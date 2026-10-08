@@ -69,17 +69,116 @@ struct Def {
 const VEHICLES: &str = r"graphics\__fc3_graphics\_common\vehicles\";
 
 const DEFS: &[Def] = &[
-    Def { prefix: "vehicle/land/jeep4x4", name: "4x4", model: r"land\4x4\4x4.xbg", kind: Kind::Car, mass: 1600.0, armour: 400.0, engine: 11000.0, top_speed: 33.0 },
-    Def { prefix: "vehicle/land/technical", name: "Technical", model: r"land\4x4technical\4x4technical_node.xbg", kind: Kind::Car, mass: 1800.0, armour: 450.0, engine: 11000.0, top_speed: 30.0 },
-    Def { prefix: "vehicle/land/atv", name: "Quad bike", model: r"land\atv\quadbike_01.xbg", kind: Kind::Car, mass: 350.0, armour: 180.0, engine: 3200.0, top_speed: 28.0 },
-    Def { prefix: "vehicle/land/japansedan", name: "Sedan", model: r"land\civiliancar_01\civiliancar_01.xbg", kind: Kind::Car, mass: 1200.0, armour: 320.0, engine: 8000.0, top_speed: 36.0 },
-    Def { prefix: "vehicle/land/germanhatch", name: "Hatchback", model: r"land\civiliancar_02\civiliancar_02.xbg", kind: Kind::Car, mass: 1100.0, armour: 300.0, engine: 7500.0, top_speed: 34.0 },
-    Def { prefix: "vehicle/land/dunebuggy", name: "Buggy", model: r"land\dunebuggy\dune_buggy.xbg", kind: Kind::Car, mass: 700.0, armour: 250.0, engine: 6500.0, top_speed: 38.0 },
-    Def { prefix: "vehicle/land/cargotruck", name: "Truck", model: r"land\bigtruck\bigtruck_01.xbg", kind: Kind::Car, mass: 5000.0, armour: 800.0, engine: 22000.0, top_speed: 24.0 },
-    Def { prefix: "vehicle/sea/zodiac", name: "Boat", model: r"sea\speedboat_01\zodiac_01.xbg", kind: Kind::Boat, mass: 600.0, armour: 300.0, engine: 7000.0, top_speed: 22.0 },
-    Def { prefix: "vehicle/sea/jetski", name: "Jet ski", model: r"sea\jetski\jetski.xbg", kind: Kind::Boat, mass: 300.0, armour: 150.0, engine: 4500.0, top_speed: 24.0 },
-    Def { prefix: "vehicle/sea/patrolboat", name: "Patrol boat", model: r"sea\rigidhullboat\rigidhullboat_01.xbg", kind: Kind::Boat, mass: 2500.0, armour: 600.0, engine: 22000.0, top_speed: 20.0 },
-    Def { prefix: "vehicle/air/glider", name: "Hang glider", model: r"air\glider\glider.xbg", kind: Kind::Glider, mass: 120.0, armour: 60.0, engine: 0.0, top_speed: 18.0 },
+    Def {
+        prefix: "vehicle/land/jeep4x4",
+        name: "4x4",
+        model: r"land\4x4\4x4.xbg",
+        kind: Kind::Car,
+        mass: 1600.0,
+        armour: 400.0,
+        engine: 11000.0,
+        top_speed: 33.0,
+    },
+    Def {
+        prefix: "vehicle/land/technical",
+        name: "Technical",
+        model: r"land\4x4technical\4x4technical_node.xbg",
+        kind: Kind::Car,
+        mass: 1800.0,
+        armour: 450.0,
+        engine: 11000.0,
+        top_speed: 30.0,
+    },
+    Def {
+        prefix: "vehicle/land/atv",
+        name: "Quad bike",
+        model: r"land\atv\quadbike_01.xbg",
+        kind: Kind::Car,
+        mass: 350.0,
+        armour: 180.0,
+        engine: 3200.0,
+        top_speed: 28.0,
+    },
+    Def {
+        prefix: "vehicle/land/japansedan",
+        name: "Sedan",
+        model: r"land\civiliancar_01\civiliancar_01.xbg",
+        kind: Kind::Car,
+        mass: 1200.0,
+        armour: 320.0,
+        engine: 8000.0,
+        top_speed: 36.0,
+    },
+    Def {
+        prefix: "vehicle/land/germanhatch",
+        name: "Hatchback",
+        model: r"land\civiliancar_02\civiliancar_02.xbg",
+        kind: Kind::Car,
+        mass: 1100.0,
+        armour: 300.0,
+        engine: 7500.0,
+        top_speed: 34.0,
+    },
+    Def {
+        prefix: "vehicle/land/dunebuggy",
+        name: "Buggy",
+        model: r"land\dunebuggy\dune_buggy.xbg",
+        kind: Kind::Car,
+        mass: 700.0,
+        armour: 250.0,
+        engine: 6500.0,
+        top_speed: 38.0,
+    },
+    Def {
+        prefix: "vehicle/land/cargotruck",
+        name: "Truck",
+        model: r"land\bigtruck\bigtruck_01.xbg",
+        kind: Kind::Car,
+        mass: 5000.0,
+        armour: 800.0,
+        engine: 22000.0,
+        top_speed: 24.0,
+    },
+    Def {
+        prefix: "vehicle/sea/zodiac",
+        name: "Boat",
+        model: r"sea\speedboat_01\zodiac_01.xbg",
+        kind: Kind::Boat,
+        mass: 600.0,
+        armour: 300.0,
+        engine: 7000.0,
+        top_speed: 22.0,
+    },
+    Def {
+        prefix: "vehicle/sea/jetski",
+        name: "Jet ski",
+        model: r"sea\jetski\jetski.xbg",
+        kind: Kind::Boat,
+        mass: 300.0,
+        armour: 150.0,
+        engine: 4500.0,
+        top_speed: 24.0,
+    },
+    Def {
+        prefix: "vehicle/sea/patrolboat",
+        name: "Patrol boat",
+        model: r"sea\rigidhullboat\rigidhullboat_01.xbg",
+        kind: Kind::Boat,
+        mass: 2500.0,
+        armour: 600.0,
+        engine: 22000.0,
+        top_speed: 20.0,
+    },
+    Def {
+        prefix: "vehicle/air/glider",
+        name: "Hang glider",
+        model: r"air\glider\glider.xbg",
+        kind: Kind::Glider,
+        mass: 120.0,
+        armour: 60.0,
+        engine: 0.0,
+        top_speed: 18.0,
+    },
 ];
 
 fn def_for(name: &str) -> Option<usize> {
@@ -141,7 +240,13 @@ pub fn arm_vehicle(commands: &mut Commands, root: Entity, model: &Fc3Model, asse
     if let Some((handle, at)) = base {
         let Some(base) = models.get(handle) else { return false };
         for part in base.lods.first().map(|l| l.parts.as_slice()).unwrap_or(&[]) {
-            commands.spawn((Mesh3d(part.mesh.clone()), MeshMaterial3d(part.material.clone()), crate::original_shaders::PropPart, Transform::from_translation(at), ChildOf(root)));
+            commands.spawn((
+                Mesh3d(part.mesh.clone()),
+                MeshMaterial3d(part.material.clone()),
+                crate::original_shaders::PropPart,
+                Transform::from_translation(at),
+                ChildOf(root),
+            ));
         }
     }
     commands.entity(root).insert(ArmedVehicle { pivot, gunner });
@@ -207,7 +312,11 @@ impl Vehicle {
             Kind::Glider => Vec3::new(c.x, self.min.y + 0.4, c.z),
             Kind::Boat => Vec3::new(c.x, self.min.y + 1.4, c.z + (self.max.z - self.min.z) * 0.2),
             // Left-hand drive, front seats a little under halfway back (the front is -Z).
-            Kind::Car => Vec3::new(self.min.x + (self.max.x - self.min.x) * 0.3, self.min.y + (self.max.y - self.min.y) * 0.52, self.min.z + (self.max.z - self.min.z) * 0.47),
+            Kind::Car => Vec3::new(
+                self.min.x + (self.max.x - self.min.x) * 0.3,
+                self.min.y + (self.max.y - self.min.y) * 0.52,
+                self.min.z + (self.max.z - self.min.z) * 0.47,
+            ),
         }
     }
 }
@@ -320,7 +429,12 @@ pub fn build_vehicle(commands: &mut Commands, def: usize, model: &Fc3Model, at: 
             ChildOf(root),
         ))
         .id();
-    commands.entity(root).insert((Vehicle { def, spawn_id, throttle: 0.0, steer: 0.0, brake: false, min, max, occupied: false, parked: true, body }, Health::new(d.armour), Wear::default(), crate::combat::DamageScale { bullet: 0.45, explosion: 1.8 }));
+    commands.entity(root).insert((
+        Vehicle { def, spawn_id, throttle: 0.0, steer: 0.0, brake: false, min, max, occupied: false, parked: true, body },
+        Health::new(d.armour),
+        Wear::default(),
+        crate::combat::DamageScale { bullet: 0.45, explosion: 1.8 },
+    ));
     // Cars carry their weight low (engine, axles, fuel), about at the axles,
     // not in the middle of the body box: it keeps them on their wheels in turns.
     if d.kind == Kind::Car {
@@ -348,7 +462,13 @@ pub fn build_vehicle(commands: &mut Commands, def: usize, model: &Fc3Model, at: 
             None => root,
         };
         let offset = part.pivot.as_ref().map(|p| -Vec3::from_array(p.at)).unwrap_or(Vec3::ZERO);
-        commands.spawn((Mesh3d(part.mesh.clone()), MeshMaterial3d(part.material.clone()), crate::original_shaders::PropPart, Transform::from_translation(offset), ChildOf(parent)));
+        commands.spawn((
+            Mesh3d(part.mesh.clone()),
+            MeshMaterial3d(part.material.clone()),
+            crate::original_shaders::PropPart,
+            Transform::from_translation(offset),
+            ChildOf(parent),
+        ));
     }
     root
 }
@@ -363,7 +483,10 @@ struct TurningPart {
 
 #[derive(Clone, Copy)]
 enum Turning {
-    Wheel { front: bool, radius: f32 },
+    Wheel {
+        front: bool,
+        radius: f32,
+    },
     /// The column's model-space orientation.
     Steering(Quat),
 }
@@ -372,7 +495,11 @@ enum Turning {
 const WHEEL_LOCK: f32 = 0.5;
 const STEERING_LOCK: f32 = 2.4;
 
-fn turn_wheels(time: Res<Time>, vehicles: Query<(&Transform, &Vehicle, &LinearVelocity, &Children)>, mut parts: Query<(&mut Transform, &mut TurningPart), Without<Vehicle>>) {
+fn turn_wheels(
+    time: Res<Time>,
+    vehicles: Query<(&Transform, &Vehicle, &LinearVelocity, &Children)>,
+    mut parts: Query<(&mut Transform, &mut TurningPart), Without<Vehicle>>,
+) {
     let dt = time.delta_secs();
     for (t, v, vel, children) in &vehicles {
         let speed = vel.0.dot(t.rotation * Vec3::NEG_Z);
@@ -395,7 +522,11 @@ fn turn_wheels(time: Res<Time>, vehicles: Query<(&Transform, &Vehicle, &LinearVe
     }
 }
 
-fn despawn_vehicles(players: Query<&Transform, With<Player>>, vehicles: Query<(Entity, &Transform, &Vehicle), Without<crate::patrols::PatrolDriver>>, mut commands: Commands) {
+fn despawn_vehicles(
+    players: Query<&Transform, With<Player>>,
+    vehicles: Query<(Entity, &Transform, &Vehicle), Without<crate::patrols::PatrolDriver>>,
+    mut commands: Commands,
+) {
     let Ok(pt) = players.single() else { return };
     for (e, t, v) in &vehicles {
         if !v.occupied && t.translation.distance(pt.translation) > 320.0 {
@@ -645,7 +776,12 @@ fn drive(
                 f.apply_force(-vel * vel.length() * 0.9);
             }
             Kind::Boat => {
-                let hull = [Vec3::new(v.min.x, v.min.y + 0.3, v.min.z), Vec3::new(v.max.x, v.min.y + 0.3, v.min.z), Vec3::new(v.min.x, v.min.y + 0.3, v.max.z), Vec3::new(v.max.x, v.min.y + 0.3, v.max.z)];
+                let hull = [
+                    Vec3::new(v.min.x, v.min.y + 0.3, v.min.z),
+                    Vec3::new(v.max.x, v.min.y + 0.3, v.min.z),
+                    Vec3::new(v.min.x, v.min.y + 0.3, v.max.z),
+                    Vec3::new(v.max.x, v.min.y + 0.3, v.max.z),
+                ];
                 let mut wet = 0;
                 // On the sea or a river or lake.
                 let water = crate::water::surface_at(t.translation, &heights);
@@ -721,13 +857,26 @@ fn run_over(
         }
         let d = gt.translation() - vt.translation;
         if Vec2::new(d.x, d.z).length() < reach && d.y.abs() < 2.0 {
-            damage.write(DamageEvent { target: e, amount: speed * 14.0, kind: DamageKind::Explosion, source: Some(vt.translation), instigator: player, headshot: false });
+            damage.write(DamageEvent {
+                target: e,
+                amount: speed * 14.0,
+                kind: DamageKind::Explosion,
+                source: Some(vt.translation),
+                instigator: player,
+                headshot: false,
+            });
             cooldown.insert(e, 1.0);
         }
     }
 }
 
-fn vehicle_hud(driving: Res<Driving>, vehicles: Query<(&Vehicle, &LinearVelocity)>, actions: Res<ActionState>, settings: Res<crate::settings::Settings>, mut hud: ResMut<crate::hud::HudState>) {
+fn vehicle_hud(
+    driving: Res<Driving>,
+    vehicles: Query<(&Vehicle, &LinearVelocity)>,
+    actions: Res<ActionState>,
+    settings: Res<crate::settings::Settings>,
+    mut hud: ResMut<crate::hud::HudState>,
+) {
     let Some((v, lv)) = driving.vehicle.and_then(|e| vehicles.get(e).ok()) else { return };
     let kmh = lv.0.length() * 3.6;
     hud.status = Some(format!("{}   {:.0} km/h   ({} get out, V view)", DEFS[v.def].name.to_uppercase(), kmh, actions.label(Action::Interact, &settings)));
@@ -756,7 +905,9 @@ fn sounds(def: &Def) -> Option<Sounds> {
     Some(match def.prefix {
         "vehicle/land/jeep4x4" => Sounds { crash: 0x0010_35C8, ..s(0x0005_2524, 0x0018_81C1, 0x0007_4EEC, 0x0007_4CDD) },
         "vehicle/land/technical" => Sounds { crash: 0x0010_36D0, ..s(0x0010_36CC, 0x0018_8412, 0x0010_36CB, 0x0010_36C8) },
-        "vehicle/land/atv" => Sounds { suspension: [0x0017_794B, 0x0017_7949, 0x0017_794A], crash: 0x0005_2520, ..s(0x0010_3750, 0x0010_3750, 0x0010_374B, 0x0010_375E) },
+        "vehicle/land/atv" => {
+            Sounds { suspension: [0x0017_794B, 0x0017_7949, 0x0017_794A], crash: 0x0005_2520, ..s(0x0010_3750, 0x0010_3750, 0x0010_374B, 0x0010_375E) }
+        }
         "vehicle/land/japansedan" => Sounds { crash: 0x0010_35C8, ..s(0x0018_979F, 0x0018_F5FE, 0x0018_9795, 0x0018_9797) },
         "vehicle/land/germanhatch" => Sounds { crash: 0x0010_35C8, ..s(0x0018_983C, 0x0018_F5CC, 0x0018_9835, 0x0018_987E) },
         "vehicle/land/dunebuggy" => Sounds { crash: 0x0010_37F2, ..s(0x0010_37F8, 0x0010_37F8, 0x0010_37F3, 0x0010_381E) },
@@ -811,7 +962,11 @@ fn target_rpm(share: f32, throttle: f32, boat: bool) -> f32 {
     let frac = ((share - low) / (GEARS[g] - low)).clamp(0.0, 1.0);
     let geared = if g == 0 { 1200.0 + frac * 3800.0 } else { 2300.0 + frac * 2700.0 };
     let revving = IDLE_RPM + throttle.abs() * 2600.0;
-    if share < 0.03 { revving } else { geared.max(IDLE_RPM) }
+    if share < 0.03 {
+        revving
+    } else {
+        geared.max(IDLE_RPM)
+    }
 }
 
 #[derive(Default)]
@@ -956,7 +1111,13 @@ fn vehicle_sounds(
         // Landing hard after a jump or a drop.
         let vy = lv.0.y;
         if below.is_some() && st.fall > 3.0 {
-            let i = if st.fall > 9.0 { 2 } else if st.fall > 5.5 { 1 } else { 0 };
+            let i = if st.fall > 9.0 {
+                2
+            } else if st.fall > 5.5 {
+                1
+            } else {
+                0
+            };
             sfx.write(PlaySfx { event: set.suspension[i], at, volume: 0.9 });
             st.fall = 0.0;
         }
@@ -1058,7 +1219,15 @@ fn drive_test(
         }
         Some(ve) => {
             let t = now - start.unwrap_or(now);
-            actions.movement = if t < 1.0 { Vec2::ZERO } else if t < 6.0 { Vec2::new(0.0, 1.0) } else if t < 9.0 { Vec2::new(0.6, 0.6) } else { Vec2::ZERO };
+            actions.movement = if t < 1.0 {
+                Vec2::ZERO
+            } else if t < 6.0 {
+                Vec2::new(0.0, 1.0)
+            } else if t < 9.0 {
+                Vec2::new(0.6, 0.6)
+            } else {
+                Vec2::ZERO
+            };
             // FC3_TD_SHOT=2,4: screenshots that long into the drive.
             let at: Vec<f32> = std::env::var("FC3_TD_SHOT").unwrap_or_default().split(',').filter_map(|s| s.parse().ok()).collect();
             if let (Some(&when), Some(path)) = (at.get(*shots), args.screenshot.as_ref()) {
@@ -1073,7 +1242,16 @@ fn drive_test(
                 if let Ok((_, vt, _, lv)) = vehicles.get(ve) {
                     let up = vt.rotation * Vec3::Y;
                     let yaw = vt.rotation.to_euler(EulerRot::YXZ).0.to_degrees();
-                    info!("drive-test t={t:.1} pos=({:.1},{:.1},{:.1}) speed={:.1} m/s up_y={:.2} yaw={yaw:.0} vel=({:.1},{:.1})", vt.translation.x, vt.translation.y, vt.translation.z, lv.0.length(), up.y, lv.0.x, lv.0.z);
+                    info!(
+                        "drive-test t={t:.1} pos=({:.1},{:.1},{:.1}) speed={:.1} m/s up_y={:.2} yaw={yaw:.0} vel=({:.1},{:.1})",
+                        vt.translation.x,
+                        vt.translation.y,
+                        vt.translation.z,
+                        lv.0.length(),
+                        up.y,
+                        lv.0.x,
+                        lv.0.z
+                    );
                 }
             }
         }
@@ -1104,10 +1282,24 @@ fn stray_hits(
     let player = players.single().ok();
     for h in hits.read() {
         let Some(vehicle) = parents.get(h.entity).ok().map(|c| c.parent()).filter(|v| vehicles.contains(*v)) else { continue };
-        damage.write(DamageEvent { target: vehicle, amount: h.amount, kind: DamageKind::Bullet, source: Some(h.from), instigator: Some(h.instigator), headshot: false });
+        damage.write(DamageEvent {
+            target: vehicle,
+            amount: h.amount,
+            kind: DamageKind::Bullet,
+            source: Some(h.from),
+            instigator: Some(h.instigator),
+            headshot: false,
+        });
         if driving.vehicle == Some(vehicle) && rng.f32() < 0.35 {
             if let Some(p) = player {
-                damage.write(DamageEvent { target: p, amount: h.amount * 0.6, kind: DamageKind::Bullet, source: Some(h.from), instigator: Some(h.instigator), headshot: false });
+                damage.write(DamageEvent {
+                    target: p,
+                    amount: h.amount * 0.6,
+                    kind: DamageKind::Bullet,
+                    source: Some(h.from),
+                    instigator: Some(h.instigator),
+                    headshot: false,
+                });
             }
         }
     }
@@ -1147,7 +1339,9 @@ fn vehicle_damage(
 ) {
     use crate::particles::{Frame, Particle, Sheet};
     let dt = time.delta_secs();
-    let charred = charred.get_or_insert_with(|| materials.add(StandardMaterial { base_color: Color::srgb(0.06, 0.055, 0.05), perceptual_roughness: 0.95, ..default() })).clone();
+    let charred = charred
+        .get_or_insert_with(|| materials.add(StandardMaterial { base_color: Color::srgb(0.06, 0.055, 0.05), perceptual_roughness: 0.95, ..default() }))
+        .clone();
     for (e, t, mut v, mut h, mut w, children) in &mut vehicles {
         if w.wrecked {
             // A wreck smoulders.
@@ -1211,14 +1405,17 @@ fn vehicle_damage(
                 m.0 = charred.clone();
             }
             if originals.get_mut(c).is_ok() {
-                commands.entity(c).remove::<MeshMaterial3d<crate::original_shaders::OriginalMaterial>>().remove::<crate::original_shaders::OriginalSwap>().insert(MeshMaterial3d(charred.clone()));
+                commands
+                    .entity(c)
+                    .remove::<MeshMaterial3d<crate::original_shaders::OriginalMaterial>>()
+                    .remove::<crate::original_shaders::OriginalSwap>()
+                    .insert(MeshMaterial3d(charred.clone()));
             }
         }
         commands.entity(e).remove::<crate::patrols::PatrolDriver>();
         info!("a {} blew up at {centre:.0?}", DEFS[v.def].name);
     }
 }
-
 
 /// The torch at work: the vehicle's armour comes back (a fire on it goes out
 /// once it's above the burning mark), sparks where it's worked on.
@@ -1295,7 +1492,13 @@ fn repair_test(
         *start = now;
     }
     let t = now - *start;
-    let Some((_, vt, v, mut h)) = vehicles.iter_mut().filter(|(_, vt, _, _)| vt.translation.distance(pt.translation) < 80.0).min_by(|a, b| a.1.translation.distance(pt.translation).total_cmp(&b.1.translation.distance(pt.translation))) else { return };
+    let Some((_, vt, v, mut h)) = vehicles
+        .iter_mut()
+        .filter(|(_, vt, _, _)| vt.translation.distance(pt.translation) < 80.0)
+        .min_by(|a, b| a.1.translation.distance(pt.translation).total_cmp(&b.1.translation.distance(pt.translation)))
+    else {
+        return;
+    };
     match *step {
         0 if t > 6.0 => {
             h.current = h.max * 0.4;
@@ -1366,7 +1569,13 @@ fn wreck_rocket(
         return;
     }
     let Ok((pt, mut p)) = players.single_mut() else { return };
-    let Some(v) = vehicles.iter().filter(|t| t.translation.distance(pt.translation) < 40.0).min_by(|a, b| a.translation.distance(pt.translation).total_cmp(&b.translation.distance(pt.translation))) else { return };
+    let Some(v) = vehicles
+        .iter()
+        .filter(|t| t.translation.distance(pt.translation) < 40.0)
+        .min_by(|a, b| a.translation.distance(pt.translation).total_cmp(&b.translation.distance(pt.translation)))
+    else {
+        return;
+    };
     // Watching it.
     let to = v.translation - pt.translation;
     p.yaw = (-to.x).atan2(-to.z);

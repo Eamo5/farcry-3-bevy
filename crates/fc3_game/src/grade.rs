@@ -155,7 +155,12 @@ fn init_pipeline(mut commands: Commands, device: Res<RenderDevice>, fullscreen: 
         address_mode_w: AddressMode::ClampToEdge,
         ..default()
     });
-    commands.insert_resource(GradePipeline { layout, sampler, fullscreen: fullscreen.clone(), shader: bevy::asset::load_embedded_asset!(server.as_ref(), "grade.wgsl") });
+    commands.insert_resource(GradePipeline {
+        layout,
+        sampler,
+        fullscreen: fullscreen.clone(),
+        shader: bevy::asset::load_embedded_asset!(server.as_ref(), "grade.wgsl"),
+    });
 }
 
 impl SpecializedRenderPipeline for GradePipeline {
@@ -189,7 +194,13 @@ fn prepare_pipelines(
     }
 }
 
-fn prepare_uniform(mut commands: Commands, grade: Option<Res<GameGrade>>, buffer: Option<Res<GradeBuffer>>, device: Res<RenderDevice>, queue: Res<RenderQueue>) {
+fn prepare_uniform(
+    mut commands: Commands,
+    grade: Option<Res<GameGrade>>,
+    buffer: Option<Res<GradeBuffer>>,
+    device: Res<RenderDevice>,
+    queue: Res<RenderQueue>,
+) {
     let (Some(grade), None) = (grade, buffer) else { return };
     let mut b = UniformBuffer::from(grade.uniform);
     b.set_label(Some("colour grade"));

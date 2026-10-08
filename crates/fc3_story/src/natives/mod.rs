@@ -6,8 +6,13 @@
 //! works on the shared [`Core`]; none calls back into Lua (callbacks are
 //! queued and run by `Story::pump`).
 
+mod actions;
+pub mod ai;
+pub mod dialog;
 mod flow;
+pub mod media;
 mod missions;
+mod player;
 pub mod world;
 
 use std::cell::RefCell;
@@ -84,7 +89,13 @@ pub(crate) fn vec3(lua: &Lua, v: [f32; 3]) -> mlua::Result<Table> {
 
 pub(crate) fn register(d: &Domino, core: &Shared) -> mlua::Result<()> {
     let r = Reg { d, core: core.clone() };
+    // The generic ones first: the specific registrations replace them.
+    actions::register(&r)?;
     flow::register(&r)?;
+    player::register(&r)?;
+    media::register(&r)?;
+    dialog::register(&r)?;
+    ai::register(&r)?;
     missions::register(&r)?;
     world::register(&r)?;
     Ok(())

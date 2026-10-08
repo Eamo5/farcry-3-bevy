@@ -12,6 +12,8 @@
 //! fc3anim pose-obj <xbg[,xbg..]> <clip.mab> <time|frac%> <out.obj>
 //!         [--skeleton P] [--lod N] [--root-motion]
 //!         [--weapon XBG --weapon-skeleton P [--attach BONE]] [--additive CLIP[@time]]
+//!         [--face RIG.dpdx [--face-clip CLIP.dpax[@time]] [--face-pose INDEX=WEIGHT,..]]
+//!         (the --face options work with bindpose-obj too)
 //! fc3anim skeleton-obj <skeleton> <out.obj> [clip time]
 //! ```
 //! Paths are archive paths (forward slashes accepted).
@@ -22,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use fc3_formats::anim::{self, Clip, Mat4, Skeleton, SkinInfo};
-use fc3_formats::{find_install, mesh, Vfs};
+use fc3_formats::{facial, find_install, mesh, Vfs};
 
 const HUMAN_SKELETON: &str = r"graphics\actors_\_skeleton_master\hips_ref.skeleton";
 
@@ -92,7 +94,7 @@ fn main() -> Result<()> {
         "bones" => cmd_bones(&vfs, rest),
         "skeleton-obj" => cmd_skeleton_obj(&vfs, rest),
         _ => {
-            println!("{}", include_str!("fc3anim.rs").lines().skip(2).take(15).map(|l| l.trim_start_matches("//! ")).collect::<Vec<_>>().join("\n"));
+            println!("{}", include_str!("fc3anim.rs").lines().skip(2).take(17).map(|l| l.trim_start_matches("//! ")).collect::<Vec<_>>().join("\n"));
             Ok(())
         }
     }
@@ -456,6 +458,29 @@ fn cmd_pose_obj(vfs: &Vfs, a: &[String], bind: bool) -> Result<()> {
         }
         None => None,
     };
+    // --face <rig.dpdx> [--face-clip <clip.dpax>[@time]] [--face-pose <index>=<weight>,..]:
+    // pose the face bones on top of the body.
+    let face = match opt(a, "--face") {
+        Some(p) => {
+            let rig = facial::parse_rig(&vfs.read(p)?)?;
+            let mut weights = rig.zero_weights();
+            if let Some(spec) = opt(a, "--face-clip") {
+                let (cp, at) = spec.split_once('@').unwrap_or((spec, "0"));
+                let fc = facial::parse_clip(&vfs.read(cp)?)?;
+                let map = rig.channel_map(&fc);
+                fc.add_weights(at.parse()?, 1.0, &map, &mut weights);
+                println!("face clip {cp} at {at}s: {} of {} channels in the rig", map.iter().flatten().count(), map.len());
+            }
+            if let Some(spec) = opt(a, "--face-pose") {
+                for kv in spec.split(',') {
+                    let (i, w) = kv.split_once('=').context("--face-pose takes index=weight")?;
+                    *weights.get_mut(i.parse::<usize>()?).context("no such pose")? += w.parse::<f32>()?;
+                }
+            }
+            Some((rig, weights))
+        }
+        None => None,
+    };
     let mut parts = Vec::new();
     let mut attach_world: Option<Mat4> = None;
     let mut camera_printed = false;
@@ -468,6 +493,9 @@ fn cmd_pose_obj(vfs: &Vfs, a: &[String], bind: bool) -> Result<()> {
         };
         if let Some((ac, at)) = &additive {
             anim::apply_additive(&s.nodes, &skel, &mut locals, ac, *at, 1.0);
+        }
+        if let Some((rig, weights)) = &face {
+            rig.apply(&s.nodes, weights, &mut locals);
         }
         let worlds = anim::compose_worlds(&s.nodes, &locals, &root);
         if let Some(i) = s.nodes.iter().position(|n| n.name == attach_bone) {

@@ -20,8 +20,16 @@ pub struct PickupsPlugin;
 
 impl Plugin for PickupsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WorldState>()
-            .add_systems(Update, (attach_pickup_models, spin_weapon_pickups, glint, (interact, loot_bodies).chain().before(crate::hud::HudSet).after(crate::turrets::man_turrets), detonate_explosives));
+        app.init_resource::<WorldState>().add_systems(
+            Update,
+            (
+                attach_pickup_models,
+                spin_weapon_pickups,
+                glint,
+                (interact, loot_bodies).chain().before(crate::hud::HudSet).after(crate::turrets::man_turrets),
+                detonate_explosives,
+            ),
+        );
     }
 }
 

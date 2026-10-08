@@ -1,74 +1,81 @@
 //! Far Cry 3 reimplemented on Bevy, loading data from an installed copy of the game.
 
+mod birds;
+mod bloom;
 mod cache_assets;
 mod camera;
 mod characters;
+mod cinema;
 mod clouds;
 mod combat;
 mod controls;
-mod bloom;
 mod data;
 mod dof;
+mod explosives;
+mod far_terrain;
 mod fire;
+mod fish;
+mod fp;
+mod freefall;
+mod grade;
+mod guard_spots;
+mod horizon;
 mod hud;
 mod lamps;
+mod lens_flare;
+mod light_shafts;
 mod map;
-mod mesh_slabs;
-mod story;
-mod upload_budget;
-mod metal;
 mod menu;
-mod explosives;
-mod freefall;
-mod turrets;
-mod villagers;
-mod birds;
+mod mesh_slabs;
+mod metal;
+mod mission_layers;
+mod music;
 mod nav;
 mod npc;
 mod objects;
 mod options;
+mod original_shaders;
 mod outposts;
 mod particles;
-mod original_shaders;
+mod patrols;
 mod physics;
 mod pickups;
-mod profile;
 mod player;
+mod player_audio;
+mod profile;
 mod progression;
-mod save;
+mod faces;
+mod qte;
 mod retire;
+mod save;
 mod settings;
-mod shadow_lod;
-mod sky_probe;
 mod setup;
+mod shadow_lod;
 mod sky;
+mod sky_probe;
 mod sound;
 mod sound_source;
+mod splines;
 mod stealth;
+mod story;
+mod story_actors;
+mod surfaces;
+mod syringes;
 mod terrain;
 mod traversal;
-mod patrols;
-mod syringes;
-mod fp;
-mod grade;
+mod turrets;
 mod ui_nav;
+mod upload_budget;
 mod vegetation;
 mod vehicles;
+mod video;
+mod villagers;
+mod vista;
 mod water;
+mod weapon_wheel;
 mod weapons;
 mod wildlife;
 mod world_fx;
-mod guard_spots;
-mod horizon;
-mod vista;
-mod far_terrain;
-mod lens_flare;
-mod light_shafts;
-mod splines;
-mod fish;
-mod surfaces;
-mod player_audio;
-mod weapon_wheel;
 
 use bevy::asset::io::AssetSourceBuilder;
 use bevy::prelude::*;
@@ -80,6 +87,8 @@ use crate::data::{to_bevy, CacheInfo};
 #[derive(Resource, Clone)]
 pub struct Args {
     pub start: Vec3,
+    /// `--pos` was given (a test at a place: no story).
+    pub placed: bool,
     pub yaw: f32,
     pub pitch: f32,
     pub time_of_day: f32,
@@ -132,8 +141,13 @@ pub struct Args {
 impl Args {
     /// Screenshot and scripted test runs (which start straight into play).
     pub fn automated(&self) -> bool {
-        self.screenshot.is_some()
-            || self.walk_secs > 0.0
+        self.screenshot.is_some() || self.scripted_test()
+    }
+
+    /// A scripted test (walking, firing, driving...), which plays without
+    /// the story.
+    pub fn scripted_test(&self) -> bool {
+        self.walk_secs > 0.0
             || self.fire_secs > 0.0
             || self.npc_test.is_some()
             || self.tour_secs > 0.0
@@ -146,6 +160,7 @@ impl Args {
     fn parse() -> Args {
         let mut a = Args {
             start: to_bevy([40.0, 2060.0, 180.0]),
+            placed: false,
             yaw: 0.0,
             pitch: -0.25,
             time_of_day: 10.5,
@@ -182,6 +197,7 @@ impl Args {
                     let v: Vec<f32> = next.split(',').filter_map(|s| s.trim().parse().ok()).collect();
                     if v.len() == 3 {
                         a.start = to_bevy([v[0], v[1], v[2]]);
+                        a.placed = true;
                     }
                     i += 1;
                 }
@@ -282,7 +298,8 @@ fn main() {
             }
             None => {
                 app.insert_resource(setup::SetupError(
-                    "Far Cry 3 data could not be found.\nSet the FC3_DATA environment variable to the game's install\n(or its data_win32 folder) and restart.".into(),
+                    "Far Cry 3 data could not be found.\nSet the FC3_DATA environment variable to the game's install\n(or its data_win32 folder) and restart."
+                        .into(),
                 ));
             }
         },
@@ -290,36 +307,28 @@ fn main() {
     // A command aimed at an entity that streaming already removed is harmless:
     // log it rather than crash the game.
     app.set_error_handler(bevy::ecs::error::warn);
-    app.register_asset_source(
-        cache_assets::SOURCE,
-        AssetSourceBuilder::platform_default(&root.to_string_lossy(), None),
-    );
-    app.register_asset_source(
-        cache_assets::SKINNED_SOURCE,
-        AssetSourceBuilder::platform_default(&root.to_string_lossy(), None),
-    );
-    app.register_asset_source(
-        original_shaders::RAW_SOURCE,
-        AssetSourceBuilder::platform_default(&root.to_string_lossy(), None),
-    );
+    app.register_asset_source(cache_assets::SOURCE, AssetSourceBuilder::platform_default(&root.to_string_lossy(), None));
+    app.register_asset_source(cache_assets::SKINNED_SOURCE, AssetSourceBuilder::platform_default(&root.to_string_lossy(), None));
+    app.register_asset_source(original_shaders::RAW_SOURCE, AssetSourceBuilder::platform_default(&root.to_string_lossy(), None));
     app.insert_resource(args.clone())
-        .add_plugins(DefaultPlugins.set(bevy::log::LogPlugin {
-            custom_layer: if cfg!(feature = "profile") { profile::layer } else { |_| None },
-            ..default()
-        }).set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Far Cry 3 — Bevy".into(),
-                // FC3_RESOLUTION=WxH (tests): the window's size.
-                resolution: std::env::var("FC3_RESOLUTION")
-                    .ok()
-                    .and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?))))
-                    .unwrap_or((1600, 900))
-                    .into(),
-                present_mode: if args.novsync { PresentMode::AutoNoVsync } else { PresentMode::AutoVsync },
-                ..default()
-            }),
-            ..default()
-        }))
+        .add_plugins(
+            DefaultPlugins.set(bevy::log::LogPlugin { custom_layer: if cfg!(feature = "profile") { profile::layer } else { |_| None }, ..default() }).set(
+                WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "Far Cry 3 — Bevy".into(),
+                        // FC3_RESOLUTION=WxH (tests): the window's size.
+                        resolution: std::env::var("FC3_RESOLUTION")
+                            .ok()
+                            .and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?))))
+                            .unwrap_or((1600, 900))
+                            .into(),
+                        present_mode: if args.novsync { PresentMode::AutoNoVsync } else { PresentMode::AutoVsync },
+                        ..default()
+                    }),
+                    ..default()
+                },
+            ),
+        )
         .add_plugins((
             cache_assets::CacheAssetsPlugin,
             terrain::TerrainPlugin,
@@ -329,11 +338,82 @@ fn main() {
             player::PlayerPlugin,
             camera::ScreenshotPlugin,
         ))
-        .add_plugins((combat::CombatPlugin, weapons::WeaponsPlugin, hud::HudPlugin, characters::CharactersPlugin, npc::NpcPlugin, menu::MenuPlugin, sound::SoundPlugin, vegetation::VegetationPlugin, pickups::PickupsPlugin))
-        .add_plugins((setup::SetupPlugin, save::SavePlugin, original_shaders::OriginalShadersPlugin, map::MapPlugin, settings::SettingsPlugin, controls::ControlsPlugin, options::OptionsPlugin, outposts::OutpostsPlugin, stealth::StealthPlugin, nav::NavPlugin, progression::ProgressionPlugin, wildlife::WildlifePlugin, water::WaterPlugin, vehicles::VehiclesPlugin, clouds::CloudsPlugin))
-        .add_plugins((guard_spots::GuardSpotsPlugin, lens_flare::LensFlarePlugin, surfaces::SurfacesPlugin, player_audio::PlayerAudioPlugin, weapon_wheel::WeaponWheelPlugin, light_shafts::LightShaftsPlugin, splines::SplinesPlugin, fish::FishPlugin, horizon::HorizonPlugin, vista::VistaPlugin, far_terrain::FarTerrainPlugin, shadow_lod::ShadowLodPlugin, retire::RetirePlugin, sky_probe::SkyProbePlugin, mesh_slabs::MeshSlabsPlugin))
-        .add_plugins((grade::GradePlugin, dof::DofPlugin, bloom::GameBloomPlugin, upload_budget::UploadBudgetPlugin, story::StoryPlugin))
-        .add_plugins((lamps::LampsPlugin, particles::ParticlesPlugin, metal::MetalPlugin, fire::FirePlugin, traversal::TraversalPlugin, ui_nav::UiNavPlugin, patrols::PatrolsPlugin, syringes::SyringesPlugin, fp::FpPlugin, freefall::FreefallPlugin, explosives::ExplosivesPlugin, turrets::TurretsPlugin, villagers::VillagersPlugin, birds::BirdsPlugin, world_fx::WorldFxPlugin))
+        .add_plugins((
+            combat::CombatPlugin,
+            weapons::WeaponsPlugin,
+            hud::HudPlugin,
+            characters::CharactersPlugin,
+            npc::NpcPlugin,
+            menu::MenuPlugin,
+            sound::SoundPlugin,
+            vegetation::VegetationPlugin,
+            pickups::PickupsPlugin,
+        ))
+        .add_plugins((
+            setup::SetupPlugin,
+            save::SavePlugin,
+            original_shaders::OriginalShadersPlugin,
+            map::MapPlugin,
+            settings::SettingsPlugin,
+            controls::ControlsPlugin,
+            options::OptionsPlugin,
+            outposts::OutpostsPlugin,
+            stealth::StealthPlugin,
+            nav::NavPlugin,
+            progression::ProgressionPlugin,
+            wildlife::WildlifePlugin,
+            water::WaterPlugin,
+            vehicles::VehiclesPlugin,
+            clouds::CloudsPlugin,
+        ))
+        .add_plugins((
+            guard_spots::GuardSpotsPlugin,
+            lens_flare::LensFlarePlugin,
+            surfaces::SurfacesPlugin,
+            player_audio::PlayerAudioPlugin,
+            weapon_wheel::WeaponWheelPlugin,
+            light_shafts::LightShaftsPlugin,
+            splines::SplinesPlugin,
+            fish::FishPlugin,
+            horizon::HorizonPlugin,
+            vista::VistaPlugin,
+            far_terrain::FarTerrainPlugin,
+            shadow_lod::ShadowLodPlugin,
+            retire::RetirePlugin,
+            sky_probe::SkyProbePlugin,
+            mesh_slabs::MeshSlabsPlugin,
+        ))
+        .add_plugins((
+            grade::GradePlugin,
+            dof::DofPlugin,
+            bloom::GameBloomPlugin,
+            upload_budget::UploadBudgetPlugin,
+            story::StoryPlugin,
+            mission_layers::MissionLayersPlugin,
+            story_actors::StoryActorsPlugin,
+            cinema::CinemaPlugin,
+            music::MusicPlugin,
+            video::VideoPlugin,
+            qte::QtePlugin,
+            faces::FacesPlugin,
+        ))
+        .add_plugins((
+            lamps::LampsPlugin,
+            particles::ParticlesPlugin,
+            metal::MetalPlugin,
+            fire::FirePlugin,
+            traversal::TraversalPlugin,
+            ui_nav::UiNavPlugin,
+            patrols::PatrolsPlugin,
+            syringes::SyringesPlugin,
+            fp::FpPlugin,
+            freefall::FreefallPlugin,
+            explosives::ExplosivesPlugin,
+            turrets::TurretsPlugin,
+            villagers::VillagersPlugin,
+            birds::BirdsPlugin,
+            world_fx::WorldFxPlugin,
+        ))
         .insert_resource(original_shaders::OriginalShaders { enabled: args.original_shaders })
         .add_systems(Startup, setup);
     if cfg!(feature = "profile") {

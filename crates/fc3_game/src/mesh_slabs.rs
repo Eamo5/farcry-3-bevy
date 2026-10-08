@@ -42,7 +42,11 @@ impl Plugin for MeshSlabsPlugin {
         if std::env::var("FC3_MESH_DEBUG").is_ok() {
             app.add_systems(Last, log_mesh_sources);
             let Some(render) = app.get_sub_app_mut(RenderApp) else { return };
-            render.init_resource::<Stamp>().add_systems(Render, (stamp.before(allocate_and_free_meshes), log_slabs.after(allocate_and_free_meshes).before(prepare_assets::<RenderMesh>)).in_set(RenderSystems::PrepareAssets));
+            render.init_resource::<Stamp>().add_systems(
+                Render,
+                (stamp.before(allocate_and_free_meshes), log_slabs.after(allocate_and_free_meshes).before(prepare_assets::<RenderMesh>))
+                    .in_set(RenderSystems::PrepareAssets),
+            );
         }
     }
 }
@@ -65,7 +69,8 @@ fn log_slabs(allocator: Res<MeshAllocator>, extracted: Res<ExtractedAssets<Rende
             info!("mesh slab {id} grew {:.1} -> {:.1} MB", mb(before.unwrap_or(0)), mb(size));
         }
     }
-    let bytes: u64 = extracted.extracted.iter().map(|(_, m)| m.get_vertex_buffer_size() as u64 + m.get_index_buffer_bytes().map_or(0, |b| b.len() as u64)).sum();
+    let bytes: u64 =
+        extracted.extracted.iter().map(|(_, m)| m.get_vertex_buffer_size() as u64 + m.get_index_buffer_bytes().map_or(0, |b| b.len() as u64)).sum();
     if bytes > 4 << 20 || ms > 3.0 {
         let biggest = extracted.extracted.iter().map(|(_, m)| m.get_vertex_buffer_size()).max().unwrap_or(0);
         info!(
@@ -89,7 +94,8 @@ fn log_mesh_sources(mut events: MessageReader<AssetEvent<Mesh>>, server: Res<Ass
     for ev in events.read() {
         if let AssetEvent::Added { id } = ev {
             n += 1;
-            let src = server.get_path(*id).map(|p| p.path().parent().map(|d| d.display().to_string()).unwrap_or_default()).unwrap_or_else(|| "(made in code)".into());
+            let src =
+                server.get_path(*id).map(|p| p.path().parent().map(|d| d.display().to_string()).unwrap_or_default()).unwrap_or_else(|| "(made in code)".into());
             *by.entry(src).or_default() += 1;
         }
     }

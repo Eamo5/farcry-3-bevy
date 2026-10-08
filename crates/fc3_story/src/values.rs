@@ -104,6 +104,8 @@ pub enum Arg {
     Bool(bool),
     Num(f64),
     Str(String),
+    /// A list of entity ids (a Lua sequence of id strings).
+    Ids(Vec<u64>),
 }
 
 impl Arg {
@@ -143,6 +145,7 @@ impl IntoLua for Arg {
             Arg::Bool(b) => Value::Boolean(b),
             Arg::Num(n) => Value::Number(n),
             Arg::Str(s) => Value::String(lua.create_string(&s)?),
+            Arg::Ids(ids) => Value::Table(lua.create_sequence_from(ids.into_iter().map(|i| i.to_string()))?),
         })
     }
 }

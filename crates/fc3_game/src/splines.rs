@@ -128,15 +128,12 @@ fn river_material(cm: &CachedMaterial, server: &AssetServer, materials: &mut Ass
     let tile = floats(river_param::TILE).first().copied().filter(|v| *v > 0.0).unwrap_or(6.0);
     let speed = floats(river_param::FLOW).first().copied().unwrap_or(1.0);
     Some(materials.add(RiverMaterial {
-        base: StandardMaterial {
-            perceptual_roughness: 0.06,
-            reflectance: 0.35,
-            alpha_mode: AlphaMode::Blend,
-            depth_bias: RIVER_DEPTH_BIAS,
-            ..default()
-        },
+        base: StandardMaterial { perceptual_roughness: 0.06, reflectance: 0.35, alpha_mode: AlphaMode::Blend, depth_bias: RIVER_DEPTH_BIAS, ..default() },
         extension: RiverExt {
-            params: RiverParams { colour: Vec4::new(colour.red, colour.green, colour.blue, if foam.is_some() { 1.0 } else { 0.0 }), flow: Vec4::new(tile, speed, 0.0, 0.0) },
+            params: RiverParams {
+                colour: Vec4::new(colour.red, colour.green, colour.blue, if foam.is_some() { 1.0 } else { 0.0 }),
+                flow: Vec4::new(tile, speed, 0.0, 0.0),
+            },
             ripples: load_tiled(server, &ripples, false),
             foam: load_tiled(server, foam.as_ref().unwrap_or(&ripples), true),
         },
@@ -172,13 +169,7 @@ fn road_material(cm: &CachedMaterial, server: &AssetServer, materials: &mut Asse
     let dye = if tint.len() >= 3 { Color::srgb(tint[0], tint[1], tint[2]).to_linear() } else { LinearRgba::WHITE };
     let across = floats(param::MAP_TILING).first().copied().filter(|v| *v > 0.0).unwrap_or(1.0);
     Some(materials.add(RoadMaterial {
-        base: StandardMaterial {
-            perceptual_roughness: 0.85,
-            reflectance: 0.2,
-            alpha_mode: AlphaMode::Blend,
-            depth_bias: ROAD_DEPTH_BIAS,
-            ..default()
-        },
+        base: StandardMaterial { perceptual_roughness: 0.85, reflectance: 0.2, alpha_mode: AlphaMode::Blend, depth_bias: ROAD_DEPTH_BIAS, ..default() },
         extension: RoadExt {
             params: RoadParams { tint: Vec4::new(dye.red, dye.green, dye.blue, across) },
             map: load_tiled(server, &map, true),
@@ -464,7 +455,10 @@ impl RoadGraph {
                         }
                     }
                 }
-                info!("gps: piece {c} ({} points) nearest big piece {} at {:.0} m, near Dunia ({:.0}, {:.0})", sizes[c as usize], best.2, best.0, best.1.x, best.1.y);
+                info!(
+                    "gps: piece {c} ({} points) nearest big piece {} at {:.0} m, near Dunia ({:.0}, {:.0})",
+                    sizes[c as usize], best.2, best.0, best.1.x, best.1.y
+                );
             }
         }
         g

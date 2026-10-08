@@ -34,8 +34,69 @@ pub const RAW_FILES: [(&str, &str); 11] = [
 /// The story entities, in the cache.
 pub const ENTITIES_REL: &str = "story/entities.bin";
 
+/// What the shop sells, as scripts know it: `model<TAB>archetype<TAB>name
+/// id` (a weapon's model path, its library archetype, the string id of its
+/// shop name), from the entity library.
+pub const SHOP_ITEMS_REL: &str = "story/shop_items.txt";
+
+/// The shop items table from the entity library: weapon archetypes
+/// (`weapons:<name>`, whose model is field `C230E653`) joined with their
+/// properties (`WeaponProperties:<name>`, `locidDisplayName`).
+pub fn shop_items(library: &crate::fcb::Object) -> Vec<(String, String, u32)> {
+    use std::collections::HashMap;
+    let (mut models, mut names): (HashMap<String, String>, HashMap<String, u32>) = (HashMap::new(), HashMap::new());
+    library.walk(&mut |o, _| {
+        let Some(h) = o.str("hidName") else { return };
+        if let Some(name) = h.strip_prefix("weapons:") {
+            let mut model = None;
+            o.walk(&mut |c, _| {
+                if model.is_none() {
+                    model = c.str_h(0xC230_E653).filter(|m| m.to_ascii_lowercase().ends_with(".xbg"));
+                }
+            });
+            if let Some(m) = model {
+                models.entry(name.to_string()).or_insert(m.to_ascii_lowercase());
+            }
+        } else if let Some(name) = h.strip_prefix("WeaponProperties:") {
+            let mut id = None;
+            o.walk(&mut |c, _| {
+                if id.is_none() {
+                    id = c.u32("locidDisplayName").filter(|&i| i != 0 && i != u32::MAX);
+                }
+            });
+            if let Some(i) = id {
+                names.entry(name.to_string()).or_insert(i);
+            }
+        }
+    });
+    let mut out: Vec<(String, String, u32)> = models.into_iter().filter_map(|(a, m)| names.get(&a).map(|&i| (m, a, i))).collect();
+    out.sort();
+    out
+}
+
 const MAGIC: &[u8; 4] = b"FCSE";
-const VERSION: u32 = 1;
+/// Bumped when what the table keeps changes (2: grouped entities, 3: the
+/// entity's own fields).
+const VERSION: u32 = 3;
+
+/// Whether a stored table is this version's (an older one is rewritten).
+pub fn is_current(data: &[u8]) -> bool {
+    data.len() >= 8 && &data[..4] == MAGIC && data[4..8] == VERSION.to_le_bytes()
+}
+
+/// The groups an entity belongs to: (name hash, name) from its
+/// `CGroupComponent` (scripts write a group as `#` and the hash in hex).
+pub fn groups(components: &Object) -> Vec<(u32, String)> {
+    let Some(c) = components.children.iter().find(|c| c.is("CGroupComponent")) else { return Vec::new() };
+    let Some(list) = c.child("Groups") else { return Vec::new() };
+    list.children
+        .iter()
+        .filter_map(|g| {
+            let hash = g.u32("group").filter(|&h| h != u32::MAX && h != 0)?;
+            Some((hash, g.str_h(0x3B74_FE98).unwrap_or_default()))
+        })
+        .collect()
+}
 
 /// Where an entity was found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,12 +121,28 @@ pub struct StoryEntity {
     pub angles: [f32; 3],
     /// The entity's `Components` object (empty when it has none).
     pub components: Arc<Object>,
+    /// The entity's own fields besides name, class and placement (a
+    /// region's shape points and height, bounds), as an object without
+    /// children.
+    pub fields: Arc<Object>,
+}
+
+/// Entity fields the table keeps (the rest is name, class and placement,
+/// stored apart, or editor bookkeeping).
+pub const KEPT_FIELDS: [&str; 4] = ["hidShapePoints", "fHeight", "hidBBoxMin", "hidBBoxMax"];
+
+/// An entity's kept fields as an object.
+pub fn kept_fields(entity: &Object) -> Arc<Object> {
+    let hashes: Vec<u32> = KEPT_FIELDS.iter().map(|n| crate::hash::name_hash(n)).collect();
+    Arc::new(Object { name_hash: entity.name_hash, fields: entity.fields.iter().filter(|(h, _)| hashes.contains(h)).cloned().collect(), children: Vec::new() })
 }
 
 /// Component classes that make an entity matter to the story whatever its
-/// layer: scripts, mission zones, triggers, cinematic scenes, markers.
-pub const STORY_COMPONENTS: [&str; 8] = [
+/// layer: scripts, mission zones, triggers, cinematic scenes, markers, and
+/// group membership (scripts address most characters by group).
+pub const STORY_COMPONENTS: [&str; 9] = [
     "CDominoComponent",
+    "CGroupComponent",
     "CMissionZoneComponent",
     "CTriggerComponent",
     "CProximityTriggerComponent",
@@ -127,9 +204,11 @@ pub fn to_bytes(entities: &[StoryEntity]) -> Vec<u8> {
         for v in e.pos.iter().chain(&e.angles) {
             body.extend_from_slice(&v.to_le_bytes());
         }
-        let c = crate::fcb::encode(&e.components);
-        body.extend_from_slice(&(c.len() as u32).to_le_bytes());
-        body.extend_from_slice(&c);
+        for o in [&e.components, &e.fields] {
+            let c = crate::fcb::encode(o);
+            body.extend_from_slice(&(c.len() as u32).to_le_bytes());
+            body.extend_from_slice(&c);
+        }
     }
     let mut out = Vec::new();
     out.extend_from_slice(MAGIC);
@@ -167,7 +246,9 @@ pub fn from_bytes(data: &[u8]) -> Result<Vec<StoryEntity>> {
         }
         let len = r.u32()? as usize;
         let components = crate::fcb::decode(r.bytes(len)?).context("story entity components")?;
-        out.push(StoryEntity { id, layer, source, name, class, pos: [v[0], v[1], v[2]], angles: [v[3], v[4], v[5]], components });
+        let len = r.u32()? as usize;
+        let fields = crate::fcb::decode(r.bytes(len)?).context("story entity fields")?;
+        out.push(StoryEntity { id, layer, source, name, class, pos: [v[0], v[1], v[2]], angles: [v[3], v[4], v[5]], components, fields });
     }
     Ok(out)
 }
@@ -192,6 +273,7 @@ mod tests {
             pos: [1.0, 2.0, 3.0],
             angles: [0.0, 0.0, 90.0],
             components: comp,
+            fields: Arc::new(Object { name_hash: 0, fields: vec![(crate::hash::name_hash("fHeight"), (-1.0f32).to_le_bytes().to_vec())], children: vec![] }),
         };
         let back = from_bytes(&to_bytes(&[e.clone()])).unwrap();
         assert_eq!(back.len(), 1);

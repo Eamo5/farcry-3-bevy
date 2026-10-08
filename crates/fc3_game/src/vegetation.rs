@@ -63,10 +63,7 @@ impl Plugin for VegetationPlugin {
             .init_resource::<FoliageCache>()
             .init_resource::<Concealment>()
             .add_systems(Update, (conceal, concealment_test).chain().run_if(resource_exists::<CacheInfo>))
-            .add_systems(
-                Update,
-                (request_vegetation, spawn_vegetation).chain().in_set(VegStreaming).run_if(resource_exists::<CacheInfo>),
-            )
+            .add_systems(Update, (request_vegetation, spawn_vegetation).chain().in_set(VegStreaming).run_if(resource_exists::<CacheInfo>))
             .add_systems(Update, follow_wind)
             .add_systems(PostUpdate, push_plants.after(TransformSystems::Propagate));
     }
@@ -341,10 +338,7 @@ pub struct VegStreamer {
 
 impl VegStreamer {
     pub fn pending_count(&self) -> usize {
-        self.slots
-            .values()
-            .filter(|s| !s.cursor.is_empty() || s.wanted.iter().any(|l| !s.roots.contains_key(l)))
-            .count()
+        self.slots.values().filter(|s| !s.cursor.is_empty() || s.wanted.iter().any(|l| !s.roots.contains_key(l))).count()
     }
 }
 
@@ -449,7 +443,12 @@ fn spawn_vegetation(
     env: Res<crate::sky::GameEnvironment>,
 ) {
     // Light through leaves, from the world's render settings (FC3_NO_SSS turns it off).
-    let sss = env.0.as_ref().and_then(|e| e.veg_sss).filter(|_| std::env::var("FC3_NO_SSS").is_err()).map_or(Vec4::ZERO, |v| Vec4::new(v[0] * v[6], v[1] * v[6], v[2] * v[6], 1.0));
+    let sss = env
+        .0
+        .as_ref()
+        .and_then(|e| e.veg_sss)
+        .filter(|_| std::env::var("FC3_NO_SSS").is_err())
+        .map_or(Vec4::ZERO, |v| Vec4::new(v[0] * v[6], v[1] * v[6], v[2] * v[6], 1.0));
     let mut budget = INSTANCE_BUDGET;
     let skip = std::env::var("FC3_NO_VEG").ok();
     if skip.as_deref() == Some("all") {
@@ -474,11 +473,10 @@ fn spawn_vegetation(
             if budget == 0 {
                 break;
             }
-            let root = *slot.roots.entry(layer).or_insert_with(|| {
-                commands
-                    .spawn((Transform::IDENTITY, Visibility::Visible, Name::new(format!("vegetation {} {layer:?}", c.id()))))
-                    .id()
-            });
+            let root = *slot
+                .roots
+                .entry(layer)
+                .or_insert_with(|| commands.spawn((Transform::IDENTITY, Visibility::Visible, Name::new(format!("vegetation {} {layer:?}", c.id())))).id());
             let start = slot.cursor.get(&layer).copied().unwrap_or(0);
             let mut next = veg.instances.len();
             for (idx, inst) in veg.instances.iter().enumerate().skip(start) {
@@ -499,17 +497,9 @@ fn spawn_vegetation(
                 let Some(lod) = model.lods.first() else { continue };
                 let range = draw_range(inst.kind, model);
                 let fade = (range.end * 0.08).max(2.0);
-                let vis = VisibilityRange {
-                    start_margin: 0.0..0.0,
-                    end_margin: (range.end - fade)..range.end,
-                    use_aabb: false,
-                };
+                let vis = VisibilityRange { start_margin: 0.0..0.0, end_margin: (range.end - fade)..range.end, use_aabb: false };
                 let mut obj = commands.spawn((
-                    Transform {
-                        translation: Vec3::from_array(inst.translation),
-                        rotation: Quat::from_array(inst.rotation),
-                        scale: Vec3::splat(inst.scale),
-                    },
+                    Transform { translation: Vec3::from_array(inst.translation), rotation: Quat::from_array(inst.rotation), scale: Vec3::splat(inst.scale) },
                     Visibility::Visible,
                     ChildOf(root),
                 ));
@@ -578,7 +568,10 @@ fn spawn_vegetation(
                                         let sss = if through > 0.0 { (sss.truncate() * through).extend(sss.w) } else { Vec4::ZERO };
                                         let pushers = PUSHERS.get().cloned().unwrap_or_default();
                                         let horizon = crate::horizon::atlas();
-                                        foliage_materials.add(FoliageMaterial { base, extension: Wind { params: w, air: Vec4::new(0.8, 0.6, 1.0, 0.0), sss, pushers, horizon } })
+                                        foliage_materials.add(FoliageMaterial {
+                                            base,
+                                            extension: Wind { params: w, air: Vec4::new(0.8, 0.6, 1.0, 0.0), sss, pushers, horizon },
+                                        })
                                     })
                                     .clone();
                                 commands.spawn((Mesh3d(part.mesh.clone()), MeshMaterial3d(foliage), vis.clone(), ChildOf(obj)))

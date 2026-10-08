@@ -26,19 +26,16 @@ pub struct CloudsPlugin;
 impl Plugin for CloudsPlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "clouds.wgsl");
-        app.add_plugins(MaterialPlugin::<CloudMaterial>::default())
-            .insert_resource(Weather::from_env())
-            .init_resource::<Daylight>()
-            .add_systems(
-                Update,
-                (
-                    setup_clouds.run_if(resource_exists::<CacheInfo>),
-                    update_weather,
-                    (update_clouds, weather_light).after(crate::sky::advance_time),
-                    follow_camera,
-                    rain,
-                ),
-            );
+        app.add_plugins(MaterialPlugin::<CloudMaterial>::default()).insert_resource(Weather::from_env()).init_resource::<Daylight>().add_systems(
+            Update,
+            (
+                setup_clouds.run_if(resource_exists::<CacheInfo>),
+                update_weather,
+                (update_clouds, weather_light).after(crate::sky::advance_time),
+                follow_camera,
+                rain,
+            ),
+        );
     }
 }
 

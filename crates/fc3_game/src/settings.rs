@@ -104,6 +104,8 @@ pub struct Settings {
     /// Horizontal-ish field of view in degrees (vertical FOV of the camera).
     pub fov: f32,
     pub master_volume: f32,
+    /// The music's share of the volume.
+    pub music_volume: f32,
     pub view_distance: Quality,
     pub shadows: Quality,
     /// Post-processing: anti-aliasing (Medium), bloom, sun shafts and ambient
@@ -116,6 +118,10 @@ pub struct Settings {
     pub fullscreen: bool,
     pub original_shaders: bool,
     pub show_fps: bool,
+    /// Subtitles for spoken lines.
+    pub subtitles: bool,
+    /// A new game plays the story (else the island is free to roam).
+    pub story: bool,
     pub difficulty: Difficulty,
     pub bindings: HashMap<Action, Binding>,
 }
@@ -128,6 +134,7 @@ impl Default for Settings {
             invert_y: false,
             fov: 75.0,
             master_volume: 0.8,
+            music_volume: 0.6,
             view_distance: Quality::High,
             shadows: Quality::High,
             effects: Quality::High,
@@ -135,6 +142,8 @@ impl Default for Settings {
             fullscreen: false,
             original_shaders: true,
             show_fps: true,
+            subtitles: true,
+            story: true,
             difficulty: Difficulty::Adventurer,
             bindings: default_bindings(),
         }
@@ -166,9 +175,15 @@ impl Settings {
     pub fn to_text(&self) -> String {
         let mut out = String::from("fc3settings 1\n");
         out += &format!("sensitivity {}\ngamepad_sensitivity {}\ninvert_y {}\nfov {}\n", self.sensitivity, self.gamepad_sensitivity, self.invert_y, self.fov);
-        out += &format!("master_volume {}\nview_distance {}\nshadows {}\neffects {}\n", self.master_volume, self.view_distance.name(), self.shadows.name(), self.effects.name());
+        out += &format!(
+            "master_volume {}\nview_distance {}\nshadows {}\neffects {}\n",
+            self.master_volume,
+            self.view_distance.name(),
+            self.shadows.name(),
+            self.effects.name()
+        );
         out += &format!("vsync {}\nfullscreen {}\noriginal_shaders {}\nshow_fps {}\n", self.vsync, self.fullscreen, self.original_shaders, self.show_fps);
-        out += &format!("difficulty {}\n", self.difficulty.name());
+        out += &format!("subtitles {}\nstory {}\ndifficulty {}\nmusic_volume {}\n", self.subtitles, self.story, self.difficulty.name(), self.music_volume);
         for a in Action::ALL {
             if let Some(b) = self.binding(a) {
                 out += &format!("bind {} {}\n", a.id(), b.id());
@@ -190,6 +205,7 @@ impl Settings {
                 "invert_y" => s.invert_y = b(value, false),
                 "fov" => s.fov = f(value, 75.0).clamp(55.0, 110.0),
                 "master_volume" => s.master_volume = f(value, 0.8).clamp(0.0, 1.0),
+                "music_volume" => s.music_volume = f(value, 0.6).clamp(0.0, 1.0),
                 "view_distance" => s.view_distance = Quality::from_name(value).unwrap_or(Quality::High),
                 "shadows" => s.shadows = Quality::from_name(value).unwrap_or(Quality::High),
                 "effects" => s.effects = Quality::from_name(value).unwrap_or(Quality::High),
@@ -197,6 +213,8 @@ impl Settings {
                 "fullscreen" => s.fullscreen = b(value, false),
                 "original_shaders" => s.original_shaders = b(value, true),
                 "show_fps" => s.show_fps = b(value, true),
+                "subtitles" => s.subtitles = b(value, true),
+                "story" => s.story = b(value, true),
                 "difficulty" => s.difficulty = Difficulty::from_name(value).unwrap_or(Difficulty::Adventurer),
                 "bind" => {
                     if let (Some(a), Some(binding)) = (Action::from_id(value), it.next().and_then(Binding::from_id)) {
@@ -321,13 +339,8 @@ fn apply_settings(
             Quality::High => (4, 400.0),
             Quality::Ultra => (4, 800.0),
         };
-        *cascades = bevy::light::CascadeShadowConfigBuilder {
-            num_cascades: count,
-            first_cascade_far_bound: 12.0,
-            maximum_distance: distance,
-            ..default()
-        }
-        .build();
+        *cascades =
+            bevy::light::CascadeShadowConfigBuilder { num_cascades: count, first_cascade_far_bound: 12.0, maximum_distance: distance, ..default() }.build();
     }
 }
 
@@ -337,7 +350,8 @@ mod tests {
 
     #[test]
     fn settings_roundtrip() {
-        let mut s = Settings { sensitivity: 1.7, fov: 90.0, invert_y: true, view_distance: Quality::Ultra, difficulty: Difficulty::Warrior, ..Default::default() };
+        let mut s =
+            Settings { sensitivity: 1.7, fov: 90.0, invert_y: true, view_distance: Quality::Ultra, difficulty: Difficulty::Warrior, ..Default::default() };
         s.rebind(Action::Jump, Binding::Key(KeyCode::KeyV));
         s.rebind(Action::Fire, Binding::Key(KeyCode::KeyW));
         // Taking W from "forward" hands it fire's old binding.

@@ -288,8 +288,18 @@ fn post_role(name: &str, faction: Faction) -> Option<Role> {
 fn random_role(faction: Faction, rng: &mut Rng) -> Role {
     let table: &[(Role, f32)] = match faction {
         Faction::Rebel => &[(Role::Assault, 80.0), (Role::Sniper, 20.0)],
-        Faction::Pirate => &[(Role::Assault, 52.0), (Role::Shotgunner, 13.0), (Role::Sniper, 8.0), (Role::Heavy, 8.0), (Role::Rocket, 7.0), (Role::Molotov, 9.0), (Role::Flamer, 3.0)],
-        Faction::Privateer => &[(Role::Assault, 46.0), (Role::Shotgunner, 12.0), (Role::Sniper, 11.0), (Role::Heavy, 12.0), (Role::Rocket, 9.0), (Role::Flamer, 10.0)],
+        Faction::Pirate => &[
+            (Role::Assault, 52.0),
+            (Role::Shotgunner, 13.0),
+            (Role::Sniper, 8.0),
+            (Role::Heavy, 8.0),
+            (Role::Rocket, 7.0),
+            (Role::Molotov, 9.0),
+            (Role::Flamer, 3.0),
+        ],
+        Faction::Privateer => {
+            &[(Role::Assault, 46.0), (Role::Shotgunner, 12.0), (Role::Sniper, 11.0), (Role::Heavy, 12.0), (Role::Rocket, 9.0), (Role::Flamer, 10.0)]
+        }
     };
     let total: f32 = table.iter().map(|(_, w)| w).sum();
     let mut x = rng.f32() * total;
@@ -463,12 +473,8 @@ fn load_injury_clips(mut clips: ResMut<InjuryClips>, server: Res<AssetServer>, i
 impl InjuryClips {
     /// The best match, relaxing the side, then the region, then the motion.
     fn pick(list: &[(Motion, Region, Side, Handle<Fc3Clip>)], m: Motion, r: Region, s: Side, rng: &mut Rng) -> Option<Handle<Fc3Clip>> {
-        let tries: [&dyn Fn(&(Motion, Region, Side, Handle<Fc3Clip>)) -> bool; 4] = [
-            &|c| c.0 == m && c.1 == r && c.2 == s,
-            &|c| c.0 == m && c.1 == r,
-            &|c| c.0 == m && c.2 == s,
-            &|c| c.0 == Motion::Stand && c.2 == s,
-        ];
+        let tries: [&dyn Fn(&(Motion, Region, Side, Handle<Fc3Clip>)) -> bool; 4] =
+            [&|c| c.0 == m && c.1 == r && c.2 == s, &|c| c.0 == m && c.1 == r, &|c| c.0 == m && c.2 == s, &|c| c.0 == Motion::Stand && c.2 == s];
         for t in tries {
             let found: Vec<&Handle<Fc3Clip>> = list.iter().filter(|c| t(c)).map(|c| &c.3).collect();
             if !found.is_empty() {
@@ -582,7 +588,11 @@ impl Npc {
 #[derive(Component, Default)]
 pub struct HeadPos(pub Vec3);
 
-fn track_heads(mut npcs: Query<(&Npc, &GlobalTransform, &mut HeadPos)>, joints: Query<&GlobalTransform, Without<Npc>>, rigs: Query<&crate::characters::CharacterRig>) {
+fn track_heads(
+    mut npcs: Query<(&Npc, &GlobalTransform, &mut HeadPos)>,
+    joints: Query<&GlobalTransform, Without<Npc>>,
+    rigs: Query<&crate::characters::CharacterRig>,
+) {
     let head = fc3_formats::hash::name_hash("Head");
     for (npc, gt, mut h) in &mut npcs {
         let joint = npc.rig.and_then(|r| rigs.get(r).ok()).and_then(|r| r.joint(head)).and_then(|(_, j)| joints.get(j).ok());
@@ -771,6 +781,7 @@ fn spawn_from_sectors(
     models: Res<Assets<Fc3Model>>,
     server: Res<AssetServer>,
     mut outposts: ResMut<crate::outposts::Outposts>,
+    area: Res<crate::story::MissionArea>,
 ) {
     // FC3_PEACEFUL (tests): no enemies.
     if std::env::var("FC3_PEACEFUL").is_ok() {
@@ -797,6 +808,10 @@ fn spawn_from_sectors(
         for e in &sector.entities {
             let Some(mut faction) = post_faction(&e.name) else { continue };
             let pos = Vec3::from_array(e.translation);
+            // A mission being played here has its own people.
+            if area.contains(pos) {
+                continue;
+            }
             let mut id = e.id;
             // Outposts: enemy ones are fully manned; liberated ones by rebels.
             let mut outpost = outposts.at(pos);
@@ -912,49 +927,7 @@ fn spawn_npc(
     };
     let root = commands
         .spawn((
-            Npc {
-                faction,
-                role,
-                state: NpcState::Idle,
-                post: feet,
-                post_yaw: yaw,
-                awareness: 0.0,
-                last_known: None,
-                sees_player: false,
-                melee: None,
-                melee_cooldown: 0.0,
-                yaw,
-                velocity: Vec3::ZERO,
-                state_time: rng.range(0.0, 5.0),
-                fire_cooldown: 0.0,
-                burst_left: 0,
-                mag: stats.mag,
-                reload: 0.0,
-                strafe_dir: if rng.f32() < 0.5 { -1.0 } else { 1.0 },
-                marker_id,
-                accuracy: stats.accuracy,
-                damage: stats.damage,
-                rig: None,
-                since_fired: 99.0,
-                step_timer: 0.0,
-                engaged: 0.0,
-                alarm_target: None,
-                throw_cooldown: rng.range(4.0, 12.0),
-                stuck: 0.0,
-                path: Vec::new(),
-                path_goal: None,
-                path_timer: 0.0,
-                foe: None,
-                foe_seen: false,
-                scan: rng.range(0.0, 0.5),
-                patrols: rng.f32() < 0.35 && role != Role::Sniper,
-                at_spot: false,
-                wander: None,
-                wander_wait: rng.range(0.0, 6.0),
-                cover: None,
-                cover_search: rng.range(0.0, 2.0),
-                flinch: 0.0,
-            },
+            new_npc(faction, role, feet, yaw, marker_id, rng),
             HeadPos::default(),
             Health::new(stats.health),
             crate::combat::Armour(stats.armour),
@@ -987,11 +960,97 @@ fn spawn_npc(
     root
 }
 
+/// Marks an enemy the story is driving (walking to a contextual action,
+/// held by a script): it still sees and hears, but doesn't decide or move by
+/// itself until something it notices takes it out of the script's hands.
+#[derive(Component)]
+pub struct Scripted;
+
+/// The AI of a story character fighting as this faction and role (its kit
+/// and rig are the story's), posted where it stands.
+pub fn story_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, id: u64, rig: Option<Entity>, rng: &mut Rng) -> impl Bundle {
+    let stats = role.stats(faction);
+    let mut npc = new_npc(faction, role, feet, yaw, id, rng);
+    npc.rig = rig;
+    npc.patrols = false;
+    (npc, HeadPos::default(), crate::combat::Armour(stats.armour))
+}
+
+/// The fighting role an AI's shooting preferences (`tmplPrimaryWeapon`)
+/// describe, or none for the unarmed.
+pub fn role_from_weapon(prefs: &str) -> Option<Role> {
+    let p = prefs.to_ascii_lowercase();
+    Some(if p.contains("unused") || p.is_empty() {
+        return None;
+    } else if p.contains("shotgun") {
+        Role::Shotgunner
+    } else if p.contains("sniper") {
+        Role::Sniper
+    } else if p.contains("rpg") || p.contains("rocket") {
+        Role::Rocket
+    } else if p.contains("flame") {
+        Role::Flamer
+    } else if p.contains("molotov") {
+        Role::Molotov
+    } else if p.contains("machinegun") || p.contains("lmg") || p.contains("heavy") {
+        Role::Heavy
+    } else {
+        Role::Assault
+    })
+}
+
+fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker_id: u64, rng: &mut Rng) -> Npc {
+    let stats = role.stats(faction);
+    Npc {
+        faction,
+        role,
+        state: NpcState::Idle,
+        post: feet,
+        post_yaw: yaw,
+        awareness: 0.0,
+        last_known: None,
+        sees_player: false,
+        melee: None,
+        melee_cooldown: 0.0,
+        yaw,
+        velocity: Vec3::ZERO,
+        state_time: rng.range(0.0, 5.0),
+        fire_cooldown: 0.0,
+        burst_left: 0,
+        mag: stats.mag,
+        reload: 0.0,
+        strafe_dir: if rng.f32() < 0.5 { -1.0 } else { 1.0 },
+        marker_id,
+        accuracy: stats.accuracy,
+        damage: stats.damage,
+        rig: None,
+        since_fired: 99.0,
+        step_timer: 0.0,
+        engaged: 0.0,
+        alarm_target: None,
+        throw_cooldown: rng.range(4.0, 12.0),
+        stuck: 0.0,
+        path: Vec::new(),
+        path_goal: None,
+        path_timer: 0.0,
+        foe: None,
+        foe_seen: false,
+        scan: rng.range(0.0, 0.5),
+        patrols: rng.f32() < 0.35 && role != Role::Sniper,
+        at_spot: false,
+        wander: None,
+        wander_wait: rng.range(0.0, 6.0),
+        cover: None,
+        cover_search: rng.range(0.0, 2.0),
+        flinch: 0.0,
+    }
+}
+
 fn despawn_far(
     mut commands: Commands,
     mut director: ResMut<NpcDirector>,
     players: Query<&Transform, With<Player>>,
-    npcs: Query<(Entity, &Transform, &Npc), (Without<Corpse>, Without<Riding>)>,
+    npcs: Query<(Entity, &Transform, &Npc), (Without<Corpse>, Without<Riding>, Without<crate::story_actors::StoryActor>)>,
 ) {
     let Ok(p) = players.single() else { return };
     for (e, t, npc) in &npcs {
@@ -1015,10 +1074,13 @@ fn perceive(
     players: Query<(Entity, &Transform, &Player, &Health)>,
     mut npcs: Query<(Entity, &Transform, &mut Npc, &Health), (Without<Corpse>, Without<Frozen>, Without<Riding>)>,
     beasts: Query<(Entity, &Transform, &Health, &crate::wildlife::WildAnimal), Without<Npc>>,
-    cover: Res<crate::vegetation::Concealment>,
+    (cover, cinema): (Res<crate::vegetation::Concealment>, Res<crate::cinema::Cinema>),
 ) {
     let dt = time.delta_secs();
     let Ok((pe, pt, player, ph)) = players.single() else { return };
+    // The story's autopilot (tests) steps into triggers in plain view: unseen.
+    // (Nor while a cutscene has the player.)
+    let unseen = player.noclip || cinema.cutscene() || std::env::var_os("FC3_STORY_AUTOPILOT").is_some();
     // Last frame's shouts over found bodies are heard now.
     let mut noises: Vec<Noise> = noises.read().copied().collect();
     noises.append(&mut shouts);
@@ -1042,7 +1104,7 @@ fn perceive(
         let (range, fov_cos) = if alert { (110.0, -0.2) } else { (70.0, 0.35) };
         let range = range * npc.role.stats(npc.faction).sight;
         let mut visible = false;
-        if !friendly && !ph.dead && !player.noclip && dist < range && (cos > fov_cos || dist < 4.0) {
+        if !friendly && !ph.dead && !unseen && dist < range && (cos > fov_cos || dist < 4.0) {
             if let Ok(dir) = Dir3::new(to) {
                 let filter = SpatialQueryFilter::from_excluded_entities([e]);
                 visible = match spatial.cast_ray(eye, dir, dist, true, &filter) {
@@ -1161,7 +1223,10 @@ fn perceive(
     }
 }
 
-fn think(time: Res<Time>, mut npcs: Query<(&mut Npc, &Health, &Transform), (Without<Corpse>, Without<Frozen>, Without<Riding>, Without<crate::turrets::Gunner>)>) {
+fn think(
+    time: Res<Time>,
+    mut npcs: Query<(&mut Npc, &Health, &Transform), (Without<Corpse>, Without<Frozen>, Without<Riding>, Without<crate::turrets::Gunner>, Without<Scripted>)>,
+) {
     let dt = time.delta_secs();
     for (mut npc, h, t) in &mut npcs {
         if h.dead {
@@ -1180,7 +1245,11 @@ fn think(time: Res<Time>, mut npcs: Query<(&mut Npc, &Health, &Transform), (With
             NpcState::Idle if npc.awareness > 0.35 && npc.last_known.is_some() => Some(NpcState::Suspicious),
             NpcState::Suspicious if npc.awareness >= 1.0 => Some(NpcState::Combat),
             // Investigate: walk to the noise, look around there, then go back.
-            NpcState::Suspicious if npc.awareness <= 0.05 && npc.state_time > 6.0 && (!npc.last_known.is_some_and(|lk| flat_distance(lk, t.translation) > 2.5) || npc.state_time > 25.0) => {
+            NpcState::Suspicious
+                if npc.awareness <= 0.05
+                    && npc.state_time > 6.0
+                    && (!npc.last_known.is_some_and(|lk| flat_distance(lk, t.translation) > 2.5) || npc.state_time > 25.0) =>
+            {
                 Some(NpcState::Idle)
             }
             NpcState::Combat if !npc.sees_player && !npc.foe_seen && npc.state_time > 1.5 => Some(NpcState::Search),
@@ -1214,9 +1283,17 @@ fn act(
     mut noises: MessageWriter<Noise>,
     mut damage: MessageWriter<DamageEvent>,
     (mut loops, mut sfx): (MessageWriter<crate::sound::LoopSfx>, MessageWriter<crate::sound::PlaySfx>),
-    (mut alarms, mut throw_clock, nav, probe): (MessageWriter<crate::outposts::AlarmRaised>, Local<f32>, Res<crate::nav::NavMesh>, crate::surfaces::SurfaceProbe),
+    (mut alarms, mut throw_clock, nav, probe): (
+        MessageWriter<crate::outposts::AlarmRaised>,
+        Local<f32>,
+        Res<crate::nav::NavMesh>,
+        crate::surfaces::SurfaceProbe,
+    ),
     players: Query<(Entity, &Transform, &Player), Without<Npc>>,
-    mut npcs: Query<(Entity, &mut Transform, &mut Npc, &Health, &Children, Option<&crate::outposts::Garrison>), (Without<Corpse>, Without<Frozen>, Without<Riding>, Without<crate::turrets::Gunner>)>,
+    mut npcs: Query<
+        (Entity, &mut Transform, &mut Npc, &Health, &Children, Option<&crate::outposts::Garrison>),
+        (Without<Corpse>, Without<Frozen>, Without<Riding>, Without<crate::turrets::Gunner>, Without<Scripted>),
+    >,
     mut limbs: Query<(&NpcLimb, &mut Transform), (Without<Npc>, Without<Player>)>,
     mut anims: Query<&mut AnimRequest>,
     mut shot_fx: crate::particles::ShotFx,
@@ -1303,7 +1380,9 @@ fn act(
                 // The player when in sight, else a foe, else where either was last seen.
                 let foe = npc.foe.and_then(|f| others.get(&f).map(|(p, v)| (f, *p, *v)));
                 let tgt = match foe {
-                    _ if npc.sees_player => Target { entity: pe, pos: pt.translation, vel: player.velocity, crouching: player.crouching, seen: true, is_player: true },
+                    _ if npc.sees_player => {
+                        Target { entity: pe, pos: pt.translation, vel: player.velocity, crouching: player.crouching, seen: true, is_player: true }
+                    }
                     Some((f, p, v)) if npc.foe_seen || !npc.faction.hostile_to_player() => {
                         Target { entity: f, pos: p, vel: v, crouching: false, seen: npc.foe_seen, is_player: false }
                     }
@@ -1321,7 +1400,13 @@ fn act(
                 npc.cover_search -= dt;
                 if takes_cover && npc.cover.is_none() && npc.cover_search <= 0.0 && dist > 9.0 && nav.ready() {
                     npc.cover_search = rng.range(2.5, 4.5);
-                    npc.cover = find_cover(&nav, &spatial, e, pe, pos, tgt.pos).map(|spot| Cover { spot, settled: false, up: false, timer: 0.0, stay: rng.range(12.0, 25.0) });
+                    npc.cover = find_cover(&nav, &spatial, e, pe, pos, tgt.pos).map(|spot| Cover {
+                        spot,
+                        settled: false,
+                        up: false,
+                        timer: 0.0,
+                        stay: rng.range(12.0, 25.0),
+                    });
                 }
                 if let Some(mut c) = npc.cover {
                     c.stay -= dt;
@@ -1354,37 +1439,69 @@ fn act(
                             if tgt.is_player && c.up {
                                 throw(&mut npc, e, pos, tgt.pos, dt, &mut rng, &fx, &mut commands, &mut throw_clock);
                             }
-                            shoot(&mut npc, e, pos, &tgt, pt.translation, dt, &mut rng, &spatial, &fx, &mut shot_fx, &mut commands, &mut damage, &mut noises, &mut loops, &mut sfx);
+                            shoot(
+                                &mut npc,
+                                e,
+                                pos,
+                                &tgt,
+                                pt.translation,
+                                dt,
+                                &mut rng,
+                                &spatial,
+                                &fx,
+                                &mut shot_fx,
+                                &mut commands,
+                                &mut damage,
+                                &mut noises,
+                                &mut loops,
+                                &mut sfx,
+                            );
                         }
                     }
                 }
                 if npc.cover.is_some() {
                     // (Handled above.)
                 } else {
-                // Keep the role's fighting distance, strafing to be harder to hit.
-                let fwd = Vec3::new(to.x, 0.0, to.z).normalize_or_zero();
-                let side = Vec3::new(-fwd.z, 0.0, fwd.x) * npc.strafe_dir;
-                let push = if dist > stats.far {
-                    fwd
-                } else if dist < stats.near {
-                    -fwd
-                } else {
-                    Vec3::ZERO
-                };
-                // Snipers stand still to aim unless the player gets close.
-                let strafe = if npc.role == Role::Sniper && push == Vec3::ZERO { 0.0 } else { stats.strafe };
-                if push != Vec3::ZERO || strafe > 0.0 {
-                    goal = Some(pos + (push + side * strafe) * 3.0);
-                }
-                // Shotgunners sprint in.
-                speed = if push == fwd && npc.role == Role::Shotgunner { 4.4 } else { 2.6 * stats.pace };
-                if rng.f32() < dt * 0.4 {
-                    npc.strafe_dir = -npc.strafe_dir;
-                }
-                if tgt.is_player {
-                    throw(&mut npc, e, pos, tgt.pos, dt, &mut rng, &fx, &mut commands, &mut throw_clock);
-                }
-                shoot(&mut npc, e, pos, &tgt, pt.translation, dt, &mut rng, &spatial, &fx, &mut shot_fx, &mut commands, &mut damage, &mut noises, &mut loops, &mut sfx);
+                    // Keep the role's fighting distance, strafing to be harder to hit.
+                    let fwd = Vec3::new(to.x, 0.0, to.z).normalize_or_zero();
+                    let side = Vec3::new(-fwd.z, 0.0, fwd.x) * npc.strafe_dir;
+                    let push = if dist > stats.far {
+                        fwd
+                    } else if dist < stats.near {
+                        -fwd
+                    } else {
+                        Vec3::ZERO
+                    };
+                    // Snipers stand still to aim unless the player gets close.
+                    let strafe = if npc.role == Role::Sniper && push == Vec3::ZERO { 0.0 } else { stats.strafe };
+                    if push != Vec3::ZERO || strafe > 0.0 {
+                        goal = Some(pos + (push + side * strafe) * 3.0);
+                    }
+                    // Shotgunners sprint in.
+                    speed = if push == fwd && npc.role == Role::Shotgunner { 4.4 } else { 2.6 * stats.pace };
+                    if rng.f32() < dt * 0.4 {
+                        npc.strafe_dir = -npc.strafe_dir;
+                    }
+                    if tgt.is_player {
+                        throw(&mut npc, e, pos, tgt.pos, dt, &mut rng, &fx, &mut commands, &mut throw_clock);
+                    }
+                    shoot(
+                        &mut npc,
+                        e,
+                        pos,
+                        &tgt,
+                        pt.translation,
+                        dt,
+                        &mut rng,
+                        &spatial,
+                        &fx,
+                        &mut shot_fx,
+                        &mut commands,
+                        &mut damage,
+                        &mut noises,
+                        &mut loops,
+                        &mut sfx,
+                    );
                 }
             }
             NpcState::Search => {
@@ -1629,7 +1746,8 @@ fn shoot(
     let dist_to_player = tgt.pos.distance(muzzle);
     // A sniper's scope glints while it is trained on the player.
     if npc.role == Role::Sniper && tgt.seen && tgt.is_player && npc.reload <= 0.0 && dist_to_player > 20.0 {
-        let mut g = crate::particles::Particle::new(crate::particles::Sheet::Glow, pos + Vec3::Y * 0.62 + forward * 0.25, 1.0, (dist_to_player * 0.018).max(0.35));
+        let mut g =
+            crate::particles::Particle::new(crate::particles::Sheet::Glow, pos + Vec3::Y * 0.62 + forward * 0.25, 1.0, (dist_to_player * 0.018).max(0.35));
         g.colour = Vec4::new(1.0, 0.97, 0.9, 1.0 + 0.2 * (npc.state_time * 9.0).sin());
         shot_fx.particles.sprite(g);
     }
@@ -1706,10 +1824,24 @@ fn shoot(
             let Ok(d3) = Dir3::new(dir) else { return };
             let filter = SpatialQueryFilter::from_excluded_entities([me]);
             let hit = spatial.cast_ray(muzzle, d3, stats.reach, true, &filter);
-            crate::particles::fx::flame_stream(&mut shot_fx.particles, rng, muzzle, dir, npc.velocity, hit.map(|h| if h.entity == tgt.entity { (h.distance - 1.2).max(0.5) } else { h.distance }).unwrap_or(stats.reach));
+            crate::particles::fx::flame_stream(
+                &mut shot_fx.particles,
+                rng,
+                muzzle,
+                dir,
+                npc.velocity,
+                hit.map(|h| if h.entity == tgt.entity { (h.distance - 1.2).max(0.5) } else { h.distance }).unwrap_or(stats.reach),
+            );
             if let Some(h) = hit {
                 if h.entity == tgt.entity {
-                    damage.write(DamageEvent { target: tgt.entity, amount: stats.damage, kind: DamageKind::Fire, source: Some(muzzle), instigator: Some(me), headshot: false });
+                    damage.write(DamageEvent {
+                        target: tgt.entity,
+                        amount: stats.damage,
+                        kind: DamageKind::Fire,
+                        source: Some(muzzle),
+                        instigator: Some(me),
+                        headshot: false,
+                    });
                 }
                 if rng.f32() < 0.12 {
                     shot_fx.ignite.write(crate::fire::Ignite { at: muzzle + dir * h.distance, radius: 1.5, instigator: Some(me) });
@@ -1779,7 +1911,14 @@ fn shoot(
         }
     }
     if target_damage > 0.0 {
-        damage.write(DamageEvent { target: tgt.entity, amount: target_damage, kind: DamageKind::Bullet, source: Some(muzzle), instigator: Some(me), headshot: false });
+        damage.write(DamageEvent {
+            target: tgt.entity,
+            amount: target_damage,
+            kind: DamageKind::Bullet,
+            source: Some(muzzle),
+            instigator: Some(me),
+            headshot: false,
+        });
     }
     for (entity, amount, from) in stray {
         shot_fx.stray.write(crate::vehicles::StrayHit { entity, amount, from, instigator: me });
@@ -1889,10 +2028,7 @@ fn react_to_death(
         if let Some(mut req) = npc.rig.and_then(|r| anims.get_mut(r).ok()) {
             *req = AnimRequest { kind: AnimKind::Death, rate: 1.0 };
         }
-        commands
-            .entity(d.entity)
-            .remove::<(Collider, RigidBody)>()
-            .insert(Corpse { age: 0.0, fall_axis: side, skinned, found: false });
+        commands.entity(d.entity).remove::<(Collider, RigidBody)>().insert(Corpse { age: 0.0, fall_axis: side, skinned, found: false });
         if npc.faction.hostile_to_player() {
             commands.entity(d.entity).insert(crate::pickups::LootableBody { role: npc.role });
         }
@@ -2089,7 +2225,8 @@ fn npc_test_spawn(
         for (i, (ahead, side)) in [(10.0, 0.0), (16.5, -1.5), (17.0, 1.5), (18.0, 0.0)].into_iter().enumerate() {
             let mut at = t.translation + forward * ahead + right * side;
             at.y = heights.height_at(at).unwrap_or(at.y - HALF_HEIGHT);
-            let e = spawn_npc(&mut commands, &assets, Some(&chars), &models, Faction::Pirate, Role::Assault, at, facing, u64::MAX - 1 - i as u64, &mut rng, None);
+            let e =
+                spawn_npc(&mut commands, &assets, Some(&chars), &models, Faction::Pirate, Role::Assault, at, facing, u64::MAX - 1 - i as u64, &mut rng, None);
             commands.entity(e).entry::<Npc>().and_modify(|mut n| n.patrols = false);
         }
         *done = true;
@@ -2153,7 +2290,13 @@ fn kill_test(
 }
 
 /// Fight tests: logs the attackers every two seconds.
-fn npc_test_log(args: Res<crate::Args>, time: Res<Time>, mut next: Local<f32>, npcs: Query<(&Npc, &Transform, &Health)>, players: Query<(&Transform, &Health), With<Player>>) {
+fn npc_test_log(
+    args: Res<crate::Args>,
+    time: Res<Time>,
+    mut next: Local<f32>,
+    npcs: Query<(&Npc, &Transform, &Health)>,
+    players: Query<(&Transform, &Health), With<Player>>,
+) {
     if !args.npc_test.as_deref().is_some_and(|s| s.starts_with("fight:") || s == "skirmish") || time.elapsed_secs() < *next {
         return;
     }
@@ -2186,7 +2329,8 @@ fn npc_test_stealth(
     mut damage: MessageWriter<DamageEvent>,
 ) {
     let Some(mode) = args.npc_test.as_deref().filter(|m| matches!(*m, "distract" | "body" | "guards")) else { return };
-    let mut guards: Vec<(Entity, &Npc, &Transform, &Health)> = npcs.iter().filter(|(_, n, _, _)| n.marker_id >= u64::MAX - 2 && n.marker_id < u64::MAX).collect();
+    let mut guards: Vec<(Entity, &Npc, &Transform, &Health)> =
+        npcs.iter().filter(|(_, n, _, _)| n.marker_id >= u64::MAX - 2 && n.marker_id < u64::MAX).collect();
     if guards.len() < 2 {
         return;
     }
@@ -2211,7 +2355,8 @@ fn npc_test_stealth(
     }
     if t > *next_log {
         *next_log = t + 1.0;
-        let list: Vec<String> = guards.iter().map(|(_, n, tf, h)| format!("{:?}{} at {:.1?}", n.state, if h.dead { " (dead)" } else { "" }, tf.translation)).collect();
+        let list: Vec<String> =
+            guards.iter().map(|(_, n, tf, h)| format!("{:?}{} at {:.1?}", n.state, if h.dead { " (dead)" } else { "" }, tf.translation)).collect();
         info!("stealth-test t={t:.0}: {}", list.join(" | "));
     }
 }
@@ -2261,8 +2406,14 @@ mod tests {
         let k = |p: &str| injury_kind(p).map(|(d, m, r, s)| (d, m, r, s));
         assert_eq!(k(r"a\injury\death\run\torso\3rdge_fulbst_run_dietorso_frombk_v01_+000fw_ak74.mab"), Some((true, Motion::Run, Region::Torso, Side::Back)));
         assert_eq!(k(r"a\injury\death\stand\head\3rdge_fulbst_diehead00_fromlt_+000fw_ak74.mab"), Some((true, Motion::Stand, Region::Head, Side::Left)));
-        assert_eq!(k(r"a\injury\hits\crouch\torso\3rdge_fulbcr_idlealert_hittorso_from180rt_v00_ak74.mab"), Some((false, Motion::Crouch, Region::Torso, Side::Back)));
-        assert_eq!(k(r"a\injury\death\coverhi\3rdge_fulbcr_coverhileftdie_generic_fromfwv01_+000fw_ak74.mab"), Some((true, Motion::Crouch, Region::Torso, Side::Front)));
+        assert_eq!(
+            k(r"a\injury\hits\crouch\torso\3rdge_fulbcr_idlealert_hittorso_from180rt_v00_ak74.mab"),
+            Some((false, Motion::Crouch, Region::Torso, Side::Back))
+        );
+        assert_eq!(
+            k(r"a\injury\death\coverhi\3rdge_fulbcr_coverhileftdie_generic_fromfwv01_+000fw_ak74.mab"),
+            Some((true, Motion::Crouch, Region::Torso, Side::Front))
+        );
         assert_eq!(k(r"a\injury\death\stand\legs\3rdge_fulbst_dielegs_v01_+000fw_ak74.mab"), None);
     }
 }
@@ -2316,9 +2467,13 @@ fn npc_melee(
     mut anims: Query<&mut AnimRequest>,
     mut damage: MessageWriter<DamageEvent>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
+    cinema: Res<crate::cinema::Cinema>,
 ) {
     let Some(clips) = clips else { return };
     let Ok((pe, pt, mut player, ph)) = players.single_mut() else { return };
+    if cinema.cutscene() {
+        return;
+    }
     let dt = time.delta_secs();
     for (e, t, mut npc, h) in &mut npcs {
         npc.melee_cooldown -= dt;
@@ -2347,7 +2502,14 @@ fn npc_melee(
                 let s = s + dt;
                 // The butt lands: if he's still in front and in reach.
                 if s >= MELEE_CONTACT && s - dt < MELEE_CONTACT && flat.length() < MELEE_REACH && ahead > 0.3 && to.y.abs() < 1.2 {
-                    damage.write(DamageEvent { target: pe, amount: MELEE_DAMAGE, kind: DamageKind::Melee, source: Some(t.translation), instigator: Some(e), headshot: false });
+                    damage.write(DamageEvent {
+                        target: pe,
+                        amount: MELEE_DAMAGE,
+                        kind: DamageKind::Melee,
+                        source: Some(t.translation),
+                        instigator: Some(e),
+                        headshot: false,
+                    });
                     sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::BUTT_HIT, at: Some(pt.translation), volume: 0.9 });
                     // Knocked back a step, the view jolted.
                     let push = flat.normalize_or_zero() * 2.5;

@@ -13,8 +13,9 @@ Status:
   AK74M and the 1911 pistol (idle, fire, reload). The poses were exported as OBJ,
   rendered to PNG, and checked by eye. Bodies are not exploded, knees and elbows
   bend the right way, and the weapons sit in the hands.
-* `.dpax` (facial animation, magic `Ap`, version 2) is a separate bit-packed format.
-  It is **not decoded**, and body animation does not need it.
+* Faces are driven by poses: `.dpax` weight clips on `.dpdx` face rigs. All named
+  clips and rigs in the install decode (`fc3tool facial-survey`). See
+  [Facial animation](#facial-animation-dpax-dpdx).
 
 Credit: the packed quaternion codec and the section-table idea come from
 buu342's public notes on the Dunia `.mab` format (PY-DuniaAnimationExtractor wiki).
@@ -708,3 +709,185 @@ target/agent_anim/release/fc3anim.exe pose-obj <a.xbg,b.xbg> <clip.mab> <t|NN%> 
 
 `pose-obj` writes a skinned OBJ in Bevy space and prints the `Camera` bone matrix
 when the model has one. Any OBJ viewer, or a small PIL script, can render it.
+
+## Facial animation (`.dpax`, `.dpdx`)
+
+Decoder: `crates/fc3_formats/src/facial.rs`. Tools: `fc3tool facial`, `fc3tool facial-survey`
+and the `--face` options of `fc3anim pose-obj` / `bindpose-obj`.
+
+Faces have no per-bone animation tracks; they are driven by **poses**.
+
+* A character's **face rig** (`.dpdx`) lists its face bones. For each bone it stores the
+  rest transform and, for every pose that moves the bone, a rotation and a translation
+  at full weight.
+* A **facial clip** (`.dpax`) stores one weight curve per pose.
+* The engine samples the playing clips and adds them into one weight per pose. It then
+  rebuilds every rig bone's local transform from its rest transform and the weighted
+  poses.
+
+Status:
+
+* All 16,961 named `.dpax` and all 45 `.dpdx` in the install parse (`fc3tool facial-survey`,
+  0 errors). Every frame count is `duration × rate + 1` and every weight is within 0..1.
+  Weights change no more across block boundaries than inside blocks.
+* 36 clips have a channel that no rig defines. The engine skips those, and so does
+  `FaceRig::channel_map`.
+* The scale constants and the sampling and posing rules were read from the engine's own
+  code. The decoder uses the same constants, bit for bit.
+* Visual checks (OBJ renders of a unique character):
+  * with all weights at zero, his rig reproduces his bind pose to within 0.02 mm;
+  * the mouth-open pose drops the jaw;
+  * the neutral blink clip closes both eyes at its peak;
+  * a cutscene clip gives natural expressions at several times.
+
+### Which rig, which clips
+
+* `CFacialPoseComponent.facialposedefinitionFacialPoseDefinition` is a key into
+  `generated\databases\generic\facialposedefinition.lib` (an FCB file).
+  * The key is the CRC-32 of the entry's `hidName`; the entry stores it as `hidKey`.
+  * Each entry stores its `.dpdx` path as text (field hash `CC979B17`) and as a path hash
+    (`filePoseDefinitionFileName`).
+* `MercKitFacialPoseDefinitions` lists `FacialPoseDefinition` entries.
+  * Each has `sHeadTag` (the CRC-32 of a lower-case tag such as `head02`) and
+    `facialposedefinitionFacialDefinition` (a key). The list ends with an empty entry
+    (all `0xFFFFFFFF`).
+  * Graphic kit head parts carry these tags as `<tag name=… type="3"/>` directly under
+    `<part>`. A kit with several heads therefore gets the rig that fits the head it picked,
+    and the default key covers the rest.
+  * This is inferred from the data. I didn't trace the engine code that does the lookup.
+* Rig bones are matched to skeleton bones and XBG nodes by the CRC-32 of the name.
+  * Kit head models carry the face joints in their NODE chunk and are skinned to them.
+  * One bone hash in every rig matches no node in the models checked. Skip unmatched
+    bones: the engine maps rig bones to its skeleton through an index table, with
+    `0xFFFF` for missing ones.
+* Where clips come from:
+  * Voice lines: the engine formats
+    `graphics\Characters\_common\facial\generated\%08x.dpax` with the line's sound id.
+  * Mission scripts load clips as `CPoseAnimationResource`.
+  * Cinematics have a `CFacialAnimationSequenceTrack` with `CFacialClip` elements:
+    `fileFacial` (the clip), `timeStartTime`, `timeDuration`, `nAnimStartFrame`,
+    `nAnimStopFrame` and `fBlendTime`.
+  * Gameplay clips sit next to their body clips as `*_facial.dpax`.
+  * Short library clips (blinks, emphasis, moods) live under
+    `graphics\characters\_common\facial\`.
+
+### `.dpdx` (face rig)
+
+Little endian; offsets are from the file start.
+
+| offset | content |
+|---|---|
+| `+0x00` | `u16 version = 1`, `"Dp"`, `u32` file size |
+| `+0x08` | `u32` offsets of the bone table, the entry table and the pose table |
+| `+0x14` | `u16` bone count, `u16` entry count, `u32` pose count, `u32 0` |
+
+* **Bone** (48 bytes):
+  * `f32 rot[4]` (x,y,z,w) and `f32 pos[3]`: the rest transform, local to the parent bone,
+    in Dunia space;
+  * `u32 crc32(bone name)`;
+  * `u32` offset of its entries, `u16` entry count, then 10 zero bytes.
+* **Entry** (12 bytes): one per pose that moves the bone, in ascending pose order.
+  * Layout: `u32` packed rotation, `i16 t[3]`, `u16` pose index.
+  * Translation: `t × 4/32767` metres.
+  * Rotation, packed as 10-10-10-2 "smallest three":
+    * bits 0–9, 10–19 and 20–29 each hold `(v − 511) / 722`;
+    * the top two bits pick the component left out: 0 = `w`, 1 = `x`, 2 = `y`, 3 = `z`;
+    * the left-out component is `sqrt(max(0, 1 − a² − b² − c²))`;
+    * the three fields are the components that follow it cyclically in `x, y, z, w` order.
+* **Pose table**: one `u32` pose name hash per pose. Clip channels name poses by this
+  hash. The names are not in the game binary, so they are unknown.
+
+### `.dpax` (facial clip)
+
+| offset | content |
+|---|---|
+| `+0x00` | `u16 version = 2`, `"Ap"`, `u32` file size |
+| `+0x08` | `u32` offset of the clip info, `u32` offset of the block table |
+| info `+0x00` | `u32` its own offset, `u32` info size, `u32` offset of the channel table |
+| info `+0x0C` | `f32` frame rate, `f32` duration in seconds |
+| info `+0x14` | `u16` frame count (`duration × rate + 1`), `u16` channel count, `u8` frames per block, 3 bytes padding |
+| info `+0x1C` | channel table: one `u32` pose name hash per channel |
+
+* **Block table**: `ceil(frames / frames per block)` `u32` offsets.
+  * Blocks follow each other in time without overlap and start on 4-byte boundaries.
+  * The file ends with a `u32 0`.
+* **Block**:
+  * Header: `u32` its own offset, `u32` its size (header, mask and data, unpadded),
+    `u32` offset of the mask, `u32` offset of the data, `u16` first frame, `u16` frame count.
+  * Mask: two bits per channel, least significant first, `ceil(channels / 4)` bytes.
+  * Then the channel data, in channel order:
+
+| bits | kind | data |
+|---|---|---|
+| 0 | raw | one `u8` per frame of the block |
+| 1 | zero | none; the weight is 0 for the whole block |
+| 2 | constant | one `u8` for the whole block |
+| 3 | sparse | `u8 runs, u8 stored, (u8 after, u8 len) × runs, u8 values[stored]` |
+
+* A weight is `u8 / 255`.
+* Sparse channels leave runs of frames out:
+  * frame `after` is stored, and the `len` frames after it are not;
+  * those frames are interpolated linearly between frames `after` and `after + len + 1`,
+    which is always inside the block;
+  * every other frame is stored, in order, so a block's first and last frames always are.
+
+### Sampling and posing
+
+1. Clip time to frame: `f = rate × clamp(t, 0, duration)`. The weight interpolates
+   linearly between frames `⌊f⌋` and `⌊f⌋ + 1`, across block boundaries too.
+2. Pose weights: for every playing clip, add `weight × blend` to the rig pose whose hash
+   matches the channel. Channels the rig lacks are skipped. Several clips (for example a
+   voice line over a blink loop) add up.
+3. Bones: start each rig bone from its rest transform, then go through its entries in
+   order. Skip entries whose weight is at most `2e-6`. For the others:
+   * `translation += w × t`;
+   * `rotation = rotation ⊗ slerp(identity, q, w)`, along the shorter arc. The pose
+     rotation is post-multiplied, so it acts in the bone's own frame.
+
+   Normalise the rotation at the end. The result replaces the bone's local transform.
+4. The engine also scales the final translations by a per-character factor stored next
+   to its list of playing clips. I didn't find where it is set. We use 1, which
+   reproduces the bind pose exactly.
+
+### API (`fc3_formats::facial`, Bevy space)
+
+```rust
+pub fn parse_clip(bytes: &[u8]) -> Result<FaceClip>;                 // .dpax, decoded to per-frame weights
+pub fn parse_rig(bytes: &[u8]) -> Result<FaceRig>;                   // .dpdx
+pub fn parse_definitions(fcb: &[u8]) -> Result<Vec<FaceDefinition>>; // facialposedefinition.lib
+pub fn voice_clip_path(sound_id: u32) -> String;
+pub fn unpack_pose_rotation(packed: u32) -> Quat;                    // Dunia space
+impl FaceClip { fn frame_at(t); fn channel_weight(channel, t); fn sample(t) -> Vec<f32>;
+                fn add_weights(t, blend, map, &mut weights); }
+impl FaceRig { fn pose_index(hash); fn channel_map(&FaceClip) -> Vec<Option<usize>>;
+               fn zero_weights(); fn clip_weights(&FaceClip, t);
+               fn bone_local(bone, &weights) -> (Vec3, Quat);
+               fn apply(&nodes, &weights, &mut locals); }               // after anim::pose_locals
+impl FaceChoice { fn from_component(&fcb::Object); fn definition(head_tags) -> Option<u32>; }
+```
+
+### In the game
+
+* The converter packs every rig and clip, named or a spoken line's
+  (`voice_clip_path` over the speech table's ids), into `facial/faces.pak`
+  (`FPAK`, a sorted table of path hash, offset, length) and writes
+  `facial/definitions.txt` (definition key -> rig path hash).
+* `fc3_game::faces`: characters whose entity has a `CFacialPoseComponent` get
+  its default rig; their face bones are found by name hash among the rig's
+  joints (unique characters: all but one). Each frame after the body pose,
+  nearby faces with a clip playing are posed from it: the scene's facial track
+  (`CFacialClip`, from its start frame) and the speaker's lip-sync clip for a
+  spoken line add up. `FC3_NO_FACES=1` leaves faces on the body pose (A/B).
+* Not yet: generic characters' rigs (by archetype and kit head tag), idle
+  blinks, gameplay `*_facial` clips.
+
+### Tools
+
+```text
+fc3tool facial-voice                                            spoken lines with a lip-sync clip
+fc3tool facial <clip.dpax> [--rig <rig.dpdx>] [--at <seconds>]   blocks, channels, sampled weights, posed bones
+fc3tool facial <rig.dpdx>                                       bones and poses
+fc3tool facial generated\databases\generic\facialposedefinition.lib
+fc3tool facial-survey [path substring]                          parse every named clip and rig
+fc3anim bindpose-obj <head.xbg> out.obj --face <rig.dpdx> [--face-clip <clip.dpax>@<t>] [--face-pose <index>=<w>,..]
+```

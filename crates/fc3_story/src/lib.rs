@@ -15,6 +15,8 @@ pub mod core;
 pub mod data;
 pub mod missions;
 mod natives;
+pub mod save;
+pub mod triggers;
 pub mod values;
 
 use std::cell::RefCell;
@@ -42,15 +44,65 @@ pub struct Live {
     pub pos: [f32; 3],
     pub alive: bool,
     pub health: f32,
+    /// AI state: 0 relaxed or cautious, 1 investigating, 2 alert, 3 in
+    /// combat.
+    pub ai_state: u8,
+}
+
+/// An inventory item as scripts ask about it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Item {
+    /// The item's name (`FC3/Machete`, `Syringe_Heal`...).
+    pub name: String,
+    /// Weapon class or gadget kind.
+    pub class: String,
+    /// Category (`binoculars`, `assault`, ...).
+    pub category: String,
+    pub count: u32,
+}
+
+/// The player as scripts ask about them.
+#[derive(Debug, Clone, Default)]
+pub struct PlayerView {
+    pub health: f32,
+    pub max_health: f32,
+    pub money: u32,
+    pub medpacks: u32,
+    /// 0 standing, 1 crouching, 2 swimming.
+    pub stance: u8,
+    pub vehicle: Option<u64>,
+    pub seat: i32,
+    pub vehicle_type: i32,
+    /// Degrees (pitch, roll, yaw).
+    pub look_angles: [f32; 3],
+    pub weapon_slots: u32,
+    pub weapons: Vec<Item>,
+    pub gadgets: Vec<Item>,
+    /// The name of what is in the player's hands.
+    pub in_hands: Option<String>,
+    /// Unlocked skills (lower-case names).
+    pub skills: HashSet<String>,
+    pub on_zipline: bool,
 }
 
 /// What the scripts may read of the world, refreshed by the host.
 #[derive(Debug, Clone, Default)]
 pub struct View {
+    pub player_state: PlayerView,
+    /// Entities the player has tagged.
+    pub tagged: HashSet<u64>,
+    /// 0 easy .. 3 hardest.
+    pub difficulty: u8,
+    /// Entities inside each trigger the host evaluates (by trigger id).
+    pub contacts: HashMap<u64, Vec<u64>>,
     /// The player's position, Dunia space (Z up).
     pub player: [f32; 3],
     /// Heading in degrees (Dunia yaw).
     pub player_yaw: f32,
+    /// Where the player's view looks (a unit vector, Dunia space) and its
+    /// vertical field of view in degrees, for look-at triggers.
+    pub look: [f32; 3],
+    pub fov: f32,
     pub player_dead: bool,
     pub player_in_vehicle: bool,
     /// Story entities the host has spawned (NPCs, props), by id.
@@ -120,6 +172,25 @@ pub enum Command {
     },
     /// A message on the bus (for host systems that react to them).
     Message(String),
+    /// A character says a line (voice by sound id, its subtitle, how long).
+    Dialog {
+        speaker: u64,
+        sound: u32,
+        target: Option<u64>,
+        subtitle: Option<String>,
+        seconds: f32,
+    },
+    /// A character stops talking.
+    StopDialog {
+        speaker: u64,
+    },
+    /// A character goes to a contextual action's spot and does it (report
+    /// `Story::action_started` there, `Story::action_finished` when done),
+    /// or stops (`None`).
+    Action {
+        pawn: u64,
+        action: Option<u64>,
+    },
     /// Anything else a script asked for that the host may act on: the
     /// native's name and its arguments as text.
     Native {
@@ -180,6 +251,105 @@ impl Story {
             for b in init {
                 c.set_block(b, LayerState::Active);
             }
+        }
+        self.start_root();
+    }
+
+    /// Starts from a save: its world state first, then the master graph,
+    /// whose missions take their saved states as they register.
+    pub fn boot_saved(&mut self, save: &save::StorySave) {
+        self.restore(save);
+        self.start_root();
+    }
+
+    fn restore(&mut self, s: &save::StorySave) {
+        {
+            let mut c = self.core.borrow_mut();
+            c.missions.saved.missions = s.missions.iter().map(|(k, st, ack)| (k.clone(), (missions::State::parse(st), *ack))).collect();
+            for &(l, st) in &s.layers {
+                if let Some(state) = LayerState::from_code(st as i64) {
+                    c.set_layer(l, state);
+                }
+            }
+            for &(b, st) in &s.blocks {
+                if let Some(state) = LayerState::from_code(st as i64) {
+                    c.blocks.insert(b, state);
+                }
+            }
+            c.safehouses_unlocked = s.safehouses.iter().copied().collect();
+            c.radio_towers_unlocked = s.radio_towers.iter().copied().collect();
+            c.unlocked_tags = s.tags.iter().cloned().collect();
+            c.removed = s.removed.iter().copied().collect();
+            c.dead = s.dead.iter().copied().collect();
+            c.missions.chapter = s.chapter;
+            c.respawn = s.respawn;
+        }
+        let lua = self.domino.lua();
+        if let Ok(globals) = lua.globals().get::<Table>("PersistentGlobals") {
+            if let Err(e) = save::load_table(lua, &globals, &s.persistent) {
+                self.core.borrow_mut().warn(format!("restoring PersistentGlobals: {e}"));
+            }
+        }
+    }
+
+    /// The story's progress, for a save.
+    pub fn save(&self) -> save::StorySave {
+        let c = self.core.borrow();
+        let mut missions: Vec<(String, String, bool)> = c
+            .missions
+            .by_id
+            .values()
+            .map(|m| {
+                let key = match &m.block {
+                    Some(b) => b.block.to_string(),
+                    None => m.name.clone(),
+                };
+                (key, m.state.name().to_string(), m.acknowledged)
+            })
+            .collect();
+        // What an earlier save knew that hasn't registered this time.
+        for (k, (st, ack)) in &c.missions.saved.missions {
+            if !missions.iter().any(|m| &m.0 == k) {
+                missions.push((k.clone(), st.name().to_string(), *ack));
+            }
+        }
+        missions.sort();
+        let mut layers: Vec<(u64, u8)> = c.layers.iter().map(|(l, s)| (*l, *s as u8)).collect();
+        layers.sort_unstable();
+        let mut blocks: Vec<(u64, u8)> = c.blocks.iter().map(|(b, s)| (*b, *s as u8)).collect();
+        blocks.sort_unstable();
+        let sorted = |set: &HashSet<u64>| {
+            let mut v: Vec<u64> = set.iter().copied().collect();
+            v.sort_unstable();
+            v
+        };
+        let mut tags: Vec<String> = c.unlocked_tags.iter().cloned().collect();
+        tags.sort();
+        let persistent = self.domino.lua().globals().get::<Table>("PersistentGlobals").map(|t| save::dump_table(&t)).unwrap_or_default();
+        save::StorySave {
+            missions,
+            layers,
+            blocks,
+            safehouses: sorted(&c.safehouses_unlocked),
+            radio_towers: sorted(&c.radio_towers_unlocked),
+            tags,
+            removed: sorted(&c.removed),
+            dead: sorted(&c.dead),
+            chapter: c.missions.chapter,
+            respawn: c.respawn,
+            persistent,
+        }
+    }
+
+    /// Where the player comes back after a reload (a spawn point), if a
+    /// checkpoint set one.
+    pub fn respawn_point(&self) -> Option<u64> {
+        self.core.borrow().respawn
+    }
+
+    fn start_root(&mut self) {
+        {
+            let mut c = self.core.borrow_mut();
             match c.data.root {
                 Some(root) => {
                     c.start_entity_script(root);
@@ -200,6 +370,12 @@ impl Story {
     pub fn update(&mut self, dt: f32, view: View) -> Vec<Command> {
         {
             let mut c = self.core.borrow_mut();
+            // Stance changes are events on the player.
+            let stance = view.player_state.stance;
+            if c.view.player_state.stance != stance && c.time > 0.0 {
+                let event = ["new_stance_stand", "new_stance_crouch", "new_stance_swim"][(stance as usize).min(2)];
+                c.raise(&Listen::Entity(PLAYER, event.into()), vec![Arg::id(PLAYER)]);
+            }
             c.view = view;
             c.time += dt as f64;
             // Timers.
@@ -219,6 +395,13 @@ impl Story {
             let ticks: Vec<Callback> = c.ticks.values().cloned().collect();
             for cb in ticks {
                 c.call(cb, vec![Arg::Num(dt as f64)]);
+            }
+            c.update_media(dt as f64);
+            c.update_dialogs(dt as f64);
+            // The world streamed in round a teleported player.
+            if c.world_ready_at.is_some_and(|at| c.time >= at) {
+                c.world_ready_at = None;
+                c.raise(&Listen::Generic("DominoGameReady".into()), vec![]);
             }
             natives::world::update_triggers(&mut c);
         }
@@ -249,6 +432,128 @@ impl Story {
         self.pump();
     }
 
+    /// An event about an entity for the scripts listening on the groups it
+    /// belongs to (`Die`, `CCounterEvent`, `CA_End`, `Alarm_Activated`,
+    /// ...): callbacks get the event name, then `args`.
+    pub fn group_event(&mut self, entity: u64, event: &str, args: Vec<Arg>) {
+        {
+            let mut c = self.core.borrow_mut();
+            let groups: Vec<String> = c
+                .listeners
+                .values()
+                .filter_map(|l| match &l.on {
+                    Listen::Group(g, e) if e == event || e.is_empty() => Some(g.clone()),
+                    _ => None,
+                })
+                .collect();
+            let mut all = vec![Arg::Str(event.to_string())];
+            all.extend(args);
+            for g in groups {
+                if c.groups(&values::Text(g.clone())).contains(&entity) {
+                    c.raise_where(|l| matches!(l, Listen::Group(lg, e) if *lg == g && (e == event || e.is_empty())), all.clone());
+                }
+            }
+        }
+        self.pump();
+    }
+
+    /// The world sectors of the mission zones being played now (the
+    /// world's own encounters keep out of them).
+    pub fn active_zone_sectors(&self) -> HashSet<u32> {
+        let c = self.core.borrow();
+        c.missions
+            .by_id
+            .values()
+            .filter(|m| m.state == missions::State::Running)
+            .filter_map(|m| m.block.as_ref())
+            .filter_map(|b| c.data.blocks.get(&b.block))
+            .flat_map(|b| b.zone_sectors.iter().copied())
+            .collect()
+    }
+
+    /// The objective markers shown now, where they are (Dunia space): (marker
+    /// entity, position).
+    pub fn objective_markers(&self) -> Vec<(u64, [f32; 3])> {
+        let c = self.core.borrow();
+        c.objective_markers.keys().filter_map(|&m| c.position(m).map(|p| (m, p))).collect()
+    }
+
+    /// The members of a group as scripts write it (`#hash`, or one id).
+    pub fn group_members(&self, group: &str) -> Vec<u64> {
+        self.core.borrow().groups(&values::Text(group.to_string()))
+    }
+
+    /// Whether an entity is in the world as the story sees it (its layer
+    /// present, not removed by a script).
+    pub fn is_loaded(&self, id: u64) -> bool {
+        self.core.borrow().is_loaded(id)
+    }
+
+    /// The entities scripts have removed (saves keep them).
+    pub fn removed(&self) -> HashSet<u64> {
+        self.core.borrow().removed.clone()
+    }
+
+    /// A character died (killed by the player unless `by` says otherwise):
+    /// the `Die` event for every group it is in, and it counts as dead from
+    /// now on.
+    pub fn killed(&mut self, id: u64) {
+        self.core.borrow_mut().dead.insert(id);
+        self.group_event(id, "Die", vec![Arg::id(PLAYER), Arg::Num(0.0), Arg::id(id), Arg::Str(String::new())]);
+    }
+
+    /// A character reached its contextual action and began it.
+    pub fn action_started(&mut self, pawn: u64) {
+        {
+            let mut c = self.core.borrow_mut();
+            let Some(cur) = c.ca.current.get_mut(&pawn) else { return };
+            if cur.started {
+                return;
+            }
+            cur.started = true;
+            let action = cur.action;
+            c.action_event(action, "CA_Start", pawn);
+        }
+        self.pump();
+    }
+
+    /// A character finished its contextual action.
+    pub fn action_finished(&mut self, pawn: u64) {
+        {
+            let mut c = self.core.borrow_mut();
+            let Some(cur) = c.ca.current.remove(&pawn) else { return };
+            c.action_event(cur.action, "CA_End", pawn);
+        }
+        self.pump();
+    }
+
+    /// A character's AI broke off its contextual action (it heard or saw
+    /// something).
+    pub fn action_interrupted(&mut self, pawn: u64) {
+        {
+            let mut c = self.core.borrow_mut();
+            let Some(cur) = c.ca.current.remove(&pawn) else { return };
+            c.action_event(cur.action, "CA_Interrupt", pawn);
+        }
+        self.pump();
+    }
+
+    /// The specific gameplays running (minigames, QTEs): (id, name).
+    pub fn gameplays(&self) -> Vec<(u64, String)> {
+        self.core.borrow().gameplays.iter().map(|(i, n)| (*i, n.clone())).collect()
+    }
+
+    /// A specific gameplay the host ran has ended.
+    pub fn gameplay_ended(&mut self, id: u64) {
+        self.core.borrow_mut().end_gameplay(id);
+        self.pump();
+    }
+
+    /// Whether a character has died (or was removed).
+    pub fn is_dead(&self, id: u64) -> bool {
+        self.core.borrow().is_dead(id)
+    }
+
     /// A global event (`PlayGame`, UI page events, ...).
     pub fn generic_event(&mut self, event: &str, args: Vec<Arg>) {
         self.core.borrow_mut().raise(&Listen::Generic(event.to_string()), args);
@@ -259,6 +564,68 @@ impl Story {
     pub fn message(&mut self, message: &str) {
         self.core.borrow_mut().raise(&Listen::Message(message.to_string()), vec![]);
         self.pump();
+    }
+
+    /// A cinematic sequence's progress, as the host plays it: `Started`,
+    /// `Finished`, `FinishedLoop`, `Paused`, `Stopped`, `Skipped`, or
+    /// `SyncPointReached` (with the sync point's name).
+    pub fn sequence_event(&mut self, scene: &str, file: &str, event: &str, sync_point: Option<&str>) {
+        let name = format!("{}{event}", natives::media::sequence_name(scene, file));
+        {
+            let mut c = self.core.borrow_mut();
+            if let Some(sp) = sync_point {
+                c.media.sync_points.insert((scene.to_string(), file.to_ascii_lowercase()), sp.to_string());
+            }
+            // (Scripts name sequences in whatever case they were written.)
+            c.raise_where(|l| matches!(l, Listen::Entity(_, e) if e.eq_ignore_ascii_case(&name)), vec![Arg::id(PLAYER), Arg::Str(name.clone())]);
+        }
+        self.pump();
+    }
+
+    /// A video started (`ended = false`) or ended: the events Bink
+    /// listeners wait for (on the player, with the video's path id), and
+    /// the end of a fullscreen video.
+    pub fn video_event(&mut self, path: &str, ended: bool, fullscreen: bool) {
+        {
+            let mut c = self.core.borrow_mut();
+            let id = fc3_domino::path_id(path);
+            c.raise(&Listen::Entity(PLAYER, "CTabletCallEvent".into()), vec![Arg::Num(if ended { 2.0 } else { 1.0 }), Arg::Str(String::new()), Arg::Str(id)]);
+            if ended && fullscreen {
+                c.raise(&Listen::Generic("StopVideo".into()), vec![]);
+            }
+        }
+        self.pump();
+    }
+
+    /// The player gave an input the scripts may listen for (`jump`,
+    /// `throw_rock`, `show_map`, ...).
+    pub fn input_signal(&mut self, signal: &str) {
+        let n = self.core.borrow_mut().raise(
+            &Listen::Input(signal.to_string()),
+            vec![Arg::id(PLAYER), Arg::Nil, Arg::Num(0.0), Arg::Num(0.0), Arg::Num(0.0), Arg::Num(0.0), Arg::Str(signal.to_string())],
+        );
+        if n > 0 {
+            self.pump();
+        }
+    }
+
+    /// A sound scripts started has ended (`reason` as the engine gives it:
+    /// 0 finished, 1 stopped).
+    pub fn sound_finished(&mut self, id: u64, reason: f64) {
+        let cb = self.core.borrow_mut().media.sounds.remove(&id);
+        if let Some(cb) = cb {
+            self.core.borrow_mut().call(cb, vec![Arg::Num(reason)]);
+            self.pump();
+        }
+    }
+
+    /// The player closed a message or tutorial box, accepting or cancelling.
+    pub fn box_answered(&mut self, id: u64, accept: bool) {
+        let cb = self.core.borrow_mut().media.boxes.remove(&id);
+        if let Some(cb) = cb {
+            self.core.borrow_mut().call(cb, vec![Arg::Str(if accept { "ACCEPT" } else { "CANCEL" }.into())]);
+            self.pump();
+        }
     }
 
     /// Runs a debug console command scripts registered (cheats like
@@ -280,6 +647,124 @@ impl Story {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The triggers scripts wait on now: (trigger, event, a point inside,
+    /// enabled), for tools that drive the story without a world.
+    pub fn watched_triggers(&self) -> Vec<(u64, String, [f32; 3], bool)> {
+        let c = self.core.borrow();
+        let mut out = Vec::new();
+        for l in c.listeners.values() {
+            let Listen::Entity(t, e) = &l.on else { continue };
+            if !matches!(e.as_str(), "Enter" | "Use" | "EnterFOV") || !c.is_loaded(*t) {
+                continue;
+            }
+            let Some(entry) = c.data.entities.get(t) else { continue };
+            let point = match triggers::shape_of(entry) {
+                Some(triggers::Shape::Prism { points, z_min, .. }) => {
+                    let n = points.len() as f32;
+                    let (x, y) = points.iter().fold((0.0, 0.0), |a, p| (a.0 + p[0] / n, a.1 + p[1] / n));
+                    [x, y, if z_min > f32::MIN { z_min + 1.0 } else { entry.pos[2] }]
+                }
+                _ => entry.pos,
+            };
+            out.push((*t, e.clone(), point, c.trigger_on(*t)));
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        out.dedup();
+        out
+    }
+
+    /// A spot on the ground inside a region trigger, given the ground's height
+    /// at a point (its centre may lie above the region's heights, as on a
+    /// hill a region rings): the centre, else points between it and the
+    /// corners and edges.
+    pub fn trigger_ground_point(&self, id: u64, ground: impl Fn(f32, f32) -> Option<f32>) -> Option<[f32; 3]> {
+        let c = self.core.borrow();
+        let shape = c.data.entities.get(&id).and_then(triggers::shape_of)?;
+        let triggers::Shape::Prism { points, .. } = &shape else { return None };
+        let n = points.len() as f32;
+        let mid = points.iter().fold([0.0, 0.0], |a, p| [a[0] + p[0] / n, a[1] + p[1] / n]);
+        let edges = (0..points.len()).map(|i| {
+            let (a, b) = (points[i], points[(i + 1) % points.len()]);
+            [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
+        });
+        let rims: Vec<[f32; 2]> = points.iter().copied().chain(edges).collect();
+        let lerp = |p: [f32; 2], t: f32| [mid[0] + (p[0] - mid[0]) * t, mid[1] + (p[1] - mid[1]) * t];
+        std::iter::once(mid)
+            .chain([0.5, 0.75, 0.9].into_iter().flat_map(|t| rims.iter().map(move |p| lerp(*p, t))))
+            .filter_map(|[x, y]| ground(x, y).map(|z| [x, y, z + 0.2]))
+            .find(|p| shape.contains(*p) && shape.contains([p[0], p[1], p[2] + triggers::BODY_HALF_HEIGHT]))
+    }
+
+    /// Why a trigger does or doesn't see the player (for working out
+    /// stalls): loaded, on, its shape, and whether that holds the player.
+    pub fn trigger_debug(&self, id: u64) -> String {
+        let c = self.core.borrow();
+        let shape = c.data.entities.get(&id).and_then(triggers::shape_of);
+        let inside = shape.as_ref().map(|s| s.contains(c.view.player));
+        format!(
+            "loaded {} on {} shape {:?} player {:?} inside {:?} contacts {:?}",
+            c.is_loaded(id),
+            c.trigger_on(id),
+            shape,
+            c.view.player,
+            inside,
+            c.contacts(id)
+        )
+    }
+
+    /// The contextual action a character is on, if any.
+    pub fn current_action(&self, pawn: u64) -> Option<u64> {
+        self.core.borrow().ca.current.get(&pawn).map(|c| c.action)
+    }
+
+    /// Contextual actions scripts wait to see interrupted (for tools that
+    /// drive the story: a distraction is due).
+    pub fn awaited_interrupts(&self) -> Vec<u64> {
+        let c = self.core.borrow();
+        c.listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Group(a, e) if e == "CA_Interrupt" => a.parse().ok(),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// What scripts wait on now, one line each (what, and the box method
+    /// it calls), with running delays: for working out where a story stalls.
+    pub fn waiting_on(&self) -> Vec<String> {
+        let c = self.core.borrow();
+        // The graph a box belongs to (else the box), by its script's name.
+        let graph = |t: &Table| -> String {
+            let path = |t: &Table| -> String {
+                let p = t.get::<Table>("_type").and_then(|ty| ty.get::<String>("_path")).unwrap_or_default();
+                p.rsplit(['/', '\\']).next().unwrap_or_default().to_string()
+            };
+            t.get::<Table>("_graph").ok().map(|g| path(&g)).filter(|n| !n.is_empty()).unwrap_or_else(|| path(t))
+        };
+        let mut out: Vec<String> = c.listeners.values().map(|l| format!("{:?} -> {} {}", l.on, graph(&l.callback.target), l.callback.method)).collect();
+        out.extend(c.delays.values().filter(|d| d.running).map(|d| format!("delay {:.1}/{:.1}s -> {}", d.elapsed, d.seconds, d.callback.method)));
+        out.sort();
+        out
+    }
+
+    /// The input signals scripts wait on now (for tools that drive the
+    /// story without a player).
+    pub fn watched_signals(&self) -> Vec<String> {
+        let c = self.core.borrow();
+        let mut out: Vec<String> = c
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Input(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        out
     }
 
     pub fn layer_state(&self, layer: u64) -> LayerState {

@@ -137,6 +137,9 @@ fn freefall_test(
     if *clock - *last >= 1.0 {
         *last = *clock;
         let h = Vec2::new(p.velocity.x, p.velocity.z).length();
-        info!("freefall-test t={:.0} {:?} y={:.1} horizontal {h:.1} m/s vertical {:.1} m/s grounded {}", *clock, p.air, t.translation.y, p.velocity.y, p.grounded);
+        info!(
+            "freefall-test t={:.0} {:?} y={:.1} horizontal {h:.1} m/s vertical {:.1} m/s grounded {}",
+            *clock, p.air, t.translation.y, p.velocity.y, p.grounded
+        );
     }
 }

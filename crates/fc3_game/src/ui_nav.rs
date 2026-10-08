@@ -103,11 +103,8 @@ fn navigate(
         return;
     }
     // Visible, laid-out buttons and their centres (screen pixels, y down).
-    let items: Vec<(Entity, Vec2)> = buttons
-        .iter()
-        .filter(|(_, _, node, _, vis)| vis.get() && node.size().min_element() > 1.0)
-        .map(|(e, _, _, t, _)| (e, t.translation))
-        .collect();
+    let items: Vec<(Entity, Vec2)> =
+        buttons.iter().filter(|(_, _, node, _, vis)| vis.get() && node.size().min_element() > 1.0).map(|(e, _, _, t, _)| (e, t.translation)).collect();
     if items.is_empty() {
         focus.entity = None;
         return;

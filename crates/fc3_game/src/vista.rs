@@ -28,9 +28,7 @@ pub struct VistaPlugin;
 impl Plugin for VistaPlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "vista.wgsl");
-        app.add_plugins(MaterialPlugin::<VistaMaterial>::default())
-            .add_systems(Startup, load_forest)
-            .add_systems(Update, (build_forest, follow_player));
+        app.add_plugins(MaterialPlugin::<VistaMaterial>::default()).add_systems(Startup, load_forest).add_systems(Update, (build_forest, follow_player));
     }
 }
 

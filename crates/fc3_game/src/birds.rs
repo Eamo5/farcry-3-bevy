@@ -113,7 +113,15 @@ struct BirdAssets {
 }
 
 fn load_birds(mut commands: Commands, server: Res<AssetServer>) {
-    let models = BIRDS.iter().map(|b| server.load_builder().with_settings(|m: &mut ModelSettings| m.skinned = true).load(skinned_cache_path(&cache::model_rel(&format!("{MODELS}{}", b.model))))).collect();
+    let models = BIRDS
+        .iter()
+        .map(|b| {
+            server
+                .load_builder()
+                .with_settings(|m: &mut ModelSettings| m.skinned = true)
+                .load(skinned_cache_path(&cache::model_rel(&format!("{MODELS}{}", b.model))))
+        })
+        .collect();
     let sets = BIRDS
         .iter()
         .map(|b| {
@@ -197,7 +205,19 @@ fn spawn_birds(
     for _ in 0..d.flock {
         let radius = rng.range(d.radius.0, d.radius.1);
         let angle = rng.f32() * std::f32::consts::TAU;
-        let bird = Bird { def, flock: *next_flock, centre, radius, height: height + rng.range(-4.0, 4.0), angle, dir, rig: None, falling: None, grounded: 0.0, call_in: rng.range(4.0, 20.0) };
+        let bird = Bird {
+            def,
+            flock: *next_flock,
+            centre,
+            radius,
+            height: height + rng.range(-4.0, 4.0),
+            angle,
+            dir,
+            rig: None,
+            falling: None,
+            grounded: 0.0,
+            call_in: rng.range(4.0, 20.0),
+        };
         let root = commands
             .spawn((
                 Transform::from_translation(centre + Vec3::new(angle.cos() * radius, height, angle.sin() * radius)),

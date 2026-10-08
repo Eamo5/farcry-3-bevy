@@ -100,9 +100,7 @@ impl Surfaces {
                 [r, g, b, (1.0 - r - g - b).max(0.0)]
             })
             .unwrap_or([1.0, 0.0, 0.0, 0.0]);
-        let best = (0..4)
-            .filter(|&i| sector.layers[i] != NO_LAYER)
-            .max_by(|&a, &b| weights[a].total_cmp(&weights[b]))?;
+        let best = (0..4).filter(|&i| sector.layers[i] != NO_LAYER).max_by(|&a, &b| weights[a].total_cmp(&weights[b]))?;
         Some(sector.layers[best])
     }
 

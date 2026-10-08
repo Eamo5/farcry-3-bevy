@@ -29,13 +29,12 @@ use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
-use bevy::shader::ShaderRef;
 use bevy::render::storage::ShaderBuffer;
 use bevy::shader::Shader;
+use bevy::shader::ShaderRef;
 use fc3_formats::cache::{self, mat_flags, CachedMaterial, ShaderEntry};
 use fc3_formats::original::{
-    h, names, ShaderSet, USAGE_BLEND_INDICES, USAGE_BLEND_WEIGHT, USAGE_COLOR, USAGE_FOG, USAGE_NORMAL, USAGE_POSITION, USAGE_PSIZE,
-    USAGE_TEXCOORD,
+    h, names, ShaderSet, USAGE_BLEND_INDICES, USAGE_BLEND_WEIGHT, USAGE_COLOR, USAGE_FOG, USAGE_NORMAL, USAGE_POSITION, USAGE_PSIZE, USAGE_TEXCOORD,
 };
 
 use crate::player::PlayerCamera;
@@ -48,18 +47,12 @@ pub struct OriginalShadersPlugin;
 
 impl Plugin for OriginalShadersPlugin {
     fn build(&self, app: &mut App) {
-        let globals = app
-            .world_mut()
-            .resource_mut::<Assets<ShaderBuffer>>()
-            .add(ShaderBuffer::from(GlobalRegisters { f: [Vec4::ZERO; 256] }));
+        let globals = app.world_mut().resource_mut::<Assets<ShaderBuffer>>().add(ShaderBuffer::from(GlobalRegisters { f: [Vec4::ZERO; 256] }));
         let _ = GLOBALS.set(globals);
         bevy::asset::embedded_asset!(app, "original_prepass.wgsl");
         app.add_plugins(MaterialPlugin::<OriginalMaterial>::default())
             .register_asset_loader(OriginalMaterialLoader)
-            .add_systems(
-                Update,
-                (toggle_original_shaders, attach_swaps, apply_original_materials, apply_terrain_materials, create_pair_shaders).chain(),
-            )
+            .add_systems(Update, (toggle_original_shaders, attach_swaps, apply_original_materials, apply_terrain_materials, create_pair_shaders).chain())
             .add_systems(PostUpdate, update_globals.after(TransformSystems::Propagate));
     }
 }
@@ -133,12 +126,9 @@ impl ShaderLibrary {
         self.set.entry(hash)
     }
 
-
     pub fn wgsl(&self, e: &ShaderEntry) -> anyhow::Result<String> {
-        let blob = self
-            .pack
-            .get(e.offset as usize..e.offset as usize + e.size as usize)
-            .ok_or_else(|| anyhow::anyhow!("shader {:016x} outside the pack", e.hash))?;
+        let blob =
+            self.pack.get(e.offset as usize..e.offset as usize + e.size as usize).ok_or_else(|| anyhow::anyhow!("shader {:016x} outside the pack", e.hash))?;
         Ok(String::from_utf8(cache::decompress(blob)?)?)
     }
 
@@ -362,7 +352,12 @@ fn cutout_tiling(params: &[(u32, Vec<u8>)]) -> [f32; 2] {
 
 /// Deterministic shader handles for a pair (created by `create_pair_shaders`).
 fn pair_handles(key: OriginalKey) -> (Handle<Shader>, Handle<Shader>) {
-    let flag = u64::from(key.normal) | u64::from(key.skinned) << 1 | u64::from(key.terrain) << 2 | u64::from(key.alpha_test) << 3 | u64::from(key.unlit) << 4 | u64::from(key.blended) << 5;
+    let flag = u64::from(key.normal)
+        | u64::from(key.skinned) << 1
+        | u64::from(key.terrain) << 2
+        | u64::from(key.alpha_test) << 3
+        | u64::from(key.unlit) << 4
+        | u64::from(key.blended) << 5;
     let vs = Uuid::from_u64_pair(key.vs ^ 0x6663_335f_7673_0000 ^ flag, key.ps);
     let ps = Uuid::from_u64_pair(key.ps ^ 0x6663_335f_7073_0000 ^ flag, key.vs);
     (Handle::Uuid(vs, std::marker::PhantomData), Handle::Uuid(ps, std::marker::PhantomData))
@@ -382,7 +377,11 @@ impl Material for OriginalMaterial {
     fn depth_bias(&self) -> f32 {
         // Overlays sort just in front of the surface they cover (the depth
         // test's own bias is set in `specialize`).
-        if self.cutout.w > 0.0 { crate::cache_assets::DECAL_DEPTH_BIAS } else { 0.0 }
+        if self.cutout.w > 0.0 {
+            crate::cache_assets::DECAL_DEPTH_BIAS
+        } else {
+            0.0
+        }
     }
 
     fn prepass_fragment_shader() -> ShaderRef {
@@ -573,13 +572,7 @@ impl AssetLoader for OriginalMaterialLoader {
 /// (channel `k` drives layer `k`, as in `terrain_detail.wgsl`), modulated by
 /// the colour atlas and the layer's distance noise; far away it fades to the
 /// baked atlas diffuse. `quadrant` is the sector's place in its 2x2 atlas.
-pub fn terrain_material(
-    ctx: &mut LoadContext,
-    table: &cache::TerrainLayerTable,
-    layers: [u8; 4],
-    atlas: u32,
-    quadrant: Vec2,
-) -> Option<OriginalMaterial> {
+pub fn terrain_material(ctx: &mut LoadContext, table: &cache::TerrainLayerTable, layers: [u8; 4], atlas: u32, quadrant: Vec2) -> Option<OriginalMaterial> {
     use crate::cache_assets::load_texture;
     use fc3_formats::terrain::SECTOR_SIZE;
 
@@ -644,7 +637,17 @@ pub fn terrain_material(
     sampler(&mut mat, names::DIFFUSE_SAMPLER, load_texture(ctx, &cache::atlas_rel(atlas, "diffuse"), true, true));
     sampler(&mut mat, names::VISTA_NOISE_SAMPLER, load_texture(ctx, cache::TERRAIN_VISTA_NOISE_REL, false, false));
     sampler(&mut mat, names::PERLIN_NOISE_SAMPLER, load_texture(ctx, cache::TERRAIN_PERLIN_REL, false, false));
-    mat.key = OriginalKey { vs: vs.hash, ps: ps.hash, normal: true, skinned: false, terrain: true, double_sided: false, alpha_test: false, unlit: false, blended: false };
+    mat.key = OriginalKey {
+        vs: vs.hash,
+        ps: ps.hash,
+        normal: true,
+        skinned: false,
+        terrain: true,
+        double_sided: false,
+        alpha_test: false,
+        unlit: false,
+        blended: false,
+    };
     Some(mat)
 }
 
@@ -668,10 +671,7 @@ fn apply_terrain_materials(
         let near = here.is_some_and(|h| (chunk.coord.x - h.x).abs().max((chunk.coord.y - h.y).abs()) <= reach);
         let want = settings.enabled && near && originals.contains(&swap.original);
         if want && !on_original {
-            commands
-                .entity(e)
-                .remove::<MeshMaterial3d<crate::cache_assets::TerrainMaterial>>()
-                .insert(MeshMaterial3d(swap.original.clone()));
+            commands.entity(e).remove::<MeshMaterial3d<crate::cache_assets::TerrainMaterial>>().insert(MeshMaterial3d(swap.original.clone()));
         } else if !want && on_original {
             commands.entity(e).remove::<MeshMaterial3d<OriginalMaterial>>().insert(MeshMaterial3d(swap.standard.clone()));
         }
@@ -784,11 +784,8 @@ fn pair_sources(lib: &ShaderLibrary, key: OriginalKey) -> anyhow::Result<(String
     if key.skinned {
         // Skinned shaders index the bone palette relative to its first register;
         // those reads come from Bevy's animated joints (in Dunia space).
-        let palette = vs
-            .bindings
-            .iter()
-            .find(|b| b.name_hash == h(names::BLEND_MATRICES))
-            .ok_or_else(|| anyhow::anyhow!("skinned shader without a bone palette"))?;
+        let palette =
+            vs.bindings.iter().find(|b| b.name_hash == h(names::BLEND_MATRICES)).ok_or_else(|| anyhow::anyhow!("skinned shader without a bone palette"))?;
         let base = palette.register;
         let hook = "fn d3d_crel(i: i32) -> vec4<f32> {\n";
         if !body.contains(hook) {
@@ -834,9 +831,7 @@ fn pair_sources(lib: &ShaderLibrary, key: OriginalKey) -> anyhow::Result<(String
             // Terrain: sector-local grid position with no neighbour LOD edge (4).
             USAGE_POSITION if key.terrain => "vec4<f32>(a_position.x, -a_position.z, 4.0, 4.0)".to_string(),
             USAGE_PSIZE if key.terrain => "d3d_height_bytes(a_position.y)".to_string(),
-            USAGE_NORMAL if key.terrain => {
-                "vec4<f32>(a_normal.x, -a_normal.z, a_normal.x, -a_normal.z) * 0.5 + vec4<f32>(0.5)".to_string()
-            }
+            USAGE_NORMAL if key.terrain => "vec4<f32>(a_normal.x, -a_normal.z, a_normal.x, -a_normal.z) * 0.5 + vec4<f32>(0.5)".to_string(),
             USAGE_POSITION => "vec4<f32>(a_position.x, -a_position.z, a_position.y, 1.0)".to_string(),
             USAGE_NORMAL => "vec4<f32>(vec3<f32>(a_normal.x, -a_normal.z, a_normal.y) * 0.5 + vec3<f32>(0.5), 1.0)".to_string(),
             // The game streams both UV sets as one four-component input
@@ -886,7 +881,9 @@ fn pair_sources(lib: &ShaderLibrary, key: OriginalKey) -> anyhow::Result<(String
     vsrc += "    out.instance = instance;\n    return out;\n}\n";
 
     // Fragment module.
-    let mut fsrc = String::from("#import bevy_pbr::{pbr_types, pbr_functions, mesh_bindings::mesh}\n#import fc3::horizon::{remove_hidden_sun, atlas_uv, beyond_cascades}\n");
+    let mut fsrc = String::from(
+        "#import bevy_pbr::{pbr_types, pbr_functions, mesh_bindings::mesh}\n#import fc3::horizon::{remove_hidden_sun, atlas_uv, beyond_cascades}\n",
+    );
     fsrc += "@group(#{MATERIAL_BIND_GROUP}) @binding(48) var d3d_horizon: texture_2d<f32>;\n@group(#{MATERIAL_BIND_GROUP}) @binding(49) var d3d_horizon_sampler: sampler;\n";
     if needs_uv {
         fsrc += "@group(#{MATERIAL_BIND_GROUP}) @binding(50) var d3d_cutout: texture_2d<f32>;\n@group(#{MATERIAL_BIND_GROUP}) @binding(51) var d3d_cutout_sampler: sampler;\n@group(#{MATERIAL_BIND_GROUP}) @binding(52) var<uniform> d3d_cutout_params: vec4<f32>;\n";
@@ -1101,7 +1098,8 @@ fn apply_original_materials(
     if std::env::var("FC3_ORIG_STATS").is_ok() && time.elapsed_secs() > *next_stats {
         *next_stats = time.elapsed_secs() + 5.0;
         let near = parts.iter().filter(|(_, _, t, _)| t.translation().distance(eye) < range).count();
-        let usable = parts.iter().filter(|(_, s, t, _)| t.translation().distance(eye) < range && originals.get(&s.original).is_some_and(|m| m.key.vs != 0)).count();
+        let usable =
+            parts.iter().filter(|(_, s, t, _)| t.translation().distance(eye) < range && originals.get(&s.original).is_some_and(|m| m.key.vs != 0)).count();
         let on = parts.iter().filter(|(_, _, _, on)| *on).count();
         info!("original shaders: {on} prop parts on them; {usable} of the {near} within {range} m can be");
     }

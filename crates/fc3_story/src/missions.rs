@@ -239,6 +239,11 @@ impl Core {
                 current_objective: None,
             },
         );
+        // A block a save left running plays again (the mission's graph may
+        // only start blocks as the one before completes).
+        if state == State::Running {
+            self.activate_block_mission(block, block_owner);
+        }
         id
     }
 
@@ -337,6 +342,7 @@ impl Core {
         };
         self.finish_mission(&m.id, State::Completed);
         if let Some(end) = m.block.as_ref().and_then(|b| b.end_spawn) {
+            self.respawn = Some(end);
             self.emit(Command::RespawnPoint(end));
         }
         if save {

@@ -104,10 +104,16 @@ fn spot_clip(kind: &str, female: bool) -> Option<&'static str> {
         ("lean", true) => r"smart_terrain_points\civilians\generic_natives\simple_animation\neutral\lean\3rdcivf_fulbln_leanonwall_loop_v00_+000fw_nowep.mab",
         ("sit", false) => r"smart_terrain_points\civilians\generic_natives\simple_animation\neutral\ground\3rdcivm_fulbgr_sitonground_loop_+000fw_nowep.mab",
         ("sit", true) => r"smart_terrain_points\civilians\generic_natives\simple_animation\neutral\ground\3rdcivf_fulbgr_sitonground_loop_+000fw_nowep.mab",
-        ("pray", false) => r"smart_terrain_points\civilians\generic_natives\simple_animation\praying\ground\3rdcivm_fulbgr_praying_v00_loop_+000fw_noweapon.mab",
+        ("pray", false) => {
+            r"smart_terrain_points\civilians\generic_natives\simple_animation\praying\ground\3rdcivm_fulbgr_praying_v00_loop_+000fw_noweapon.mab"
+        }
         ("pray", true) => r"smart_terrain_points\civilians\generic_natives\simple_animation\praying\ground\3rdcivf_fulbgr_praying_v00_loop_+000fw_noweapon.mab",
-        ("loot", false) => r"smart_terrain_points\civilians\generic_natives\simple_animation\lootingcorpse\3rdcivm_fulb_lootingcorpse_v00_loop_+000fw_noweap.mab",
-        ("loot", true) => r"smart_terrain_points\civilians\generic_natives\simple_animation\lootingcorpse\3rdcivf_fulb_lootingcorpse_v00_loop_+000fw_noweap.mab",
+        ("loot", false) => {
+            r"smart_terrain_points\civilians\generic_natives\simple_animation\lootingcorpse\3rdcivm_fulb_lootingcorpse_v00_loop_+000fw_noweap.mab"
+        }
+        ("loot", true) => {
+            r"smart_terrain_points\civilians\generic_natives\simple_animation\lootingcorpse\3rdcivf_fulb_lootingcorpse_v00_loop_+000fw_noweap.mab"
+        }
         _ => return None,
     })
 }
@@ -342,9 +348,11 @@ fn villager_ai(
         }
         let pos = t.translation;
         // Gunfire, an explosion or being hit: run from it.
-        let scare = hurt.iter().find(|(target, _)| *target == e).map(|(_, from)| from.unwrap_or(pos)).or_else(|| {
-            noises.iter().find(|n| n.at.distance(pos) < (n.radius * HEAR).min(60.0)).map(|n| n.at)
-        });
+        let scare = hurt
+            .iter()
+            .find(|(target, _)| *target == e)
+            .map(|(_, from)| from.unwrap_or(pos))
+            .or_else(|| noises.iter().find(|n| n.at.distance(pos) < (n.radius * HEAR).min(60.0)).map(|n| n.at));
         if let Some(from) = scare {
             if v.state != State::Flee {
                 v.state = State::Flee;
@@ -442,7 +450,9 @@ fn villager_ai(
             let next = pos + step;
             // Stay on walkable ground (the mesh, where it's loaded); blocked:
             // turn aside, or give up on the walk.
-            let on_mesh = !nav.ready() || nav.height_at(next - Vec3::Y * HALF_HEIGHT).is_some() || heights.height_at(next).is_some_and(|g| (g - (pos.y - HALF_HEIGHT)).abs() < 0.6);
+            let on_mesh = !nav.ready()
+                || nav.height_at(next - Vec3::Y * HALF_HEIGHT).is_some()
+                || heights.height_at(next).is_some_and(|g| (g - (pos.y - HALF_HEIGHT)).abs() < 0.6);
             if on_mesh {
                 if let Some(g) = ground(&nav, &heights, next - Vec3::Y * HALF_HEIGHT) {
                     t.translation = Vec3::new(next.x, g + HALF_HEIGHT, next.z);
@@ -507,7 +517,10 @@ fn spot_clips(
         // where the clip's tool track puts it.
         if at.is_some_and(|s| s.kind == "hoe") && v.prop.is_none() {
             let Some(clip) = rig.clips().clips.get(&AnimKind::Idle).and_then(|h| clips.get(h)) else { continue };
-            let (Some(tool), Some(model), Some((_, hand))) = (clip.0.sub_clips.first(), models.get(&hoe), rig.joint(fc3_formats::hash::name_hash("RightHand"))) else { continue };
+            let (Some(tool), Some(model), Some((_, hand))) = (clip.0.sub_clips.first(), models.get(&hoe), rig.joint(fc3_formats::hash::name_hash("RightHand")))
+            else {
+                continue;
+            };
             let track = tool.tracks.iter().min_by_key(|t| t.bone);
             let rotation = track.and_then(|t| t.sample_rotation(0.0)).map(Quat::from_array).unwrap_or(Quat::from_array(tool.reference_rotation));
             let translation = track.and_then(|t| t.sample_translation(0.0)).map(Vec3::from_array).unwrap_or(Vec3::from_array(tool.reference_translation));

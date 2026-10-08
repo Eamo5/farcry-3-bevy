@@ -27,18 +27,39 @@ pub struct TraversalPlugin;
 
 impl Plugin for TraversalPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Ways>()
-            .init_resource::<Mount>()
-            .add_systems(
-                Update,
-                (load_ways.run_if(resource_exists::<CacheInfo>), traversal_test, (zip_prompt, tower_prompt).before(HudSet).after(crate::turrets::man_turrets), climb, ride).chain(),
-            );
+        app.init_resource::<Ways>().init_resource::<Mount>().add_message::<TowerTaken>().add_systems(
+            Update,
+            (
+                load_ways.run_if(resource_exists::<CacheInfo>),
+                traversal_test,
+                (zip_prompt, tower_prompt).before(HudSet).after(crate::turrets::man_turrets),
+                climb,
+                ride,
+            )
+                .chain(),
+        );
     }
 }
 
 /// Weapons a radio tower frees in the shops, one per tower, in order.
 pub const FREE_WEAPONS: [&str; 18] = [
-    "1911", "A2000", "F1", "1887", "SVD", "Recurve Bow", "P416", "Vector .45 ACP", "SPAS-12", "MKG", "D50", "ACE", "Z93", "U100", "GL-94", "STG-90", "MS16",
+    "1911",
+    "A2000",
+    "F1",
+    "1887",
+    "SVD",
+    "Recurve Bow",
+    "P416",
+    "Vector .45 ACP",
+    "SPAS-12",
+    "MKG",
+    "D50",
+    "ACE",
+    "Z93",
+    "U100",
+    "GL-94",
+    "STG-90",
+    "MS16",
     "Flamethrower",
 ];
 
@@ -70,7 +91,11 @@ fn cable_point(c: &Cable, t: f32) -> Vec3 {
 /// A zip line's ends, high end first.
 fn zip_ends(c: &Cable) -> (Vec3, Vec3) {
     let (a, b) = (Vec3::from(c.a), Vec3::from(c.b));
-    if a.y >= b.y { (a, b) } else { (b, a) }
+    if a.y >= b.y {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }
 
 /// One cable as a thin four-sided tube.
@@ -294,6 +319,12 @@ fn climb(
     }
 }
 
+/// A radio tower taken over, at its panel (the story hears of it).
+#[derive(Message, Clone, Copy)]
+pub struct TowerTaken {
+    pub at: Vec3,
+}
+
 /// At a radio tower's panel: take the tower over.
 #[allow(clippy::too_many_arguments)]
 fn tower_prompt(
@@ -305,6 +336,7 @@ fn tower_prompt(
     mut hud: ResMut<HudState>,
     mut xp: MessageWriter<crate::progression::XpGain>,
     players: Query<(&Transform, &Health), With<Player>>,
+    mut taken: MessageWriter<TowerTaken>,
 ) {
     let Ok((t, h)) = players.single() else { return };
     if hud.prompt.is_some() || h.dead {
@@ -315,9 +347,11 @@ fn tower_prompt(
         return;
     }
     hud.prompt = Some(format!("{}  take over the radio tower", actions.label(Action::Interact, &settings)));
-    if actions.just_pressed(Action::Interact) {
+    // (The story's autopilot takes the towers it is brought to.)
+    if actions.just_pressed(Action::Interact) || std::env::var_os("FC3_STORY_AUTOPILOT").is_some() {
         actions.consume(Action::Interact);
         progress.towers.insert(i as u32);
+        taken.write(TowerTaken { at: Vec3::from(*at) });
         explored.reveal(Vec3::from(*at), 1100.0);
         xp.write(crate::progression::XpGain { amount: 300, reason: "Radio tower" });
         let freed = FREE_WEAPONS.get(progress.towers.len() - 1).copied().unwrap_or("");
@@ -337,7 +371,12 @@ fn traversal_test(
     mut stage: Local<u32>,
     mut next_log: Local<f32>,
     mut players: Query<(&mut Transform, &mut Player, &Health)>,
-    (mut spawns, td, npcs, heights): (MessageWriter<crate::npc::SpawnEnemy>, Res<crate::stealth::Takedown>, Query<(&Transform, &Health), (With<crate::npc::Npc>, Without<Player>)>, Res<crate::terrain::Heightfield>),
+    (mut spawns, td, npcs, heights): (
+        MessageWriter<crate::npc::SpawnEnemy>,
+        Res<crate::stealth::Takedown>,
+        Query<(&Transform, &Health), (With<crate::npc::Npc>, Without<Player>)>,
+        Res<crate::terrain::Heightfield>,
+    ),
 ) {
     let Ok(kind) = std::env::var("FC3_TRAVERSAL_TEST") else { return };
     let Ok((mut t, mut p, h)) = players.single_mut() else { return };
@@ -380,7 +419,14 @@ fn traversal_test(
             if kind == "zip_takedown" {
                 let under = (6..19).map(|k| start.lerp(end, k as f32 / 20.0)).find(|p| heights.height_at(*p).is_some_and(|g| (3.0..10.0).contains(&(p.y - g))));
                 match under {
-                    Some(at) => spawns.write(crate::npc::SpawnEnemy { at, hunting: None, garrison: None, faction: crate::npc::Faction::Pirate, role: Some(crate::npc::Role::Assault), ride: None }),
+                    Some(at) => spawns.write(crate::npc::SpawnEnemy {
+                        at,
+                        hunting: None,
+                        garrison: None,
+                        faction: crate::npc::Faction::Pirate,
+                        role: Some(crate::npc::Role::Assault),
+                        ride: None,
+                    }),
                     None => {
                         info!("zip test: no ground close under this line");
                         return;
@@ -394,7 +440,15 @@ fn traversal_test(
             *stage = 2;
         }
         (0, "ladder") => {
-            let Some(l) = ways.data.ladders.iter().filter(|l| l.top - l.base[1] > 4.0).min_by(|a, b| Vec3::from(a.base).distance(here).total_cmp(&Vec3::from(b.base).distance(here))) else { return };
+            let Some(l) = ways
+                .data
+                .ladders
+                .iter()
+                .filter(|l| l.top - l.base[1] > 4.0)
+                .min_by(|a, b| Vec3::from(a.base).distance(here).total_cmp(&Vec3::from(b.base).distance(here)))
+            else {
+                return;
+            };
             let base = Vec3::from(l.base);
             let side = Vec3::from(l.facing);
             t.translation = base + side * 0.7 + Vec3::Y * (HALF_HEIGHT + 0.05);

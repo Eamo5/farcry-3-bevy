@@ -139,7 +139,11 @@ impl SoundBank {
                     bank.files.insert(stem.to_string(), SoundFile { path: format!("audio/{stem}.{ext}"), looping });
                 }
                 Some("mod") => {
-                    let (Some(token), Some(header), Some(gain)) = (it.next(), it.next().and_then(|h| u32::from_str_radix(h, 16).ok()), it.next().and_then(|g| g.parse().ok())) else { continue };
+                    let (Some(token), Some(header), Some(gain)) =
+                        (it.next(), it.next().and_then(|h| u32::from_str_radix(h, 16).ok()), it.next().and_then(|g| g.parse().ok()))
+                    else {
+                        continue;
+                    };
                     let curves = it.filter_map(fc3_formats::audio::Curve::from_token).collect();
                     bank.mods.entry(token.to_string()).or_default().insert(header, Arc::new(VoiceMod { gain, curves }));
                 }
@@ -181,10 +185,7 @@ impl SoundBank {
     /// The event's record, falling back from a switched id (see [`switched`])
     /// to the same event without the gait, then without any switch.
     fn event(&self, event: u32) -> Option<&EventDef> {
-        self.events
-            .get(&event)
-            .or_else(|| self.events.get(&(event & 0x3FFF_FFFF)))
-            .or_else(|| self.events.get(&(event & 0x00FF_FFFF)))
+        self.events.get(&event).or_else(|| self.events.get(&(event & 0x3FFF_FFFF))).or_else(|| self.events.get(&(event & 0x00FF_FFFF)))
     }
 
     /// Whether everything `event` plays loops (an ambience bed rather than a
@@ -410,13 +411,7 @@ fn settings(mode: PlaybackMode, volume: f32, spatial: bool) -> PlaybackSettings 
     PlaybackSettings { mode, volume: Volume::Linear(volume), spatial, ..default() }
 }
 
-fn play_one_shots(
-    mut events: MessageReader<PlaySfx>,
-    bank: Option<Res<SoundBank>>,
-    server: Res<AssetServer>,
-    mut rng: ResMut<Rng>,
-    mut commands: Commands,
-) {
+fn play_one_shots(mut events: MessageReader<PlaySfx>, bank: Option<Res<SoundBank>>, server: Res<AssetServer>, mut rng: ResMut<Rng>, mut commands: Commands) {
     let Some(bank) = bank else { return };
     for ev in events.read() {
         let (files, vol) = bank.resolve(ev.event, &mut rng);

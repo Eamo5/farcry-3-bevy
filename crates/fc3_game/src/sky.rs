@@ -1,12 +1,11 @@
 //! Sun, sky and time of day (clouds and weather are in `clouds`, the sea in `water`).
 
 use bevy::camera::Exposure;
-use bevy::light::{CascadeShadowConfigBuilder, GlobalAmbientLight, SunDisk};
 use bevy::light::atmosphere::ScatteringMedium;
 use bevy::light::Atmosphere;
+use bevy::light::{CascadeShadowConfigBuilder, GlobalAmbientLight, SunDisk};
 use bevy::pbr::AtmosphereSettings;
 use bevy::prelude::*;
-
 
 /// Ocean surface height in Bevy Y (Dunia Z), derived from floating props.
 pub const SEA_LEVEL: f32 = 100.0;
@@ -49,7 +48,11 @@ fn indoors(
     // A roof alone (a canopy, an awning) shades a little; with walls it's a room.
     let target = if eye.y > SEA_LEVEL && hit(Dir3::Y, ROOF) {
         let walls = [Dir3::X, Dir3::NEG_X, Dir3::Z, Dir3::NEG_Z].into_iter().filter(|d| hit(*d, WALLS)).count();
-        if walls >= 2 { 0.4 + 0.15 * walls as f32 } else { 0.1 }
+        if walls >= 2 {
+            0.4 + 0.15 * walls as f32
+        } else {
+            0.1
+        }
     } else {
         0.0
     };
@@ -241,13 +244,7 @@ fn setup_sky(mut commands: Commands, mut media: ResMut<Assets<ScatteringMedium>>
         DirectionalLight { illuminance: 90_000.0, shadow_maps_enabled: true, ..default() },
         // The world, plus the shadow proxies only the sun sees.
         bevy::camera::visibility::RenderLayers::from_layers(&[0, crate::shadow_lod::SHADOW_LAYER]),
-        CascadeShadowConfigBuilder {
-            num_cascades: 4,
-            first_cascade_far_bound: 12.0,
-            maximum_distance: 400.0,
-            ..default()
-        }
-        .build(),
+        CascadeShadowConfigBuilder { num_cascades: 4, first_cascade_far_bound: 12.0, maximum_distance: 400.0, ..default() }.build(),
         SunDisk::EARTH,
         Transform::default(),
         Name::new("sun"),

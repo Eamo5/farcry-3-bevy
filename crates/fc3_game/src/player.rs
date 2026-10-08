@@ -66,6 +66,9 @@ pub struct Player {
     pub noclip: bool,
     /// Waiting for the ground under the spawn point to stream in.
     pub spawning: bool,
+    /// The spawn keeps to the height it was given (a story teleport into a
+    /// cave lands on the floor below, not on the rock above).
+    pub keep_height: bool,
     /// Downward speed at the moment of the last landing (for fall damage).
     pub last_landing_speed: f32,
     pub sprinting: bool,
@@ -181,6 +184,7 @@ fn spawn_player(mut commands: Commands, args: Res<Args>) {
                 swimming: false,
                 noclip: args.noclip,
                 spawning: !args.noclip,
+                keep_height: false,
                 last_landing_speed: 0.0,
                 sprinting: false,
                 spawned_at: 0.0,
@@ -291,9 +295,21 @@ fn footsteps(
     *timer -= time.delta_secs() * speed;
     if *timer <= 0.0 {
         *timer = 1.9;
-        let volume = if p.crouching { 0.15 } else if p.sprinting { 0.5 } else { 0.3 };
+        let volume = if p.crouching {
+            0.15
+        } else if p.sprinting {
+            0.5
+        } else {
+            0.3
+        };
         let surface = surface();
-        let gait = if p.crouching { 2 } else if p.sprinting { 3 } else { 1 };
+        let gait = if p.crouching {
+            2
+        } else if p.sprinting {
+            3
+        } else {
+            1
+        };
         if std::env::var("FC3_SURFACE_DEBUG").is_ok() {
             info!("footstep on surface {surface:08x} gait {gait} at {:?}", crate::data::to_dunia(feet));
         }
@@ -340,17 +356,26 @@ fn place_on_ground(
     if !chunks.iter().any(|(c, kids)| c.coord == here && kids.iter().any(|k| colliders.contains(k))) {
         return;
     }
+    // Kept to its height: the surface just below the point given.
+    if p.keep_height {
+        let filter = SpatialQueryFilter::from_excluded_entities([entity]);
+        if let Some(h) = spatial.cast_ray(t.translation + Vec3::Y * 1.5, Dir3::NEG_Y, 10.0, true, &filter) {
+            t.translation.y += 1.5 - h.distance + HALF_HEIGHT + 0.05;
+            p.velocity = Vec3::ZERO;
+            p.spawning = false;
+            p.keep_height = false;
+            p.spawned_at = time.elapsed_secs();
+            info!("player placed at its height at {:?}", t.translation);
+            return;
+        }
+        p.keep_height = false;
+    }
     // Land on the highest surface below a point well above the terrain (roofs, rocks...).
     let top = Vec3::new(t.translation.x, ground.max(SEA_LEVEL) + 60.0, t.translation.z);
     // Exclude the player's own capsule from the probe.
     let hit = spatial.cast_ray(top, Dir3::NEG_Y, 200.0, true, &SpatialQueryFilter::from_excluded_entities([entity]));
     if let Some(h) = &hit {
-        let what = objects
-            .get(h.entity)
-            .ok()
-            .and_then(|o| server.get_path(&o.model))
-            .map(|p| p.to_string())
-            .unwrap_or_else(|| "terrain".into());
+        let what = objects.get(h.entity).ok().and_then(|o| server.get_path(&o.model)).map(|p| p.to_string()).unwrap_or_else(|| "terrain".into());
         info!("spawn ray hit {what} at y={:.2} (terrain {ground:.2})", top.y - h.distance);
     }
     let surface = hit.map(|h| top.y - h.distance).unwrap_or(ground).max(ground);
@@ -467,6 +492,7 @@ fn player_move(
     progress: Res<crate::progression::Progress>,
     mut actions_out: MessageWriter<crate::fp::FpAction>,
     sway: Res<crate::weapons::ScopeSway>,
+    scripted: Res<crate::story::ScriptedPlayer>,
 ) {
     let Ok((entity, mut p, mut t, collider)) = player.single_mut() else { return };
     let dt = time.delta_secs().min(0.05);
@@ -480,8 +506,15 @@ fn player_move(
     use crate::controls::Action;
     let input_ok = *state.get() == crate::menu::GameState::Playing && cinematic.0 <= 0.0;
     let (s_fwd, s_sprint, s_jump) = scripted_keys(&args, &time, &mut script_start);
+    // Signals a mission ignores (no jumping or sprinting through a scene).
+    let ignored = |a: Action| match a {
+        Action::Jump => scripted.ignored.contains("jump"),
+        Action::Sprint => scripted.ignored.contains("sprint") || scripted.ignored.contains("lock_sprint"),
+        _ => false,
+    };
     let key = |a: Action| {
-        (input_ok && actions.pressed(a)) || (a == Action::Forward && s_fwd) || (a == Action::Sprint && s_sprint) || (a == Action::Jump && s_jump)
+        !ignored(a)
+            && ((input_ok && actions.pressed(a)) || (a == Action::Forward && s_fwd) || (a == Action::Sprint && s_sprint) || (a == Action::Jump && s_jump))
     };
     let forward = Vec3::new(-p.yaw.sin(), 0.0, -p.yaw.cos());
     let right = Vec3::new(forward.z * -1.0, 0.0, forward.x);
@@ -490,7 +523,7 @@ fn player_move(
     if s_fwd {
         axis.y = 1.0;
     }
-    let wish = (forward * axis.y + right * axis.x).clamp_length_max(1.0);
+    let wish = (forward * axis.y + right * axis.x).clamp_length_max(1.0) * scripted.movement;
 
     if p.noclip {
         let look = Quat::from_rotation_y(p.yaw) * Quat::from_rotation_x(p.pitch) * Vec3::NEG_Z;
@@ -585,7 +618,13 @@ fn player_move(
         p.velocity.z = slowed.z;
     }
     // Horizontal acceleration toward the wished velocity.
-    let accel = if p.sliding.is_some() { 0.0 } else if p.grounded || p.swimming { GROUND_ACCEL } else { AIR_ACCEL };
+    let accel = if p.sliding.is_some() {
+        0.0
+    } else if p.grounded || p.swimming {
+        GROUND_ACCEL
+    } else {
+        AIR_ACCEL
+    };
     let target = wish * speed;
     let horiz = Vec3::new(p.velocity.x, 0.0, p.velocity.z);
     let delta = target - horiz;
@@ -650,21 +689,12 @@ fn player_move(
     let fall_speed = if p.air == AirMode::Wingsuit { p.velocity.length() } else { -p.velocity.y };
     let mut ground_hit = false;
     let start = t.translation;
-    let out = move_and_slide.move_and_slide(
-        collider,
-        start,
-        Quat::IDENTITY,
-        p.velocity,
-        std::time::Duration::from_secs_f32(dt),
-        &config,
-        &filter,
-        |hit| {
-            if hit.normal.y > MIN_GROUND_NORMAL_Y {
-                ground_hit = true;
-            }
-            MoveAndSlideHitResponse::Accept
-        },
-    );
+    let out = move_and_slide.move_and_slide(collider, start, Quat::IDENTITY, p.velocity, std::time::Duration::from_secs_f32(dt), &config, &filter, |hit| {
+        if hit.normal.y > MIN_GROUND_NORMAL_Y {
+            ground_hit = true;
+        }
+        MoveAndSlideHitResponse::Accept
+    });
     let mut new_pos = out.position;
     let mut new_vel = out.projected_velocity;
 
@@ -674,14 +704,8 @@ fn player_move(
     if was_grounded && wanted.length() > 0.001 && achieved.length() < wanted.length() * 0.5 {
         let up = Vec3::Y * STEP_HEIGHT;
         let raised = start + up;
-        let clear = move_and_slide.spatial_query.cast_shape(
-            collider,
-            start,
-            Quat::IDENTITY,
-            Dir3::Y,
-            &ShapeCastConfig::from_max_distance(STEP_HEIGHT),
-            &filter,
-        );
+        let clear =
+            move_and_slide.spatial_query.cast_shape(collider, start, Quat::IDENTITY, Dir3::Y, &ShapeCastConfig::from_max_distance(STEP_HEIGHT), &filter);
         if clear.is_none() {
             let step_out = move_and_slide.move_and_slide(
                 collider,
@@ -811,6 +835,13 @@ fn slide_test(
     }
     if now - *last >= 0.25 && t < 5.0 {
         *last = now;
-        info!("slide-test t={t:.2} speed {:.1} eye {:.2} sliding {:?} crouching {} sprinting {}", Vec2::new(p.velocity.x, p.velocity.z).length(), p.eye, p.sliding.map(|s| (s * 100.0).round() / 100.0), p.crouching, p.sprinting);
+        info!(
+            "slide-test t={t:.2} speed {:.1} eye {:.2} sliding {:?} crouching {} sprinting {}",
+            Vec2::new(p.velocity.x, p.velocity.z).length(),
+            p.eye,
+            p.sliding.map(|s| (s * 100.0).round() / 100.0),
+            p.crouching,
+            p.sprinting
+        );
     }
 }

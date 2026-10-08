@@ -24,8 +24,7 @@ pub struct LampsPlugin;
 
 impl Plugin for LampsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Lamps>()
-            .add_systems(Update, (load_lamps.run_if(resource_exists::<CacheInfo>), assign_lamps, drive_lights, drive_glows).chain());
+        app.init_resource::<Lamps>().add_systems(Update, (load_lamps.run_if(resource_exists::<CacheInfo>), assign_lamps, drive_lights, drive_glows).chain());
     }
 }
 
@@ -176,7 +175,10 @@ fn load_lamps(info: Res<CacheInfo>, mut lamps: ResMut<Lamps>, mut commands: Comm
         .map(|_| Slot { entity: commands.spawn((PointLight { intensity: 0.0, radius: 0.05, ..default() }, hidden())).id(), current: None })
         .collect();
     lamps.spots = (0..SPOT_SLOTS)
-        .map(|_| Slot { entity: commands.spawn((SpotLight { intensity: 0.0, outer_angle: 0.75, inner_angle: 0.45, ..default() }, hidden())).id(), current: None })
+        .map(|_| Slot {
+            entity: commands.spawn((SpotLight { intensity: 0.0, outer_angle: 0.75, inner_angle: 0.45, ..default() }, hidden())).id(),
+            current: None,
+        })
         .collect();
     // Glows are particle sprites; their slots need no entity.
     lamps.glows = (0..GLOW_SLOTS).map(|_| Slot { entity: Entity::PLACEHOLDER, current: None }).collect();
@@ -340,7 +342,16 @@ mod tests {
             kind,
             position: [0.0; 3],
             direction: [0.0, -1.0, 0.0],
-            params: LightParams { colour: [1.0; 3], radius: 4.0, inner_radius: 1.0, intensity, fade_distance: 20.0, night_only: false, flicker, cycle: [0.0; 4] },
+            params: LightParams {
+                colour: [1.0; 3],
+                radius: 4.0,
+                inner_radius: 1.0,
+                intensity,
+                fade_distance: 20.0,
+                night_only: false,
+                flicker,
+                cycle: [0.0; 4],
+            },
         }
     }
 

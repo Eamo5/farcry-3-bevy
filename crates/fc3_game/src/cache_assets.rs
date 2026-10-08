@@ -14,7 +14,9 @@ use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::Face;
-use fc3_formats::cache::{self, mat_flags, CachedBone, CachedEntity, CachedMaterial, CachedModel, CachedPart, CachedSector, CachedTerrain, Placement, TerrainLayerTable};
+use fc3_formats::cache::{
+    self, mat_flags, CachedBone, CachedEntity, CachedMaterial, CachedModel, CachedPart, CachedSector, CachedTerrain, Placement, TerrainLayerTable,
+};
 use fc3_formats::terrain::{SectorCoord, TerrainSector, GRID, SECTOR_SIZE};
 use serde::{Deserialize, Serialize};
 
@@ -193,6 +195,26 @@ pub struct ModelLod {
 pub struct CollisionMesh {
     pub positions: Vec<Vec3>,
     pub triangles: Vec<[u32; 3]>,
+    /// From the game's own collision (`cache::collision_rel`) rather than
+    /// the render mesh.
+    pub from_havok: bool,
+}
+
+/// Whether the model whose cache file is named by `hash` has collision of
+/// the game's own (the converter's index, read once). `FC3_RENDER_COLLISION`
+/// ignores it, for comparing with the render-derived meshes.
+fn has_havok_collision(hash: u64) -> bool {
+    static INDEX: std::sync::LazyLock<std::collections::HashSet<u64>> = std::sync::LazyLock::new(|| {
+        if std::env::var_os("FC3_RENDER_COLLISION").is_some() {
+            info!("FC3_RENDER_COLLISION: colliders from the render meshes only");
+            return Default::default();
+        }
+        let path = cache::default_cache_root().join(cache::COLLISION_INDEX_REL);
+        let index = std::fs::read_to_string(&path).map(|t| cache::collision_index(&t)).unwrap_or_default();
+        info!("{} models with the game's own collision", index.len());
+        index
+    });
+    INDEX.contains(&hash)
 }
 
 #[derive(Asset, TypePath)]
@@ -253,12 +275,42 @@ impl AssetLoader for ModelLoader {
             lods.push(ModelLod { distance: lod.distance, parts });
         }
         let is_vegetation = lods.first().is_some_and(|l| !l.parts.is_empty() && l.parts.iter().all(|p| p.flags & mat_flags::VEGETATION != 0));
-        let collision = (!m.collision_indices.is_empty()).then(|| {
-            Arc::new(CollisionMesh {
-                positions: m.collision_positions.iter().map(|p| Vec3::from_array(*p)).collect(),
-                triangles: m.collision_indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect(),
-            })
-        });
+        // The game's own collision where the model ships one (static props
+        // only: characters don't use it); else the render-derived mesh.
+        let hash = ctx.path().path().file_stem().and_then(|s| s.to_str()).and_then(|s| u64::from_str_radix(s, 16).ok());
+        let havok = match hash.filter(|&h| !settings.skinned && has_havok_collision(h)) {
+            Some(h) => match ctx
+                .read_asset_bytes(cache_path(&cache::collision_rel_of_hash(h)))
+                .await
+                .map_err(io_err)
+                .and_then(|b| cache::CachedCollision::from_bytes(&b).map_err(io_err))
+            {
+                // Made only of the no-impact material (plant pickups, kelp,
+                // volumes) where the render mesh has nothing solid: the file
+                // doesn't say these block characters (their shapes look like
+                // targets to aim at), so they stay walk-through.
+                Ok(c) => Some(c).filter(|c| !c.indices.is_empty() && !(c.no_impact && m.collision_indices.is_empty())),
+                Err(e) => {
+                    warn!("{}: its collision didn't load ({e}); using the render mesh", ctx.path());
+                    None
+                }
+            },
+            None => None,
+        };
+        let collision = match havok {
+            Some(c) => Some(Arc::new(CollisionMesh {
+                positions: c.positions.iter().map(|p| Vec3::from_array(*p)).collect(),
+                triangles: c.indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect(),
+                from_havok: true,
+            })),
+            None => (!m.collision_indices.is_empty()).then(|| {
+                Arc::new(CollisionMesh {
+                    positions: m.collision_positions.iter().map(|p| Vec3::from_array(*p)).collect(),
+                    triangles: m.collision_indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect(),
+                    from_havok: false,
+                })
+            }),
+        };
         let inverse_bindposes = (settings.skinned && !m.bones.is_empty()).then(|| {
             let mats: Vec<Mat4> = m.bones.iter().map(|b| Mat4::from_cols_array(&b.inverse_bind)).collect();
             ctx.add_labeled_asset("inverse_bindposes".to_string(), SkinnedMeshInverseBindposes::from(mats))
@@ -355,11 +407,7 @@ pub fn flow_materials(
 
 fn build_material(ctx: &mut LoadContext, cm: &CachedMaterial) -> StandardMaterial {
     if cm.flags & mat_flags::PLACEHOLDER != 0 {
-        return StandardMaterial {
-            base_color: Color::srgb(cm.base_color[0], cm.base_color[1], cm.base_color[2]),
-            perceptual_roughness: 0.9,
-            ..default()
-        };
+        return StandardMaterial { base_color: Color::srgb(cm.base_color[0], cm.base_color[1], cm.base_color[2]), perceptual_roughness: 0.9, ..default() };
     }
     let diffuse = load_texture(ctx, &cm.diffuse, true, false);
     // Lit effects add their light (foam on a waterfall, spray): their maps
@@ -448,11 +496,8 @@ fn build_mesh(p: &CachedPart, skinned: bool) -> Mesh {
     }
     // The original vertex colours (blend weights and baked occlusion for the
     // game's own shaders); a custom attribute so standard materials ignore it.
-    let colors: Vec<[u8; 4]> = if p.colors.len() == n {
-        p.colors.iter().map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect()
-    } else {
-        vec![[255; 4]; n]
-    };
+    let colors: Vec<[u8; 4]> =
+        if p.colors.len() == n { p.colors.iter().map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect() } else { vec![[255; 4]; n] };
     mesh.insert_attribute(ATTRIBUTE_D3D_COLOR, bevy::mesh::VertexAttributeValues::Unorm8x4(colors));
     mesh
 }
@@ -497,8 +542,18 @@ impl AssetLoader for ClipLoader {
     type Settings = ();
     type Error = std::io::Error;
 
-    async fn load(&self, reader: &mut dyn Reader, _: &(), _ctx: &mut LoadContext<'_>) -> Result<Fc3Clip, Self::Error> {
+    async fn load(&self, reader: &mut dyn Reader, _: &(), ctx: &mut LoadContext<'_>) -> Result<Fc3Clip, Self::Error> {
         let bytes = read_all(reader).await?;
+        // A clip kept in segments: the list of them, joined here.
+        if let Some(list) = bytes.strip_prefix(fc3_formats::anim::SEGMENTS_MAGIC.as_bytes()) {
+            let mut segments = Vec::new();
+            for rel in String::from_utf8_lossy(list).lines().map(str::trim).filter(|l| !l.is_empty()) {
+                let seg = ctx.read_asset_bytes(cache_path(rel)).await.map_err(io_err)?;
+                segments.push(fc3_formats::anim::parse_clip(&seg).map_err(io_err)?);
+            }
+            let clip = fc3_formats::anim::stitch(segments).ok_or_else(|| io_err("no segments"))?;
+            return Ok(Fc3Clip(Arc::new(clip)));
+        }
         Ok(Fc3Clip(Arc::new(fc3_formats::anim::parse_clip(&bytes).map_err(io_err)?)))
     }
 
@@ -649,8 +704,8 @@ impl AssetLoader for TerrainLoader {
             detail.params.flags.y = 1.0;
         }
         let quadrant = Vec2::new((c.x - c.atlas_coord().x) as f32, (c.y - c.atlas_coord().y) as f32);
-        let original = crate::original_shaders::terrain_material(ctx, &table, t.layers, atlas, quadrant)
-            .map(|m| ctx.add_labeled_asset("original".to_string(), m));
+        let original =
+            crate::original_shaders::terrain_material(ctx, &table, t.layers, atlas, quadrant).map(|m| ctx.add_labeled_asset("original".to_string(), m));
         let material = ctx.add_labeled_asset(
             "material".to_string(),
             TerrainMaterial {
@@ -718,7 +773,8 @@ pub fn terrain_mesh(s: &TerrainSector, c: SectorCoord, step: usize) -> Mesh {
     let cells = fc3_formats::terrain::CELLS;
     // A coarse cell is left open if any cell it covers opens into a cave.
     let open = |col: usize, row: usize| {
-        !s.holes.is_empty() && (row * step..(row + 1) * step).any(|r| (col * step..(col + 1) * step).any(|c| s.holes[r.min(cells - 1) * cells + c.min(cells - 1)]))
+        !s.holes.is_empty()
+            && (row * step..(row + 1) * step).any(|r| (col * step..(col + 1) * step).any(|c| s.holes[r.min(cells - 1) * cells + c.min(cells - 1)]))
     };
     for row in 0..n - 1 {
         for col in 0..n - 1 {
@@ -843,11 +899,7 @@ impl AssetLoader for SectorLoader {
             }
         }
         let models = s.models.iter().zip(&standing_models).map(|(m, &used)| if used { ctx.load(cache_path(m)) } else { Handle::default() }).collect();
-        let material_sets = s
-            .material_sets
-            .iter()
-            .map(|set| set.iter().map(|rel| ctx.load(cache_path(rel))).collect())
-            .collect();
+        let material_sets = s.material_sets.iter().map(|set| set.iter().map(|rel| ctx.load(cache_path(rel))).collect()).collect();
         Ok(Fc3Sector { id: s.sector_id, models, model_paths: s.models, placements, entities, layers, material_sets })
     }
 

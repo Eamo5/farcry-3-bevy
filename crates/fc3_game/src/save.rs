@@ -27,6 +27,7 @@ pub struct SavePlugin;
 impl Plugin for SavePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SaveSlot>()
+            .init_resource::<SaveContinued>()
             .add_message::<ContinueGame>()
             .add_systems(OnExit(GameState::Loading), find_save)
             .add_systems(OnEnter(GameState::Playing), (mark_played, continue_from_args))
@@ -186,6 +187,17 @@ pub struct SaveSlot {
 #[derive(Message, Clone, Copy)]
 pub struct ContinueGame;
 
+/// The session went on from the save (the story then starts from its own).
+#[derive(Resource, Default)]
+pub struct SaveContinued(pub bool);
+
+impl SaveSlot {
+    /// Where the story's progress is kept, next to the save.
+    pub fn story_path(&self) -> Option<PathBuf> {
+        self.path.as_ref().filter(|_| self.enabled).map(|p| p.with_file_name("story.txt"))
+    }
+}
+
 fn find_save(mut slot: ResMut<SaveSlot>, args: Res<Args>, info: Option<Res<CacheInfo>>) {
     let explicit = std::env::var_os("FC3_SAVE").map(PathBuf::from);
     slot.enabled = explicit.is_some() || (!args.automated() && !args.noclip);
@@ -304,7 +316,8 @@ fn save_on_exit(mut exits: MessageReader<AppExit>, mut slot: ResMut<SaveSlot>, s
 }
 
 #[allow(clippy::too_many_arguments)]
-fn continue_game(
+pub fn continue_game(
+    mut continued: ResMut<SaveContinued>,
     mut requests: MessageReader<ContinueGame>,
     slot: Res<SaveSlot>,
     mut players: Query<(&mut Transform, &mut Player, &mut Health, &mut PlayerStats, &mut Inventory)>,
@@ -322,6 +335,7 @@ fn continue_game(
         return;
     }
     let Some(save) = &slot.existing else { return };
+    continued.0 = true;
     let Ok((mut t, mut p, mut h, mut stats, mut inv)) = players.single_mut() else { return };
     t.translation = save.position + Vec3::Y * 0.5;
     t.rotation = Quat::from_rotation_y(save.yaw);

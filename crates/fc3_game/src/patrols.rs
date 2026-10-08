@@ -29,7 +29,15 @@ impl Plugin for PatrolsPlugin {
             .add_message::<Convoy>()
             .add_systems(
                 Update,
-                (load_routes.run_if(resource_exists::<crate::data::CacheInfo>), spawn_patrols, spawn_boat_patrols, send_convoys, (spot, drive_patrols, dismount).chain(), end_patrols, patrol_log)
+                (
+                    load_routes.run_if(resource_exists::<crate::data::CacheInfo>),
+                    spawn_patrols,
+                    spawn_boat_patrols,
+                    send_convoys,
+                    (spot, drive_patrols, dismount).chain(),
+                    end_patrols,
+                    patrol_log,
+                )
                     .run_if(in_state(crate::menu::GameState::Playing)),
             )
             .add_systems(PostUpdate, carry_crew.before(TransformSystems::Propagate));
@@ -159,7 +167,14 @@ fn send_convoys(
         let ground = on_road(&heights, a);
         let heading = Vec3::new(c.to.x - a.x, 0.0, c.to.z - a.z).normalize_or(Vec3::NEG_Z);
         let at = Vec3::new(a.x, ground + 1.0, a.z);
-        let vehicle = crate::vehicles::build_vehicle(&mut commands, def, model, at, Quat::from_rotation_arc(Vec3::NEG_Z, heading), 0x5100_0000_0000_0000 | c.garrison as u64);
+        let vehicle = crate::vehicles::build_vehicle(
+            &mut commands,
+            def,
+            model,
+            at,
+            Quat::from_rotation_arc(Vec3::NEG_Z, heading),
+            0x5100_0000_0000_0000 | c.garrison as u64,
+        );
         if let Some(a) = assets.as_ref() {
             crate::vehicles::arm_vehicle(&mut commands, vehicle, model, a, &models);
         }
@@ -185,7 +200,14 @@ fn send_convoys(
             (Vec3::new((min.x + max.x) * 0.5, min.y + size.y * 0.42, max.z - size.z * 0.4), true),
         ];
         for (seat, visible) in seats.into_iter().take(CONVOY_CREW) {
-            spawns.write(SpawnEnemy { at, hunting: Some(pt.translation), garrison: Some(c.garrison), faction, role: None, ride: Some(Riding { vehicle, seat, visible }) });
+            spawns.write(SpawnEnemy {
+                at,
+                hunting: Some(pt.translation),
+                garrison: Some(c.garrison),
+                faction,
+                role: None,
+                ride: Some(Riding { vehicle, seat, visible }),
+            });
         }
         info!("convoy to outpost {} from {at:.0?}", c.garrison);
     }
@@ -289,13 +311,28 @@ fn spawn_patrols(
         } else {
             Faction::Pirate
         };
-        commands.entity(vehicle).insert(PatrolDriver { route: ri, next: first, step, alert: 0.0, stopping: false, reverse: 0.0, stuck: 0.0, look: 0.5, goal: None, jams: 0, friendly });
+        commands.entity(vehicle).insert(PatrolDriver {
+            route: ri,
+            next: first,
+            step,
+            alert: 0.0,
+            stopping: false,
+            reverse: 0.0,
+            stuck: 0.0,
+            look: 0.5,
+            goal: None,
+            jams: 0,
+            friendly,
+        });
         let (min, max) = (model.aabb_min, model.aabb_max);
         let size = max - min;
         let (driver, gunner) = if afloat {
             (Vec3::new((min.x + max.x) * 0.5, min.y + 0.5, max.z - size.z * 0.2), Vec3::new((min.x + max.x) * 0.5, min.y + 0.5, min.z + size.z * 0.3))
         } else {
-            (Vec3::new(min.x + size.x * 0.3, min.y + 0.6, min.z + size.z * 0.45), Vec3::new((min.x + max.x) * 0.5, min.y + size.y * 0.42, max.z - size.z * 0.22))
+            (
+                Vec3::new(min.x + size.x * 0.3, min.y + 0.6, min.z + size.z * 0.45),
+                Vec3::new((min.x + max.x) * 0.5, min.y + size.y * 0.42, max.z - size.z * 0.22),
+            )
         };
         for (seat, visible, role) in [(driver, false, Role::Assault), (gunner, armed || !afloat, Role::Assault)] {
             spawns.write(SpawnEnemy { at, hunting: None, garrison: None, faction, role: Some(role), ride: Some(Riding { vehicle, seat, visible }) });
@@ -334,7 +371,11 @@ fn dry_start(heights: &crate::terrain::Heightfield, p: Vec3) -> bool {
 /// that's a little above the ground (a bridge deck), else the ground.
 fn on_road(heights: &crate::terrain::Heightfield, a: Vec3) -> f32 {
     let ground = heights.height_at(a).unwrap_or(a.y);
-    if (0.0..6.0).contains(&(a.y - ground)) { a.y } else { ground }
+    if (0.0..6.0).contains(&(a.y - ground)) {
+        a.y
+    } else {
+        ground
+    }
 }
 
 /// Boat patrols at once, how near a marker must be to put one to sea, the
@@ -451,14 +492,33 @@ fn spawn_boat_patrols(
             let at = Vec3::new(a.x, a.y + 0.4, a.z);
             let vehicle = crate::vehicles::build_vehicle(&mut commands, def, model, at, Quat::from_rotation_arc(Vec3::NEG_Z, heading), BOAT_SPAWN | ri as u64);
             let armed = crate::vehicles::arm_vehicle(&mut commands, vehicle, model, &assets, &models);
-            commands.entity(vehicle).insert(PatrolDriver { route: ri, next: 1, step: 1, alert: 0.0, stopping: false, reverse: 0.0, stuck: 0.0, look: 0.5, goal: None, jams: 0, friendly: false });
+            commands.entity(vehicle).insert(PatrolDriver {
+                route: ri,
+                next: 1,
+                step: 1,
+                alert: 0.0,
+                stopping: false,
+                reverse: 0.0,
+                stuck: 0.0,
+                look: 0.5,
+                goal: None,
+                jams: 0,
+                friendly: false,
+            });
             let faction = if a.z > 600.0 { Faction::Privateer } else { Faction::Pirate };
             let (min, max) = (model.aabb_min, model.aabb_max);
             let size = max - min;
             let driver = Vec3::new((min.x + max.x) * 0.5, min.y + 0.5, max.z - size.z * 0.2);
             let gunner = Vec3::new((min.x + max.x) * 0.5, min.y + 0.5, min.z + size.z * 0.3);
             for (seat, visible) in [(driver, false), (gunner, armed)] {
-                spawns.write(SpawnEnemy { at, hunting: None, garrison: None, faction, role: Some(Role::Assault), ride: Some(Riding { vehicle, seat, visible }) });
+                spawns.write(SpawnEnemy {
+                    at,
+                    hunting: None,
+                    garrison: None,
+                    faction,
+                    role: Some(Role::Assault),
+                    ride: Some(Riding { vehicle, seat, visible }),
+                });
             }
             routes.active[ri] = Some(vehicle);
             info!("boat patrol at {centre:.0?} ({faction:?}, {waypoints} waypoints, armed {armed})");
@@ -560,24 +620,24 @@ fn drive_patrols(time: Res<Time>, routes: Res<Routes>, mut vehicles: Query<(&Tra
             cruise_speed = CONVOY_SPEED;
         }
         if let Some(r) = routes.list.get(d.route).filter(|_| d.goal.is_none()) {
-        let n = r.points.len();
-        target = point(r, d.next);
-        let to = Vec2::new(target.x - t.translation.x, target.z - t.translation.z);
-        let ahead = t.rotation * Vec3::NEG_Z;
-        // Reached, or close by and already behind (it would only circle it).
-        let passed = to.length() < REACHED * 2.5 && to.normalize_or_zero().dot(Vec2::new(ahead.x, ahead.z).normalize_or_zero()) < -0.2;
-        if to.length() < REACHED || passed {
-            let next = d.next as i32 + d.step;
-            if r.looped {
-                d.next = next.rem_euclid(n as i32) as usize;
-            } else if next < 0 || next >= n as i32 {
-                d.step = -d.step;
-                d.next = (d.next as i32 + d.step).clamp(0, n as i32 - 1) as usize;
-            } else {
-                d.next = next as usize;
-            }
+            let n = r.points.len();
             target = point(r, d.next);
-        }
+            let to = Vec2::new(target.x - t.translation.x, target.z - t.translation.z);
+            let ahead = t.rotation * Vec3::NEG_Z;
+            // Reached, or close by and already behind (it would only circle it).
+            let passed = to.length() < REACHED * 2.5 && to.normalize_or_zero().dot(Vec2::new(ahead.x, ahead.z).normalize_or_zero()) < -0.2;
+            if to.length() < REACHED || passed {
+                let next = d.next as i32 + d.step;
+                if r.looped {
+                    d.next = next.rem_euclid(n as i32) as usize;
+                } else if next < 0 || next >= n as i32 {
+                    d.step = -d.step;
+                    d.next = (d.next as i32 + d.step).clamp(0, n as i32 - 1) as usize;
+                } else {
+                    d.next = next as usize;
+                }
+                target = point(r, d.next);
+            }
         } else if d.goal.is_none() {
             continue;
         }
@@ -663,12 +723,25 @@ fn patrol_log(
         if let Some(d) = d {
             let up = (t.rotation * Vec3::Y).y;
             if d.goal.is_some() {
-                info!("convoy at {:.0?} {:.1} m/s jams {} stopping {} dist {:.0}", t.translation, v.0.length(), d.jams, d.stopping, t.translation.distance(pt.translation));
+                info!(
+                    "convoy at {:.0?} {:.1} m/s jams {} stopping {} dist {:.0}",
+                    t.translation,
+                    v.0.length(),
+                    d.jams,
+                    d.stopping,
+                    t.translation.distance(pt.translation)
+                );
                 continue;
             }
             info!(
                 "patrol: route {} wp {} at {:.0?} {:.1} m/s up {up:.2} alert {:.2} stopping {} dist {:.0}",
-                d.route, d.next, t.translation, v.0.length(), d.alert, d.stopping, t.translation.distance(pt.translation)
+                d.route,
+                d.next,
+                t.translation,
+                v.0.length(),
+                d.alert,
+                d.stopping,
+                t.translation.distance(pt.translation)
             );
         }
     }

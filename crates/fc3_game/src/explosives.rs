@@ -19,10 +19,7 @@ impl Plugin for ExplosivesPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_models)
             .add_systems(PreUpdate, explosives_test.after(crate::controls::update_actions))
-            .add_systems(
-            Update,
-            (use_explosives, fly_charges, trip_mines, show_models).chain().run_if(in_state(crate::menu::GameState::Playing)),
-        );
+            .add_systems(Update, (use_explosives, fly_charges, trip_mines, show_models).chain().run_if(in_state(crate::menu::GameState::Playing)));
     }
 }
 
@@ -141,7 +138,11 @@ fn use_explosives(
             let ground = spatial.cast_ray(above, Dir3::NEG_Y, 3.0, true, &filter).map(|hit| (above.y - hit.distance, hit.normal));
             let (y, normal) = ground.unwrap_or((heights.height_at(above).unwrap_or(t.translation.y - crate::player::HALF_HEIGHT), Vec3::Y));
             let rotation = Quat::from_rotation_arc(Vec3::Y, normal) * Quat::from_rotation_y(p.yaw);
-            commands.spawn((Mine { age: 0.0, owner: pe }, Transform::from_translation(Vec3::new(above.x, y, above.z)).with_rotation(rotation), Visibility::Visible));
+            commands.spawn((
+                Mine { age: 0.0, owner: pe },
+                Transform::from_translation(Vec3::new(above.x, y, above.z)).with_rotation(rotation),
+                Visibility::Visible,
+            ));
         }
     }
 }

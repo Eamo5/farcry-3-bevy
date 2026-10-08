@@ -96,12 +96,7 @@ pub fn quat_slerp(a: Quat, b: Quat, t: f32) -> Quat {
         d = -d;
     }
     if d > 0.9995 {
-        return quat_normalize([
-            a[0] + (b[0] - a[0]) * t,
-            a[1] + (b[1] - a[1]) * t,
-            a[2] + (b[2] - a[2]) * t,
-            a[3] + (b[3] - a[3]) * t,
-        ]);
+        return quat_normalize([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t]);
     }
     let th = d.min(1.0).acos();
     let s = th.sin();
@@ -183,11 +178,7 @@ pub fn mat_mul(a: &Mat4, b: &Mat4) -> Mat4 {
 }
 
 pub fn mat_transform_point(m: &Mat4, p: Vec3) -> Vec3 {
-    [
-        m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
-        m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13],
-        m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14],
-    ]
+    [m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12], m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13], m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]]
 }
 
 /// Inverse of an affine matrix (last row 0,0,0,1).
@@ -200,21 +191,9 @@ pub fn mat_inverse_affine(m: &Mat4) -> Mat4 {
     }
     let id = 1.0 / det;
     let inv = [
-        [
-            (a[1][1] * a[2][2] - a[1][2] * a[2][1]) * id,
-            (a[0][2] * a[2][1] - a[0][1] * a[2][2]) * id,
-            (a[0][1] * a[1][2] - a[0][2] * a[1][1]) * id,
-        ],
-        [
-            (a[1][2] * a[2][0] - a[1][0] * a[2][2]) * id,
-            (a[0][0] * a[2][2] - a[0][2] * a[2][0]) * id,
-            (a[0][2] * a[1][0] - a[0][0] * a[1][2]) * id,
-        ],
-        [
-            (a[1][0] * a[2][1] - a[1][1] * a[2][0]) * id,
-            (a[0][1] * a[2][0] - a[0][0] * a[2][1]) * id,
-            (a[0][0] * a[1][1] - a[0][1] * a[1][0]) * id,
-        ],
+        [(a[1][1] * a[2][2] - a[1][2] * a[2][1]) * id, (a[0][2] * a[2][1] - a[0][1] * a[2][2]) * id, (a[0][1] * a[1][2] - a[0][2] * a[1][1]) * id],
+        [(a[1][2] * a[2][0] - a[1][0] * a[2][2]) * id, (a[0][0] * a[2][2] - a[0][2] * a[2][0]) * id, (a[0][2] * a[1][0] - a[0][0] * a[1][2]) * id],
+        [(a[1][0] * a[2][1] - a[1][1] * a[2][0]) * id, (a[0][1] * a[2][0] - a[0][0] * a[2][1]) * id, (a[0][0] * a[1][1] - a[0][1] * a[1][0]) * id],
     ];
     let t = [m[12], m[13], m[14]];
     let nt = [
@@ -222,10 +201,7 @@ pub fn mat_inverse_affine(m: &Mat4) -> Mat4 {
         -(inv[1][0] * t[0] + inv[1][1] * t[1] + inv[1][2] * t[2]),
         -(inv[2][0] * t[0] + inv[2][1] * t[1] + inv[2][2] * t[2]),
     ];
-    [
-        inv[0][0], inv[1][0], inv[2][0], 0.0, inv[0][1], inv[1][1], inv[2][1], 0.0, inv[0][2], inv[1][2], inv[2][2], 0.0,
-        nt[0], nt[1], nt[2], 1.0,
-    ]
+    [inv[0][0], inv[1][0], inv[2][0], 0.0, inv[0][1], inv[1][1], inv[2][1], 0.0, inv[0][2], inv[1][2], inv[2][2], 0.0, nt[0], nt[1], nt[2], 1.0]
 }
 
 // ===========================================================================
@@ -479,7 +455,13 @@ pub fn skin_offset(format: u32) -> Option<usize> {
     if format & 0x10 == 0 {
         return None;
     }
-    let mut o = if format & 1 != 0 { 12 } else if format & 6 != 0 { 8 } else { 0 };
+    let mut o = if format & 1 != 0 {
+        12
+    } else if format & 6 != 0 {
+        8
+    } else {
+        0
+    };
     for f in [0x8, 0x800, 0x1000, 0x2000] {
         if format & f != 0 {
             o += 4;
@@ -529,13 +511,7 @@ pub fn skin_info_lods(xbg: &[u8], max_lods: usize) -> Result<SkinInfo> {
     let inverse_bind: Vec<Mat4> = nodes
         .iter()
         .zip(&bind_world)
-        .map(|(n, w)| {
-            if n.bind_index >= 0 && (n.bind_index as usize) < o2bm.len() {
-                o2bm[n.bind_index as usize]
-            } else {
-                mat_inverse_affine(w)
-            }
-        })
+        .map(|(n, w)| if n.bind_index >= 0 && (n.bind_index as usize) < o2bm.len() { o2bm[n.bind_index as usize] } else { mat_inverse_affine(w) })
         .collect();
     let parts = match chunk(&x, "SKND") {
         Some((d, _)) => skin_part_count(d).context("SKND")?,
@@ -549,9 +525,8 @@ pub fn skin_info_lods(xbg: &[u8], max_lods: usize) -> Result<SkinInfo> {
         Some((d, _)) => parse_skid(d).context("SKID")?,
         None => vec![],
     };
-    let rigid_of_part = |part: u32| -> Option<u16> {
-        skid.iter().find(|(p, _)| *p as u32 == part).map(|(_, n)| *n).filter(|n| *n != 0xffff && (*n as usize) < nodes.len())
-    };
+    let rigid_of_part =
+        |part: u32| -> Option<u16> { skid.iter().find(|(p, _)| *p as u32 == part).map(|(_, n)| *n).filter(|n| *n != 0xffff && (*n as usize) < nodes.len()) };
 
     let lods_chunk = x.root.find("LODS").context("XBG has no LODS")?;
     let lods = parse_lods(xbg, lods_chunk)?;
@@ -564,11 +539,7 @@ pub fn skin_info_lods(xbg: &[u8], max_lods: usize) -> Result<SkinInfo> {
             base.push(total);
             total += b.count;
         }
-        let mut sl = SkinLod {
-            primitives: Vec::new(),
-            joints: vec![[0; 4]; total as usize],
-            weights: vec![[1.0, 0.0, 0.0, 0.0]; total as usize],
-        };
+        let mut sl = SkinLod { primitives: Vec::new(), joints: vec![[0; 4]; total as usize], weights: vec![[1.0, 0.0, 0.0, 0.0]; total as usize] };
         let mut used: Vec<Vec<bool>> = clusters.iter().map(|c| vec![false; c.len()]).collect();
         let nidx = lod.indices.len() as u32;
         for (pi, p) in lod.primitives.iter().enumerate() {
@@ -587,10 +558,7 @@ pub fn skin_info_lods(xbg: &[u8], max_lods: usize) -> Result<SkinInfo> {
             // counts, otherwise search for a matching unused cluster.
             let pc = clusters.get(part as usize);
             let matches = |c: &Cluster| {
-                c.index_count as u32 == index_count
-                    && c.vertex_count as u32 == vcount
-                    && c.format as u32 == buf.format
-                    && c.stride as u32 == buf.stride
+                c.index_count as u32 == index_count && c.vertex_count as u32 == vcount && c.format as u32 == buf.format && c.stride as u32 == buf.stride
             };
             let mut ci = p.material_index.max(0) as usize;
             if let Some(pc) = pc {
@@ -812,14 +780,7 @@ pub fn parse_skeleton(data: &[u8]) -> Result<Skeleton> {
             let rot = s.vec4()?;
             let pos = s.vec3()?;
             s.skip(4 * 11)?; // inverse transform + rotation copy
-            Ok(Socket {
-                name,
-                name_hash,
-                bone,
-                bone_hash,
-                translation: vec_to_bevy(pos),
-                rotation: quat_to_bevy(quat_normalize(rot)),
-            })
+            Ok(Socket { name, name_hash, bone, bone_hash, translation: vec_to_bevy(pos), rotation: quat_to_bevy(quat_normalize(rot)) })
         })();
         match parsed {
             Ok(sock) => {
@@ -931,8 +892,7 @@ impl Clip {
         let near_identity = |q: &Quat| q[3].abs() > 0.996; // < ~10 degrees
         let rot_ok = root.rotations.iter().all(near_identity);
         let tr_ok = root.translations.iter().all(|v| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() < 0.05);
-        let mostly_identity =
-            self.tracks.iter().filter(|t| t.rotations.first().is_some_and(near_identity)).count() * 10 >= self.tracks.len() * 7;
+        let mostly_identity = self.tracks.iter().filter(|t| t.rotations.first().is_some_and(near_identity)).count() * 10 >= self.tracks.len() * 7;
         rot_ok && tr_ok && mostly_identity
     }
 
@@ -968,21 +928,79 @@ impl Track {
         sample_keys(&self.rotation_times, &self.rotations, t, quat_slerp)
     }
     pub fn sample_translation(&self, t: f32) -> Option<Vec3> {
-        sample_keys(&self.translation_times, &self.translations, t, |a, b, f| {
-            [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]
-        })
+        sample_keys(&self.translation_times, &self.translations, t, |a, b, f| [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f])
     }
 }
 
 impl RootMotion {
     pub fn sample(&self, t: f32) -> (Vec3, Quat) {
-        let tr = sample_keys(&self.times, &self.translations, t, |a, b, f| {
-            [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]
-        })
-        .unwrap_or([0.0; 3]);
+        let tr = sample_keys(&self.times, &self.translations, t, |a, b, f| [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f])
+            .unwrap_or([0.0; 3]);
         let r = sample_keys(&self.times, &self.rotations, t, quat_slerp).unwrap_or(QUAT_IDENTITY);
         (tr, r)
     }
+}
+
+/// Joins a long clip the game stores in segments (`<name>_<id>_<n>_seg.mab`,
+/// each starting where the last ends) into one: each segment's keys follow
+/// on after the ones before, and the root motion carries on from where the
+/// last segment left the character. Sounds and attachments come along;
+/// sub-clips are the first segment's.
+pub fn stitch(segments: Vec<Clip>) -> Option<Clip> {
+    let mut it = segments.into_iter();
+    let mut out = it.next()?;
+    let mut offset = out.duration;
+    // The first segment's start, which the joined root motion is relative to.
+    let first = out.root_motion.as_ref().map(|r| (r.start_translation, r.start_rotation));
+    for seg in it {
+        for t in seg.tracks {
+            let shift = |times: Vec<f32>| times.into_iter().map(|x| x + offset);
+            match out.tracks.iter_mut().find(|o| o.bone == t.bone) {
+                Some(o) => {
+                    o.rotation_times.extend(shift(t.rotation_times));
+                    o.rotations.extend(t.rotations);
+                    o.translation_times.extend(shift(t.translation_times));
+                    o.translations.extend(t.translations);
+                }
+                None => {
+                    let mut t = t;
+                    t.rotation_times = shift(std::mem::take(&mut t.rotation_times)).collect();
+                    t.translation_times = shift(std::mem::take(&mut t.translation_times)).collect();
+                    out.tracks.push(t);
+                }
+            }
+        }
+        if let (Some(root), Some(seg_root), Some((t0, r0))) = (out.root_motion.as_mut(), seg.root_motion, first) {
+            // Where this segment's keys are in the world, then relative to
+            // the first segment's start.
+            let r0i = quat_conj(r0);
+            for ((time, d), r) in seg_root.times.iter().zip(&seg_root.translations).zip(&seg_root.rotations) {
+                let rd = quat_rotate(seg_root.start_rotation, *d);
+                let abs = [seg_root.start_translation[0] + rd[0], seg_root.start_translation[1] + rd[1], seg_root.start_translation[2] + rd[2]];
+                root.times.push(time + offset);
+                root.translations.push(quat_rotate(r0i, [abs[0] - t0[0], abs[1] - t0[1], abs[2] - t0[2]]));
+                root.rotations.push(quat_normalize(quat_mul(r0i, quat_mul(seg_root.start_rotation, *r))));
+            }
+        }
+        out.sounds.extend(seg.sounds.into_iter().map(|(t, s)| (t + offset, s)));
+        out.attachments.extend(seg.attachments);
+        offset += seg.duration;
+    }
+    out.duration = offset;
+    Some(out)
+}
+
+/// The text the cache keeps in place of a segmented clip: this magic, then
+/// the segments' cache paths, one per line, in order.
+pub const SEGMENTS_MAGIC: &str = "SEGS";
+
+/// A segment's base clip and index: `..._<id>_<n>_seg.mab` -> (`....mab`, n).
+pub fn segment_of(path: &str) -> Option<(String, u32)> {
+    let stem = path.strip_suffix("_seg.mab")?;
+    let (rest, n) = stem.rsplit_once('_')?;
+    let (base, id) = rest.rsplit_once('_')?;
+    (id.bytes().all(|b| b.is_ascii_digit()) && !id.is_empty()).then_some(())?;
+    Some((format!("{base}.mab"), n.parse().ok()?))
 }
 
 fn mask_bits(d: &[u8]) -> Vec<u16> {
@@ -1024,9 +1042,7 @@ pub fn parse_clip_with_skeleton(data: &[u8], skel: &Skeleton) -> Result<Clip> {
 }
 
 fn parse_block(d: &[u8], b: usize) -> Result<(Clip, Option<usize>)> {
-    let rd = |o: usize| -> Result<u32> {
-        d.get(o..o + 4).map(|s| u32::from_le_bytes(s.try_into().unwrap())).context("truncated MAB header")
-    };
+    let rd = |o: usize| -> Result<u32> { d.get(o..o + 4).map(|s| u32::from_le_bytes(s.try_into().unwrap())).context("truncated MAB header") };
     let rf = |o: usize| -> Result<f32> { Ok(f32::from_bits(rd(o)?)) };
     let skeleton_id = rd(b)?;
     let masks: Vec<Vec<u16>> = (0..4).map(|k| mask_bits(&d[b + 4 + 32 * k..b + 36 + 32 * k])).collect();
@@ -1368,12 +1384,7 @@ fn parse_attachments(d: &[u8], s: usize, end: usize) -> Result<Vec<ClipAttachmen
         }
         if names.len() >= 2 {
             let kind = if q >= s + 24 { u16::from_le_bytes([d[q - 20], d[q - 19]]) } else { 0 };
-            out.push(ClipAttachment {
-                kind,
-                object: names[0].clone(),
-                bone: names[1].clone(),
-                target: names.get(2).cloned(),
-            });
+            out.push(ClipAttachment { kind, object: names[0].clone(), bone: names[1].clone(), target: names.get(2).cloned() });
         }
         q = k;
     }
@@ -1559,15 +1570,7 @@ mod tests {
     }
 
     fn bone(name: &str, parent: i32, procedural: Procedural) -> SkeletonBone {
-        SkeletonBone {
-            name: name.into(),
-            name_hash: crc32(name.as_bytes()),
-            parent,
-            translation: [0.0; 3],
-            rotation: QUAT_IDENTITY,
-            length: 0.0,
-            procedural,
-        }
+        SkeletonBone { name: name.into(), name_hash: crc32(name.as_bytes()), parent, translation: [0.0; 3], rotation: QUAT_IDENTITY, length: 0.0, procedural }
     }
 
     #[test]

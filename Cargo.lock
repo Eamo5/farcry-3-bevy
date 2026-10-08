@@ -2727,6 +2727,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
+name = "fc3_bink"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "fc3_convert"
 version = "0.1.0"
 dependencies = [
@@ -2763,9 +2770,11 @@ dependencies = [
  "avian3d",
  "bevy",
  "event-listener",
+ "fc3_bink",
  "fc3_convert",
  "fc3_domino",
  "fc3_formats",
+ "fc3_story",
  "half",
  "mlua",
  "rodio",
@@ -2789,6 +2798,7 @@ dependencies = [
  "anyhow",
  "fc3_domino",
  "fc3_formats",
+ "fc3_story",
  "naga",
  "rayon",
 ]

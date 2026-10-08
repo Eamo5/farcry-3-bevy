@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use crate::combat::{Died, DamageKind, Health, PlayerStats};
+use crate::combat::{DamageKind, Died, Health, PlayerStats};
 use crate::hud::HudState;
 use crate::menu::GameState;
 use crate::player::Player;
@@ -24,6 +24,9 @@ impl Plugin for ProgressionPlugin {
             .init_resource::<ShopTab>()
             .init_resource::<Popups>()
             .add_message::<XpGain>()
+            .add_message::<ItemBought>()
+            .init_resource::<Shops>()
+            .add_systems(Update, find_shops)
             .add_systems(Startup, (setup_journal, setup_shop, setup_popups))
             .add_systems(
                 Update,
@@ -210,7 +213,11 @@ pub const UPGRADES: &[UpgradeDef] = &[
     UpgradeDef {
         id: "syringe_kit",
         name: "Syringe Kit",
-        levels: &[(&[(Animal::Boar, 1), (Animal::Goat, 1)], "Carry 4 medkits"), (&[(Animal::Tapir, 2)], "Carry 5 medkits"), (&[(Animal::Crocodile, 1)], "Carry 6 medkits")],
+        levels: &[
+            (&[(Animal::Boar, 1), (Animal::Goat, 1)], "Carry 4 medkits"),
+            (&[(Animal::Tapir, 2)], "Carry 5 medkits"),
+            (&[(Animal::Crocodile, 1)], "Carry 6 medkits"),
+        ],
     },
     UpgradeDef {
         id: "holster",
@@ -571,19 +578,45 @@ fn setup_journal(mut commands: Commands) {
     let skills = commands.spawn((Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(4.0), ..default() }, ChildOf(columns))).id();
     commands.spawn((Text::new("SKILLS"), font(24.0), TextColor(ACCENT), ChildOf(skills)));
     for branch in [Branch::Heron, Branch::Shark, Branch::Spider] {
-        commands.spawn((Text::new(branch.title()), font(16.0), TextColor(Color::srgb(0.75, 0.8, 0.9)), Node { margin: UiRect::top(Val::Px(8.0)), ..default() }, ChildOf(skills)));
+        commands.spawn((
+            Text::new(branch.title()),
+            font(16.0),
+            TextColor(Color::srgb(0.75, 0.8, 0.9)),
+            Node { margin: UiRect::top(Val::Px(8.0)), ..default() },
+            ChildOf(skills),
+        ));
         for (i, s) in SKILLS.iter().enumerate().filter(|(_, s)| s.branch == branch) {
             let b = commands
                 .spawn((
                     Button,
-                    Node { width: Val::Px(640.0), height: Val::Px(28.0), align_items: AlignItems::Center, padding: UiRect::horizontal(Val::Px(10.0)), flex_shrink: 0.0, ..default() },
+                    Node {
+                        width: Val::Px(640.0),
+                        height: Val::Px(28.0),
+                        align_items: AlignItems::Center,
+                        padding: UiRect::horizontal(Val::Px(10.0)),
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
                     BackgroundColor(IDLE),
                     JournalButton::Skill(i),
                     ChildOf(skills),
                 ))
                 .id();
-            commands.spawn((Text::new(s.name), font(15.0), TextColor(TEXT), Node { width: Val::Px(170.0), ..default() }, JournalText(JournalField::Skill(i)), ChildOf(b)));
-            commands.spawn((Text::new(s.description), font(14.0), TextColor(Color::srgba(0.9, 0.9, 0.88, 0.8)), Node { width: Val::Px(370.0), ..default() }, ChildOf(b)));
+            commands.spawn((
+                Text::new(s.name),
+                font(15.0),
+                TextColor(TEXT),
+                Node { width: Val::Px(170.0), ..default() },
+                JournalText(JournalField::Skill(i)),
+                ChildOf(b),
+            ));
+            commands.spawn((
+                Text::new(s.description),
+                font(14.0),
+                TextColor(Color::srgba(0.9, 0.9, 0.88, 0.8)),
+                Node { width: Val::Px(370.0), ..default() },
+                ChildOf(b),
+            ));
             commands.spawn((Text::new(""), font(14.0), TextColor(TEXT), JournalText(JournalField::SkillStatus(i)), ChildOf(b)));
         }
     }
@@ -594,7 +627,14 @@ fn setup_journal(mut commands: Commands) {
         let b = commands
             .spawn((
                 Button,
-                Node { width: Val::Px(440.0), min_height: Val::Px(46.0), align_items: AlignItems::Center, padding: UiRect::horizontal(Val::Px(10.0)), flex_shrink: 0.0, ..default() },
+                Node {
+                    width: Val::Px(440.0),
+                    min_height: Val::Px(46.0),
+                    align_items: AlignItems::Center,
+                    padding: UiRect::horizontal(Val::Px(10.0)),
+                    flex_shrink: 0.0,
+                    ..default()
+                },
                 BackgroundColor(IDLE),
                 JournalButton::Craft(i),
                 ChildOf(craft),
@@ -611,7 +651,14 @@ fn setup_journal(mut commands: Commands) {
         let mix = commands
             .spawn((
                 Button,
-                Node { width: Val::Px(360.0), min_height: Val::Px(40.0), align_items: AlignItems::Center, padding: UiRect::horizontal(Val::Px(10.0)), flex_shrink: 0.0, ..default() },
+                Node {
+                    width: Val::Px(360.0),
+                    min_height: Val::Px(40.0),
+                    align_items: AlignItems::Center,
+                    padding: UiRect::horizontal(Val::Px(10.0)),
+                    flex_shrink: 0.0,
+                    ..default()
+                },
                 BackgroundColor(IDLE),
                 JournalButton::Syringe(i),
                 ChildOf(row),
@@ -621,7 +668,14 @@ fn setup_journal(mut commands: Commands) {
         let inject = commands
             .spawn((
                 Button,
-                Node { width: Val::Px(74.0), min_height: Val::Px(40.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, flex_shrink: 0.0, ..default() },
+                Node {
+                    width: Val::Px(74.0),
+                    min_height: Val::Px(40.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    flex_shrink: 0.0,
+                    ..default()
+                },
                 BackgroundColor(IDLE),
                 JournalButton::Inject(i),
                 ChildOf(row),
@@ -629,7 +683,14 @@ fn setup_journal(mut commands: Commands) {
             .id();
         commands.spawn((Text::new("USE"), font(14.0), TextColor(TEXT), ChildOf(inject)));
     }
-    commands.spawn((Text::new(""), font(14.0), TextColor(Color::srgba(0.9, 0.9, 0.88, 0.85)), Node { width: Val::Px(440.0), ..default() }, JournalText(JournalField::Plants), ChildOf(craft)));
+    commands.spawn((
+        Text::new(""),
+        font(14.0),
+        TextColor(Color::srgba(0.9, 0.9, 0.88, 0.85)),
+        Node { width: Val::Px(440.0), ..default() },
+        JournalText(JournalField::Plants),
+        ChildOf(craft),
+    ));
     let close = commands
         .spawn((
             Button,
@@ -978,7 +1039,10 @@ fn shop_items(inv: &Inventory, tab: usize) -> Vec<ShopItem> {
             .take(14)
             .collect();
     }
-    (0..inv.defs.len()).filter(|&d| inv.defs[d].class != crate::weapons::WeaponClass::Melee && shop_tab(inv.defs[d].class) == tab).map(ShopItem::Weapon).collect()
+    (0..inv.defs.len())
+        .filter(|&d| inv.defs[d].class != crate::weapons::WeaponClass::Melee && shop_tab(inv.defs[d].class) == tab)
+        .map(ShopItem::Weapon)
+        .collect()
 }
 
 fn setup_shop(mut commands: Commands) {
@@ -1002,16 +1066,12 @@ fn setup_shop(mut commands: Commands) {
         .id();
     commands.spawn((Text::new("SHOP"), font(36.0), TextColor(TEXT), ChildOf(root)));
     commands.spawn((Text::new(""), font(18.0), TextColor(ACCENT), ShopHeader, ChildOf(root)));
-    let tabs = commands.spawn((Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(4.0), margin: UiRect::vertical(Val::Px(6.0)), ..default() }, ChildOf(root))).id();
+    let tabs = commands
+        .spawn((Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(4.0), margin: UiRect::vertical(Val::Px(6.0)), ..default() }, ChildOf(root)))
+        .id();
     for (i, name) in SHOP_TABS.iter().enumerate() {
         let b = commands
-            .spawn((
-                Button,
-                Node { padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)), ..default() },
-                BackgroundColor(IDLE),
-                ShopButton::Tab(i),
-                ChildOf(tabs),
-            ))
+            .spawn((Button, Node { padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)), ..default() }, BackgroundColor(IDLE), ShopButton::Tab(i), ChildOf(tabs)))
             .id();
         commands.spawn((Text::new(*name), font(14.0), TextColor(TEXT), ChildOf(b)));
     }
@@ -1019,7 +1079,14 @@ fn setup_shop(mut commands: Commands) {
         let b = commands
             .spawn((
                 Button,
-                Node { width: Val::Px(560.0), height: Val::Px(30.0), align_items: AlignItems::Center, padding: UiRect::horizontal(Val::Px(12.0)), flex_shrink: 0.0, ..default() },
+                Node {
+                    width: Val::Px(560.0),
+                    height: Val::Px(30.0),
+                    align_items: AlignItems::Center,
+                    padding: UiRect::horizontal(Val::Px(12.0)),
+                    flex_shrink: 0.0,
+                    ..default()
+                },
                 BackgroundColor(IDLE),
                 ShopButton::Buy(i),
                 ChildOf(root),
@@ -1030,7 +1097,14 @@ fn setup_shop(mut commands: Commands) {
     let close = commands
         .spawn((
             Button,
-            Node { width: Val::Px(200.0), height: Val::Px(36.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, margin: UiRect::top(Val::Px(10.0)), ..default() },
+            Node {
+                width: Val::Px(200.0),
+                height: Val::Px(36.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                margin: UiRect::top(Val::Px(10.0)),
+                ..default()
+            },
             BackgroundColor(IDLE),
             ShopButton::Close,
             ChildOf(root),
@@ -1039,7 +1113,36 @@ fn setup_shop(mut commands: Commands) {
     commands.spawn((Text::new("CLOSE"), font(17.0), TextColor(TEXT), ChildOf(close)));
 }
 
-/// Liberated outposts have a shop at their centre.
+/// Something bought at the shop: a weapon's model path (the story hears of
+/// it as the game's item).
+#[derive(Message, Clone)]
+pub struct ItemBought {
+    pub model: Option<String>,
+}
+
+/// Where the world's shopkeepers stand (Bevy space): each keeps a shop.
+#[derive(Resource, Default)]
+pub struct Shops(pub Vec<Vec3>);
+
+/// Shopkeepers as their sectors load.
+fn find_shops(
+    sectors: Res<Assets<crate::cache_assets::Fc3Sector>>,
+    added: Query<&crate::objects::SectorObjects, Added<crate::objects::SectorObjects>>,
+    mut shops: ResMut<Shops>,
+) {
+    for so in &added {
+        let Some(sector) = sectors.get(&so.sector) else { continue };
+        for e in sector.entities.iter().filter(|e| e.name.to_ascii_lowercase().contains("shopkeeper")) {
+            let at = Vec3::from_array(e.translation);
+            if !shops.0.iter().any(|s| s.distance(at) < 1.0) {
+                shops.0.push(at);
+            }
+        }
+    }
+}
+
+/// Liberated outposts have a shop at their centre; shopkeepers keep one
+/// where they stand.
 #[allow(clippy::too_many_arguments)]
 fn shop_prompt(
     args: Res<crate::Args>,
@@ -1052,6 +1155,7 @@ fn shop_prompt(
     players: Query<(&Transform, &Health), With<Player>>,
     mut hud: ResMut<HudState>,
     mut next: ResMut<NextState<GameState>>,
+    shops: Res<Shops>,
 ) {
     if *state.get() != GameState::Playing || hud.prompt.is_some() {
         return;
@@ -1067,7 +1171,8 @@ fn shop_prompt(
     if h.dead {
         return;
     }
-    let near = outposts.list.iter().any(|o| o.liberated && Vec2::new(t.translation.x - o.centre.x, t.translation.z - o.centre.z).length() < 10.0);
+    let near = outposts.list.iter().any(|o| o.liberated && Vec2::new(t.translation.x - o.centre.x, t.translation.z - o.centre.z).length() < 10.0)
+        || shops.0.iter().any(|s| s.distance(t.translation) < 3.5);
     if !near {
         return;
     }
@@ -1088,6 +1193,7 @@ fn shop_buttons(
     mut hud: ResMut<HudState>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     mut tab: ResMut<ShopTab>,
+    mut bought_items: MessageWriter<ItemBought>,
 ) {
     if *state.get() != GameState::Shop {
         return;
@@ -1185,6 +1291,11 @@ fn shop_buttons(
                 };
                 if bought {
                     progress.money -= price;
+                    let model = match item {
+                        ShopItem::Weapon(d) => Some(inv.defs[d].model_path()),
+                        _ => None,
+                    };
+                    bought_items.write(ItemBought { model });
                 } else {
                     hud.notify("Already full");
                 }

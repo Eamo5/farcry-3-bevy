@@ -35,10 +35,7 @@ impl Plugin for DofPlugin {
             .init_gpu_resource::<SpecializedRenderPipelines<DofPipeline>>()
             .add_systems(RenderStartup, init_pipeline)
             .add_systems(Render, prepare_pipelines.in_set(RenderSystems::Prepare))
-            .add_systems(
-                Core3d,
-                draw_blur.in_set(Core3dSystems::PostProcess).before(crate::light_shafts::ShaftsPass).before(bevy::post_process::bloom::bloom),
-            );
+            .add_systems(Core3d, draw_blur.in_set(Core3dSystems::PostProcess).before(crate::light_shafts::ShaftsPass).before(bevy::post_process::bloom::bloom));
     }
 }
 
@@ -107,7 +104,12 @@ fn init_pipeline(mut commands: Commands, device: Res<RenderDevice>, fullscreen: 
         ),
     );
     let sampler = device.create_sampler(&SamplerDescriptor { min_filter: FilterMode::Linear, mag_filter: FilterMode::Linear, ..default() });
-    commands.insert_resource(DofPipeline { layout, sampler, fullscreen: fullscreen.clone(), shader: bevy::asset::load_embedded_asset!(server.as_ref(), "dof.wgsl") });
+    commands.insert_resource(DofPipeline {
+        layout,
+        sampler,
+        fullscreen: fullscreen.clone(),
+        shader: bevy::asset::load_embedded_asset!(server.as_ref(), "dof.wgsl"),
+    });
 }
 
 impl SpecializedRenderPipeline for DofPipeline {
@@ -152,7 +154,9 @@ fn draw_blur(
     if blur.params.z <= 0.0 || blur.params.w <= 0.0 {
         return;
     }
-    let (Some(render_pipeline), Some(binding), Some(depth)) = (cache.get_render_pipeline(**id), uniforms.uniforms().binding(), prepass.depth_view()) else { return };
+    let (Some(render_pipeline), Some(binding), Some(depth)) = (cache.get_render_pipeline(**id), uniforms.uniforms().binding(), prepass.depth_view()) else {
+        return;
+    };
     let post = target.post_process_write();
     let bind_group = ctx.render_device().create_bind_group(
         Some("depth of field"),

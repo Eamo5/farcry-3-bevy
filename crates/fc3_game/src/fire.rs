@@ -16,9 +16,7 @@ pub struct FirePlugin;
 
 impl Plugin for FirePlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<Ignite>()
-            .init_resource::<Fires>()
-            .add_systems(Update, (ignite, spread, burn_effects, burn_damage, fire_lights).chain());
+        app.add_message::<Ignite>().init_resource::<Fires>().add_systems(Update, (ignite, spread, burn_effects, burn_damage, fire_lights).chain());
     }
 }
 
@@ -251,12 +249,7 @@ fn burn_effects(
 }
 
 /// Anything standing in a burning cell takes fire damage.
-fn burn_damage(
-    time: Res<Time>,
-    mut fires: ResMut<Fires>,
-    targets: Query<(Entity, &GlobalTransform, &Health)>,
-    mut damage: MessageWriter<DamageEvent>,
-) {
+fn burn_damage(time: Res<Time>, mut fires: ResMut<Fires>, targets: Query<(Entity, &GlobalTransform, &Health)>, mut damage: MessageWriter<DamageEvent>) {
     if fires.burning.is_empty() {
         return;
     }
@@ -285,7 +278,11 @@ fn fire_lights(time: Res<Time>, mut fires: ResMut<Fires>, mut lights: Query<(&mu
         fires.lights = (0..LIGHTS)
             .map(|_| {
                 commands
-                    .spawn((PointLight { color: Color::srgb(1.0, 0.55, 0.25), intensity: 0.0, range: 25.0, radius: 1.0, ..default() }, Transform::default(), Visibility::Hidden))
+                    .spawn((
+                        PointLight { color: Color::srgb(1.0, 0.55, 0.25), intensity: 0.0, range: 25.0, radius: 1.0, ..default() },
+                        Transform::default(),
+                        Visibility::Hidden,
+                    ))
                     .id()
             })
             .collect();

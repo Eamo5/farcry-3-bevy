@@ -32,7 +32,8 @@ impl Plugin for StealthPlugin {
             .add_systems(Startup, load_rock)
             .add_systems(
                 Update,
-                ((tag_test, binoculars).chain(), takedown_prompt.before(crate::hud::HudSet), detection_markers, throw_rock, fly_rocks).run_if(in_state(crate::menu::GameState::Playing)),
+                ((tag_test, binoculars).chain(), takedown_prompt.before(crate::hud::HudSet), detection_markers, throw_rock, fly_rocks)
+                    .run_if(in_state(crate::menu::GameState::Playing)),
             );
     }
 }
@@ -134,10 +135,20 @@ fn throw_rock(
     mut commands: Commands,
     mut fp: ResMut<crate::fp::FpState>,
     busy: Res<crate::fp::HandsBusy>,
+    scripted: Res<crate::story::ScriptedPlayer>,
 ) {
     *cooldown -= time.delta_secs();
     let Ok((p, h)) = players.single() else { return };
-    if !actions.just_pressed(Action::ThrowRock) || *cooldown > 0.0 || h.dead || p.swimming || p.driving || p.noclip || p.mounted.is_some() || busy.busy() {
+    if !actions.just_pressed(Action::ThrowRock)
+        || scripted.ignored.contains("throw_rock")
+        || *cooldown > 0.0
+        || h.dead
+        || p.swimming
+        || p.driving
+        || p.noclip
+        || p.mounted.is_some()
+        || busy.busy()
+    {
         return;
     }
     let Ok(cam) = camera.single() else { return };
@@ -369,9 +380,20 @@ fn takedown(
             if actions.just_pressed(Action::Melee) {
                 actions.consume(Action::Melee);
                 td.chain_window = 0.0;
-                damage.write(DamageEvent { target, amount: 10_000.0, kind: DamageKind::Melee, source: Some(pt.translation), instigator: Some(pe), headshot: false });
+                damage.write(DamageEvent {
+                    target,
+                    amount: 10_000.0,
+                    kind: DamageKind::Melee,
+                    source: Some(pt.translation),
+                    instigator: Some(pe),
+                    headshot: false,
+                });
                 crate::particles::fx::blood(&mut particles, &mut rng, eye + to, to.normalize_or_zero());
-                sfx.write(crate::sound::PlaySfx { event: crate::sound::switched(crate::sound::ev::MELEE_IMPACT, crate::surfaces::value::FLESH, 0), at: Some(eye + to), volume: 0.8 });
+                sfx.write(crate::sound::PlaySfx {
+                    event: crate::sound::switched(crate::sound::ev::MELEE_IMPACT, crate::surfaces::value::FLESH, 0),
+                    at: Some(eye + to),
+                    volume: 0.8,
+                });
             }
             return;
         }
@@ -398,7 +420,13 @@ fn takedown(
             let first = npcs.get(target).ok().map(|(_, t, n, _)| (t.translation, n.role.armoured()));
             let second = first.filter(|(_, heavy)| perks.double_takedown && !heavy).and_then(|(at, _)| {
                 npcs.iter()
-                    .filter(|(e, t, n, h)| *e != target && !takeable(n, h) && !n.role.armoured() && Vec2::new(t.translation.x - at.x, t.translation.z - at.z).length() < DOUBLE_REACH && (t.translation.y - at.y).abs() < 2.5)
+                    .filter(|(e, t, n, h)| {
+                        *e != target
+                            && !takeable(n, h)
+                            && !n.role.armoured()
+                            && Vec2::new(t.translation.x - at.x, t.translation.z - at.z).length() < DOUBLE_REACH
+                            && (t.translation.y - at.y).abs() < 2.5
+                    })
                     .min_by(|a, b| a.1.translation.distance(at).total_cmp(&b.1.translation.distance(at)))
                     .map(|(e, t, _, _)| {
                         let flat = Vec3::new(to.x, 0.0, to.z).normalize_or(fwd);
@@ -432,10 +460,25 @@ fn takedown(
                 let from = npcs.get(target).map(|(_, _, n, _)| crate::fp::Quarter::of(n.yaw, -flat)).unwrap_or(crate::fp::Quarter::Back);
                 strike(&mut td, &mut inv, target, pe, pt.translation, &mut damage, &mut sfx);
                 if let Some((e2, _)) = second {
-                    damage.write(DamageEvent { target: e2, amount: 10_000.0, kind: DamageKind::Melee, source: Some(pt.translation), instigator: Some(pe), headshot: false });
+                    damage.write(DamageEvent {
+                        target: e2,
+                        amount: 10_000.0,
+                        kind: DamageKind::Melee,
+                        source: Some(pt.translation),
+                        instigator: Some(pe),
+                        headshot: false,
+                    });
                     td.timer = crate::fp::DOUBLE_TIME + 0.1;
                 }
-                anims.write(crate::fp::TakedownAnim { victim: target, style: crate::fp::TakedownStyle::Above { from }, chain: None, grenade: None, drag: false, second, pistol: [None; 3] });
+                anims.write(crate::fp::TakedownAnim {
+                    victim: target,
+                    style: crate::fp::TakedownStyle::Above { from },
+                    chain: None,
+                    grenade: None,
+                    drag: false,
+                    second,
+                    pistol: [None; 3],
+                });
             }
             return;
         }
@@ -470,7 +513,15 @@ fn takedown(
                 let front = facing.dot(flat) < -0.3;
                 strike(&mut td, &mut inv, target, pe, at, &mut damage, &mut sfx);
                 debug!("takedown from below ({} m up, front {front}, water {})", at.y - crate::player::HALF_HEIGHT - feet, p.swimming);
-                anims.write(crate::fp::TakedownAnim { victim: target, style: crate::fp::TakedownStyle::Below { front, water: p.swimming }, chain: None, grenade: None, drag: false, second: None, pistol: [None; 3] });
+                anims.write(crate::fp::TakedownAnim {
+                    victim: target,
+                    style: crate::fp::TakedownStyle::Below { front, water: p.swimming },
+                    chain: None,
+                    grenade: None,
+                    drag: false,
+                    second: None,
+                    pistol: [None; 3],
+                });
             }
             return;
         }
@@ -509,7 +560,12 @@ fn takedown(
         let landing = pt.translation + fwd * GRENADE_KICK;
         let near: Vec<Vec3> = npcs
             .iter()
-            .filter(|(e, t, npc, nh)| *e != target && !nh.dead && npc.faction.hostile_to_player() && Vec2::new(t.translation.x - landing.x, t.translation.z - landing.z).length() < GRENADE_GROUP)
+            .filter(|(e, t, npc, nh)| {
+                *e != target
+                    && !nh.dead
+                    && npc.faction.hostile_to_player()
+                    && Vec2::new(t.translation.x - landing.x, t.translation.z - landing.z).length() < GRENADE_GROUP
+            })
             .map(|(_, t, _, _)| t.translation)
             .collect();
         if near.len() >= 2 {
@@ -529,7 +585,9 @@ fn takedown(
                 let d = to.length();
                 (d < range && Vec3::new(to.x, 0.0, to.z).normalize_or_zero().dot(fwd) > 0.4).then_some((e, d, to))
             })
-            .filter(|(e, d, to)| Dir3::new(*to).ok().is_some_and(|dir| spatial.cast_ray(eye, dir, *d, true, &filter).is_none_or(|h| h.entity == *e || h.distance > d - 0.6)))
+            .filter(|(e, d, to)| {
+                Dir3::new(*to).ok().is_some_and(|dir| spatial.cast_ray(eye, dir, *d, true, &filter).is_none_or(|h| h.entity == *e || h.distance > d - 0.6))
+            })
             .map(|(e, d, _)| (e, d))
             .collect();
         seen.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -615,10 +673,20 @@ fn strike(
     td.chain_window = td.timer + CHAIN_WINDOW;
     td.last = Some(target);
     damage.write(DamageEvent { target, amount: 10_000.0, kind: DamageKind::Melee, source: Some(at), instigator: Some(player), headshot: false });
-    sfx.write(crate::sound::PlaySfx { event: crate::sound::switched(crate::sound::ev::MELEE_IMPACT, crate::surfaces::value::FLESH, 0), at: Some(at), volume: 0.8 });
+    sfx.write(crate::sound::PlaySfx {
+        event: crate::sound::switched(crate::sound::ev::MELEE_IMPACT, crate::surfaces::value::FLESH, 0),
+        at: Some(at),
+        volume: 0.8,
+    });
 }
 
-fn takedown_prompt(td: Res<Takedown>, actions: Res<ActionState>, settings: Res<crate::settings::Settings>, perks: Res<crate::progression::Perks>, mut hud: ResMut<crate::hud::HudState>) {
+fn takedown_prompt(
+    td: Res<Takedown>,
+    actions: Res<ActionState>,
+    settings: Res<crate::settings::Settings>,
+    perks: Res<crate::progression::Perks>,
+    mut hud: ResMut<crate::hud::HudState>,
+) {
     if td.candidate.is_some() && hud.prompt.is_none() {
         let what = match td.kind {
             TakedownKind::Ground if td.grenade_at.is_some() => "grenade takedown",
@@ -727,7 +795,8 @@ fn takedown_test(
 ) {
     // `FC3_TRAVERSAL_TEST=zip_takedown`: drop off the zip line onto the enemy
     // waiting under it, once over him.
-    if std::env::var("FC3_TRAVERSAL_TEST").is_ok_and(|m| m == "zip_takedown") && matches!(*mount, crate::traversal::Mount::Zip { .. }) && td.candidate.is_some() {
+    if std::env::var("FC3_TRAVERSAL_TEST").is_ok_and(|m| m == "zip_takedown") && matches!(*mount, crate::traversal::Mount::Zip { .. }) && td.candidate.is_some()
+    {
         info!("zip test: dropping onto the enemy below");
         actions.press(Action::Melee);
     }
@@ -937,7 +1006,10 @@ pub fn below_test(
                 *step = 3;
                 return;
             };
-            let Some((e, mut nt, _, mut npc)) = npcs.iter_mut().filter(|(_, _, _, n)| n.marker_id >= u64::MAX - 4).max_by_key(|(_, _, _, n)| n.marker_id) else { return };
+            let Some((e, mut nt, _, mut npc)) = npcs.iter_mut().filter(|(_, _, _, n)| n.marker_id >= u64::MAX - 4).max_by_key(|(_, _, _, n)| n.marker_id)
+            else {
+                return;
+            };
             let swim = Vec3::new(spot.x, SEA_LEVEL - 1.45 + crate::player::HALF_HEIGHT, spot.z);
             nt.translation = Vec3::new(spot.x, SEA_LEVEL + 0.3 + crate::player::HALF_HEIGHT, spot.z) + fwd * 1.0;
             npc.yaw = (-fwd.x).atan2(-fwd.z);
@@ -951,7 +1023,10 @@ pub fn below_test(
         // The course is out by now: the wall's face is 15.5 m ahead.
         0 if t > 4.0 => {
             let feet = pt.translation - Vec3::Y * crate::player::HALF_HEIGHT;
-            let Some((e, mut nt, _, mut npc)) = npcs.iter_mut().filter(|(_, _, _, n)| n.marker_id >= u64::MAX - 4).max_by_key(|(_, _, _, n)| n.marker_id) else { return };
+            let Some((e, mut nt, _, mut npc)) = npcs.iter_mut().filter(|(_, _, _, n)| n.marker_id >= u64::MAX - 4).max_by_key(|(_, _, _, n)| n.marker_id)
+            else {
+                return;
+            };
             nt.translation = feet + fwd * 15.65 + Vec3::Y * (2.0 + crate::player::HALF_HEIGHT);
             npc.yaw = (-fwd.x).atan2(-fwd.z);
             nt.rotation = Quat::from_rotation_y(npc.yaw);
@@ -978,7 +1053,8 @@ pub fn below_test(
             }
         }
         2 => {
-            let dead: Vec<String> = npcs.iter().filter(|(_, _, _, n)| n.marker_id >= u64::MAX - 4).map(|(_, t, h, _)| format!("{:.1?} dead {}", t.translation, h.dead)).collect();
+            let dead: Vec<String> =
+                npcs.iter().filter(|(_, _, _, n)| n.marker_id >= u64::MAX - 4).map(|(_, t, h, _)| format!("{:.1?} dead {}", t.translation, h.dead)).collect();
             info!("takedown-test: after {dead:?}, player at {:.1?}", pt.translation);
             *step = 3;
         }

@@ -219,13 +219,80 @@ impl Binding {
 pub const KEYS: &[KeyCode] = &{
     use KeyCode as K;
     [
-        K::KeyA, K::KeyB, K::KeyC, K::KeyD, K::KeyE, K::KeyF, K::KeyG, K::KeyH, K::KeyI, K::KeyJ, K::KeyK, K::KeyL, K::KeyM,
-        K::KeyN, K::KeyO, K::KeyP, K::KeyQ, K::KeyR, K::KeyS, K::KeyT, K::KeyU, K::KeyV, K::KeyW, K::KeyX, K::KeyY, K::KeyZ,
-        K::Digit0, K::Digit9, K::Space, K::ShiftLeft, K::ShiftRight, K::ControlLeft, K::ControlRight, K::AltLeft, K::Tab,
-        K::CapsLock, K::Backquote, K::Enter, K::Backspace, K::ArrowUp, K::ArrowDown, K::ArrowLeft, K::ArrowRight,
-        K::Insert, K::Delete, K::Home, K::End, K::PageUp, K::PageDown, K::Numpad0, K::Numpad1, K::Numpad2, K::Numpad3,
-        K::Numpad4, K::Numpad5, K::Numpad6, K::Numpad7, K::Numpad8, K::Numpad9, K::F5, K::F6, K::F7, K::F8, K::F9,
-        K::Comma, K::Period, K::Slash, K::Semicolon, K::Quote, K::BracketLeft, K::BracketRight, K::Backslash, K::Minus, K::Equal,
+        K::KeyA,
+        K::KeyB,
+        K::KeyC,
+        K::KeyD,
+        K::KeyE,
+        K::KeyF,
+        K::KeyG,
+        K::KeyH,
+        K::KeyI,
+        K::KeyJ,
+        K::KeyK,
+        K::KeyL,
+        K::KeyM,
+        K::KeyN,
+        K::KeyO,
+        K::KeyP,
+        K::KeyQ,
+        K::KeyR,
+        K::KeyS,
+        K::KeyT,
+        K::KeyU,
+        K::KeyV,
+        K::KeyW,
+        K::KeyX,
+        K::KeyY,
+        K::KeyZ,
+        K::Digit0,
+        K::Digit9,
+        K::Space,
+        K::ShiftLeft,
+        K::ShiftRight,
+        K::ControlLeft,
+        K::ControlRight,
+        K::AltLeft,
+        K::Tab,
+        K::CapsLock,
+        K::Backquote,
+        K::Enter,
+        K::Backspace,
+        K::ArrowUp,
+        K::ArrowDown,
+        K::ArrowLeft,
+        K::ArrowRight,
+        K::Insert,
+        K::Delete,
+        K::Home,
+        K::End,
+        K::PageUp,
+        K::PageDown,
+        K::Numpad0,
+        K::Numpad1,
+        K::Numpad2,
+        K::Numpad3,
+        K::Numpad4,
+        K::Numpad5,
+        K::Numpad6,
+        K::Numpad7,
+        K::Numpad8,
+        K::Numpad9,
+        K::F5,
+        K::F6,
+        K::F7,
+        K::F8,
+        K::F9,
+        K::Comma,
+        K::Period,
+        K::Slash,
+        K::Semicolon,
+        K::Quote,
+        K::BracketLeft,
+        K::BracketRight,
+        K::Backslash,
+        K::Minus,
+        K::Equal,
     ]
 };
 
@@ -305,6 +372,15 @@ impl ActionState {
     /// Marks a press as handled so later systems don't act on it too.
     pub fn consume(&mut self, a: Action) {
         self.just_pressed.remove(&a);
+    }
+
+    /// Drops this frame's input (a box on screen has it).
+    pub fn clear(&mut self) {
+        self.pressed.clear();
+        self.just_pressed.clear();
+        self.movement = Vec2::ZERO;
+        self.look = Vec2::ZERO;
+        self.cycle = 0;
     }
 
     /// Prompt label for an action on the device in use.

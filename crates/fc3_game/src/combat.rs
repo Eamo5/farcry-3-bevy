@@ -103,7 +103,16 @@ fn add_player_health(mut commands: Commands, player: Query<(Entity, &Transform),
     for (e, t) in &player {
         commands.entity(e).insert((
             Health::new(PLAYER_MAX_HEALTH),
-            PlayerStats { medkits: 2, kills: 0, deaths: 0, respawn_timer: 0.0, spawn_point: t.translation, hurt_dir: None, burning: 0.0, last_hurt: DamageKind::Bullet },
+            PlayerStats {
+                medkits: 2,
+                kills: 0,
+                deaths: 0,
+                respawn_timer: 0.0,
+                spawn_point: t.translation,
+                hurt_dir: None,
+                burning: 0.0,
+                last_hurt: DamageKind::Bullet,
+            },
         ));
     }
 }
@@ -116,6 +125,7 @@ fn apply_damage(
     mut died: MessageWriter<Died>,
     mut targets: Query<(&mut Health, Option<&GlobalTransform>, Option<&mut PlayerStats>, Option<&Armour>, Option<&DamageScale>)>,
     mut stats: Query<&mut PlayerStats, Without<Health>>,
+    scripted: Res<crate::story::ScriptedPlayer>,
 ) {
     for ev in events.read() {
         let Ok((mut h, gt, ps, armour, scale)) = targets.get_mut(ev.target) else { continue };
@@ -143,13 +153,14 @@ fn apply_damage(
                 amount = 0.0;
             }
         }
-        // FC3_GOD (tests): the player takes no damage, but it is logged.
-        if ps.is_some() && std::env::var("FC3_GOD").is_ok() {
+        // FC3_GOD (tests), or a mission's scene: the player takes no damage.
+        if ps.is_some() && (scripted.god || std::env::var("FC3_GOD").is_ok()) {
             info!("player hit: {amount:.1} {:?}", ev.kind);
             amount = 0.0;
         }
         h.current -= amount;
         h.since_damage = 0.0;
+        let is_player = ps.is_some();
         if let Some(mut ps) = ps {
             if amount > 0.0 {
                 ps.last_hurt = ev.kind;
@@ -165,6 +176,9 @@ fn apply_damage(
         if h.current <= 0.0 {
             h.current = 0.0;
             h.dead = true;
+            if is_player {
+                info!("player died: {:?}", ev.kind);
+            }
             died.write(Died { entity: ev.target, killer: ev.instigator, kind: ev.kind });
         }
     }

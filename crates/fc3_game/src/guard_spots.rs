@@ -83,13 +83,24 @@ fn clips(kind: &str, privateer: bool) -> &'static [&'static str] {
             r"smart_terrain_points\fighters\faction_specific\generic\simple_animation\stand\smoke\3rdge_fulbst_idlerelax_smoke_loop_v00_+000fw_nowep.mab",
             r"smart_terrain_points\fighters\faction_specific\generic\simple_animation\stand\smoke\3rdge_fulbst_idlerelax_smoke_loop_v01_+000fw_nowep.mab",
         ],
-        ("piss", _) => &[r"contextual_actions\patrol\pissing\3rdge_fulbst_pissingloop_v00_+000fw_ak74.mab", r"contextual_actions\patrol\pissing\3rdge_fulbst_pissingloop_v01_+000fw_ak74.mab"],
+        ("piss", _) => &[
+            r"contextual_actions\patrol\pissing\3rdge_fulbst_pissingloop_v00_+000fw_ak74.mab",
+            r"contextual_actions\patrol\pissing\3rdge_fulbst_pissingloop_v01_+000fw_ak74.mab",
+        ],
         ("lean", _) => &[r"contextual_actions\patrol\leanonwall\ak74\3rdge_fulbst_idlerelaxleanonwall_v00_ak74.mab"],
-        ("lookover", _) => &[r"smart_terrain_points\fighters\behavior_specific\cautious\lookoverobject\3rdge_fulbst_cautious_lookoverobject_v00_+000fw_ak74.mab"],
-        ("corner_left", _) => &[r"smart_terrain_points\fighters\behavior_specific\cautious\lookaroundcorner\3rdge_fulbst_lookaroundcorner_left_v00_+000fw_ak74.mab"],
-        ("corner_right", _) => &[r"smart_terrain_points\fighters\behavior_specific\cautious\lookaroundcorner\3rdge_fulbst_lookaroundcorner_right_v00_+000fw_ak74.mab"],
+        ("lookover", _) => {
+            &[r"smart_terrain_points\fighters\behavior_specific\cautious\lookoverobject\3rdge_fulbst_cautious_lookoverobject_v00_+000fw_ak74.mab"]
+        }
+        ("corner_left", _) => {
+            &[r"smart_terrain_points\fighters\behavior_specific\cautious\lookaroundcorner\3rdge_fulbst_lookaroundcorner_left_v00_+000fw_ak74.mab"]
+        }
+        ("corner_right", _) => {
+            &[r"smart_terrain_points\fighters\behavior_specific\cautious\lookaroundcorner\3rdge_fulbst_lookaroundcorner_right_v00_+000fw_ak74.mab"]
+        }
         ("gear", _) => &[r"smart_terrain_points\fighters\theme_specific\weapons_handling\verifygear\3rdge_fulbst_verifygear_merc_000fw_ak74.mab"],
-        ("sit", _) => &[r"smart_terrain_points\fighters\faction_specific\generic\simple_animation\ground\3rdge_fulbst_idlerelax_sitground_loop_+000fw_ak74.mab"],
+        ("sit", _) => {
+            &[r"smart_terrain_points\fighters\faction_specific\generic\simple_animation\ground\3rdge_fulbst_idlerelax_sitground_loop_+000fw_ak74.mab"]
+        }
         ("flies", _) => &[r"smart_terrain_points\fighters\theme_specific\dead_bodies\swatflies\3rdge_fulbst_cautiousak_swatflies_v00_000fw_ak74.mab"],
         _ => &[],
     }

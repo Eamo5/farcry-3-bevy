@@ -11,6 +11,8 @@ path = "src/main.rs"
 fc3_formats.workspace = true
 fc3_convert.workspace = true
 fc3_domino.workspace = true
+fc3_story.workspace = true
+fc3_bink.workspace = true
 mlua = { version = "0.12", features = ["lua51", "vendored"] }
 anyhow.workspace = true
 bevy = { version = "0.19", features = ["dds"] }

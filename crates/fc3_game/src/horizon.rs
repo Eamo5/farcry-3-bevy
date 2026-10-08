@@ -36,10 +36,8 @@ fn load_atlas(mut commands: Commands, server: Res<AssetServer>, mut images: ResM
     commands.insert_resource(HorizonShader(shader));
     let path = fc3_formats::cache::default_cache_root().join(fc3_formats::cache::HORIZON_ATLAS_REL);
     // FC3_NO_HORIZON=1 (debug): no shadows from distant land.
-    let atlas = std::env::var("FC3_NO_HORIZON")
-        .is_err()
-        .then(|| std::fs::read(path).ok().and_then(|b| fc3_formats::cache::HorizonAtlas::from_bytes(&b)))
-        .flatten();
+    let atlas =
+        std::env::var("FC3_NO_HORIZON").is_err().then(|| std::fs::read(path).ok().and_then(|b| fc3_formats::cache::HorizonAtlas::from_bytes(&b))).flatten();
     let (size, data) = match atlas {
         Some(a) => (a.size, a.data),
         None => (1, vec![128, 128]),

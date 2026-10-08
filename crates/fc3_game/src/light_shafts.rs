@@ -125,7 +125,12 @@ fn init_pipeline(mut commands: Commands, device: Res<RenderDevice>, fullscreen: 
         ),
     );
     let sampler = device.create_sampler(&SamplerDescriptor { min_filter: FilterMode::Linear, mag_filter: FilterMode::Linear, ..default() });
-    commands.insert_resource(ShaftsPipeline { layout, sampler, fullscreen: fullscreen.clone(), shader: bevy::asset::load_embedded_asset!(server.as_ref(), "light_shafts.wgsl") });
+    commands.insert_resource(ShaftsPipeline {
+        layout,
+        sampler,
+        fullscreen: fullscreen.clone(),
+        shader: bevy::asset::load_embedded_asset!(server.as_ref(), "light_shafts.wgsl"),
+    });
 }
 
 impl SpecializedRenderPipeline for ShaftsPipeline {

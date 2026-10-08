@@ -90,7 +90,15 @@ fn player_audio(
     let dt = time.delta_secs();
     let ui = |event: u32, volume: f32| PlaySfx { event, at: None, volume };
     if !last.init {
-        *last = Last { init: true, since_detected: DETECTED_AGAIN, level: progress.level, money: progress.money, crouching: p.crouching, dead: health.dead, ..default() };
+        *last = Last {
+            init: true,
+            since_detected: DETECTED_AGAIN,
+            level: progress.level,
+            money: progress.money,
+            crouching: p.crouching,
+            dead: health.dead,
+            ..default()
+        };
     }
     // Spotted: the sting, once per encounter.
     let detected = npcs.iter().any(|n| n.faction.hostile_to_player() && n.state == crate::npc::NpcState::Combat && n.sees_player);
@@ -156,6 +164,13 @@ fn player_audio(
     // Wind rushing past in a fall, a wingsuit glide or under the canopy.
     let fall = if p.grounded || p.swimming || p.noclip || driving.vehicle.is_some() { 0.0 } else { p.velocity.length() };
     if fall > 6.0 {
-        loops.write(LoopSfx { key: 0x5749_4E44, event: FALLING, at: None, volume: 0.9, params: [(FALL_SPEED, fall), (0, 0.0), (0, 0.0), (0, 0.0)], ..default() });
+        loops.write(LoopSfx {
+            key: 0x5749_4E44,
+            event: FALLING,
+            at: None,
+            volume: 0.9,
+            params: [(FALL_SPEED, fall), (0, 0.0), (0, 0.0), (0, 0.0)],
+            ..default()
+        });
     }
 }

@@ -230,7 +230,8 @@ gait, then the plain event.
   Each `hkpStorageExtendedMeshShapeMeshSubpartStorage` has per-triangle material indices
   (`materialIndices` u8 at +0x38, or u16 at +0x5C). Those index its `materials` (12 bytes
   each), whose user data (+8) is the palette entry. Most files hold two rigid bodies: a
-  coarse one that characters walk on and a detailed `HIGH_*` one for shots.
+  coarse one that characters walk on and a detailed `HIGH_*` one for shots (the bodies'
+  and shapes' layouts are in `physics.md`).
   The converter keeps, per model:
   * `walk`: the logic material with the most area facing up, from the coarse body.
   * `wall`: the one with the most area overall, from the detailed body.

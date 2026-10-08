@@ -54,11 +54,7 @@ pub fn filelist_dir() -> Option<std::path::PathBuf> {
 
 /// Starts converting `data_dir` into `cache_root` on a background thread.
 pub fn start_conversion(data_dir: std::path::PathBuf, cache_root: std::path::PathBuf, filelists: Option<std::path::PathBuf>) -> Conversion {
-    let conv = Conversion {
-        progress: Arc::new(Mutex::new(None)),
-        result: Arc::new(Mutex::new(None)),
-        cache_root: cache_root.clone(),
-    };
+    let conv = Conversion { progress: Arc::new(Mutex::new(None)), result: Arc::new(Mutex::new(None)), cache_root: cache_root.clone() };
     let progress = conv.progress.clone();
     let result = conv.result.clone();
     std::thread::spawn(move || {
@@ -111,11 +107,7 @@ fn setup_screen(mut commands: Commands, conversion: Option<Res<Conversion>>, err
     ));
     if error.is_none() {
         let track = commands
-            .spawn((
-                Node { width: Val::Px(520.0), height: Val::Px(10.0), ..default() },
-                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.12)),
-                ChildOf(root),
-            ))
+            .spawn((Node { width: Val::Px(520.0), height: Val::Px(10.0), ..default() }, BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.12)), ChildOf(root)))
             .id();
         commands.spawn((
             Node { width: Val::Percent(0.0), height: Val::Percent(100.0), ..default() },

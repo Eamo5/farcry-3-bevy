@@ -152,20 +152,24 @@ fn plan_route(
     graph: Option<Res<crate::splines::RoadGraph>>,
     players: Query<&Transform, With<Player>>,
     mut gps: ResMut<Gps>,
+    objectives: Res<crate::story::ObjectiveMarkers>,
 ) {
     // FC3_WAYPOINT=x,y (Dunia; tests): a waypoint there from the start.
     let test = std::env::var("FC3_WAYPOINT").ok().and_then(|v| {
         let f: Vec<f32> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
         (f.len() == 2).then(|| Vec3::new(f[0], 0.0, -f[1]))
     });
-    let Some(w) = waypoint.0.or(test) else {
+    // Without a waypoint of the player's own, the way to the mission's
+    // objective.
+    let Some(w) = waypoint.0.or(test).or_else(|| objectives.0.first().copied()) else {
         gps.route.clear();
         gps.planned_for = None;
         return;
     };
     let Ok(pt) = players.single() else { return };
     let me = Vec2::new(pt.translation.x, pt.translation.z);
-    let changed = gps.planned_for != Some(w);
+    // A moving objective (someone to follow) replans once it has gone a way.
+    let changed = gps.planned_for.is_none_or(|p| Vec2::new(p.x - w.x, p.z - w.z).length() > 15.0);
     if !changed && time.elapsed_secs() < *next {
         return;
     }
@@ -326,31 +330,27 @@ fn setup_fog(mut images: ResMut<Assets<Image>>, mut explored: ResMut<Explored>) 
     explored.image = images.add(image);
 }
 
-fn setup_map_ui(
-    mut done: Local<bool>,
-    server: Res<AssetServer>,
-    explored: Res<Explored>,
-    mut materials: ResMut<Assets<MapMaterial>>,
-    mut commands: Commands,
-) {
+fn setup_map_ui(mut done: Local<bool>, server: Res<AssetServer>, explored: Res<Explored>, mut materials: ResMut<Assets<MapMaterial>>, mut commands: Commands) {
     if *done {
         return;
     }
     *done = true;
-    let map: Handle<Image> = server.load_builder().with_settings(|s: &mut ImageLoaderSettings| {
-        s.is_srgb = true;
-        s.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-            address_mode_u: ImageAddressMode::ClampToEdge,
-            address_mode_v: ImageAddressMode::ClampToEdge,
-            mag_filter: ImageFilterMode::Linear,
-            min_filter: ImageFilterMode::Linear,
-            mipmap_filter: ImageFilterMode::Linear,
-            anisotropy_clamp: 4,
-            ..default()
-        });
-        s.asset_usage = RenderAssetUsages::RENDER_WORLD;
-    })
-    .load(crate::cache_assets::cache_path(fc3_formats::cache::WORLD_MAP_REL));
+    let map: Handle<Image> = server
+        .load_builder()
+        .with_settings(|s: &mut ImageLoaderSettings| {
+            s.is_srgb = true;
+            s.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::ClampToEdge,
+                address_mode_v: ImageAddressMode::ClampToEdge,
+                mag_filter: ImageFilterMode::Linear,
+                min_filter: ImageFilterMode::Linear,
+                mipmap_filter: ImageFilterMode::Linear,
+                anisotropy_clamp: 4,
+                ..default()
+            });
+            s.asset_usage = RenderAssetUsages::RENDER_WORLD;
+        })
+        .load(crate::cache_assets::cache_path(fc3_formats::cache::WORLD_MAP_REL));
     let material = |params: MapParams| MapMaterial { params, map: map.clone(), fog: explored.image.clone() };
     commands.spawn((
         Node {
@@ -467,10 +467,13 @@ fn update_minimap(
     players: Query<(&Transform, &Player, &crate::combat::Health)>,
     mut minimap: Query<(&MaterialNode<MapMaterial>, &mut Visibility), With<Minimap>>,
     mut materials: ResMut<Assets<MapMaterial>>,
+    scripted: Res<crate::story::ScriptedPlayer>,
+    cinema: Res<crate::cinema::Cinema>,
 ) {
     let Ok((node, mut vis)) = minimap.single_mut() else { return };
     let Ok((t, p, h)) = players.single() else { return };
-    let show = *state.get() == GameState::Playing && !h.dead;
+    // Missions hide it with the HUD, and scenes take the screen.
+    let show = *state.get() == GameState::Playing && !h.dead && !scripted.hud_hidden && cinema.view.is_none();
     *vis = if show { Visibility::Inherited } else { Visibility::Hidden };
     if !show {
         return;
@@ -600,6 +603,7 @@ fn update_minimap_icons(
     minimap: Query<Entity, With<Minimap>>,
     dots: Query<Entity, With<MinimapDot>>,
     mut commands: Commands,
+    objectives: Res<crate::story::ObjectiveMarkers>,
 ) {
     for e in &dots {
         commands.entity(e).despawn();
@@ -609,6 +613,16 @@ fn update_minimap_icons(
     }
     let (Ok((t, p)), Ok(mini)) = (players.single(), minimap.single()) else { return };
     let rot = Rot2::radians(heading(p));
+    // Mission objectives: held on the rim when further than the map shows.
+    for &at in &objectives.0 {
+        let d = at - t.translation;
+        let mut local = rot.inverse() * Vec2::new(d.x, d.z) / MINIMAP_RADIUS_M;
+        if local.length() > 0.88 {
+            local = local.normalize() * 0.88;
+        }
+        let px = (local * 0.5 + Vec2::splat(0.5)) * MINIMAP_SIZE;
+        commands.spawn((objective_icon(px, 12.0), GlobalZIndex(3), MinimapDot, ChildOf(mini)));
+    }
     // Outposts in range: red while enemy-held, blue once liberated.
     for o in &outposts.list {
         let d = o.centre - t.translation;
@@ -681,6 +695,24 @@ fn update_minimap_icons(
     }
 }
 
+/// A mission objective: a gold diamond centred on `px`.
+fn objective_icon(px: Vec2, size: f32) -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(px.x - size / 2.0),
+            top: Val::Px(px.y - size / 2.0),
+            width: Val::Px(size),
+            height: Val::Px(size),
+            border: UiRect::all(Val::Px(1.5)),
+            ..default()
+        },
+        BackgroundColor(Color::srgb(1.0, 0.82, 0.25)),
+        BorderColor::all(Color::srgb(0.1, 0.08, 0.02)),
+        UiTransform::from_rotation(Rot2::degrees(45.0)),
+    )
+}
+
 /// A radio tower marker: a mast with a cross-bar, centred on `px`.
 fn tower_icon(px: Vec2, scale: f32, taken: bool) -> impl Bundle {
     let colour = if taken { Color::srgb(0.25, 0.85, 0.35) } else { Color::srgb(0.95, 0.7, 0.15) };
@@ -727,6 +759,7 @@ fn full_map_icons(
     mut players: Query<(&mut Transform, &mut Player)>,
     mut commands: Commands,
     (map_pad, gamepads): (Res<MapPad>, Query<&Gamepad>),
+    objectives: Res<crate::story::ObjectiveMarkers>,
 ) {
     for e in &icons {
         commands.entity(e).despawn();
@@ -769,13 +802,26 @@ fn full_map_icons(
         if cursor.is_some_and(|c| c.distance(px) < 12.0) {
             let label = if taken { "Radio tower (taken)" } else { "Radio tower: climb it and take it over" };
             commands.spawn((
-                Node { position_type: PositionType::Absolute, left: Val::Px(px.x + 16.0), top: Val::Px(px.y - 12.0), padding: UiRect::all(Val::Px(6.0)), ..default() },
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(px.x + 16.0),
+                    top: Val::Px(px.y - 12.0),
+                    padding: UiRect::all(Val::Px(6.0)),
+                    ..default()
+                },
                 BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
                 FullMapIcon,
                 ChildOf(root),
                 children![(Text::new(label), TextFont { font_size: bevy::text::FontSize::Px(16.0), ..default() }, TextColor(Color::srgb(0.95, 0.95, 0.9)))],
             ));
         }
+    }
+    for &at in &objectives.0 {
+        let px = to_px(map_uv(at));
+        if px.x < -20.0 || px.y < -20.0 || px.x > size.x + 20.0 || px.y > size.y + 20.0 {
+            continue;
+        }
+        commands.spawn((objective_icon(px, 16.0), FullMapIcon, ChildOf(root)));
     }
     let mut hovered = None;
     for (i, o) in outposts.list.iter().enumerate() {
@@ -813,7 +859,13 @@ fn full_map_icons(
             _ => "Enemy outpost",
         };
         commands.spawn((
-            Node { position_type: PositionType::Absolute, left: Val::Px(px.x + 16.0), top: Val::Px(px.y - 12.0), padding: UiRect::all(Val::Px(6.0)), ..default() },
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(px.x + 16.0),
+                top: Val::Px(px.y - 12.0),
+                padding: UiRect::all(Val::Px(6.0)),
+                ..default()
+            },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
             FullMapIcon,
             ChildOf(root),

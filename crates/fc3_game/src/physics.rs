@@ -1,8 +1,11 @@
 //! Static collision for terrain and world objects.
 //!
 //! Terrain sectors near the player get heightfield colliders; placed objects
-//! get trimesh colliders built once per model from the cached collision mesh
-//! and shared between instances.
+//! get trimesh colliders built once per model and shared between instances:
+//! from the game's own collision where the model ships one (its `.hkx`,
+//! converted to `collision/<hash>.col`, see `docs/physics.md`), else from the
+//! render mesh's coarsest detail level without its see-through, undrawn,
+//! water and foliage parts.
 
 use std::collections::HashMap;
 
@@ -11,9 +14,9 @@ use bevy::prelude::*;
 use fc3_formats::terrain::{SectorCoord, TerrainSector, GRID, SECTOR_SIZE};
 
 use crate::cache_assets::Fc3Model;
+use crate::data::to_dunia;
 use crate::objects::WorldObject;
 use crate::terrain::{StreamingAnchor, TerrainChunk};
-use crate::data::to_dunia;
 
 /// Terrain sectors within this Chebyshev radius of the player get colliders.
 pub const TERRAIN_PHYSICS_RADIUS: i32 = 2;
@@ -24,16 +27,13 @@ pub struct WorldPhysicsPlugin;
 
 impl Plugin for WorldPhysicsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(PhysicsPlugins::default())
-            .insert_resource(Gravity(Vec3::NEG_Y * 9.81))
-            .init_resource::<ModelColliders>()
-            .add_systems(
-                Update,
-                (terrain_colliders, object_colliders)
-                    .after(crate::terrain::TerrainStreaming)
-                    .after(crate::objects::ObjectStreaming)
-                    .after(crate::vegetation::VegStreaming),
-            );
+        app.add_plugins(PhysicsPlugins::default()).insert_resource(Gravity(Vec3::NEG_Y * 9.81)).init_resource::<ModelColliders>().add_systems(
+            Update,
+            (terrain_colliders, object_colliders)
+                .after(crate::terrain::TerrainStreaming)
+                .after(crate::objects::ObjectStreaming)
+                .after(crate::vegetation::VegStreaming),
+        );
     }
 }
 
@@ -50,8 +50,7 @@ pub fn sector_heightfield(s: &TerrainSector) -> Collider {
         return sector_trimesh(s);
     }
     // Rows run along X, columns along Z (centred). Chunk-local z = -row.
-    let heights: Vec<Vec<f32>> =
-        (0..GRID).map(|i| (0..GRID).map(|j| s.height(i, GRID - 1 - j)).collect()).collect();
+    let heights: Vec<Vec<f32>> = (0..GRID).map(|i| (0..GRID).map(|j| s.height(i, GRID - 1 - j)).collect()).collect();
     Collider::heightfield(heights, Vec3::new(SECTOR_SIZE, 1.0, SECTOR_SIZE))
 }
 
@@ -146,6 +145,7 @@ impl ModelColliders {
                 if c.triangles.is_empty() {
                     return None;
                 }
+                debug!("collider for {id:?}: {} triangles from the {}", c.triangles.len(), if c.from_havok { "game's collision" } else { "render mesh" });
                 Some(Collider::trimesh(c.positions.clone(), c.triangles.clone()))
             })
             .clone()
@@ -211,9 +211,7 @@ mod tests {
         for (col, row) in [(0.5f32, 0.5f32), (10.0, 50.0), (60.0, 3.0), (31.5, 31.5)] {
             // Chunk-local point for (col, row) is (col, h, -row).
             let origin = Vec3::new(col, 500.0, -row);
-            let (dist, _) = collider
-                .cast_ray(offset, Quat::IDENTITY, origin, Vec3::NEG_Y, 1000.0, true)
-                .expect("ray should hit heightfield");
+            let (dist, _) = collider.cast_ray(offset, Quat::IDENTITY, origin, Vec3::NEG_Y, 1000.0, true).expect("ray should hit heightfield");
             let hit_y = 500.0 - dist;
             let expected = s.sample(col, row);
             assert!((hit_y - expected).abs() < 0.05, "at ({col},{row}): collider {hit_y} vs terrain {expected}");

@@ -26,10 +26,7 @@ impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TerrainStreamer>()
             .init_resource::<Heightfield>()
-            .add_systems(
-                Update,
-                (request_terrain, spawn_terrain).chain().in_set(TerrainStreaming).run_if(resource_exists::<CacheInfo>),
-            );
+            .add_systems(Update, (request_terrain, spawn_terrain).chain().in_set(TerrainStreaming).run_if(resource_exists::<CacheInfo>));
     }
 }
 

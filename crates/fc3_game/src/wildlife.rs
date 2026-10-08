@@ -25,7 +25,16 @@ impl Plugin for WildlifePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnExit(crate::menu::GameState::Loading), load_animals).add_systems(
             Update,
-            (animal_test, spawn_animals, release_caged, cage_test, animal_ai, animal_deaths, skin_animals.before(crate::hud::HudSet).after(crate::turrets::man_turrets), despawn_animals)
+            (
+                animal_test,
+                spawn_animals,
+                release_caged,
+                cage_test,
+                animal_ai,
+                animal_deaths,
+                skin_animals.before(crate::hud::HudSet).after(crate::turrets::man_turrets),
+                despawn_animals,
+            )
                 .chain()
                 .run_if(in_state(crate::menu::GameState::Playing)),
         );
@@ -626,7 +635,19 @@ fn spawn_animal(commands: &mut Commands, assets: &AnimalAssets, model: &Fc3Model
     let (radius, half) = s.size;
     let root = commands
         .spawn((
-            WildAnimal { species, mood, call_in: rng.range(CALL_EVERY.0, CALL_EVERY.1), health_seen: f32::MAX, timer: rng.range(2.0, 8.0), goal: feet, yaw, velocity: Vec3::ZERO, rig: None, attack_cooldown: 0.0, frozen: None },
+            WildAnimal {
+                species,
+                mood,
+                call_in: rng.range(CALL_EVERY.0, CALL_EVERY.1),
+                health_seen: f32::MAX,
+                timer: rng.range(2.0, 8.0),
+                goal: feet,
+                yaw,
+                velocity: Vec3::ZERO,
+                rig: None,
+                attack_cooldown: 0.0,
+                frozen: None,
+            },
             Health::new(s.health),
             RigidBody::Kinematic,
             // Lying along the body: a capsule turned to point forward.
@@ -636,7 +657,9 @@ fn spawn_animal(commands: &mut Commands, assets: &AnimalAssets, model: &Fc3Model
             Name::new(s.animal.name()),
         ))
         .id();
-    if let Some(rig) = spawn_rig_with(commands, root, &[model], None, assets.sets[species].clone(), Vec3::new(0.0, -(radius + 0.25), 0.0), assets.skins[species].clone()) {
+    if let Some(rig) =
+        spawn_rig_with(commands, root, &[model], None, assets.sets[species].clone(), Vec3::new(0.0, -(radius + 0.25), 0.0), assets.skins[species].clone())
+    {
         commands.entity(root).entry::<WildAnimal>().and_modify(move |mut a| a.rig = Some(rig));
     }
     root
@@ -660,7 +683,14 @@ fn cage_test(
     let Ok((pe, pt)) = players.single() else { return };
     if let Some((door, gt)) = doors.iter().min_by(|a, b| a.1.translation().distance(pt.translation).total_cmp(&b.1.translation().distance(pt.translation))) {
         info!("cage-test: shooting the door at {:.0?}", gt.translation());
-        damage.write(DamageEvent { target: door, amount: 100.0, kind: DamageKind::Bullet, source: Some(pt.translation), instigator: Some(pe), headshot: false });
+        damage.write(DamageEvent {
+            target: door,
+            amount: 100.0,
+            kind: DamageKind::Bullet,
+            source: Some(pt.translation),
+            instigator: Some(pe),
+            headshot: false,
+        });
         return;
     }
     for (t, a, h) in &animals {
@@ -734,11 +764,8 @@ fn animal_ai(
     };
     let noises: Vec<crate::npc::Noise> = noises.read().copied().collect();
     // Pirates, privateers and rebels nearby are prey (or a threat) too.
-    let npcs: Vec<(Entity, Vec3)> = people
-        .iter()
-        .filter(|(_, t, h)| !h.dead && t.translation.distance(pt.translation) < 160.0)
-        .map(|(e, t, _)| (e, t.translation))
-        .collect();
+    let npcs: Vec<(Entity, Vec3)> =
+        people.iter().filter(|(_, t, h)| !h.dead && t.translation.distance(pt.translation) < 160.0).map(|(e, t, _)| (e, t.translation)).collect();
     for (e, mut t, mut a, h) in &mut animals {
         if h.dead {
             continue;
@@ -976,9 +1003,11 @@ fn skin_animals(
     if h.dead || hud.prompt.is_some() || busy.busy() {
         return;
     }
-    let Some((_, _, mut c)) = carcasses.iter_mut().filter(|(_, gt, c)| !c.skinned && gt.translation().distance(pt.translation) < 2.8).min_by(|a, b| {
-        a.1.translation().distance(pt.translation).total_cmp(&b.1.translation().distance(pt.translation))
-    }) else {
+    let Some((_, _, mut c)) = carcasses
+        .iter_mut()
+        .filter(|(_, gt, c)| !c.skinned && gt.translation().distance(pt.translation) < 2.8)
+        .min_by(|a, b| a.1.translation().distance(pt.translation).total_cmp(&b.1.translation().distance(pt.translation)))
+    else {
         return;
     };
     let animal = SPECIES[c.species].animal;
@@ -1059,7 +1088,19 @@ fn animal_test(
         let yaw = (-right.x).atan2(-right.z);
         let root = commands
             .spawn((
-                WildAnimal { species: i, mood: Mood::Graze, call_in: 3.0, health_seen: f32::MAX, timer: if hunt { 1.0 } else { 99.0 }, goal: at, yaw, velocity: Vec3::ZERO, rig: None, attack_cooldown: 0.0, frozen: (!hunt).then_some(kind) },
+                WildAnimal {
+                    species: i,
+                    mood: Mood::Graze,
+                    call_in: 3.0,
+                    health_seen: f32::MAX,
+                    timer: if hunt { 1.0 } else { 99.0 },
+                    goal: at,
+                    yaw,
+                    velocity: Vec3::ZERO,
+                    rig: None,
+                    attack_cooldown: 0.0,
+                    frozen: (!hunt).then_some(kind),
+                },
                 Health::new(s.health),
                 Collider::capsule(radius, half * 2.0),
                 RigidBody::Kinematic,
@@ -1067,7 +1108,9 @@ fn animal_test(
                 Visibility::Visible,
             ))
             .id();
-        if let Some(rig) = spawn_rig_with(&mut commands, root, &[model], None, assets.sets[i].clone(), Vec3::new(0.0, -(radius + 0.25), 0.0), assets.skins[i].clone()) {
+        if let Some(rig) =
+            spawn_rig_with(&mut commands, root, &[model], None, assets.sets[i].clone(), Vec3::new(0.0, -(radius + 0.25), 0.0), assets.skins[i].clone())
+        {
             commands.entity(root).entry::<WildAnimal>().and_modify(move |mut a| a.rig = Some(rig));
         }
     }

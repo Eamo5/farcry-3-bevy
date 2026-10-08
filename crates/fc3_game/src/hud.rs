@@ -12,14 +12,25 @@ pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(FrameTimeDiagnosticsPlugin::default())
-            .init_resource::<HudState>()
-            .add_systems(Startup, setup_hud)
-            .add_systems(
-                Update,
-                (update_crosshair, update_scope, update_hit_marker, update_health, update_ammo, update_compass, update_damage, update_grenades, update_overlays, update_detection, apply_hud_settings, update_status, hud_visibility)
-                    .in_set(HudSet),
-            );
+        app.add_plugins(FrameTimeDiagnosticsPlugin::default()).init_resource::<HudState>().add_systems(Startup, setup_hud).add_systems(
+            Update,
+            (
+                update_crosshair,
+                update_scope,
+                update_hit_marker,
+                update_health,
+                update_ammo,
+                update_compass,
+                update_damage,
+                update_grenades,
+                update_overlays,
+                update_detection,
+                apply_hud_settings,
+                update_status,
+                hud_visibility,
+            )
+                .in_set(HudSet),
+        );
     }
 }
 
@@ -116,7 +127,13 @@ fn setup_hud(mut commands: Commands) {
         ));
     }
     commands.spawn((
-        Node { position_type: PositionType::Absolute, left: Val::Percent(50.0), top: Val::Percent(50.0), margin: UiRect::new(Val::Px(-11.0), Val::ZERO, Val::Px(-16.0), Val::ZERO), ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Percent(50.0),
+            top: Val::Percent(50.0),
+            margin: UiRect::new(Val::Px(-11.0), Val::ZERO, Val::Px(-16.0), Val::ZERO),
+            ..default()
+        },
         text("x", 26.0),
         Visibility::Hidden,
         HitMarkerUi,
@@ -162,11 +179,7 @@ fn setup_hud(mut commands: Commands) {
     let segments = (PLAYER_MAX_HEALTH / HEALTH_SEGMENT) as usize;
     for i in 0..segments {
         let seg = commands
-            .spawn((
-                Node { width: Val::Px(60.0), height: Val::Px(12.0), ..default() },
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
-                ChildOf(bar),
-            ))
+            .spawn((Node { width: Val::Px(60.0), height: Val::Px(12.0), ..default() }, BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)), ChildOf(bar)))
             .id();
         commands.spawn((
             Node { width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
@@ -204,7 +217,13 @@ fn setup_hud(mut commands: Commands) {
 
     // Centre message.
     commands.spawn((
-        Node { position_type: PositionType::Absolute, top: Val::Percent(62.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Percent(62.0),
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
         GlobalZIndex(1),
         children![(text("", 20.0), MessageText)],
     ));
@@ -227,7 +246,13 @@ fn setup_hud(mut commands: Commands) {
 
     // Interaction prompt.
     commands.spawn((
-        Node { position_type: PositionType::Absolute, top: Val::Percent(56.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Percent(56.0),
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
         GlobalZIndex(1),
         children![(text("", 18.0), PromptText)],
     ));
@@ -242,7 +267,13 @@ fn setup_hud(mut commands: Commands) {
 
     // Click-to-play prompt while the cursor is free.
     commands.spawn((
-        Node { position_type: PositionType::Absolute, bottom: Val::Percent(30.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, ..default() },
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Percent(30.0),
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
         GlobalZIndex(2),
         ClickToPlay,
         children![text("Click to resume  -  F1 for controls  -  Esc to pause", 20.0)],
@@ -256,20 +287,20 @@ fn setup_hud(mut commands: Commands) {
         DeathScreen,
         GlobalZIndex(3),
         children![(
-            Node { width: Val::Percent(100.0), height: Val::Percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
             children![(text("", 40.0), DeathText)],
         )],
     ));
 
     // Controls help (text filled from the current bindings).
     commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Percent(10.0),
-            top: Val::Percent(20.0),
-            padding: UiRect::all(Val::Px(18.0)),
-            ..default()
-        },
+        Node { position_type: PositionType::Absolute, left: Val::Percent(10.0), top: Val::Percent(20.0), padding: UiRect::all(Val::Px(18.0)), ..default() },
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
         Visibility::Hidden,
         HelpPanel,
@@ -458,11 +489,7 @@ fn update_ammo(
     }
 }
 
-fn update_compass(
-    players: Query<(&Player, &Transform)>,
-    waypoint: Res<crate::map::Waypoint>,
-    mut q: Query<&mut Text, With<CompassText>>,
-) {
+fn update_compass(players: Query<(&Player, &Transform)>, waypoint: Res<crate::map::Waypoint>, mut q: Query<&mut Text, With<CompassText>>) {
     let Ok((p, pt)) = players.single() else { return };
     let Ok(mut t) = q.single_mut() else { return };
     // yaw 0 faces north (-Z); positive yaw turns left (west).
@@ -576,11 +603,12 @@ fn update_grenades(
     }
 }
 
-fn hud_visibility(state: Res<State<crate::menu::GameState>>, mut q: Query<&mut Visibility, With<HudElement>>) {
-    if !state.is_changed() {
+fn hud_visibility(state: Res<State<crate::menu::GameState>>, scripted: Res<crate::story::ScriptedPlayer>, mut q: Query<&mut Visibility, With<HudElement>>) {
+    if !state.is_changed() && !scripted.is_changed() {
         return;
     }
-    let show = matches!(state.get(), crate::menu::GameState::Playing);
+    // Missions hide the HUD for their scenes.
+    let show = matches!(state.get(), crate::menu::GameState::Playing) && !scripted.hud_hidden;
     for mut v in &mut q {
         *v = if show { Visibility::Inherited } else { Visibility::Hidden };
     }
@@ -620,10 +648,29 @@ fn help_text_for(s: &crate::settings::Settings) -> String {
     let move_keys = format!("{}{}{}{}", k(A::Forward), k(A::Left), k(A::Back), k(A::Right));
     [
         "CONTROLS".to_string(),
-        line(&[(move_keys, "move"), (k(A::Sprint), "sprint / hold breath"), (k(A::Crouch), "crouch"), (k(A::Jump), "jump / swim up"), (k(A::SwimDown), "swim down")]),
-        line(&[("Mouse".into(), "look"), (k(A::Fire), "fire"), (k(A::Aim), "aim"), (k(A::Reload), "reload"), ("1-8 / wheel".into(), "switch weapon"), (k(A::Melee), "machete")]),
+        line(&[
+            (move_keys, "move"),
+            (k(A::Sprint), "sprint / hold breath"),
+            (k(A::Crouch), "crouch"),
+            (k(A::Jump), "jump / swim up"),
+            (k(A::SwimDown), "swim down"),
+        ]),
+        line(&[
+            ("Mouse".into(), "look"),
+            (k(A::Fire), "fire"),
+            (k(A::Aim), "aim"),
+            (k(A::Reload), "reload"),
+            ("1-8 / wheel".into(), "switch weapon"),
+            (k(A::Melee), "machete"),
+        ]),
         line(&[(k(A::Grenade), "throw grenade"), (k(A::Medkit), "use medkit"), (k(A::Interact), "pick up / interact"), (k(A::Map), "map"), (k(A::Tag), "tag")]),
-        line(&[("F1".into(), "toggle this help"), ("F2".into(), "noclip (debug)"), ("T".into(), "advance time"), ("F4".into(), "original shaders"), ("Esc".into(), "pause / options")]),
+        line(&[
+            ("F1".into(), "toggle this help"),
+            ("F2".into(), "noclip (debug)"),
+            ("T".into(), "advance time"),
+            ("F4".into(), "original shaders"),
+            ("Esc".into(), "pause / options"),
+        ]),
     ]
     .join("\n")
 }

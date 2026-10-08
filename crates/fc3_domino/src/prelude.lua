@@ -70,6 +70,7 @@ function __domino_class(path)
     rawset(_G, "_compilerVersion", nil)
     class._meta = { __index = class }
     class._type = class
+    class._path = path
     Boxes[id] = class
     if class.Create ~= nil then
         class.Create(class, resource)

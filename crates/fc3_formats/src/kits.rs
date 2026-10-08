@@ -10,6 +10,9 @@ use anyhow::{Context, Result};
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Kit {
     pub name: String,
+    /// The kit's id (the number its file is named by; entities name their
+    /// kit with it), or 0.
+    pub id: u64,
     pub slots: Vec<KitSlot>,
 }
 
@@ -115,6 +118,12 @@ fn tags(xml: &str) -> impl Iterator<Item = Tag<'_>> {
     })
 }
 
+/// A kit's id from its file name (`graphics\characters\Kits\<id>.xml`).
+pub fn id_from_file(file: &str) -> u64 {
+    let name = file.rsplit(['\\', '/']).next().unwrap_or(file);
+    name.split('.').next().and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
 /// `(name, file)` for every kit in `graphickitlist.xml`.
 pub fn parse_kit_list(xml: &str) -> Vec<(String, String)> {
     tags(xml)
@@ -175,6 +184,9 @@ pub fn to_text(kits: &[Kit]) -> String {
     let mut out = String::new();
     for k in kits {
         out += &format!("kit {}\n", k.name);
+        if k.id != 0 {
+            out += &format!("id {}\n", k.id);
+        }
         for s in &k.slots {
             out += &format!("slot {}\n", s.name);
             for p in &s.parts {
@@ -198,7 +210,12 @@ pub fn from_text(text: &str) -> Vec<Kit> {
     for line in text.lines() {
         let (key, rest) = line.split_once(' ').unwrap_or((line, ""));
         match key {
-            "kit" => kits.push(Kit { name: rest.to_string(), slots: Vec::new() }),
+            "kit" => kits.push(Kit { name: rest.to_string(), id: 0, slots: Vec::new() }),
+            "id" => {
+                if let Some(k) = kits.last_mut() {
+                    k.id = rest.parse().unwrap_or(0);
+                }
+            }
             "slot" => {
                 if let Some(k) = kits.last_mut() {
                     k.slots.push(KitSlot { name: rest.to_string(), parts: Vec::new() });

@@ -34,6 +34,7 @@ enum Opt {
     InvertY,
     Fov,
     Volume,
+    MusicVolume,
     ViewDistance,
     Shadows,
     Effects,
@@ -41,17 +42,21 @@ enum Opt {
     Fullscreen,
     OriginalShaders,
     ShowFps,
+    Subtitles,
+    Story,
     Difficulty,
 }
 
 impl Opt {
-    const ALL: [Opt; 13] = [
+    const ALL: [Opt; 16] = [
         Opt::Difficulty,
+        Opt::Story,
         Opt::Sensitivity,
         Opt::GamepadSensitivity,
         Opt::InvertY,
         Opt::Fov,
         Opt::Volume,
+        Opt::MusicVolume,
         Opt::ViewDistance,
         Opt::Shadows,
         Opt::Effects,
@@ -59,6 +64,7 @@ impl Opt {
         Opt::Fullscreen,
         Opt::OriginalShaders,
         Opt::ShowFps,
+        Opt::Subtitles,
     ];
 
     fn label(self) -> &'static str {
@@ -68,6 +74,7 @@ impl Opt {
             Opt::InvertY => "Invert look",
             Opt::Fov => "Field of view",
             Opt::Volume => "Volume",
+            Opt::MusicVolume => "Music volume",
             Opt::ViewDistance => "View distance",
             Opt::Shadows => "Shadows",
             Opt::Effects => "Effects (AA, bloom, shafts)",
@@ -75,6 +82,8 @@ impl Opt {
             Opt::Fullscreen => "Fullscreen",
             Opt::OriginalShaders => "Original shaders",
             Opt::ShowFps => "Show FPS",
+            Opt::Subtitles => "Subtitles",
+            Opt::Story => "New game: story",
             Opt::Difficulty => "Difficulty",
         }
     }
@@ -87,6 +96,7 @@ impl Opt {
             Opt::InvertY => on(s.invert_y),
             Opt::Fov => format!("{:.0}", s.fov),
             Opt::Volume => format!("{:.0}%", s.master_volume * 100.0),
+            Opt::MusicVolume => format!("{:.0}%", s.music_volume * 100.0),
             Opt::ViewDistance => s.view_distance.name().into(),
             Opt::Shadows => s.shadows.name().into(),
             Opt::Effects => s.effects.name().into(),
@@ -94,6 +104,8 @@ impl Opt {
             Opt::Fullscreen => on(s.fullscreen),
             Opt::OriginalShaders => on(s.original_shaders),
             Opt::ShowFps => on(s.show_fps),
+            Opt::Subtitles => on(s.subtitles),
+            Opt::Story => if s.story { "Story" } else { "Free roam" }.to_string(),
             Opt::Difficulty => s.difficulty.name().into(),
         }
     }
@@ -110,6 +122,7 @@ impl Opt {
             Opt::InvertY => s.invert_y = !s.invert_y,
             Opt::Fov => s.fov = (s.fov + d * 5.0).clamp(55.0, 110.0),
             Opt::Volume => s.master_volume = (s.master_volume + d * 0.1).clamp(0.0, 1.0),
+            Opt::MusicVolume => s.music_volume = (s.music_volume + d * 0.1).clamp(0.0, 1.0),
             Opt::ViewDistance => s.view_distance = cycle(s.view_distance),
             Opt::Shadows => s.shadows = cycle(s.shadows),
             Opt::Effects => s.effects = cycle(s.effects),
@@ -117,6 +130,8 @@ impl Opt {
             Opt::Fullscreen => s.fullscreen = !s.fullscreen,
             Opt::OriginalShaders => s.original_shaders = !s.original_shaders,
             Opt::ShowFps => s.show_fps = !s.show_fps,
+            Opt::Subtitles => s.subtitles = !s.subtitles,
+            Opt::Story => s.story = !s.story,
             Opt::Difficulty => {
                 use crate::settings::Difficulty;
                 let i = Difficulty::ALL.iter().position(|x| *x == s.difficulty).unwrap_or(1) as i32;
@@ -191,7 +206,14 @@ fn setup_options(mut commands: Commands, args: Res<crate::Args>, mut open: ResMu
     for opt in Opt::ALL {
         let row = commands
             .spawn((
-                Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: Val::Px(8.0), height: Val::Px(30.0), flex_shrink: 0.0, ..default() },
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(8.0),
+                    height: Val::Px(30.0),
+                    flex_shrink: 0.0,
+                    ..default()
+                },
                 ChildOf(left),
             ))
             .id();
@@ -218,7 +240,14 @@ fn setup_options(mut commands: Commands, args: Res<crate::Args>, mut open: ResMu
         for &a in chunk {
             let row = commands
                 .spawn((
-                    Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: Val::Px(8.0), height: Val::Px(26.0), flex_shrink: 0.0, ..default() },
+                    Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(8.0),
+                        height: Val::Px(26.0),
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
                     ChildOf(col),
                 ))
                 .id();

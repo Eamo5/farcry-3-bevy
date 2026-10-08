@@ -745,6 +745,9 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         if let Err(e) = convert_surfaces(&job, &model_paths) {
             job.error(format!("surfaces: {e:#}"));
         }
+        if let Err(e) = convert_collision(&job, &model_paths) {
+            job.error(format!("collision: {e:#}"));
+        }
     }
     // Skins the animal models only get from their archetypes.
     material_paths.extend(cache::ANIMAL_SKINS.iter().map(|s| cache::animal_skin_path(s)));
@@ -801,6 +804,60 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     if opts.only_sectors.is_none() {
         if let Err(e) = convert_story(&job) {
             job.error(format!("story: {e:#}"));
+        }
+    }
+
+    // ---- the single-player videos, kept as they are (the game decodes
+    // the Bink itself)
+    if opts.only_sectors.is_none() {
+        let mut videos: Vec<String> = job.vfs.names.values().filter(|n| cache::is_story_video(n)).cloned().collect();
+        videos.sort();
+        for v in videos {
+            let rel = cache::video_rel(&v);
+            if job.should_write(&rel) {
+                if let Err(e) = job.vfs.read(&v).and_then(|b| write_atomic(job.root(), &rel, &b, job.ctx)) {
+                    job.error(format!("video {v}: {e:#}"));
+                }
+            }
+        }
+    }
+
+    // ---- what the shop sells, as scripts name it
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::story::SHOP_ITEMS_REL) {
+        let items = std::fs::read(job.root().join("story/entitylibrary.fcb")).map_err(anyhow::Error::from).and_then(|b| {
+            let at = b.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+            let library = fc3_formats::fcb::parse(&b[at..])?;
+            Ok(fc3_formats::story::shop_items(&library))
+        });
+        match items {
+            Ok(items) => {
+                let text: String = items.iter().map(|(m, a, i)| format!("{m}\t{a}\t{i}\n")).collect();
+                if let Err(e) = write_atomic(job.root(), fc3_formats::story::SHOP_ITEMS_REL, text.as_bytes(), job.ctx) {
+                    job.error(format!("shop items: {e:#}"));
+                }
+            }
+            Err(e) => job.error(format!("shop items: {e:#}")),
+        }
+    }
+
+    // ---- the clips the story's contextual actions play
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::moves::CA_MOVES_REL) || job.should_write(fc3_formats::moves::MOVES_REL)) {
+        if let Err(e) = convert_ca_moves(&job) {
+            job.error(format!("contextual action moves: {e:#}"));
+        }
+    }
+
+    // ---- faces: the rigs, which character uses which, and every facial clip
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::facial::PAK_REL) || job.should_write(fc3_formats::facial::DEFINITIONS_REL)) {
+        if let Err(e) = convert_facial(&job) {
+            job.error(format!("facial: {e:#}"));
+        }
+    }
+
+    // ---- cinematics: every sequence, with its camera paths
+    if opts.only_sectors.is_none() {
+        if let Err(e) = convert_cinema(&job) {
+            job.error(format!("cinema: {e:#}"));
         }
     }
 
@@ -894,6 +951,25 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
         Some(())
     })?;
+    // Long clips the game keeps in segments: the clip's own name lists them
+    // (the game joins them as it loads the clip).
+    let mut segmented: std::collections::BTreeMap<String, Vec<(u32, String)>> = Default::default();
+    for n in vfs.names.values() {
+        if let Some((base, i)) = fc3_formats::anim::segment_of(n) {
+            segmented.entry(base).or_default().push((i, cache::anim_rel(n)));
+        }
+    }
+    for (base, mut segs) in segmented {
+        let rel = cache::anim_rel(&base);
+        if vfs.exists(&base) || !job.should_write(&rel) {
+            continue;
+        }
+        segs.sort();
+        let text: String = std::iter::once(fc3_formats::anim::SEGMENTS_MAGIC.to_string()).chain(segs.into_iter().map(|s| s.1)).collect::<Vec<_>>().join("\n");
+        if let Err(e) = write_atomic(job.root(), &rel, text.as_bytes(), job.ctx) {
+            job.error(format!("anim {base}: {e:#}"));
+        }
+    }
 
     // ---- audio: every playable sound plus the event manifest the game resolves at runtime
     let graph = fc3_formats::audio::SoundGraph::build(&vfs);
@@ -1218,6 +1294,21 @@ fn convert_kits(job: &Job) -> Result<Vec<String>> {
     if job.should_write(cache::KITS_REL) {
         write_atomic(job.root(), cache::KITS_REL, fc3_formats::kits::to_text(&kits).as_bytes(), job.ctx)?;
     }
+    // Every kit, for the story's characters.
+    let mut all = Vec::new();
+    for (name, file) in &list {
+        match job.vfs.read(file).map_err(anyhow::Error::from).and_then(|xml| fc3_formats::kits::parse_kit(&String::from_utf8_lossy(&xml))) {
+            Ok(mut k) => {
+                k.id = fc3_formats::kits::id_from_file(file);
+                all.push(k);
+            }
+            Err(e) => job.error(format!("kit {name}: {e:#}")),
+        }
+    }
+    if job.should_write(cache::ALL_KITS_REL) {
+        write_atomic(job.root(), cache::ALL_KITS_REL, fc3_formats::kits::to_text(&all).as_bytes(), job.ctx)?;
+    }
+    kits.extend(all);
     Ok(kits.iter().flat_map(|k| &k.slots).flat_map(|s| &s.parts).flat_map(|p| &p.swaps).flat_map(|s| s.choices.iter().map(|c| c.material.clone())).collect())
 }
 
@@ -1271,6 +1362,53 @@ fn convert_surfaces(job: &Job, model_paths: &[String]) -> Result<()> {
     models.sort_by_key(|m| m.model);
     let table = cache::SurfaceTable { switch_values, layers, models };
     write_atomic(job.root(), cache::SURFACES_REL, &table.to_bytes(), job.ctx)
+}
+
+/// The game's own collision for every model that ships one (`<model>.hkx`,
+/// read by `havok::collision_geometry`): `collision/<hash>.col` in Bevy
+/// space per model, and the index of the models that have one. Runs whenever
+/// the index is missing; files already there are kept. Models whose `.hkx`
+/// has no usable body keep their render-derived collision.
+fn convert_collision(job: &Job, model_paths: &[String]) -> Result<()> {
+    if !job.should_write(cache::COLLISION_INDEX_REL) {
+        return Ok(());
+    }
+    use fc3_formats::havok;
+    // The logic material that leaves no impact, by name.
+    let names = havok::logic_material_names(&job.vfs.read(havok::LOGIC_MATERIALS)?)?;
+    let no_impact = names.iter().position(|n| n.to_ascii_lowercase().ends_with("noimpact")).map(|i| i as u32);
+    let models: Vec<&String> = model_paths.iter().filter(|p| p.ends_with(".xbg")).collect();
+    let mut have: Vec<String> = job.run(Stage::Models, &models, |p| {
+        let hkx = job.vfs.read(&format!("{}.hkx", p.strip_suffix(".xbg")?)).ok()?;
+        let rel = cache::collision_rel(p);
+        if !job.should_write(&rel) {
+            return Some(cache::hash_name(p));
+        }
+        let geometry = match havok::collision_geometry(&hkx) {
+            Ok(g) if !g.triangles.is_empty() => g,
+            Ok(_) => return None,
+            Err(e) => {
+                job.error(format!("collision {p}: {e:#}"));
+                return None;
+            }
+        };
+        let cached = cache::CachedCollision {
+            positions: geometry.positions.iter().map(|&v| fmesh::to_bevy(v)).collect(),
+            indices: geometry.triangles.iter().flatten().copied().collect(),
+            no_impact: !geometry.palette.is_empty() && geometry.palette.iter().all(|&l| Some(l) == no_impact),
+        };
+        match write_atomic(job.root(), &rel, &cached.to_bytes(), job.ctx) {
+            Ok(()) => Some(cache::hash_name(p)),
+            Err(e) => {
+                job.error(format!("collision {p}: {e:#}"));
+                None
+            }
+        }
+    })?;
+    have.sort_unstable();
+    have.dedup();
+    let text: String = have.iter().map(|h| format!("{h}\n")).collect();
+    write_atomic(job.root(), cache::COLLISION_INDEX_REL, text.as_bytes(), job.ctx)
 }
 
 /// Water planes at or below this height (sea level plus a little) are the
@@ -1347,7 +1485,8 @@ fn convert_story(job: &Job) -> Result<()> {
             }
         }
     }
-    if !job.should_write(story::ENTITIES_REL) {
+    let current = std::fs::read(job.root().join(story::ENTITIES_REL)).is_ok_and(|b| story::is_current(&b));
+    if current && !job.opts.force {
         return Ok(());
     }
     // Every packed script (the scripts stage runs first).
@@ -1384,6 +1523,7 @@ fn convert_story(job: &Job) -> Result<()> {
                 pos: e.vec3("hidPos_precise").or_else(|| e.vec3("hidPos")).unwrap_or_default(),
                 angles: e.vec3("hidAngles").unwrap_or_default(),
                 components,
+                fields: story::kept_fields(&e),
             });
         }
         Some(out)
@@ -1391,6 +1531,105 @@ fn convert_story(job: &Job) -> Result<()> {
     let entities: Vec<story::StoryEntity> = lists.into_iter().flatten().collect();
     write_atomic(job.root(), story::ENTITIES_REL, &story::to_bytes(&entities), job.ctx)
 }
+
+/// The moves the story's contextual actions name, with the clips found for
+/// them by name (`fc3_formats::moves`).
+fn convert_ca_moves(job: &Job) -> Result<()> {
+    use fc3_formats::{moves, story};
+    let entities = story::from_bytes(&std::fs::read(job.root().join(story::ENTITIES_REL)).context("the story entities")?)?;
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    for e in &entities {
+        let Some(ca) = e.components.children.iter().find(|c| c.is("CAIContextualActionComponent")) else { continue };
+        if let Some(params) = ca.children.iter().find(|c| c.is("Parameters")) {
+            names.extend(moves::move_names(params));
+        }
+    }
+    let clips: Vec<&str> = job.vfs.names.values().filter(|n| n.ends_with(".mab")).map(String::as_str).collect();
+    let db = moves::parse_move_db(&job.vfs.read(moves::MOVE_DB).context("the move database")?);
+    write_atomic(job.root(), moves::MOVES_REL, moves::moves_to_text(&db).as_bytes(), job.ctx)?;
+    let table = moves::ca_clips(names.iter().map(String::as_str), &db, &clips);
+    write_atomic(job.root(), moves::CA_MOVES_REL, moves::to_text(&table).as_bytes(), job.ctx)
+}
+
+/// Faces (`fc3_formats::facial`): the definitions table (which rig a
+/// definition key names), and one pack of every face rig, every named facial
+/// clip and the lip-sync clip of every spoken line that has one.
+fn convert_facial(job: &Job) -> Result<()> {
+    use fc3_formats::{facial, hash::path_hash};
+    let defs = facial::parse_definitions(&job.vfs.read(facial::DEFINITION_LIBRARY)?)?;
+    let table: Vec<(u32, u64)> = defs.iter().filter(|d| !d.rig.is_empty()).map(|d| (d.key, path_hash(&d.rig))).collect();
+    let mut paths: BTreeSet<String> = job.vfs.names.values().filter(|n| n.ends_with(".dpax") || n.ends_with(".dpdx")).cloned().collect();
+    paths.extend(defs.iter().filter(|d| !d.rig.is_empty()).map(|d| d.rig.to_ascii_lowercase()));
+    // Spoken lines' clips are named by the line's sound id.
+    let speech = job.vfs.read(r"languages\english\speechlength.bin").map_err(anyhow::Error::from).and_then(|b| fc3_formats::oasis::speech_lengths(&b));
+    match speech {
+        Ok(lines) => paths.extend(lines.keys().map(|&id| facial::voice_clip_path(id))),
+        Err(e) => job.error(format!("facial: speech lengths: {e:#}")),
+    }
+    let paths: Vec<String> = paths.into_iter().collect();
+    let mut files: Vec<(u64, Vec<u8>)> = paths.par_iter().filter_map(|p| Some((path_hash(p), job.vfs.read(p).ok()?))).collect();
+    files.sort_by_key(|f| f.0);
+    files.dedup_by_key(|f| f.0);
+    write_atomic(job.root(), facial::PAK_REL, &facial::write_pak(&mut files), job.ctx)?;
+    write_atomic(job.root(), facial::DEFINITIONS_REL, facial::definitions_to_text(&table).as_bytes(), job.ctx)
+}
+
+/// Every in-engine cinematic (`.cseq`) the archives name or a scene entity
+/// plays, as a timeline in the cache, its camera paths read in.
+fn convert_cinema(job: &Job) -> Result<()> {
+    use fc3_formats::cinema;
+    let mut paths: std::collections::BTreeSet<String> = job.vfs.names.values().filter(|n| n.ends_with(".cseq")).cloned().collect();
+    // Scene entities name what they play (some files aren't in the lists).
+    if let Ok(entities) =
+        std::fs::read(job.root().join(fc3_formats::story::ENTITIES_REL)).map_err(anyhow::Error::from).and_then(|b| fc3_formats::story::from_bytes(&b))
+    {
+        for e in &entities {
+            e.components.walk(&mut |o, _| {
+                if let Some(p) = o.str_h(0xB1C2_6EBB).filter(|p| p.to_ascii_lowercase().ends_with(".cseq")) {
+                    paths.insert(p.to_ascii_lowercase());
+                }
+            });
+        }
+    }
+    let paths: Vec<String> = paths.into_iter().collect();
+    // Sequences written before they kept facial clips are written again.
+    let refresh = !exists(job.root(), CINEMA_STAMP);
+    job.run(Stage::Story, &paths, |path| {
+        let rel = cinema::sequence_rel(path);
+        if !refresh && !job.should_write(&rel) {
+            return Some(());
+        }
+        let bytes = job.vfs.read(path).ok()?;
+        let xml = String::from_utf8_lossy(&bytes);
+        let mut seq = match cinema::parse(&xml) {
+            Ok(s) => s,
+            Err(e) => {
+                job.error(format!("cinema {path}: {e:#}"));
+                return Some(());
+            }
+        };
+        // Camera clips get their paths, in clip order.
+        let root = fc3_formats::xml::parse(&xml)?;
+        let mut cams = cinema::camera_resources(&root).into_iter();
+        for clip in seq.groups.iter_mut().flat_map(|g| g.clips.iter_mut()) {
+            if let cinema::ClipKind::CameraAnimation { keys } = &mut clip.kind {
+                let Some(res) = cams.next() else { break };
+                match job.vfs.read(&res).map_err(anyhow::Error::from).and_then(|b| cinema::camera_keys(&b)) {
+                    Ok(k) => *keys = k,
+                    Err(e) => job.error(format!("cinema camera {res}: {e:#}")),
+                }
+            }
+        }
+        if let Err(e) = write_atomic(job.root(), &rel, seq.to_text().as_bytes(), job.ctx) {
+            job.error(format!("cinema {path}: {e:#}"));
+        }
+        Some(())
+    })?;
+    write_atomic(job.root(), CINEMA_STAMP, b"facial clips\n", job.ctx)
+}
+
+/// Marks the sequences as written with their facial clips.
+const CINEMA_STAMP: &str = "cinema/stamp-facial.txt";
 
 /// Packs every Domino script the file lists name, and the ones they refer to
 /// that the lists don't.

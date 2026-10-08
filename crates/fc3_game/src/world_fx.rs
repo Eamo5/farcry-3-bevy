@@ -7,10 +7,10 @@
 use bevy::prelude::*;
 use fc3_formats::cache;
 
-use crate::CacheInfo;
 use crate::particles::{Frame, Particle, Particles, Sheet};
 use crate::player::PlayerCamera;
 use crate::weapons::Rng;
+use crate::CacheInfo;
 
 pub struct WorldFxPlugin;
 
@@ -131,7 +131,12 @@ fn play_effects(
             // Low mist hanging in the valleys, thicker at dawn and dusk.
             Kind::Mist => {
                 if chance(0.35, &mut rng) {
-                    let mut s = Particle::new(Sheet::Smoke, at + Vec3::new(rng.range(-6.0, 6.0), rng.range(-0.5, 1.0), rng.range(-6.0, 6.0)), rng.range(10.0, 14.0), rng.range(6.0, 9.0));
+                    let mut s = Particle::new(
+                        Sheet::Smoke,
+                        at + Vec3::new(rng.range(-6.0, 6.0), rng.range(-0.5, 1.0), rng.range(-6.0, 6.0)),
+                        rng.range(10.0, 14.0),
+                        rng.range(6.0, 9.0),
+                    );
                     s.grow = 1.4;
                     s.vel = Vec3::new(rng.range(-0.3, 0.3), 0.02, rng.range(-0.3, 0.3));
                     s.rot = rng.range(0.0, std::f32::consts::TAU);
@@ -147,7 +152,8 @@ fn play_effects(
             // After dark: drifting glints.
             Kind::Fireflies => {
                 if night > 0.0 && chance(3.0 * night, &mut rng) {
-                    let mut g = Particle::new(Sheet::Glow, at + Vec3::new(rng.range(-4.0, 4.0), rng.range(0.2, 2.0), rng.range(-4.0, 4.0)), rng.range(1.5, 3.0), 0.12);
+                    let mut g =
+                        Particle::new(Sheet::Glow, at + Vec3::new(rng.range(-4.0, 4.0), rng.range(0.2, 2.0), rng.range(-4.0, 4.0)), rng.range(1.5, 3.0), 0.12);
                     g.vel = jitter(&mut rng, 0.4);
                     g.fade_in = 0.3;
                     g.fade_out = 0.6;
@@ -204,10 +210,19 @@ fn spawn_drops(mut commands: Commands, server: Res<AssetServer>) {
     let image: Handle<Image> = server.load(crate::cache_assets::cache_path(&cache::fx_rel("fc3_gfx_waterdrops_01")));
     // A few patches of the drop map about the view, turned different ways
     // (left, top, size in % of the width, flips).
-    for (left, top, size, flip_x, flip_y) in [(-8.0, -12.0, 52.0, false, false), (48.0, -6.0, 46.0, true, false), (4.0, 38.0, 44.0, true, true), (56.0, 44.0, 50.0, false, true)] {
+    for (left, top, size, flip_x, flip_y) in
+        [(-8.0, -12.0, 52.0, false, false), (48.0, -6.0, 46.0, true, false), (4.0, 38.0, 44.0, true, true), (56.0, 44.0, 50.0, false, true)]
+    {
         commands.spawn((
             ScreenDrops,
-            Node { left: Val::Percent(left), top: Val::Percent(top), width: Val::Percent(size), aspect_ratio: Some(1.0), position_type: PositionType::Absolute, ..default() },
+            Node {
+                left: Val::Percent(left),
+                top: Val::Percent(top),
+                width: Val::Percent(size),
+                aspect_ratio: Some(1.0),
+                position_type: PositionType::Absolute,
+                ..default()
+            },
             ImageNode { image: image.clone(), color: Color::srgba(1.0, 1.0, 1.0, 0.0), flip_x, flip_y, ..default() },
             GlobalZIndex(0),
             Pickable::IGNORE,

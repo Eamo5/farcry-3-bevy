@@ -521,8 +521,34 @@ pub struct ShotFx<'w, 's> {
 
 /// Guesses a prop's material from its entity name.
 fn surface_for_name(name: &str) -> fx::Surface {
-    const WOOD: &[&str] = &["wood", "shack", "hut", "plank", "crate", "pallet", "fence", "bamboo", "log", "table", "chair", "door", "dock", "pier", "palm", "tree", "stilt", "shed", "barn", "box", "shelf", "bench"];
-    const METAL: &[&str] = &["metal", "container", "tank", "barrel", "car_", "truck", "jeep", "tin", "corrugated", "pipe", "generator", "antenna", "tower", "rail", "sign", "drum", "steel", "iron", "fuel", "vehicle", "wreck", "gate"];
+    const WOOD: &[&str] = &[
+        "wood", "shack", "hut", "plank", "crate", "pallet", "fence", "bamboo", "log", "table", "chair", "door", "dock", "pier", "palm", "tree", "stilt",
+        "shed", "barn", "box", "shelf", "bench",
+    ];
+    const METAL: &[&str] = &[
+        "metal",
+        "container",
+        "tank",
+        "barrel",
+        "car_",
+        "truck",
+        "jeep",
+        "tin",
+        "corrugated",
+        "pipe",
+        "generator",
+        "antenna",
+        "tower",
+        "rail",
+        "sign",
+        "drum",
+        "steel",
+        "iron",
+        "fuel",
+        "vehicle",
+        "wreck",
+        "gate",
+    ];
     let n = name.to_ascii_lowercase();
     if METAL.iter().any(|k| n.contains(k)) {
         fx::Surface::Metal

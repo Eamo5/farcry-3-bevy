@@ -56,7 +56,9 @@ struct School {
 fn load_fish(mut commands: Commands, server: Res<AssetServer>) {
     let models = SCHOOLS
         .iter()
-        .map(|m| server.load_builder().with_settings(|s: &mut ModelSettings| s.skinned = true).load(skinned_cache_path(&cache::model_rel(&format!("{MODELS}{m}")))))
+        .map(|m| {
+            server.load_builder().with_settings(|s: &mut ModelSettings| s.skinned = true).load(skinned_cache_path(&cache::model_rel(&format!("{MODELS}{m}"))))
+        })
         .collect();
     let clip = |name: &str| server.load(cache_path(&cache::anim_rel(&format!("{CLIPS}{name}"))));
     let mut clips = std::collections::HashMap::new();
@@ -125,7 +127,12 @@ fn spawn_schools(
     let Some(model) = models.get(&assets.models[i]) else { return };
     let yaw = rng.f32() * std::f32::consts::TAU;
     let root = commands
-        .spawn((School { goal: at, yaw, fleeing: 0.0, rig: None }, Transform::from_translation(at).with_rotation(Quat::from_rotation_y(yaw)), Visibility::Visible, Name::new("reef fish")))
+        .spawn((
+            School { goal: at, yaw, fleeing: 0.0, rig: None },
+            Transform::from_translation(at).with_rotation(Quat::from_rotation_y(yaw)),
+            Visibility::Visible,
+            Name::new("reef fish"),
+        ))
         .id();
     if let Some(rig) = spawn_rig_with(&mut commands, root, &[model], None, assets.set.clone(), Vec3::ZERO, None) {
         commands.entity(root).entry::<School>().and_modify(move |mut s| s.rig = Some(rig));

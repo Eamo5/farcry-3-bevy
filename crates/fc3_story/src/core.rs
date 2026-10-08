@@ -129,6 +129,42 @@ pub struct Core {
     pub time: f64,
     pub game_ready: bool,
     pub play_game: bool,
+    pub media: crate::natives::media::Media,
+    /// Stand-in ids for inventory items scripts hold.
+    pub item_ids: HashMap<u64, String>,
+    /// Entities scripts spawned (archetype by id).
+    pub spawned: HashMap<u64, String>,
+    /// Group membership scripts changed: (group text, entity) added / removed.
+    pub group_added: HashSet<(String, u64)>,
+    pub group_removed: HashSet<(String, u64)>,
+    /// Who was inside each watched trigger last frame.
+    pub trigger_contacts: HashMap<u64, Vec<u64>>,
+    /// Triggers scripts enabled or disabled (others as placed).
+    pub trigger_enabled: HashMap<u64, bool>,
+    /// Look-at triggers the player sees now.
+    pub looked_at: HashSet<u64>,
+    /// When the world will be ready around the player after a teleport
+    /// (`DominoGameReady` then).
+    pub world_ready_at: Option<f64>,
+    /// Where the player was when triggers were last tested.
+    pub last_player: Option<[f32; 3]>,
+    /// Specific gameplays running (minigames, QTEs, boss fights): id ->
+    /// name.
+    pub gameplays: BTreeMap<u64, String>,
+    pub dialogs: crate::natives::dialog::Dialogs,
+    /// Script control requests the engine answers next frame.
+    pub control_answers: Vec<(u64, String)>,
+    /// Characters that died.
+    pub dead: HashSet<u64>,
+    /// The contextual actions characters are on.
+    pub ca: crate::natives::ai::Actions,
+    /// Where the player comes back after a reload (the last checkpoint's
+    /// spawn point).
+    pub respawn: Option<u64>,
+    /// Objective markers shown (marker entity -> sub type).
+    pub objective_markers: BTreeMap<u64, String>,
+    /// Entities bound to others (`CAPI_Entity.Bind`): child -> parent.
+    pub binds: HashMap<u64, u64>,
 }
 
 impl Core {
@@ -155,6 +191,24 @@ impl Core {
             time: 0.0,
             game_ready: false,
             play_game: false,
+            media: Default::default(),
+            item_ids: HashMap::new(),
+            spawned: HashMap::new(),
+            group_added: HashSet::new(),
+            group_removed: HashSet::new(),
+            trigger_contacts: HashMap::new(),
+            trigger_enabled: HashMap::new(),
+            looked_at: HashSet::new(),
+            world_ready_at: None,
+            last_player: None,
+            gameplays: BTreeMap::new(),
+            dialogs: Default::default(),
+            control_answers: Vec::new(),
+            dead: HashSet::new(),
+            ca: Default::default(),
+            respawn: None,
+            objective_markers: BTreeMap::new(),
+            binds: HashMap::new(),
         }
     }
 
@@ -252,10 +306,18 @@ impl Core {
         }
     }
 
-    /// Where an entity is now (the host's live position, else its placement).
+    /// Where an entity is now (the host's live position, else its placement;
+    /// bound entities ride on what they are bound to).
     pub fn position(&self, id: u64) -> Option<[f32; 3]> {
         if id == crate::PLAYER {
             return Some(self.view.player);
+        }
+        if let Some(&parent) = self.binds.get(&id) {
+            if parent != id {
+                if let Some(p) = self.view.spawned.get(&parent).map(|l| l.pos) {
+                    return Some([p[0], p[1], p[2] + 1.2]);
+                }
+            }
         }
         self.view.spawned.get(&id).map(|l| l.pos).or_else(|| self.data.position(id))
     }
@@ -298,6 +360,28 @@ impl Core {
                 self.actions.push_back(Action::Stop(zone));
             }
         }
+        // Blocks share world state through referenced blocks (a mission's
+        // `*_common` characters and props): active while any block using
+        // them is.
+        for r in b.refs.iter().copied().filter(|&r| r != block) {
+            let wanted = match state {
+                LayerState::Active => LayerState::Active,
+                LayerState::Enabled => continue,
+                _ => {
+                    let still_used = self
+                        .blocks
+                        .iter()
+                        .any(|(other, s)| *other != block && *s == LayerState::Active && self.data.blocks.get(other).is_some_and(|o| o.refs.contains(&r)));
+                    if still_used {
+                        continue;
+                    }
+                    state
+                }
+            };
+            if self.blocks.get(&r) != Some(&wanted) {
+                self.set_block(r, wanted);
+            }
+        }
     }
 
     /// Starts the graph of an entity's Domino component (once).
@@ -313,6 +397,50 @@ impl Core {
         self.running.insert(entity);
         self.actions.push_back(Action::Start { script, owner: entity, prefab, inputs, entries: vec!["In"] });
         true
+    }
+
+    /// Whether a trigger is on (as placed, or as scripts set it).
+    pub fn trigger_on(&self, id: u64) -> bool {
+        self.trigger_enabled.get(&id).copied().unwrap_or_else(|| self.data.entities.get(&id).is_some_and(crate::triggers::starts_enabled))
+    }
+
+    /// Who is inside a trigger now: what the host reports, and the player
+    /// when inside its volume.
+    pub fn contacts(&self, trigger: u64) -> Vec<u64> {
+        if !self.trigger_on(trigger) || !self.is_loaded(trigger) {
+            return Vec::new();
+        }
+        let mut out = self.view.contacts.get(&trigger).cloned().unwrap_or_default();
+        let Some(shape) = self.data.entities.get(&trigger).and_then(crate::triggers::shape_of) else { return out };
+        // Bodies, not points; the player's since last frame (thin triggers
+        // across a path are crossed between frames).
+        use crate::triggers::{BODY_HALF_HEIGHT as H, BODY_RADIUS as R};
+        let p = self.view.player;
+        // (A jump of more than a few metres is a teleport: only where it lands.)
+        let from = self.last_player.filter(|l| (0..3).map(|i| (l[i] - p[i]).powi(2)).sum::<f32>() < 9.0).unwrap_or(p);
+        if !out.contains(&crate::PLAYER) && shape.holds_along(from, self.view.player, R, H) {
+            out.push(crate::PLAYER);
+        }
+        // The characters the host has in the world, by where they are now
+        // (their positions are their feet).
+        let mut chars: Vec<u64> = self
+            .view
+            .spawned
+            .iter()
+            .filter(|(id, l)| l.alive && !out.contains(id) && shape.holds([l.pos[0], l.pos[1], l.pos[2] + H], R, H))
+            .map(|(id, _)| *id)
+            .collect();
+        chars.sort_unstable();
+        out.extend(chars);
+        out
+    }
+
+    /// A specific gameplay ended: its box hears `OnDestroyed` with its id.
+    pub fn end_gameplay(&mut self, id: u64) {
+        if let Some(name) = self.gameplays.remove(&id) {
+            self.emit(Command::Native { name: "DestroySpecificGameplay".into(), args: vec![id.to_string(), name] });
+            self.raise(&Listen::Generic("OnDestroyed".into()), vec![Arg::Str(id.to_string())]);
+        }
     }
 
     /// The host gets a command.

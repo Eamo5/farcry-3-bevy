@@ -83,10 +83,18 @@ fn pick_bloom(
         let (want_game, want_bevy) = (wants && game, wants && !game);
         let mut c = commands.entity(e);
         if want_game != has_game {
-            if want_game { c.insert(GameBloom) } else { c.remove::<GameBloom>() };
+            if want_game {
+                c.insert(GameBloom)
+            } else {
+                c.remove::<GameBloom>()
+            };
         }
         if want_bevy != has_bevy {
-            if want_bevy { c.insert(bevy_bloom()) } else { c.remove::<Bloom>() };
+            if want_bevy {
+                c.insert(bevy_bloom())
+            } else {
+                c.remove::<Bloom>()
+            };
         }
     }
 }
@@ -161,12 +169,7 @@ fn init_pipeline(mut commands: Commands, device: Res<RenderDevice>, fullscreen: 
     commands.insert_resource(BloomPipelines { layout, sampler, prefilter, downsample });
 }
 
-fn prepare_levels(
-    mut commands: Commands,
-    mut textures: ResMut<TextureCache>,
-    device: Res<RenderDevice>,
-    views: Query<(Entity, &ViewTarget), With<GameBloom>>,
-) {
+fn prepare_levels(mut commands: Commands, mut textures: ResMut<TextureCache>, device: Res<RenderDevice>, views: Query<(Entity, &ViewTarget), With<GameBloom>>) {
     for (e, target) in &views {
         let size = target.main_texture().size();
         let levels = std::array::from_fn(|k| {
@@ -220,7 +223,8 @@ fn draw_bloom(
     };
     let layout = cache.get_bind_group_layout(&pipelines.layout);
     let run = |ctx: &mut RenderContext, source: &TextureView, destination: &TextureView, pipeline| {
-        let bind_group = ctx.render_device().create_bind_group(Some("game bloom"), &layout, &BindGroupEntries::sequential((source, &pipelines.sampler, binding.clone())));
+        let bind_group =
+            ctx.render_device().create_bind_group(Some("game bloom"), &layout, &BindGroupEntries::sequential((source, &pipelines.sampler, binding.clone())));
         let mut pass = ctx.begin_tracked_render_pass(RenderPassDescriptor {
             label: Some("game bloom"),
             color_attachments: &[Some(RenderPassColorAttachment { view: destination, depth_slice: None, resolve_target: None, ops: Operations::default() })],

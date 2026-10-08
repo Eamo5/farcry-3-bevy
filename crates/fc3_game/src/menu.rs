@@ -134,12 +134,7 @@ fn setup_menu(mut commands: Commands) {
 struct StartPlaying(bool);
 
 /// Leaves the loading state as soon as the converted cache is available.
-fn leave_loading(
-    state: Res<State<GameState>>,
-    info: Option<Res<crate::data::CacheInfo>>,
-    start: Res<StartPlaying>,
-    mut next: ResMut<NextState<GameState>>,
-) {
+fn leave_loading(state: Res<State<GameState>>, info: Option<Res<crate::data::CacheInfo>>, start: Res<StartPlaying>, mut next: ResMut<NextState<GameState>>) {
     if *state.get() == GameState::Loading && info.is_some() {
         next.set(if start.0 { GameState::Playing } else { GameState::MainMenu });
     }
@@ -171,21 +166,13 @@ fn enter_playing(
     time.unpause();
 }
 
-fn enter_paused(
-    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
-    mut captured: ResMut<InputCaptured>,
-    mut time: ResMut<Time<Virtual>>,
-) {
+fn enter_paused(mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>, mut captured: ResMut<InputCaptured>, mut time: ResMut<Time<Virtual>>) {
     set_cursor(&mut cursor, false);
     captured.0 = false;
     time.pause();
 }
 
-fn enter_menu(
-    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
-    mut captured: ResMut<InputCaptured>,
-    mut time: ResMut<Time<Virtual>>,
-) {
+fn enter_menu(mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>, mut captured: ResMut<InputCaptured>, mut time: ResMut<Time<Virtual>>) {
     set_cursor(&mut cursor, false);
     captured.0 = false;
     time.unpause();

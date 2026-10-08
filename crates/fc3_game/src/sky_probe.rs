@@ -132,7 +132,11 @@ fn draw(env: &Environment, t: f32, sun: Vec3, storm: f32, inside: f32, to_lumina
         // Under a roof, what light gets in is mostly warm bounce off the
         // ground (as the ambient light, `clouds::weather_light`).
         let c = c.lerp(Vec3::new(1.0, 0.86, 0.7) * grey, inside * 0.8);
-        if dir.y < 0.0 { c * GROUND } else { c }
+        if dir.y < 0.0 {
+            c * GROUND
+        } else {
+            c
+        }
     };
     let mut out = Vec::with_capacity((SIZE * SIZE * 6 * 8) as usize);
     for face in 0..6 {

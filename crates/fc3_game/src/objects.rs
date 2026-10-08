@@ -29,10 +29,7 @@ pub struct ObjectsPlugin;
 impl Plugin for ObjectsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ObjectStreamer>()
-            .add_systems(
-                Update,
-                (request_objects, spawn_objects).chain().in_set(ObjectStreaming).run_if(resource_exists::<CacheInfo>),
-            )
+            .add_systems(Update, (request_objects, spawn_objects).chain().in_set(ObjectStreaming).run_if(resource_exists::<CacheInfo>))
             .add_systems(Update, near_debug);
     }
 }
@@ -61,7 +58,13 @@ fn near_debug(
         if gt.translation().distance(pt.translation()) > radius {
             continue;
         }
-        let name = roots.get(parent.parent()).ok().and_then(|r| sectors.get(&r.sector)).and_then(|s| s.entities.get(o.entity_index as usize)).map(|e| e.name.clone()).unwrap_or_default();
+        let name = roots
+            .get(parent.parent())
+            .ok()
+            .and_then(|r| sectors.get(&r.sector))
+            .and_then(|s| s.entities.get(o.entity_index as usize))
+            .map(|e| e.name.clone())
+            .unwrap_or_default();
         let mats: Vec<String> = children.iter().filter_map(|c| parts.get(c).ok()).filter_map(|m| server.get_path(m.0.id()).map(|p| p.to_string())).collect();
         info!("near: {name} at {:.1?} model {:?} materials {mats:?}", gt.translation(), server.get_path(o.model.id()).map(|p| p.to_string()));
     }
@@ -134,10 +137,7 @@ fn request_objects(
                 continue;
             }
             keep.insert(c);
-            streamer
-                .slots
-                .entry(c)
-                .or_insert_with(|| Slot { handle: server.load(cache_path(&cache::sector_rel(c.id()))), root: None, since: None });
+            streamer.slots.entry(c).or_insert_with(|| Slot { handle: server.load(cache_path(&cache::sector_rel(c.id()))), root: None, since: None });
         }
     }
     streamer.slots.retain(|c, slot| {
@@ -173,6 +173,7 @@ fn spawn_objects(
     models: Res<Assets<Fc3Model>>,
     mut commands: Commands,
     world: Res<crate::pickups::WorldState>,
+    dressed: Res<crate::story_actors::DressedEntities>,
 ) {
     use crate::pickups::{classify, Classified, Explosive, Pickup};
     // FC3_STREAM_DEBUG: the sector under the streaming centre, once a second.
@@ -181,8 +182,15 @@ fn spawn_objects(
             match streamer.slots.get(&c) {
                 Some(slot) => {
                     let placements = sectors.get(&slot.handle).map(|s| s.placements.len());
-                    let missing = sectors.get(&slot.handle).map(|s| s.placements.iter().filter(|p| s.models.get(p.model as usize).is_none_or(|h| models.get(h).is_none())).count());
-                    info!("stream-debug: sector {} root {:?} placements {placements:?} without a model {missing:?} state {:?}", c.id(), slot.root, server.recursive_dependency_load_state(&slot.handle));
+                    let missing = sectors
+                        .get(&slot.handle)
+                        .map(|s| s.placements.iter().filter(|p| s.models.get(p.model as usize).is_none_or(|h| models.get(h).is_none())).count());
+                    info!(
+                        "stream-debug: sector {} root {:?} placements {placements:?} without a model {missing:?} state {:?}",
+                        c.id(),
+                        slot.root,
+                        server.recursive_dependency_load_state(&slot.handle)
+                    );
                 }
                 None => info!("stream-debug: sector {} has no slot", c.id()),
             }
@@ -219,24 +227,18 @@ fn spawn_objects(
             if world.removed.contains(&entity_id) {
                 continue;
             }
+            // Placed characters are spawned as characters, not statues in
+            // their bind pose.
+            if sector.entities.get(p.entity as usize).is_some_and(|e| is_character(&e.class)) || dressed.0.contains(&entity_id) {
+                continue;
+            }
             let Some(handle) = sector.models.get(p.model as usize) else { continue };
             let Some(model) = models.get(handle) else { continue };
             if model.lods.is_empty() {
                 continue;
             }
-            let transform = Transform {
-                translation: Vec3::from_array(p.translation),
-                rotation: Quat::from_array(p.rotation),
-                scale: Vec3::splat(p.scale),
-            };
-            let obj = commands
-                .spawn((
-                    transform,
-                    Visibility::Visible,
-                    WorldObject { model: handle.clone(), entity_index: p.entity },
-                    ChildOf(root),
-                ))
-                .id();
+            let obj = spawn_placement(&mut commands, root, sector, p, handle, model);
+            commands.entity(obj).insert(PlacedId(entity_id));
             placed.insert(p.entity, obj);
             if let Some(Classified::Explosive) = sector.entities.get(p.entity as usize).and_then(|e| classify(&e.name)) {
                 commands.entity(obj).insert((Explosive { id: entity_id }, crate::combat::Health::new(25.0)));
@@ -244,31 +246,6 @@ fn spawn_objects(
             // Animal cages' doors give way to gunfire or a blast.
             if sector.entities.get(p.entity as usize).is_some_and(|e| e.name.to_ascii_lowercase().starts_with("animalcagedoor")) {
                 commands.entity(obj).insert((crate::wildlife::CageDoor { id: entity_id }, crate::combat::Health::new(crate::wildlife::CAGE_DOOR_HEALTH)));
-            }
-            let small = model.radius() < 1.5;
-            for (li, lod) in model.lods.iter().enumerate() {
-                let range = lod_range(model, li);
-                let fade = (range.end * 0.1).clamp(0.5, 8.0);
-                let vis = VisibilityRange {
-                    start_margin: if li == 0 { 0.0..0.0 } else { (range.start - fade * 0.5)..(range.start + fade * 0.5) },
-                    end_margin: (range.end - fade * 0.5)..(range.end + fade * 0.5),
-                    use_aabb: false,
-                };
-                for part in &lod.parts {
-                    crate::camera::SPAWNED_OBJECTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let mut e = commands.spawn((
-                        Mesh3d(part.mesh.clone()),
-                        MeshMaterial3d(sector.part_material(p, part)),
-                        vis.clone(),
-                        crate::original_shaders::PropPart,
-                        ChildOf(obj),
-                    ));
-                    if small || li > 1 {
-                        e.insert(NotShadowCaster);
-                    } else {
-                        e.insert(crate::shadow_lod::ShadowSize(model.radius() * p.scale));
-                    }
-                }
             }
         }
         // Pickups: interactable markers (with their placed mesh, if any).
@@ -289,13 +266,51 @@ fn spawn_objects(
     }
 }
 
+/// Whether an entity class is a character (a pawn), whose placed model is
+/// its bind pose.
+/// A placed object's entity id (scenes move the props they hold).
+#[derive(Component, Clone, Copy)]
+pub struct PlacedId(pub u64);
+
+pub fn is_character(class: &str) -> bool {
+    class.contains("Pawn")
+}
+
+/// Spawns one placed object (its LOD parts with their visibility ranges)
+/// under `root`.
+pub fn spawn_placement(commands: &mut Commands, root: Entity, sector: &Fc3Sector, p: &cache::Placement, handle: &Handle<Fc3Model>, model: &Fc3Model) -> Entity {
+    let transform = Transform { translation: Vec3::from_array(p.translation), rotation: Quat::from_array(p.rotation), scale: Vec3::splat(p.scale) };
+    let obj = commands.spawn((transform, Visibility::Visible, WorldObject { model: handle.clone(), entity_index: p.entity }, ChildOf(root))).id();
+    let small = model.radius() < 1.5;
+    for (li, lod) in model.lods.iter().enumerate() {
+        let range = lod_range(model, li);
+        let fade = (range.end * 0.1).clamp(0.5, 8.0);
+        let vis = VisibilityRange {
+            start_margin: if li == 0 { 0.0..0.0 } else { (range.start - fade * 0.5)..(range.start + fade * 0.5) },
+            end_margin: (range.end - fade * 0.5)..(range.end + fade * 0.5),
+            use_aabb: false,
+        };
+        for part in &lod.parts {
+            crate::camera::SPAWNED_OBJECTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut e = commands.spawn((
+                Mesh3d(part.mesh.clone()),
+                MeshMaterial3d(sector.part_material(p, part)),
+                vis.clone(),
+                crate::original_shaders::PropPart,
+                ChildOf(obj),
+            ));
+            if small || li > 1 {
+                e.insert(NotShadowCaster);
+            } else {
+                e.insert(crate::shadow_lod::ShadowSize(model.radius() * p.scale));
+            }
+        }
+    }
+    obj
+}
+
 /// Finds gameplay entities near a point (used by spawning systems).
-pub fn entities_near<'a>(
-    sectors: &'a Assets<Fc3Sector>,
-    streamer: &'a ObjectStreamer,
-    pos: Vec3,
-    radius: f32,
-) -> impl Iterator<Item = &'a CachedEntity> + 'a {
+pub fn entities_near<'a>(sectors: &'a Assets<Fc3Sector>, streamer: &'a ObjectStreamer, pos: Vec3, radius: f32) -> impl Iterator<Item = &'a CachedEntity> + 'a {
     streamer
         .slots
         .values()

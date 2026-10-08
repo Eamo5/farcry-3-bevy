@@ -30,9 +30,14 @@ impl Plugin for FpPlugin {
             .add_systems(OnExit(crate::menu::GameState::Loading), load_fp)
             .add_systems(
                 Update,
-                (spawn_arms, select_weapon, action_test, start_takedowns, start_actions, drive_arms, action_props, gesture_props).chain().before(crate::weapons::ViewModelSystems),
+                (spawn_arms, select_weapon, action_test, start_takedowns, start_actions, drive_arms, action_props, gesture_props)
+                    .chain()
+                    .before(crate::weapons::ViewModelSystems),
             )
-            .add_systems(PostUpdate, (drive_takedown, wingsuit_membrane, align_arms).chain().after(crate::characters::animate_characters).before(TransformSystems::Propagate))
+            .add_systems(
+                PostUpdate,
+                (drive_takedown, wingsuit_membrane, align_arms).chain().after(crate::characters::animate_characters).before(TransformSystems::Propagate),
+            )
             .add_systems(Update, live_grenades);
     }
 }
@@ -181,7 +186,11 @@ impl Quarter {
         let right = facing.cross(Vec3::Y);
         let (ahead, side) = (facing.dot(to_player), right.dot(to_player));
         if ahead.abs() >= side.abs() {
-            if ahead >= 0.0 { Quarter::Front } else { Quarter::Back }
+            if ahead >= 0.0 {
+                Quarter::Front
+            } else {
+                Quarter::Back
+            }
         } else if side >= 0.0 {
             Quarter::Right
         } else {
@@ -210,18 +219,34 @@ impl HandsBusy {
 #[derive(Message, Clone, Copy, Debug)]
 pub enum FpAction {
     /// A medkit: the syringe.
-    Syringe { to: f32 },
+    Syringe {
+        to: f32,
+    },
     /// Field surgery when out of medkits, picked by what last hurt.
-    ManualHeal { kind: crate::combat::DamageKind, to: f32 },
+    ManualHeal {
+        kind: crate::combat::DamageKind,
+        to: f32,
+    },
     /// Searching a body, picking a plant, skinning an animal (full body: the
     /// view follows the clip and the player stays put).
-    LootBody { crouch: bool },
-    LootPlant { crouch: bool },
-    Skin { large: bool },
+    LootBody {
+        crouch: bool,
+    },
+    LootPlant {
+        crouch: bool,
+    },
+    Skin {
+        large: bool,
+    },
     /// Pulling up onto a ledge (`high` above about 1.3 m) or vaulting over,
     /// fitted to `secs`.
-    Climb { high: bool, secs: f32 },
-    Vault { secs: f32 },
+    Climb {
+        high: bool,
+        secs: f32,
+    },
+    Vault {
+        secs: f32,
+    },
 }
 
 impl FpAction {
@@ -231,7 +256,10 @@ impl FpAction {
         use crate::combat::DamageKind as D;
         match self {
             FpAction::Syringe { .. } => (
-                &[(r"healing\syringe_heals\1stge_uppb_syringe_heal_+000fw_nowep.mab", 2.0), (r"healing\syringe_heals\1stge_uppb_syringe_heal_2_+000fw_nowep.mab", 2.0)],
+                &[
+                    (r"healing\syringe_heals\1stge_uppb_syringe_heal_+000fw_nowep.mab", 2.0),
+                    (r"healing\syringe_heals\1stge_uppb_syringe_heal_2_+000fw_nowep.mab", 2.0),
+                ],
                 false,
             ),
             FpAction::ManualHeal { kind, .. } => (
@@ -255,12 +283,14 @@ impl FpAction {
                 },
                 false,
             ),
-            FpAction::LootBody { crouch } => {
-                (if crouch { &[(r"loot\1stge_fulb_loot_human_crouch_+000fw.mab", 2.0)] } else { &[(r"loot\1stge_fulb_loot_human_stand_+000fw.mab", 2.0)] }, true)
-            }
-            FpAction::LootPlant { crouch } => {
-                (if crouch { &[(r"loot\1stge_fulb_loot_bush_crouch_+000fw.mab", 1.33)] } else { &[(r"loot\1stge_fulb_loot_bush_stand_+000fw.mab", 1.33)] }, true)
-            }
+            FpAction::LootBody { crouch } => (
+                if crouch { &[(r"loot\1stge_fulb_loot_human_crouch_+000fw.mab", 2.0)] } else { &[(r"loot\1stge_fulb_loot_human_stand_+000fw.mab", 2.0)] },
+                true,
+            ),
+            FpAction::LootPlant { crouch } => (
+                if crouch { &[(r"loot\1stge_fulb_loot_bush_crouch_+000fw.mab", 1.33)] } else { &[(r"loot\1stge_fulb_loot_bush_stand_+000fw.mab", 1.33)] },
+                true,
+            ),
             FpAction::Skin { large } => {
                 (if large { &[(r"loot\1stge_fulb_loot_animal_large+000fw.mab", 6.0)] } else { &[(r"loot\1stge_fulb_loot_animal_medium+000fw.mab", 4.0)] }, true)
             }
@@ -348,7 +378,13 @@ pub fn release_time(action: &str, prop: &str) -> Option<f32> {
 /// Places the props a clip carries (by its attachments' object names) on the
 /// rig's joints, each driven by the sub-clip with its bone count: (prop root,
 /// sub-clip, object name).
-fn place_props(clip: &fc3_formats::anim::Clip, rig: &CharacterRig, props: &HashMap<&'static str, Handle<Fc3Model>>, models: &Assets<Fc3Model>, commands: &mut Commands) -> Vec<(Entity, usize, String)> {
+fn place_props(
+    clip: &fc3_formats::anim::Clip,
+    rig: &CharacterRig,
+    props: &HashMap<&'static str, Handle<Fc3Model>>,
+    models: &Assets<Fc3Model>,
+    commands: &mut Commands,
+) -> Vec<(Entity, usize, String)> {
     let mut used = vec![false; clip.sub_clips.len()];
     let mut spawned = Vec::new();
     for at in &clip.attachments {
@@ -367,7 +403,13 @@ fn spawn_prop(model: &Fc3Model, joint: Entity, commands: &mut Commands) -> Entit
     let root = commands.spawn((Transform::default(), Visibility::Inherited, ChildOf(joint))).id();
     if let Some(lod) = model.lods.first() {
         for part in &lod.parts {
-            commands.spawn((Mesh3d(part.mesh.clone()), MeshMaterial3d(part.material.clone()), NotShadowCaster, crate::original_shaders::PropPart, ChildOf(root)));
+            commands.spawn((
+                Mesh3d(part.mesh.clone()),
+                MeshMaterial3d(part.material.clone()),
+                NotShadowCaster,
+                crate::original_shaders::PropPart,
+                ChildOf(root),
+            ));
         }
     }
     root
@@ -563,7 +605,14 @@ fn action_props(
 
 /// The grenade, rock, charge or mine in hand through a throw, gone from the
 /// hand once it lets go.
-fn gesture_props(time: Res<Time>, mut state: ResMut<FpState>, clips: Res<Assets<Fc3Clip>>, models: Res<Assets<Fc3Model>>, rigs: Query<&CharacterRig>, mut commands: Commands) {
+fn gesture_props(
+    time: Res<Time>,
+    mut state: ResMut<FpState>,
+    clips: Res<Assets<Fc3Clip>>,
+    models: Res<Assets<Fc3Model>>,
+    rigs: Query<&CharacterRig>,
+    mut commands: Commands,
+) {
     if state.throwing <= 0.0 {
         for (e, _, _) in std::mem::take(&mut state.gesture_props) {
             commands.entity(e).despawn();
@@ -599,7 +648,11 @@ fn takedown_clips(style: TakedownStyle, heavy: bool, variant: u32) -> (String, S
         TakedownStyle::Below { front, water } => {
             let side = if front { "fw" } else { "bk" };
             let w = if water { "water" } else { "" };
-            pair("takedown", format!("1stge_fulb_{w}ledgetakedown_{side}_var1_+000fw_nowep.mab"), format!("3rdge_fulb_{w}ledgetakedown_{side}_var1_+000fw_target_1.mab"))
+            pair(
+                "takedown",
+                format!("1stge_fulb_{w}ledgetakedown_{side}_var1_+000fw_nowep.mab"),
+                format!("3rdge_fulb_{w}ledgetakedown_{side}_var1_+000fw_target_1.mab"),
+            )
         }
         // From his front or back (heavies: those two only), or either side.
         TakedownStyle::Above { from } => {
@@ -611,7 +664,11 @@ fn takedown_clips(style: TakedownStyle, heavy: bool, variant: u32) -> (String, S
                 (Quarter::Right, false) => ("b", "+090rt"),
                 (Quarter::Left, false) => ("b", "-090lt"),
             };
-            pair("stealthtakedown_above", format!("1stge_fulb_stealthtakedown_above_{kind}_{dir}_hhmac.mab"), format!("3rdge_fulb_stealthtakedown_above_{kind}_{dir}_target.mab"))
+            pair(
+                "stealthtakedown_above",
+                format!("1stge_fulb_stealthtakedown_above_{kind}_{dir}_hhmac.mab"),
+                format!("3rdge_fulb_stealthtakedown_above_{kind}_{dir}_target.mab"),
+            )
         }
         _ => {
             let side = if style == TakedownStyle::Front { "front" } else { "back" };
@@ -632,10 +689,7 @@ fn chain_clips(style: TakedownStyle, variant: u32) -> [(String, String); 2] {
         n => format!("_var{n}"),
     };
     let pair = |name: String| (format!(r"melee\takedown\1stge_fulb_{name}"), format!(r"melee\takedown\3rdge_fulb_{name}"));
-    [
-        pair(format!("takedown{side}_kill2knife{v}_pirateassault_+000fw_nowep.mab")),
-        pair(format!("takedown{side}_knifethrow_pirateassault_+000fw_nowep.mab")),
-    ]
+    [pair(format!("takedown{side}_kill2knife{v}_pirateassault_+000fw_nowep.mab")), pair(format!("takedown{side}_knifethrow_pirateassault_+000fw_nowep.mab"))]
 }
 
 /// The grenade takedown's follow-ups (player, victim): grabbing the victim's
@@ -647,10 +701,7 @@ fn grenade_clips(style: TakedownStyle, variant: u32) -> [(String, String); 2] {
         n => format!("_var{n}"),
     };
     let pair = |name: String| (format!(r"melee\takedown\1stge_fulb_{name}"), format!(r"melee\takedown\3rdge_fulb_{name}"));
-    [
-        pair(format!("takedown{side}_kill2grenade{v}_pirateassault_+000fw_nowep.mab")),
-        pair(format!("takedown{side}_grenade_pirateassault_+000fw_nowep.mab")),
-    ]
+    [pair(format!("takedown{side}_kill2grenade{v}_pirateassault_+000fw_nowep.mab")), pair(format!("takedown{side}_grenade_pirateassault_+000fw_nowep.mab"))]
 }
 
 /// The takedown drag's follow-ups (player, victim): getting a grip, the hold
@@ -735,7 +786,8 @@ fn live_grenades(
         if g.fuse > 0.0 {
             continue;
         }
-        let hips = g.rig.and_then(|r| rigs.get(r).ok()).and_then(|r| r.joint(name_hash("Hips"))).and_then(|(_, j)| globals.get(j).ok()).map(|t| t.translation());
+        let hips =
+            g.rig.and_then(|r| rigs.get(r).ok()).and_then(|r| r.joint(name_hash("Hips"))).and_then(|(_, j)| globals.get(j).ok()).map(|t| t.translation());
         // The clip lands him on its own flat ground: on a slope, up to the
         // surface where he lies.
         let mut at = hips.unwrap_or(g.fallback);
@@ -797,7 +849,10 @@ fn start_takedowns(
         let victim_clip = load(&theirs);
         if let Some(mut r) = npc.rig.and_then(|r| rigs.get_mut(r).ok()) {
             let clip = victim_clip.clone();
-            r.set_clips(Arc::new(ClipSet { skeleton: chars.human.skeleton.clone(), clips: HashMap::from([(AnimKind::Death, clip.clone()), (AnimKind::Idle, clip)]) }));
+            r.set_clips(Arc::new(ClipSet {
+                skeleton: chars.human.skeleton.clone(),
+                clips: HashMap::from([(AnimKind::Death, clip.clone()), (AnimKind::Idle, clip)]),
+            }));
             if let Some((_, hand)) = r.joint(name_hash("RightHand")) {
                 for (_, mut v) in held.iter_mut().filter(|(c, _)| c.parent() == hand) {
                     *v = Visibility::Hidden;
@@ -810,7 +865,10 @@ fn start_takedowns(
             let clip = load(&format!(r"melee\stealthtakedown_above\3rdge_fulb_doubletakedownfront_{side}_var1_+000fw_target_2.mab"));
             let n2 = npcs.get(e2).ok()?;
             if let Some(mut r) = n2.rig.and_then(|r| rigs.get_mut(r).ok()) {
-                r.set_clips(Arc::new(ClipSet { skeleton: chars.human.skeleton.clone(), clips: HashMap::from([(AnimKind::Death, clip.clone()), (AnimKind::Idle, clip.clone())]) }));
+                r.set_clips(Arc::new(ClipSet {
+                    skeleton: chars.human.skeleton.clone(),
+                    clips: HashMap::from([(AnimKind::Death, clip.clone()), (AnimKind::Idle, clip.clone())]),
+                }));
                 if let Some((_, hand)) = r.joint(name_hash("RightHand")) {
                     for (_, mut v) in held.iter_mut().filter(|(c, _)| c.parent() == hand) {
                         *v = Visibility::Hidden;
@@ -984,7 +1042,9 @@ fn drive_takedown(
         td.stage_time += dt;
     }
     // Letting go of a dragged body: either key, or when it's been long enough.
-    let drop = td.drag && td.stage == 2 && (actions.just_pressed(crate::controls::Action::Interact) || actions.just_pressed(crate::controls::Action::Melee) || td.stage_time > DRAG_MAX);
+    let drop = td.drag
+        && td.stage == 2
+        && (actions.just_pressed(crate::controls::Action::Interact) || actions.just_pressed(crate::controls::Action::Melee) || td.stage_time > DRAG_MAX);
     let next = match td.stage {
         0 => CHAIN_BRANCH,
         1 if td.drag => DRAG_GRIP,
@@ -1047,7 +1107,14 @@ fn drive_takedown(
         let eye = pt.translation + Vec3::Y * (p.eye - HALF_HEIGHT);
         let dir = (at - eye).normalize_or_zero();
         let muzzle = eye + dir * 0.6 - Vec3::Y * 0.12;
-        damage.write(crate::combat::DamageEvent { target: shot, amount: 10_000.0, kind: crate::combat::DamageKind::Bullet, source: Some(eye), instigator: Some(pe), headshot: true });
+        damage.write(crate::combat::DamageEvent {
+            target: shot,
+            amount: 10_000.0,
+            kind: crate::combat::DamageKind::Bullet,
+            source: Some(eye),
+            instigator: Some(pe),
+            headshot: true,
+        });
         crate::particles::fx::muzzle_flash(&mut particles, &mut rng, muzzle, dir, 1.0);
         crate::particles::fx::blood(&mut particles, &mut rng, at, dir);
         sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::PISTOL, at: Some(muzzle), volume: 1.0 });
@@ -1065,10 +1132,21 @@ fn drive_takedown(
     if td.chain.is_some() && td.stage == 2 && !td.thrown && td.stage_time >= KNIFE_RELEASE {
         td.thrown = true;
         if let (Some(c), Some(at)) = (td.chain, target) {
-            damage.write(crate::combat::DamageEvent { target: c, amount: 10_000.0, kind: crate::combat::DamageKind::Melee, source: Some(pt.translation), instigator: Some(pe), headshot: false });
+            damage.write(crate::combat::DamageEvent {
+                target: c,
+                amount: 10_000.0,
+                kind: crate::combat::DamageKind::Melee,
+                source: Some(pt.translation),
+                instigator: Some(pe),
+                headshot: false,
+            });
             let dir = (at - pt.translation).normalize_or_zero();
             crate::particles::fx::blood(&mut particles, &mut rng, at, dir);
-            sfx.write(crate::sound::PlaySfx { event: crate::sound::switched(crate::sound::ev::MELEE_IMPACT, crate::surfaces::value::FLESH, 0), at: Some(at), volume: 0.8 });
+            sfx.write(crate::sound::PlaySfx {
+                event: crate::sound::switched(crate::sound::ev::MELEE_IMPACT, crate::surfaces::value::FLESH, 0),
+                at: Some(at),
+                volume: 0.8,
+            });
         }
     }
     let Ok(rig) = rigs.get(rig_e) else { return };
@@ -1212,7 +1290,9 @@ fn drive_takedown(
     // A double takedown's second victim stands where his half starts, beside
     // the first (their halves' first root keys give the offset).
     if let Some((e2, clip2)) = td.second.clone() {
-        let starts = |h: &Handle<Fc3Clip>| clips.get(h).and_then(|c| c.0.root_motion.as_ref().map(|r| (Vec3::from_array(r.start_translation), Quat::from_array(c.0.reference_rotation))));
+        let starts = |h: &Handle<Fc3Clip>| {
+            clips.get(h).and_then(|c| c.0.root_motion.as_ref().map(|r| (Vec3::from_array(r.start_translation), Quat::from_array(c.0.reference_rotation))))
+        };
         let first = td.victim_clip.as_ref().and_then(starts);
         if let (Some((s1, _)), Some((s2, r2))) = (first, starts(&clip2)) {
             if let Ok((mut nt, mut npc)) = npcs.get_mut(e2) {
@@ -1481,7 +1561,12 @@ fn drive_arms(
     server: Res<AssetServer>,
     chars: Option<Res<CharacterAssets>>,
     mut mounts: Query<&mut Visibility>,
-    (holding, driving, vehicles, plain): (Res<crate::traversal::Mount>, Res<crate::vehicles::Driving>, Query<&crate::vehicles::Vehicle>, Query<Entity, With<crate::weapons::ViewModelPart>>),
+    (holding, driving, vehicles, plain): (
+        Res<crate::traversal::Mount>,
+        Res<crate::vehicles::Driving>,
+        Query<&crate::vehicles::Vehicle>,
+        Query<Entity, With<crate::weapons::ViewModelPart>>,
+    ),
     (mut cinematic, mut busy, repairing, bino): (ResMut<Cinematic>, ResMut<HandsBusy>, Res<crate::vehicles::Repairing>, Res<crate::stealth::Binoculars>),
     mut commands: Commands,
 ) {
@@ -1502,7 +1587,15 @@ fn drive_arms(
             _ if p.air == crate::player::AirMode::Wingsuit => Some(Context::Wingsuit),
             _ if p.air == crate::player::AirMode::Chute => Some(Context::Chute),
             // Into a long fall (and out of it only on landing).
-            crate::traversal::Mount::None if !p.grounded && !p.swimming && !p.noclip && !p.driving && (p.velocity.y < -SKYDIVE_SPEED || (state.context == Some(Context::Skydive) && p.velocity.y < 0.0)) => Some(Context::Skydive),
+            crate::traversal::Mount::None
+                if !p.grounded
+                    && !p.swimming
+                    && !p.noclip
+                    && !p.driving
+                    && (p.velocity.y < -SKYDIVE_SPEED || (state.context == Some(Context::Skydive) && p.velocity.y < 0.0)) =>
+            {
+                Some(Context::Skydive)
+            }
             _ if repairing.vehicle.is_some() => Some(Context::Repair),
             crate::traversal::Mount::None if bino.held > 0.0 => Some(Context::Camera),
             crate::traversal::Mount::Ladder { .. } => Some(Context::Ladder),
@@ -1601,7 +1694,10 @@ fn drive_arms(
         let (folder, action) = gesture.split_once('|').unwrap_or((gesture, "throw"));
         if let Some(path) = state.index.get(folder).and_then(|c| c.get(action)).cloned() {
             let clip: Handle<Fc3Clip> = server.load(cache_path(&cache::anim_rel(&path)));
-            let set = Arc::new(ClipSet { skeleton: chars.human.skeleton.clone(), clips: HashMap::from([(AnimKind::Shot, clip.clone()), (AnimKind::Idle, clip.clone())]) });
+            let set = Arc::new(ClipSet {
+                skeleton: chars.human.skeleton.clone(),
+                clips: HashMap::from([(AnimKind::Shot, clip.clone()), (AnimKind::Idle, clip.clone())]),
+            });
             r.set_clips(set);
             state.throwing = 0.75;
             // Props in hand: last throw's gone, this one's placed once it loads.
@@ -1745,7 +1841,10 @@ fn wingsuit_membrane(
     let (model, skeleton) = state
         .membrane_assets
         .get_or_insert_with(|| {
-            let model = server.load_builder().with_settings(|m: &mut crate::cache_assets::ModelSettings| m.skinned = true).load(crate::cache_assets::skinned_cache_path(&cache::model_rel(WINGSUIT_MODEL)));
+            let model = server
+                .load_builder()
+                .with_settings(|m: &mut crate::cache_assets::ModelSettings| m.skinned = true)
+                .load(crate::cache_assets::skinned_cache_path(&cache::model_rel(WINGSUIT_MODEL)));
             (model, server.load(cache_path(&cache::skeleton_rel(WINGSUIT_SKELETON))))
         })
         .clone();
@@ -1777,12 +1876,7 @@ fn wingsuit_membrane(
 
 /// Puts the camera on the rig's `Camera` bone (the rig moves, not the view)
 /// and the weapon at the clip's hand offset.
-fn align_arms(
-    state: Res<FpState>,
-    clips: Res<Assets<Fc3Clip>>,
-    rigs: Query<&CharacterRig>,
-    mut transforms: Query<&mut Transform>,
-) {
+fn align_arms(state: Res<FpState>, clips: Res<Assets<Fc3Clip>>, rigs: Query<&CharacterRig>, mut transforms: Query<&mut Transform>) {
     let (Some(rig_e), Some(mount)) = (state.rig, state.mount) else { return };
     let Ok(rig) = rigs.get(rig_e) else { return };
     let Some(m) = camera_bone(rig, |e| transforms.get(e).ok().copied()) else { return };

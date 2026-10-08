@@ -95,6 +95,13 @@ pub struct WeaponDef {
 
 const MODEL_ROOT: &str = r"graphics\__fc3_graphics\_common\weapons\";
 
+impl WeaponDef {
+    /// The weapon's model as the archives name it.
+    pub fn model_path(&self) -> String {
+        format!("{MODEL_ROOT}{}", self.model).to_ascii_lowercase()
+    }
+}
+
 pub fn weapon_defs() -> Vec<WeaponDef> {
     use WeaponClass::*;
     let w = |name, model, class, damage, rpm: f32, automatic, magazine, max_reserve, spread, reload_time, ads_fov, recoil, hold| WeaponDef {
@@ -123,10 +130,7 @@ pub fn weapon_defs() -> Vec<WeaponDef> {
     let sniper = Vec3::new(0.14, -0.17, -0.24);
     let lmg = Vec3::new(0.15, -0.2, -0.28);
     vec![
-        WeaponDef {
-            range: 2.4,
-            ..w("Machete", r"machete\machete.xbg", Melee, 85.0, 90.0, false, 0, 0, 0.0, 0.0, 75.0, 0.0, Vec3::new(0.22, -0.32, -0.38))
-        },
+        WeaponDef { range: 2.4, ..w("Machete", r"machete\machete.xbg", Melee, 85.0, 90.0, false, 0, 0, 0.0, 0.0, 75.0, 0.0, Vec3::new(0.22, -0.32, -0.38)) },
         w("MK23 Pistol", r"mk23\mk23.xbg", Pistol, 34.0, 330.0, false, 12, 72, 0.9, 1.5, 60.0, 0.035, Vec3::new(0.16, -0.17, -0.42)),
         w("MP5 SMG", r"mp5\mp5.xbg", Smg, 21.0, 800.0, true, 30, 180, 1.6, 2.1, 58.0, 0.012, Vec3::new(0.14, -0.17, -0.3)),
         w("AK-74M Rifle", r"ak74m\ak74m.xbg", Rifle, 31.0, 640.0, true, 30, 210, 1.1, 2.4, 55.0, 0.018, Vec3::new(0.14, -0.17, -0.27)),
@@ -137,10 +141,7 @@ pub fn weapon_defs() -> Vec<WeaponDef> {
         },
         w("700 Sniper", r"700sniperrifle\700sniperrifle.xbg", Sniper, 140.0, 48.0, false, 5, 35, 3.0, 3.2, 18.0, 0.07, Vec3::new(0.14, -0.17, -0.24)),
         w("PKM LMG", r"pkm\pkm.xbg", Lmg, 33.0, 620.0, true, 100, 300, 1.9, 4.6, 55.0, 0.016, Vec3::new(0.15, -0.2, -0.28)),
-        WeaponDef {
-            range: 300.0,
-            ..w("RPG-7", r"rpg7\rpg7.xbg", Launcher, 260.0, 30.0, false, 1, 5, 0.6, 3.0, 60.0, 0.06, Vec3::new(0.16, -0.12, 0.05))
-        },
+        WeaponDef { range: 300.0, ..w("RPG-7", r"rpg7\rpg7.xbg", Launcher, 260.0, 30.0, false, 1, 5, 0.6, 3.0, 60.0, 0.06, Vec3::new(0.16, -0.12, 0.05)) },
         // Handguns.
         w("1911", r"kimber\kimber.xbg", Pistol, 38.0, 300.0, false, 7, 70, 0.9, 1.4, 60.0, 0.04, pistol),
         WeaponDef { silenced: true, ..w("6P9", r"6p9\6p9.xbg", Pistol, 30.0, 330.0, false, 8, 72, 1.0, 1.5, 60.0, 0.03, pistol) },
@@ -166,10 +167,7 @@ pub fn weapon_defs() -> Vec<WeaponDef> {
         w("U100", r"u100\u100.xbg", Lmg, 30.0, 700.0, true, 100, 300, 1.9, 4.8, 55.0, 0.015, lmg),
         w("MKG", r"lmg\minimi.xbg", Lmg, 31.0, 750.0, true, 100, 300, 2.0, 4.8, 55.0, 0.015, lmg),
         // Specials.
-        WeaponDef {
-            range: 200.0,
-            ..w("GL-94", r"gm94grenadelauncher\gm94.xbg", GrenadeLauncher, 170.0, 55.0, false, 3, 12, 0.8, 3.2, 58.0, 0.06, shotgun)
-        },
+        WeaponDef { range: 200.0, ..w("GL-94", r"gm94grenadelauncher\gm94.xbg", GrenadeLauncher, 170.0, 55.0, false, 3, 12, 0.8, 3.2, 58.0, 0.06, shotgun) },
         WeaponDef { range: 11.0, ..w("Flamethrower", r"flamethrower\flamethrower.xbg", Flamethrower, 5.0, 1000.0, true, 100, 400, 0.0, 3.0, 70.0, 0.0, lmg) },
         WeaponDef {
             silenced: true,
@@ -180,7 +178,24 @@ pub fn weapon_defs() -> Vec<WeaponDef> {
         // of the view, its grips where the arms' clips put the hands.
         WeaponDef { range: 600.0, ..w("DShK", r"dshk\dshk.xbg", Mounted, 75.0, 600.0, true, 999, 0, 1.0, 0.0, 50.0, 0.01, Vec3::new(0.0, -0.255, -0.79)) },
         WeaponDef { range: 500.0, ..w("M249", r"lmg\minimi.xbg", Mounted, 36.0, 750.0, true, 999, 0, 1.3, 0.0, 50.0, 0.007, Vec3::new(0.0, -0.175, -0.66)) },
+        // Empty hands, when a mission has taken everything (not a weapon of
+        // its own: it goes as soon as there is one).
+        WeaponDef { range: 1.8, ..w(UNARMED, "", Melee, 20.0, 90.0, false, 0, 0, 0.0, 0.0, 75.0, 0.0, Vec3::new(0.22, -0.32, -0.38)) },
     ]
+}
+
+/// The empty-hands entry (see `settle_unarmed`).
+pub const UNARMED: &str = "Unarmed";
+
+/// Empty hands when there is nothing else, and not otherwise.
+pub fn settle_unarmed(inv: &mut Inventory) {
+    let Some(unarmed) = inv.defs.iter().position(|d| d.name == UNARMED) else { return };
+    if inv.slots.iter().any(|s| s.def != unarmed) {
+        inv.slots.retain(|s| s.def != unarmed);
+    } else if inv.slots.is_empty() {
+        inv.slots.push(WeaponSlot { def: unarmed, mag: 0, reserve: 0 });
+    }
+    inv.current = inv.current.min(inv.slots.len().saturating_sub(1));
 }
 
 pub const GRENADE_MODEL: &str = r"graphics\__fc3_graphics\_common\weapons\grenade\frag_grenade.xbg";
@@ -261,7 +276,10 @@ impl Inventory {
     /// The next arrow kind with arrows left, after the one nocked (plain
     /// arrows always).
     pub fn next_arrow(&self) -> u8 {
-        (1..=ARROW_NAMES.len() as u8).map(|k| (self.arrow_kind + k) % ARROW_NAMES.len() as u8).find(|&k| k == 0 || self.special_arrows[k as usize - 1] > 0).unwrap_or(0)
+        (1..=ARROW_NAMES.len() as u8)
+            .map(|k| (self.arrow_kind + k) % ARROW_NAMES.len() as u8)
+            .find(|&k| k == 0 || self.special_arrows[k as usize - 1] > 0)
+            .unwrap_or(0)
     }
 }
 
@@ -342,13 +360,8 @@ pub enum Attachment {
 }
 
 /// Attachment models under the weapons folder.
-const ATTACHMENT_MODELS: [&str; 5] = [
-    r"_shared\silencer_handgun.xbg",
-    r"_shared\silencer_smg.xbg",
-    r"_shared\silencer_sniper.xbg",
-    r"_shared\reflex_a.xbg",
-    r"_shared\acog.xbg",
-];
+const ATTACHMENT_MODELS: [&str; 5] =
+    [r"_shared\silencer_handgun.xbg", r"_shared\silencer_smg.xbg", r"_shared\silencer_sniper.xbg", r"_shared\reflex_a.xbg", r"_shared\acog.xbg"];
 const OPTICAL_MODEL: &str = r"_shared\optical.xbg";
 
 /// Weapons whose models have no mount for a sight or suppressor.
@@ -495,7 +508,15 @@ fn scope_sway(
     }
     sway.t += dt;
     let t = sway.t;
-    let amp = SWAY * perks.recoil * if sway.holding { 0.06 } else if sway.recover > 0.6 { 1.8 } else { 1.0 };
+    let amp = SWAY
+        * perks.recoil
+        * if sway.holding {
+            0.06
+        } else if sway.recover > 0.6 {
+            1.8
+        } else {
+            1.0
+        };
     let target = Vec2::new((t * 0.7).sin() + 0.5 * (t * 1.9).sin(), 0.8 * (t * 0.9).cos() + 0.4 * (t * 2.3).sin()) * amp;
     sway.offset = sway.offset.lerp(target, (dt * 4.0).min(1.0));
 }
@@ -657,19 +678,8 @@ pub struct Projectile {
 
 // --------------------------------------------------------------- systems ---
 
-fn setup_effects(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    server: Res<AssetServer>,
-) {
-    let glow = |c: LinearRgba| StandardMaterial {
-        base_color: Color::from(c),
-        emissive: c * 4.0,
-        unlit: true,
-        alpha_mode: AlphaMode::Add,
-        ..default()
-    };
+fn setup_effects(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>, server: Res<AssetServer>) {
+    let glow = |c: LinearRgba| StandardMaterial { base_color: Color::from(c), emissive: c * 4.0, unlit: true, alpha_mode: AlphaMode::Add, ..default() };
     commands.insert_resource(EffectAssets {
         tracer_mesh: meshes.add(Cuboid::new(0.012, 0.012, 1.0)),
         tracer_mat: materials.add(glow(LinearRgba::rgb(4.0, 3.0, 1.2))),
@@ -688,7 +698,7 @@ fn give_player_loadout(
     cameras: Query<Entity, With<PlayerCamera>>,
 ) {
     let defs = weapon_defs();
-    let models = defs.iter().map(|d| model_handle(&server, &format!("{MODEL_ROOT}{}", d.model))).collect();
+    let models = defs.iter().map(|d| if d.model.is_empty() { Handle::default() } else { model_handle(&server, &format!("{MODEL_ROOT}{}", d.model)) }).collect();
     let attachment_models: Vec<Handle<Fc3Model>> =
         ATTACHMENT_MODELS.iter().chain([&OPTICAL_MODEL]).map(|m| model_handle(&server, &format!("{MODEL_ROOT}{m}"))).collect();
     // Start with the machete, pistol and rifle; the rest are found in the world.
@@ -796,6 +806,7 @@ pub fn grant_weapon(inv: &mut Inventory, name: &str, max_guns: usize) -> Granted
         inv.slots.push(slot);
     }
     // Keep slots in catalogue order and hold the new weapon.
+    settle_unarmed(inv);
     inv.slots.sort_by_key(|s| s.def);
     inv.current = inv.slots.iter().position(|s| s.def == def).unwrap_or(0);
     result
@@ -1039,7 +1050,15 @@ pub fn damage_target(e: Entity, health: &Query<&Health>, parents: &Query<&ChildO
 
 #[allow(clippy::too_many_arguments)]
 fn fire(
-    inputs: (Res<crate::stealth::Binoculars>, Res<crate::controls::ActionState>, Res<InputCaptured>, Res<crate::progression::Perks>, Res<crate::fp::HandsBusy>, Query<&crate::npc::HeadPos>, Res<crate::weapon_wheel::WeaponWheel>),
+    inputs: (
+        Res<crate::stealth::Binoculars>,
+        Res<crate::controls::ActionState>,
+        Res<InputCaptured>,
+        Res<crate::progression::Perks>,
+        Res<crate::fp::HandsBusy>,
+        Query<&crate::npc::HeadPos>,
+        Res<crate::weapon_wheel::WeaponWheel>,
+    ),
     args: Res<crate::Args>,
     script: Res<TestScript>,
     time: Res<Time>,
@@ -1082,7 +1101,8 @@ fn fire(
     inv.recoil_offset -= recover;
     player.pitch -= recover;
     let scripted = script.t(&time, &args).is_some();
-    let can_act = (captured.0 || scripted) && !health.dead && !player.noclip && !player.swimming && !player.driving && bino.blend < 0.3 && !busy.busy() && !wheel.open;
+    let can_act =
+        (captured.0 || scripted) && !health.dead && !player.noclip && !player.swimming && !player.driving && bino.blend < 0.3 && !busy.busy() && !wheel.open;
     // FC3_AIM (tests): hold aim down the sights.
     let aim_held = actions.pressed(Action::Aim) || std::env::var("FC3_AIM").is_ok();
     inv.aiming = (can_act || std::env::var("FC3_AIM").is_ok()) && aim_held && inv.reloading <= 0.0 && inv.def().class != WeaponClass::Melee;
@@ -1208,7 +1228,14 @@ fn fire(
         fx::flame_stream(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, player.velocity, muzzle_pos.distance(end));
         if let Some(h) = reach {
             if let Some(target) = damage_target(h.entity, &healths, &parents) {
-                damage.write(DamageEvent { target, amount: d.damage, kind: DamageKind::Fire, source: Some(origin), instigator: Some(player_e), headshot: false });
+                damage.write(DamageEvent {
+                    target,
+                    amount: d.damage,
+                    kind: DamageKind::Fire,
+                    source: Some(origin),
+                    instigator: Some(player_e),
+                    headshot: false,
+                });
                 markers.write(HitMarker { kill: false, headshot: false });
             }
             if rng.f32() < 0.2 {
@@ -1526,7 +1553,14 @@ fn update_projectiles(
                         info!("{} arrow went off at {point:.1?}", if p.incendiary { "fire" } else { "explosive" });
                     }
                     if let Some(target) = damage_target(hit.entity, &healths, &parents) {
-                        damage.write(DamageEvent { target, amount: p.damage, kind: DamageKind::Bullet, source: Some(t.translation), instigator: Some(p.owner), headshot: false });
+                        damage.write(DamageEvent {
+                            target,
+                            amount: p.damage,
+                            kind: DamageKind::Bullet,
+                            source: Some(t.translation),
+                            instigator: Some(p.owner),
+                            headshot: false,
+                        });
                         markers.write(HitMarker { kill: false, headshot: false });
                     }
                     if p.incendiary {
@@ -1541,7 +1575,14 @@ fn update_projectiles(
                 }
                 if p.arrow {
                     if let Some(target) = damage_target(hit.entity, &healths, &parents) {
-                        damage.write(DamageEvent { target, amount: p.damage, kind: DamageKind::Bullet, source: Some(t.translation), instigator: Some(p.owner), headshot: false });
+                        damage.write(DamageEvent {
+                            target,
+                            amount: p.damage,
+                            kind: DamageKind::Bullet,
+                            source: Some(t.translation),
+                            instigator: Some(p.owner),
+                            headshot: false,
+                        });
                         markers.write(HitMarker { kill: false, headshot: false });
                         crate::particles::fx::blood(&mut particles, &mut rng, point, step.normalize());
                         commands.entity(e).despawn();
@@ -1823,10 +1864,24 @@ fn spawn_view_model_parts(
             match paint.and_then(|p| painted(&server, &paint_table, &part.material, p)) {
                 Some(variant) => {
                     let material: Handle<StandardMaterial> = server.load(crate::cache_assets::cache_path(&variant));
-                    commands.spawn((Mesh3d(part.mesh.clone()), MeshMaterial3d(material), NotShadowCaster, ViewModelPart, crate::original_shaders::PropPart, ChildOf(root)));
+                    commands.spawn((
+                        Mesh3d(part.mesh.clone()),
+                        MeshMaterial3d(material),
+                        NotShadowCaster,
+                        ViewModelPart,
+                        crate::original_shaders::PropPart,
+                        ChildOf(root),
+                    ));
                 }
                 None => {
-                    commands.spawn((Mesh3d(part.mesh.clone()), MeshMaterial3d(part.material.clone()), NotShadowCaster, ViewModelPart, crate::metal::MaskedMetal, ChildOf(root)));
+                    commands.spawn((
+                        Mesh3d(part.mesh.clone()),
+                        MeshMaterial3d(part.material.clone()),
+                        NotShadowCaster,
+                        ViewModelPart,
+                        crate::metal::MaskedMetal,
+                        ChildOf(root),
+                    ));
                 }
             }
         }
@@ -1837,7 +1892,15 @@ fn spawn_view_model_parts(
         let Some((mi, node)) = a.model(d).filter(|_| inv.has_attachment(def_index, a)) else { continue };
         let (Some(at), Some(part_model)) = (node_pose(model, node), inv.attachment_models.get(mi).and_then(|h| models.get(h))) else { continue };
         for part in part_model.lods.first().map(|l| l.parts.as_slice()).unwrap_or(&[]) {
-            commands.spawn((Mesh3d(part.mesh.clone()), MeshMaterial3d(part.material.clone()), NotShadowCaster, ViewModelPart, crate::metal::MaskedMetal, at, ChildOf(root)));
+            commands.spawn((
+                Mesh3d(part.mesh.clone()),
+                MeshMaterial3d(part.material.clone()),
+                NotShadowCaster,
+                ViewModelPart,
+                crate::metal::MaskedMetal,
+                at,
+                ChildOf(root),
+            ));
         }
     }
     // The model's muzzle-flash node, else the front of its bounds.

@@ -21,9 +21,7 @@ pub struct FarTerrainPlugin;
 impl Plugin for FarTerrainPlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "far_terrain.wgsl");
-        app.add_plugins(MaterialPlugin::<FarMaterial>::default())
-            .add_systems(Startup, spawn_far_terrain)
-            .add_systems(Update, follow_player);
+        app.add_plugins(MaterialPlugin::<FarMaterial>::default()).add_systems(Startup, spawn_far_terrain).add_systems(Update, follow_player);
     }
 }
 

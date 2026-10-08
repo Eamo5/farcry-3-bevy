@@ -46,6 +46,20 @@ pub fn anim_rel(original: &str) -> String {
     format!("anims/{}.mab", hash_name(original))
 }
 
+/// A Bink video, copied as it is (scripts name it by its archive path, in
+/// any case and with either slash).
+pub fn video_rel(original: &str) -> String {
+    let p: String = original.chars().map(|c| if c == '/' { '\\' } else { c.to_ascii_lowercase() }).collect();
+    format!("video/{}.bik", hash_name(&p))
+}
+
+/// The single-player videos the converter copies: the story's and the
+/// menus' (not multiplayer's).
+pub fn is_story_video(path: &str) -> bool {
+    let p = path.to_ascii_lowercase();
+    p.ends_with(".bik") && !p.starts_with("ui\\multiplayer")
+}
+
 /// Extracted skeleton (raw `.skeleton`, parsed with `anim::parse_skeleton`).
 pub fn skeleton_rel(original: &str) -> String {
     format!("skeletons/{}.skeleton", hash_name(original))
@@ -438,9 +452,7 @@ pub fn default_cache_root() -> PathBuf {
     } else if cfg!(target_os = "macos") {
         std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Caches"))
     } else {
-        std::env::var_os("XDG_CACHE_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
     };
     base.unwrap_or_else(|| PathBuf::from(".")).join("fc3-bevy").join("cache")
 }
@@ -1273,6 +1285,10 @@ pub const TRAVERSAL_REL: &str = "world/traversal.txt";
 /// Enemy outfits (see `kits`), from the game's graphic kits.
 pub const KITS_REL: &str = "characters/kits.txt";
 
+/// Every graphic kit in the game's kit list, with its id (story characters
+/// name their kit by id; loaded when one appears).
+pub const ALL_KITS_REL: &str = "characters/all_kits.txt";
+
 /// Weapon paint jobs (see `fc3_convert::convert_paints`): one line per paint a
 /// material can take, `base_material_rel paint variant_original_path
 /// variant_material_rel`.
@@ -1349,13 +1365,7 @@ pub fn villager_spot_kind(name: &str) -> Option<&'static str> {
     if !what.contains("_civ") {
         return None;
     }
-    let kinds: [(&str, &str); 5] = [
-        ("gardeninghoe", "hoe"),
-        ("leanwall", "lean"),
-        ("sitonground", "sit"),
-        ("prayingground", "pray"),
-        ("lootcorpse", "loot"),
-    ];
+    let kinds: [(&str, &str); 5] = [("gardeninghoe", "hoe"), ("leanwall", "lean"), ("sitonground", "sit"), ("prayingground", "pray"), ("lootcorpse", "loot")];
     kinds.iter().find(|(k, _)| what.contains(k)).map(|(_, v)| *v)
 }
 
@@ -1389,9 +1399,11 @@ pub fn guard_spot_kind(name: &str) -> Option<&'static str> {
         ("lookunderobject", "cautious"),
         ("sniperbinocular", "cautious"),
     ];
-    kinds.iter().find(|(k, _)| what.starts_with(k)).map(|(_, kind)| *kind).or_else(|| {
-        ["lookdowncliff", "validaterisk", "standandwatch"].iter().any(|k| what.starts_with(k)).then_some("cautious")
-    })
+    kinds
+        .iter()
+        .find(|(k, _)| what.starts_with(k))
+        .map(|(_, kind)| *kind)
+        .or_else(|| ["lookdowncliff", "validaterisk", "standandwatch"].iter().any(|k| what.starts_with(k)).then_some("cautious"))
 }
 
 /// The world's placed effects the game plays, one per line: `kind x y z`
@@ -1440,14 +1452,17 @@ pub const SOUND_POINTS_REL: &str = "world/sound_points.txt";
 /// scripted one-offs (explosions, thunder claps).
 pub fn sound_point_kept(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
-    !["walla", "_vo", "vo_", "chase", "jas_", "jas0", "collapse", "elevator", "gazexplosion", "thunder", "cinematic", "mission", "scream", "radio", "music"].iter().any(|k| n.contains(k))
+    !["walla", "_vo", "vo_", "chase", "jas_", "jas0", "collapse", "elevator", "gazexplosion", "thunder", "cinematic", "mission", "scream", "radio", "music"]
+        .iter()
+        .any(|k| n.contains(k))
 }
 
 /// The moon sprite (alpha: the disc and its glow).
 pub const SKY_MOON_REL: &str = "sky/moon.dds";
 /// The sky's cloud panoramas (360 degrees around, horizon at the bottom row),
 /// from clear to storm. Alpha is cover, green the lit cloud, red the sun rim.
-pub const SKY_CLOUDS_REL: [&str; 5] = ["sky/clouds_clear.dds", "sky/clouds_medium.dds", "sky/clouds_dense.dds", "sky/clouds_cumulonimbus.dds", "sky/clouds_storm.dds"];
+pub const SKY_CLOUDS_REL: [&str; 5] =
+    ["sky/clouds_clear.dds", "sky/clouds_medium.dds", "sky/clouds_dense.dds", "sky/clouds_cumulonimbus.dds", "sky/clouds_storm.dds"];
 
 /// The baked world map (see `worldmap`).
 pub const WORLD_MAP_REL: &str = "map/world.dds";
@@ -1889,12 +1904,11 @@ impl ShaderEntry {
     pub fn to_line(&self) -> String {
         let list = |v: Vec<String>| if v.is_empty() { "-".to_string() } else { v.join(",") };
         let io = |v: &[ShaderIo]| {
-            list(v
-                .iter()
-                .map(|i| {
-                    format!("{}.{}:{}:{}:{}", i.usage, i.usage_index, i.register, i.location.map_or("-".into(), |l| l.to_string()), i.flags)
-                })
-                .collect())
+            list(
+                v.iter()
+                    .map(|i| format!("{}.{}:{}:{}:{}", i.usage, i.usage_index, i.register, i.location.map_or("-".into(), |l| l.to_string()), i.flags))
+                    .collect(),
+            )
         };
         format!(
             "{:016x} {} {} {} {} {} {} {} {} {}",
@@ -1905,11 +1919,7 @@ impl ShaderEntry {
             io(&self.inputs),
             io(&self.outputs),
             list(self.samplers.iter().map(|(r, t)| format!("{r}:{t}")).collect()),
-            list(self
-                .bindings
-                .iter()
-                .map(|b| format!("{:08x}:{}:{}{}", b.name_hash, b.register, b.rows, if b.sampler { "s" } else { "" }))
-                .collect()),
+            list(self.bindings.iter().map(|b| format!("{:08x}:{}:{}{}", b.name_hash, b.register, b.rows, if b.sampler { "s" } else { "" })).collect()),
             self.color_outputs,
             self.nonuniform,
         )
@@ -1920,7 +1930,13 @@ impl ShaderEntry {
         if f.len() != 10 {
             return None;
         }
-        let items = |s: &str| -> Vec<String> { if s == "-" { vec![] } else { s.split(',').map(str::to_string).collect() } };
+        let items = |s: &str| -> Vec<String> {
+            if s == "-" {
+                vec![]
+            } else {
+                s.split(',').map(str::to_string).collect()
+            }
+        };
         let io = |s: &str| -> Option<Vec<ShaderIo>> {
             items(s)
                 .iter()
@@ -2079,9 +2095,97 @@ impl SurfaceTable {
     }
 }
 
+/// A model's collision from the game's own `.hkx` (see
+/// `havok::collision_geometry`), by `hash_name` of the model path.
+pub fn collision_rel(model: &str) -> String {
+    collision_rel_of_hash(path_hash(model))
+}
+
+/// [`collision_rel`] from the model path's hash (a model file's stem).
+pub fn collision_rel_of_hash(hash: u64) -> String {
+    format!("collision/{hash:016x}.col")
+}
+
+/// The models that have a `collision/<hash>.col`: one `hash_name` per line.
+pub const COLLISION_INDEX_REL: &str = "collision/index.txt";
+
+/// Triangle soup in Bevy model space, what characters collide with.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CachedCollision {
+    pub positions: Vec<[f32; 3]>,
+    pub indices: Vec<u32>,
+    /// Every surface is the logic material that leaves no impact: what plant
+    /// pickups, volumes and invisible walls are made of. Whether such a
+    /// model blocks characters isn't in the file (see `physics`).
+    pub no_impact: bool,
+}
+
+impl CachedCollision {
+    /// `FLAG` chunk bits.
+    const NO_IMPACT: u32 = 1;
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = Writer::default();
+        header(&mut w, b"FCOL");
+        w.chunk(b"TRIS", |w| {
+            w.u32(self.positions.len() as u32);
+            w.u32(self.indices.len() as u32);
+            for p in &self.positions {
+                w.f32s(p);
+            }
+            for i in &self.indices {
+                w.u32(*i);
+            }
+        });
+        w.chunk(b"FLAG", |w| w.u32(if self.no_impact { Self::NO_IMPACT } else { 0 }));
+        w.buf
+    }
+
+    pub fn from_bytes(data: &[u8]) -> Result<CachedCollision> {
+        let mut r = Reader::new(data);
+        check_header(&mut r, b"FCOL")?;
+        let mut c = CachedCollision::default();
+        for (tag, body) in chunks(&mut r)? {
+            let mut r = Reader::new(body);
+            match &tag {
+                b"TRIS" => {
+                    let (nv, ni) = (r.u32()? as usize, r.u32()? as usize);
+                    c.positions = read_f32s::<3>(&mut r, nv)?;
+                    c.indices = (0..ni).map(|_| r.u32()).collect::<Result<_>>()?;
+                }
+                b"FLAG" => c.no_impact = r.u32()? & Self::NO_IMPACT != 0,
+                _ => {}
+            }
+        }
+        if c.indices.len() % 3 != 0 || c.indices.iter().any(|&i| i as usize >= c.positions.len()) {
+            bail!("collision indices out of range");
+        }
+        Ok(c)
+    }
+}
+
+/// Parses the collision index (`COLLISION_INDEX_REL`) into model hashes.
+pub fn collision_index(text: &str) -> std::collections::HashSet<u64> {
+    text.lines().filter_map(|l| u64::from_str_radix(l.trim(), 16).ok()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collision_round_trip() {
+        for no_impact in [false, true] {
+            let c = CachedCollision { positions: vec![[0.0, 1.0, 2.0], [3.0, 4.0, 5.0], [-1.0, 0.5, 0.25]], indices: vec![0, 1, 2], no_impact };
+            assert_eq!(CachedCollision::from_bytes(&c.to_bytes()).unwrap(), c);
+        }
+        let bad = CachedCollision { positions: vec![[0.0; 3]], indices: vec![0, 1, 2], no_impact: false };
+        assert!(CachedCollision::from_bytes(&bad.to_bytes()).is_err());
+        let rel = collision_rel(r"graphics\a\b.xbg");
+        assert!(rel.starts_with("collision/") && rel.ends_with(".col"));
+        let hash = rel.trim_start_matches("collision/").trim_end_matches(".col");
+        assert!(collision_index(&format!("{hash}\n\n")).contains(&path_hash(r"graphics\a\b.xbg")));
+    }
 
     #[test]
     fn vista_and_far_terrain_round_trip() {
@@ -2091,7 +2195,8 @@ mod tests {
         };
         assert_eq!(VistaForest::from_bytes(&forest.to_bytes()).unwrap(), forest);
         let mut far = FarTerrainBuilder::default();
-        let mut t = CachedTerrain { sector_id: 81 * 160 + 82, min_height: 0.0, max_height: 150.0, heights: vec![0; 65 * 65], layers: [0; 4], holes: Vec::new() };
+        let mut t =
+            CachedTerrain { sector_id: 81 * 160 + 82, min_height: 0.0, max_height: 150.0, heights: vec![0; 65 * 65], layers: [0; 4], holes: Vec::new() };
         t.heights[32 * 65 + 32] = 150 * 64;
         far.put(&t, |_, _| Some([10, 20, 30]));
         let f = far.0;
@@ -2181,7 +2286,14 @@ mod tests {
         let v = CachedVegetation {
             sector_id: 3,
             models: vec!["models/a.fcm".into()],
-            instances: vec![VegInstance { model: 0, kind: veg_kind::GRASS, translation: [1.0, 2.0, 3.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: 1.2, tint: [10, 20, 30] }],
+            instances: vec![VegInstance {
+                model: 0,
+                kind: veg_kind::GRASS,
+                translation: [1.0, 2.0, 3.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: 1.2,
+                tint: [10, 20, 30],
+            }],
         };
         let v2 = CachedVegetation::from_bytes(&v.to_bytes()).unwrap();
         assert_eq!(v2.instances, v.instances);

@@ -73,7 +73,11 @@ pub fn plane_level(p: Vec3) -> f32 {
 /// mouth), otherwise the sea's.
 pub fn surface(p: Vec3, ground: Option<f32>) -> f32 {
     let level = plane_level(p);
-    if level > SEA_LEVEL && ground.is_some_and(|g| g < level) { level } else { SEA_LEVEL }
+    if level > SEA_LEVEL && ground.is_some_and(|g| g < level) {
+        level
+    } else {
+        SEA_LEVEL
+    }
 }
 
 pub fn surface_at(p: Vec3, heights: &Heightfield) -> f32 {
@@ -281,7 +285,8 @@ fn setup_water(
     *done = true;
     load_planes(&info);
     let floor = images.add(depth_image(FLOOR_TEXELS, 64.0));
-    let (ripples, swell, foam) = (load(&server, cache::WATER_RIPPLES_REL, false), load(&server, cache::WATER_SWELL_REL, false), load(&server, cache::WATER_FOAM_REL, false));
+    let (ripples, swell, foam) =
+        (load(&server, cache::WATER_RIPPLES_REL, false), load(&server, cache::WATER_SWELL_REL, false), load(&server, cache::WATER_FOAM_REL, false));
     // Opaque, but transmissive: drawn after the scene is copied, which the
     // shader blends in itself (see `water.wgsl`).
     let base = StandardMaterial {
@@ -345,7 +350,14 @@ fn follow_camera(cameras: Query<&GlobalTransform, With<PlayerCamera>>, mut ocean
 
 /// Puts a finished depth texture in place: its texels, and its corner on the
 /// material.
-fn put_floor(images: &mut Assets<Image>, materials: &mut Assets<WaterMaterial>, image: &Handle<Image>, material: &Handle<WaterMaterial>, corner: Vec2, data: Vec<u8>) {
+fn put_floor(
+    images: &mut Assets<Image>,
+    materials: &mut Assets<WaterMaterial>,
+    image: &Handle<Image>,
+    material: &Handle<WaterMaterial>,
+    corner: Vec2,
+    data: Vec<u8>,
+) {
     if let Some(mut image) = images.get_mut(image) {
         image.data = Some(data);
     }

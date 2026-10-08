@@ -33,6 +33,8 @@ pub struct Entry {
     pub layer: u64,
     pub origin: Origin,
     pub components: Arc<Object>,
+    /// The entity's own kept fields (a region's shape).
+    pub fields: Arc<Object>,
 }
 
 impl Entry {
@@ -126,6 +128,10 @@ pub struct StoryData {
     pub zone_blocks: HashMap<u64, u64>,
     /// The entity running the master graph.
     pub root: Option<u64>,
+    /// Group name hash -> members (scripts write a group as `#` and the
+    /// hash in hex).
+    pub groups: HashMap<u32, Vec<u64>>,
+    pub group_names: HashMap<u32, String>,
 }
 
 /// A counted array of u64 (u32 count, then the values).
@@ -172,7 +178,17 @@ impl StoryData {
                 story::Source::Sector(id) => Origin::Sector(id),
                 story::Source::Metasector(id) => Origin::Metasector(id),
             };
-            d.add(Entry { id: e.id, name: e.name, class: e.class, pos: e.pos, angles: e.angles, layer: e.layer, origin, components: e.components });
+            d.add(Entry {
+                id: e.id,
+                name: e.name,
+                class: e.class,
+                pos: e.pos,
+                angles: e.angles,
+                layer: e.layer,
+                origin,
+                components: e.components,
+                fields: e.fields,
+            });
         }
         // The always-loaded entities: map data (race checkpoints, some
         // zones), safehouses, the master graph's host.
@@ -266,6 +282,15 @@ impl StoryData {
     }
 
     fn add(&mut self, e: Entry) {
+        if self.entities.contains_key(&e.id) {
+            return;
+        }
+        for (hash, name) in story::groups(&e.components) {
+            self.groups.entry(hash).or_default().push(e.id);
+            if !name.is_empty() {
+                self.group_names.entry(hash).or_insert(name);
+            }
+        }
         self.by_name.entry(e.name.to_ascii_lowercase()).or_insert(e.id);
         // Sector copies and global copies of one entity: keep the first.
         self.entities.entry(e.id).or_insert(e);
@@ -287,6 +312,7 @@ impl StoryData {
                         layer,
                         origin: Origin::Global,
                         components: c.child("Components").cloned().unwrap_or_default(),
+                        fields: story::kept_fields(c),
                     });
                 }
             } else if !c.is("Components") {

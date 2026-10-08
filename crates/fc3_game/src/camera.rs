@@ -339,12 +339,8 @@ fn auto_screenshot(
     let spawned = player.single().map(|p| !p.spawning).unwrap_or(true);
     // While converting on first launch, capture the progress screen itself.
     let loading = *game_state.get() == crate::menu::GameState::Loading;
-    let settled = loading
-        || spawned
-        && terrain.pending_count() == 0
-        && objects.pending_count() == 0
-        && vegetation.pending_count() == 0
-        && !heights.sectors.is_empty();
+    let settled =
+        loading || spawned && terrain.pending_count() == 0 && objects.pending_count() == 0 && vegetation.pending_count() == 0 && !heights.sectors.is_empty();
     if !*taken && ((settled && time.elapsed_secs() > args.settle) || time.elapsed_secs() > args.settle + 60.0) {
         *taken = true;
         info!("capturing screenshot to {path}");

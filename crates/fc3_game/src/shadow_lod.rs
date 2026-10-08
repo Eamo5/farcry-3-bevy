@@ -94,10 +94,7 @@ fn update_proxies(
             proxy.insert(r.clone());
         }
         let proxy = proxy.id();
-        commands
-            .entity(e)
-            .remove::<(ShadowSize, DistanceCulled)>()
-            .insert((NotShadowCaster, ShadowProxy { proxy, size: size.map(|s| s.0) }));
+        commands.entity(e).remove::<(ShadowSize, DistanceCulled)>().insert((NotShadowCaster, ShadowProxy { proxy, size: size.map(|s| s.0) }));
     }
     for (e, p) in &old {
         commands.entity(p.proxy).despawn();

@@ -133,7 +133,14 @@ fn draw_wheel(
             let name = inv.defs[slot.def].name.to_uppercase();
             let ammo = if slot.mag + slot.reserve > 0 { format!("\n{} / {}", slot.mag, slot.reserve) } else { String::new() };
             commands.spawn((
-                Node { position_type: PositionType::Absolute, left: Val::Percent(x - 8.0), top: Val::Percent(y - 3.0), width: Val::Percent(16.0), justify_content: JustifyContent::Center, ..default() },
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Percent(x - 8.0),
+                    top: Val::Percent(y - 3.0),
+                    width: Val::Percent(16.0),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
                 Text::new(format!("{name}{ammo}")),
                 TextFont { font_size: bevy::text::FontSize::Px(20.0), ..default() },
                 TextLayout::new(Justify::Center, bevy::text::LineBreak::WordBoundary),
@@ -146,7 +153,13 @@ fn draw_wheel(
     for (label, mut colour) in &mut labels {
         let lit = Some(label.0) == wheel.selected;
         let current = label.0 == inv.current;
-        colour.0 = if lit { Color::srgb(1.0, 0.75, 0.2) } else if current { Color::srgb(0.75, 0.9, 1.0) } else { Color::srgba(1.0, 1.0, 1.0, 0.8) };
+        colour.0 = if lit {
+            Color::srgb(1.0, 0.75, 0.2)
+        } else if current {
+            Color::srgb(0.75, 0.9, 1.0)
+        } else {
+            Color::srgba(1.0, 1.0, 1.0, 0.8)
+        };
     }
 }
 
@@ -173,7 +186,14 @@ fn wheel_test(
     let Ok(inv) = players.single() else { return };
     if *logged == 0 && t > 21.0 {
         *logged = 1;
-        info!("wheel-test: open {} selected {:?} speed {:.2} holding slot {} {}", wheel.open, wheel.selected, virt.relative_speed(), inv.current, inv.defs[inv.slots[inv.current].def].name);
+        info!(
+            "wheel-test: open {} selected {:?} speed {:.2} holding slot {} {}",
+            wheel.open,
+            wheel.selected,
+            virt.relative_speed(),
+            inv.current,
+            inv.defs[inv.slots[inv.current].def].name
+        );
     }
     if *logged == 1 && t > 23.0 {
         *logged = 2;

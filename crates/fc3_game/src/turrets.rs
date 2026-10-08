@@ -25,12 +25,12 @@ impl Plugin for TurretsPlugin {
             .add_systems(Startup, load_mounts)
             .add_systems(PreUpdate, (turret_test, gunner_test, armed_test).after(crate::controls::update_actions))
             .add_systems(
-            Update,
-            (spawn_turrets, arm_vehicles, follow_vehicles, man_turrets, recruit_gunners, crew_gunners, drive_gunners, heat, pose_guns)
-                .chain()
-                .after(crate::patrols::carry_crew)
-                .run_if(in_state(crate::menu::GameState::Playing)),
-        );
+                Update,
+                (spawn_turrets, arm_vehicles, follow_vehicles, man_turrets, recruit_gunners, crew_gunners, drive_gunners, heat, pose_guns)
+                    .chain()
+                    .after(crate::patrols::carry_crew)
+                    .run_if(in_state(crate::menu::GameState::Playing)),
+            );
     }
 }
 
@@ -43,7 +43,8 @@ struct Kind {
     arc_deg: f32,
 }
 
-const MOUNTS: [&str; 2] = [r"graphics\__fc3_graphics\_common\weapons\turret\tripod_01.xbg", r"graphics\__fc3_graphics\_common\weapons\turret\tripodmount_01.xbg"];
+const MOUNTS: [&str; 2] =
+    [r"graphics\__fc3_graphics\_common\weapons\turret\tripod_01.xbg", r"graphics\__fc3_graphics\_common\weapons\turret\tripodmount_01.xbg"];
 
 const KINDS: &[Kind] = &[
     Kind { prefix: "fc3/turret_ground360_dshk", mount: 0, gun: "DShK", arc_deg: 180.0 },
@@ -188,7 +189,8 @@ fn spawn_turrets(
             let base_yaw = (-fwd.x).atan2(-fwd.z);
             spawned.insert(e.id);
             let back = Quat::from_rotation_y(-base_yaw) * (gunner - pivot);
-            let turret = Turret { kind: k, spawn_id: e.id, base_yaw, pivot, back, yaw: base_yaw, pitch: 0.0, heat: 0.0, overheated: false, user: None, vehicle: None };
+            let turret =
+                Turret { kind: k, spawn_id: e.id, base_yaw, pivot, back, yaw: base_yaw, pitch: 0.0, heat: 0.0, overheated: false, user: None, vehicle: None };
             let root = commands.spawn((turret, Transform::from_translation(pivot).with_rotation(Quat::from_rotation_y(base_yaw)), Visibility::Visible)).id();
             // The gun on its mount, its grip over the pivot.
             let seat = Transform::from_translation(gun_offset(kind.gun));
@@ -300,7 +302,13 @@ pub(crate) fn man_turrets(
 }
 
 /// Firing heats the manned gun; too hot and it stops until it cools.
-fn heat(time: Res<Time>, mut last_shots: Local<u32>, mut gauge: ResMut<GunHeat>, mut players: Query<(Entity, &mut Inventory), With<Player>>, mut turrets: Query<&mut Turret>) {
+fn heat(
+    time: Res<Time>,
+    mut last_shots: Local<u32>,
+    mut gauge: ResMut<GunHeat>,
+    mut players: Query<(Entity, &mut Inventory), With<Player>>,
+    mut turrets: Query<&mut Turret>,
+) {
     let Ok((pe, mut inv)) = players.single_mut() else { return };
     let dt = time.delta_secs();
     let fired = inv.shots_fired.wrapping_sub(*last_shots);
@@ -373,7 +381,10 @@ fn turret_test(
     }
     let (on_at, shots, last_log) = &mut *state;
     let now = time.elapsed_secs();
-    let Some(t) = turrets.iter().filter(|t| t.vehicle.is_none()).min_by(|a, b| a.pivot.distance(pt.translation).total_cmp(&b.pivot.distance(pt.translation))) else { return };
+    let Some(t) = turrets.iter().filter(|t| t.vehicle.is_none()).min_by(|a, b| a.pivot.distance(pt.translation).total_cmp(&b.pivot.distance(pt.translation)))
+    else {
+        return;
+    };
     let Some(start) = *on_at else {
         if p.mounted.is_none() {
             // Behind the gun, then on.
@@ -468,7 +479,11 @@ fn recruit_gunners(
         let pick = npcs
             .iter()
             .filter(|(e, nt, n, h)| {
-                !h.dead && !taken.contains(e) && n.faction.hostile_to_player() && matches!(n.state, crate::npc::NpcState::Combat | crate::npc::NpcState::Search) && nt.translation.distance(spot) < RECRUIT
+                !h.dead
+                    && !taken.contains(e)
+                    && n.faction.hostile_to_player()
+                    && matches!(n.state, crate::npc::NpcState::Combat | crate::npc::NpcState::Search)
+                    && nt.translation.distance(spot) < RECRUIT
             })
             .min_by(|a, b| a.1.translation.distance(spot).total_cmp(&b.1.translation.distance(spot)));
         if let Some((e, _, _, _)) = pick {
@@ -603,7 +618,11 @@ fn drive_gunners(
         skip.extend(t.vehicle.map(|(v, b, _, _)| [v, b]).into_iter().flatten());
         let sees = !calm
             && sight.length() < 150.0
-            && Dir3::new(sight).ok().is_some_and(|d| spatial.cast_ray(eye, d, sight.length(), true, &SpatialQueryFilter::from_excluded_entities(skip.clone())).is_none_or(|h| h.entity == pe || h.distance > sight.length() - 0.6));
+            && Dir3::new(sight).ok().is_some_and(|d| {
+                spatial
+                    .cast_ray(eye, d, sight.length(), true, &SpatialQueryFilter::from_excluded_entities(skip.clone()))
+                    .is_none_or(|h| h.entity == pe || h.distance > sight.length() - 0.6)
+            });
         g.burst -= dt;
         if g.burst < -BURST.1 {
             g.burst = BURST.0;
@@ -620,7 +639,11 @@ fn drive_gunners(
         // at 30 m once it's settled.
         let settle = (g.engaged / 2.5).clamp(0.25, 1.0);
         let hit_chance = (npc.accuracy * 0.6 * settle * (1.0 - dist / 160.0)).clamp(0.03, 0.35);
-        let aim = if rng.f32() < hit_chance { target + Vec3::Y * rng.range(-0.3, 0.4) } else { target + Vec3::new(rng.range(-1.5, 1.5), rng.range(-0.8, 1.2), rng.range(-1.5, 1.5)) * (1.0 + dist / 50.0) };
+        let aim = if rng.f32() < hit_chance {
+            target + Vec3::Y * rng.range(-0.3, 0.4)
+        } else {
+            target + Vec3::new(rng.range(-1.5, 1.5), rng.range(-0.8, 1.2), rng.range(-1.5, 1.5)) * (1.0 + dist / 50.0)
+        };
         let dir = (aim - muzzle).normalize_or(t.forward());
         let Ok(d3) = Dir3::new(dir) else { continue };
         let filter = SpatialQueryFilter::from_excluded_entities(skip);
@@ -628,7 +651,14 @@ fn drive_gunners(
         let end = hit.map(|h| muzzle + dir * h.distance).unwrap_or(muzzle + dir * 400.0);
         match hit {
             Some(h) if h.entity == pe => {
-                damage.write(crate::combat::DamageEvent { target: pe, amount: GUNNER_DAMAGE, kind: crate::combat::DamageKind::Bullet, source: Some(muzzle), instigator: Some(e), headshot: false });
+                damage.write(crate::combat::DamageEvent {
+                    target: pe,
+                    amount: GUNNER_DAMAGE,
+                    kind: crate::combat::DamageKind::Bullet,
+                    source: Some(muzzle),
+                    instigator: Some(e),
+                    headshot: false,
+                });
             }
             _ if end.distance(pt.translation) < 50.0 => shot_fx.bullet_end(&mut rng, muzzle, dir, 400.0, hit.map(|h| (h.entity, h.distance, h.normal))),
             _ => {}
@@ -671,7 +701,10 @@ fn gunner_test(
     }
     let (step, last) = &mut *state;
     let now = time.elapsed_secs();
-    let Some(t) = turrets.iter().filter(|t| t.vehicle.is_none()).min_by(|a, b| a.pivot.distance(pt.translation).total_cmp(&b.pivot.distance(pt.translation))) else { return };
+    let Some(t) = turrets.iter().filter(|t| t.vehicle.is_none()).min_by(|a, b| a.pivot.distance(pt.translation).total_cmp(&b.pivot.distance(pt.translation)))
+    else {
+        return;
+    };
     if *step == 0 {
         *step = 1;
         let ahead = Vec3::new(-t.base_yaw.sin(), 0.0, -t.base_yaw.cos());

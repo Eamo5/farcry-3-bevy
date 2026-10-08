@@ -211,15 +211,19 @@ impl CharacterAssets {
         let settled = |id: bevy::asset::UntypedAssetId| crate::cache_assets::settled(server, id);
         self.human.ready(server)
             && self.looks.iter().all(|l| settled(l.weapon.id().untyped()))
-            && self.kits.iter().flat_map(|k| k.slots.iter().flatten()).all(|p| {
-                settled(p.model.id().untyped()) && p.swaps.iter().flat_map(|(_, c)| c).all(|m| settled(m.id().untyped()))
-            })
+            && self
+                .kits
+                .iter()
+                .flat_map(|k| k.slots.iter().flatten())
+                .all(|p| settled(p.model.id().untyped()) && p.swaps.iter().flat_map(|(_, c)| c).all(|m| settled(m.id().untyped())))
     }
 
     /// Indices of the looks for a faction and role (the faction's assault
     /// look if it has none for that role).
     pub fn looks_for(&self, faction: Faction, role: Role) -> Vec<usize> {
-        let pick = |r: Role| -> Vec<usize> { self.looks.iter().enumerate().filter(|(_, l)| l.faction == faction && l.role == r && !l.kits.is_empty()).map(|(i, _)| i).collect() };
+        let pick = |r: Role| -> Vec<usize> {
+            self.looks.iter().enumerate().filter(|(_, l)| l.faction == faction && l.role == r && !l.kits.is_empty()).map(|(i, _)| i).collect()
+        };
         let v = pick(role);
         if v.is_empty() {
             pick(Role::Assault)
@@ -229,33 +233,59 @@ impl CharacterAssets {
     }
 }
 
-fn load_character_assets(mut commands: Commands, server: Res<AssetServer>, info: Res<crate::data::CacheInfo>) {
+/// Starts loading a kit's part models and swap materials.
+pub fn load_kit(server: &AssetServer, k: kits::Kit) -> LoadedKit {
     let skinned = |path: &str| -> Handle<Fc3Model> {
         server.load_builder().with_settings(|s: &mut ModelSettings| s.skinned = true).load(skinned_cache_path(&cache::model_rel(path)))
     };
     let material = |path: &str| -> Handle<StandardMaterial> { server.load(cache_path(&cache::material_rel(path))) };
+    LoadedKit {
+        name: k.name,
+        slots: k
+            .slots
+            .into_iter()
+            .map(|s| {
+                s.parts
+                    .into_iter()
+                    .map(|p| KitPart {
+                        model: skinned(&p.model),
+                        weight: p.weight,
+                        swaps: p.swaps.iter().map(|sw| (material(&sw.default), sw.choices.iter().map(|c| material(&c.material)).collect())).collect(),
+                        def: p,
+                    })
+                    .collect()
+            })
+            .collect(),
+    }
+}
+
+impl LoadedKit {
+    /// Every part and swap loaded or failed.
+    pub fn settled(&self, server: &AssetServer) -> bool {
+        let settled = |id: bevy::asset::UntypedAssetId| crate::cache_assets::settled(server, id);
+        self.slots.iter().flatten().all(|p| settled(p.model.id().untyped()) && p.swaps.iter().flat_map(|(_, c)| c).all(|m| settled(m.id().untyped())))
+    }
+}
+
+/// Spawns a character dressed from one kit under `parent` (feet at
+/// `offset`), on the human clips; `weapon` goes in its right hand.
+pub fn spawn_kit_character(
+    commands: &mut Commands,
+    parent: Entity,
+    assets: &CharacterAssets,
+    kit: &LoadedKit,
+    models: &Assets<Fc3Model>,
+    weapon: Option<&Fc3Model>,
+    rng: &mut Rng,
+    offset: Vec3,
+) -> Option<Entity> {
+    let parts = dress(kit, models, rng);
+    spawn_dressed_rig(commands, parent, &parts, weapon, assets.human.clone(), offset, None)
+}
+
+fn load_character_assets(mut commands: Commands, server: Res<AssetServer>, info: Res<crate::data::CacheInfo>) {
     let text = std::fs::read_to_string(info.root.join(cache::KITS_REL)).unwrap_or_default();
-    let kits: Vec<LoadedKit> = kits::from_text(&text)
-        .into_iter()
-        .map(|k| LoadedKit {
-            name: k.name,
-            slots: k
-                .slots
-                .into_iter()
-                .map(|s| {
-                    s.parts
-                        .into_iter()
-                        .map(|p| KitPart {
-                            model: skinned(&p.model),
-                            weight: p.weight,
-                            swaps: p.swaps.iter().map(|sw| (material(&sw.default), sw.choices.iter().map(|c| material(&c.material)).collect())).collect(),
-                            def: p,
-                        })
-                        .collect()
-                })
-                .collect(),
-        })
-        .collect();
+    let kits: Vec<LoadedKit> = kits::from_text(&text).into_iter().map(|k| load_kit(&server, k)).collect();
     if kits.is_empty() {
         warn!("no enemy outfits in the cache ({}); re-run the converter", cache::KITS_REL);
     }
@@ -268,23 +298,14 @@ fn load_character_assets(mut commands: Commands, server: Res<AssetServer>, info:
             weapon: server.load(cache_path(&cache::model_rel(l.weapon))),
         })
         .collect();
-    let clips = CLIPS
-        .iter()
-        .map(|(k, p)| (*k, server.load(cache_path(&cache::anim_rel(&format!("{CLIP_ROOT}{p}"))))))
-        .collect();
+    let clips = CLIPS.iter().map(|(k, p)| (*k, server.load(cache_path(&cache::anim_rel(&format!("{CLIP_ROOT}{p}")))))).collect();
     let skeleton: Handle<Fc3Skeleton> = server.load(cache_path(&cache::skeleton_rel(MASTER_SKELETON)));
     let villager_clips = VILLAGER_CLIPS.map(|set| {
         let clips = set.iter().map(|(k, p)| (*k, server.load(cache_path(&cache::anim_rel(&format!("{CLIP_ROOT}{p}")))))).collect();
         Arc::new(ClipSet { skeleton: skeleton.clone(), clips })
     });
     let villager_kits = ["Villager_Men", "Local_Women"].map(|n| kits.iter().position(|k| k.name.eq_ignore_ascii_case(n)));
-    commands.insert_resource(CharacterAssets {
-        human: Arc::new(ClipSet { skeleton, clips }),
-        kits,
-        looks,
-        villager_kits,
-        villager_clips,
-    });
+    commands.insert_resource(CharacterAssets { human: Arc::new(ClipSet { skeleton, clips }), kits, looks, villager_kits, villager_clips });
 }
 
 /// Weighted pick of an index (uniform when every weight is zero).
@@ -324,6 +345,11 @@ pub struct CharacterRig {
 }
 
 impl CharacterRig {
+    /// A line for logs: node and joint counts, the clip and its time.
+    pub fn summary(&self) -> String {
+        format!("{} nodes, {} joints, {:?} at {:.2}s", self.nodes.len(), self.joints.len(), self.current, self.time)
+    }
+
     /// The clip playing and the time into it (wrapped as it plays).
     pub fn playing(&self) -> (AnimKind, f32) {
         (self.current, self.time)
@@ -438,7 +464,15 @@ pub struct AnimRequest {
 /// Returns the rig entity, or `None` if assets aren't loaded.
 /// Spawns a villager (`female` picks the women's kit) under `parent`,
 /// unarmed, on the villagers' clips.
-pub fn spawn_villager(commands: &mut Commands, parent: Entity, assets: &CharacterAssets, models: &Assets<Fc3Model>, female: bool, rng: &mut Rng, offset: Vec3) -> Option<Entity> {
+pub fn spawn_villager(
+    commands: &mut Commands,
+    parent: Entity,
+    assets: &CharacterAssets,
+    models: &Assets<Fc3Model>,
+    female: bool,
+    rng: &mut Rng,
+    offset: Vec3,
+) -> Option<Entity> {
     let i = usize::from(female);
     let kit = &assets.kits[assets.villager_kits[i]?];
     let parts = dress(kit, models, rng);
@@ -549,24 +583,14 @@ fn spawn_dressed_rig(
         return None;
     }
     // Converted character models already face -Z, Bevy's forward.
-    let rig_root = commands
-        .spawn((
-            Transform::from_translation(offset),
-            Visibility::Inherited,
-            ChildOf(parent),
-        ))
-        .id();
+    let rig_root = commands.spawn((Transform::from_translation(offset), Visibility::Inherited, ChildOf(parent))).id();
     // One joint entity per bone, bind-local transforms, parented like the skeleton.
     let joints: Vec<Entity> = base
         .iter()
         .map(|b| {
             commands
                 .spawn((
-                    Transform {
-                        translation: Vec3::from_array(b.translation),
-                        rotation: Quat::from_array(b.rotation),
-                        scale: Vec3::from_array(b.scale),
-                    },
+                    Transform { translation: Vec3::from_array(b.translation), rotation: Quat::from_array(b.rotation), scale: Vec3::from_array(b.scale) },
                     Visibility::Inherited,
                     ChildOf(rig_root),
                 ))
@@ -583,11 +607,7 @@ fn spawn_dressed_rig(
         let part = dressed.model;
         let Some(ibp) = part.inverse_bindposes.clone() else { continue };
         // Map this part's bones into the shared rig; its own root node maps to the rig's root bone.
-        let part_joints: Vec<Entity> = part
-            .bones
-            .iter()
-            .map(|b| by_hash.get(&b.name_hash).map(|&i| joints[i]).unwrap_or(joints[0]))
-            .collect();
+        let part_joints: Vec<Entity> = part.bones.iter().map(|b| by_hash.get(&b.name_hash).map(|&i| joints[i]).unwrap_or(joints[0])).collect();
         let Some(lod) = part.lods.first() else { continue };
         for p in &lod.parts {
             commands.spawn((
@@ -658,18 +678,41 @@ fn wrap(kind: AnimKind, t: f32, duration: f32) -> f32 {
     }
 }
 
+/// A rig played by a scene (`cinema`): this clip at this time, in place of
+/// what its `AnimRequest` asks.
+#[derive(Component, Clone)]
+pub struct ClipOverride {
+    pub clip: Handle<Fc3Clip>,
+    /// The skeleton the clip targets.
+    pub skeleton: Handle<Fc3Skeleton>,
+    pub time: f32,
+}
+
 #[allow(clippy::type_complexity)]
 pub fn animate_characters(
     time: Res<Time>,
     skeletons: Res<Assets<Fc3Skeleton>>,
     clips: Res<Assets<Fc3Clip>>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
-    mut rigs: Query<(&mut CharacterRig, &AnimRequest, &GlobalTransform, Option<&AnimRestart>)>,
+    mut rigs: Query<(&mut CharacterRig, &AnimRequest, &GlobalTransform, Option<&AnimRestart>, Option<&ClipOverride>)>,
     mut joints: Query<&mut Transform>,
 ) {
     let cam = cameras.iter().next().map(|c| c.translation()).unwrap_or(Vec3::ZERO);
     let dt = time.delta_secs();
-    for (mut rig, req, gt, restart) in &mut rigs {
+    for (mut rig, req, gt, restart, scene) in &mut rigs {
+        // A scene's clip, exactly where the scene is.
+        if let Some(o) = scene {
+            let (Some(skel), Some(clip)) = (skeletons.get(&o.skeleton), clips.get(&o.clip)) else { continue };
+            let pose = sample(&rig, &skel.0, &clip.0, o.time.clamp(0.0, clip.0.duration));
+            for (i, m) in pose.iter().enumerate() {
+                let Some(&j) = rig.joints.get(i) else { break };
+                if let Ok(mut t) = joints.get_mut(j) {
+                    let (s, r, tr) = Mat4::from_cols_array(m).to_scale_rotation_translation();
+                    *t = Transform { translation: tr, rotation: r, scale: s };
+                }
+            }
+            continue;
+        }
         // Replays: back to the start at once (each first-person shot).
         if let Some(r) = restart.filter(|r| r.0 != rig.restarts) {
             rig.restarts = r.0;
@@ -695,7 +738,13 @@ pub fn animate_characters(
         }
         // Distant characters pose at a lower rate.
         let dist = gt.translation().distance(cam);
-        let interval = if dist < 40.0 { 0.0 } else if dist < 100.0 { 1.0 / 20.0 } else { 1.0 / 8.0 };
+        let interval = if dist < 40.0 {
+            0.0
+        } else if dist < 100.0 {
+            1.0 / 20.0
+        } else {
+            1.0 / 8.0
+        };
         rig.accum += dt;
         if rig.accum < interval {
             continue;

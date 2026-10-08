@@ -1,10 +1,12 @@
 //! Command-line explorer for Far Cry 3 archives.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use fc3_formats::{find_install, Vfs};
+
+mod facial_cmd;
 
 fn filelist_dir() -> PathBuf {
     let exe_rel = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/filelists");
@@ -890,6 +892,100 @@ fn main() -> Result<()> {
                 println!("tex param {h:08X} x{c} e.g. {ex}");
             }
         }
+        "scene-bindings" => {
+            // A sequence's groups and what its scene entities bind them to:
+            // scene-bindings <sequence path part>
+            use fc3_formats::{cinema, story};
+            let part = args.get(1).context("usage: scene-bindings <sequence path part>")?.to_ascii_lowercase();
+            let root = fc3_formats::cache::default_cache_root();
+            let entities = story::from_bytes(&std::fs::read(root.join(story::ENTITIES_REL))?)?;
+            let by_id: HashMap<u64, &story::StoryEntity> = entities.iter().map(|e| (e.id, e)).collect();
+            let names = component_names();
+            for e in &entities {
+                let Some(c) = e.components.children.iter().find(|c| c.is("CCinematicSceneComponent")) else { continue };
+                let mut entries = Vec::new();
+                c.walk(&mut |o, _| {
+                    if let Some(p) = o.str_h(0xB1C2_6EBB).filter(|p| p.to_ascii_lowercase().contains(&part)) {
+                        entries.push((p.to_ascii_lowercase(), o.clone()));
+                    }
+                });
+                for (path, entry) in entries {
+                    println!("scene {} ({}) plays {path}", e.name, e.id);
+                    let mut binds: BTreeMap<u64, u64> = BTreeMap::new();
+                    entry.walk(&mut |b, _| {
+                        if let (Some(entity), Some(track)) = (b.u64("EntityID"), b.u64("TrackID")) {
+                            binds.insert(track, entity);
+                        }
+                    });
+                    let seq = std::fs::read_to_string(root.join(cinema::sequence_rel(&path))).ok().and_then(|t| cinema::Sequence::from_text(&t));
+                    for g in seq.iter().flat_map(|s| &s.groups) {
+                        let kinds: BTreeSet<String> =
+                            g.clips.iter().map(|c| format!("{:?}", c.kind).split([' ', '{', '(']).next().unwrap_or_default().to_string()).collect();
+                        let bound = binds.get(&g.uid).map(|id| match by_id.get(id) {
+                            Some(b) => {
+                                let comps: Vec<String> = b
+                                    .components
+                                    .children
+                                    .iter()
+                                    .map(|c| names.get(c.name_hash))
+                                    .filter(|n| n.contains("Graphic") || n.contains("Pawn") || n.contains("Vehicle"))
+                                    .collect();
+                                format!("{} [{}] {}", b.name, b.class, comps.join(" "))
+                            }
+                            None => format!("{id} (not a story entity)"),
+                        });
+                        println!(
+                            "  group {} {:?} '{}' archetype {:x}: {kinds:?} -> {}",
+                            g.uid,
+                            g.kind,
+                            g.name,
+                            g.archetype,
+                            bound.unwrap_or_else(|| "unbound".into())
+                        );
+                    }
+                }
+            }
+        }
+        "facial-voice" => {
+            // How many spoken lines have a lip-sync clip under the engine's
+            // naming, with a few found and missing: facial-voice
+            let lines = fc3_formats::oasis::speech_lengths(&vfs.read(r"languages\english\speechlength.bin")?)?;
+            let mut ids: Vec<u32> = lines.keys().copied().collect();
+            ids.sort();
+            let found: Vec<u32> = ids.iter().copied().filter(|&id| vfs.exists(&fc3_formats::facial::voice_clip_path(id))).collect();
+            println!("{} lines, {} with a clip; found e.g. {:x?}", ids.len(), found.len(), &found[..found.len().min(5)]);
+            let unnamed = vfs.index.keys().filter(|h| vfs.name_of(**h).is_none()).count();
+            println!("{unnamed} unnamed archive entries");
+        }
+        "hkx-classes" => {
+            // How often each Havok class appears in the models' .hkx files
+            // (files, objects): hkx-classes [substr]
+            let filter = args.get(1).map(|s| s.to_ascii_lowercase());
+            let mut by: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+            let mut files = 0;
+            for n in vfs.names.values().filter(|n| n.ends_with(".xbg")) {
+                if filter.as_ref().is_some_and(|f| !n.contains(f.as_str())) {
+                    continue;
+                }
+                let Ok(bytes) = vfs.read(&format!("{}.hkx", &n[..n.len() - 4])) else { continue };
+                let Ok(classes) = fc3_formats::havok::object_classes(&bytes) else { continue };
+                files += 1;
+                let mut seen = BTreeSet::new();
+                for c in classes {
+                    let e = by.entry(c.clone()).or_default();
+                    e.1 += 1;
+                    if seen.insert(c) {
+                        e.0 += 1;
+                    }
+                }
+            }
+            println!("{files} files");
+            let mut rows: Vec<_> = by.into_iter().collect();
+            rows.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+            for (c, (f, o)) in rows {
+                println!("{f:6} files {o:7} objects  {c}");
+            }
+        }
         "hkx-surfaces" => {
             // Collision surfaces of models with an .hkx: hkx-surfaces [substr] [--each]
             let filter = args.get(1).filter(|a| !a.starts_with("--")).map(|s| s.to_ascii_lowercase());
@@ -936,6 +1032,314 @@ fn main() -> Result<()> {
                 }
             }
             println!("{models} models, {mixed} with mixed walkable surfaces ({mixed_up_tris} non-vertical minority tris), {errors} errors");
+        }
+        "hkx-collision" => {
+            // Full Havok collision of models with an .hkx, against their render
+            // bounds (both Bevy space): hkx-collision [substr] [--survey] [--worst N]
+            use rayon::prelude::*;
+            let filter = args.get(1).filter(|a| !a.starts_with("--")).map(|s| s.to_ascii_lowercase());
+            let survey = args.iter().any(|a| a == "--survey");
+            let worst: usize = args.iter().position(|a| a == "--worst").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(25);
+            let mut names: Vec<&String> =
+                vfs.names.values().filter(|n| n.ends_with(".xbg") && filter.as_ref().is_none_or(|f| n.contains(f.as_str()))).collect();
+            names.sort();
+            names.dedup();
+            let to_bevy = |(mn, mx): ([f32; 3], [f32; 3])| ([mn[0], mn[2], -mx[1]], [mx[0], mx[2], -mn[1]]);
+            struct Row {
+                name: String,
+                geo: Option<fc3_formats::havok::CollisionGeometry>,
+                error: Option<String>,
+                render: Option<([f32; 3], [f32; 3])>,
+            }
+            let rows: Vec<Row> = names
+                .par_iter()
+                .filter_map(|n| {
+                    let hkx = vfs.read(&format!("{}.hkx", &n[..n.len() - 4])).ok()?;
+                    let render = vfs.read(n).ok().and_then(|b| fc3_formats::mesh::decode(&b, 1).ok()).map(|m| (m.bbox_min, m.bbox_max));
+                    Some(match fc3_formats::havok::collision_geometry(&hkx) {
+                        Ok(g) => Row { name: n.to_string(), geo: Some(g), error: None, render },
+                        Err(e) => Row { name: n.to_string(), geo: None, error: Some(format!("{e:#}")), render },
+                    })
+                })
+                .collect();
+            // How far the collision box reaches past the render box, and how much
+            // of the render box it leaves out (largest per side, metres).
+            let compare = |h: ([f32; 3], [f32; 3]), r: ([f32; 3], [f32; 3])| {
+                let over = (0..3).map(|k| (r.0[k] - h.0[k]).max(h.1[k] - r.1[k])).fold(0.0f32, f32::max);
+                let short = (0..3).map(|k| (h.0[k] - r.0[k]).max(r.1[k] - h.1[k])).fold(0.0f32, f32::max);
+                let diag = (0..3).map(|k| (r.1[k] - r.0[k]).powi(2)).sum::<f32>().sqrt();
+                (over, short, diag)
+            };
+            let fmt3 = |v: [f32; 3]| format!("({:.2}, {:.2}, {:.2})", v[0], v[1], v[2]);
+            let (mut empty, mut errors, mut detail_only, mut agree, mut bad_over, mut bad_short) = (0, 0, 0, 0, 0, 0);
+            let mut tris = 0usize;
+            let mut shapes: BTreeMap<String, usize> = BTreeMap::new();
+            let mut unhandled: BTreeMap<String, usize> = BTreeMap::new();
+            let mut over_buckets = [0usize; 4];
+            let mut flagged: Vec<(f32, String)> = Vec::new();
+            for r in &rows {
+                let Some(g) = &r.geo else {
+                    errors += 1;
+                    if !survey {
+                        println!("{}: error {}", r.name, r.error.as_deref().unwrap_or(""));
+                    }
+                    continue;
+                };
+                tris += g.triangles.len();
+                for (c, n) in &g.shapes {
+                    *shapes.entry(c.clone()).or_default() += n;
+                }
+                for (c, n) in &g.unhandled {
+                    *unhandled.entry(c.clone()).or_default() += n;
+                }
+                detail_only += (g.detail_bodies > 0) as usize;
+                let Some(h) = g.bounds().map(to_bevy) else {
+                    empty += 1;
+                    if !survey {
+                        println!("{}: no collision triangles; bodies {:?}", r.name, g.body_names);
+                    }
+                    continue;
+                };
+                let verdict = r.render.map(|rb| {
+                    let (over, short, diag) = compare(h, rb);
+                    let bucket = [0.1, 0.5, 2.0].iter().position(|&t| over < t).unwrap_or(3);
+                    over_buckets[bucket] += 1;
+                    // Out past the render box: misplaced. Far short of it on a side:
+                    // possibly missing pieces (or a model whose bounds include
+                    // destruction debris or far-off helpers).
+                    let is_over = over > 0.5 + 0.1 * diag;
+                    let is_short = short > 1.0 + 0.5 * diag;
+                    bad_over += is_over as usize;
+                    bad_short += is_short as usize;
+                    if is_over || is_short {
+                        flagged.push((over.max(short), format!("{} over {over:.2} short {short:.2} (render diag {diag:.1})", r.name)));
+                    } else {
+                        agree += 1;
+                    }
+                    (over, short)
+                });
+                if !survey {
+                    println!(
+                        "{}\n  bodies {} of {} ({} detail) {:?}\n  shapes {:?}{}\n  {} tris, {} verts\n  collision {} .. {}\n  render    {}{}",
+                        r.name,
+                        g.bodies,
+                        g.body_names.len(),
+                        g.detail_bodies,
+                        g.body_names.iter().map(|(n, t)| format!("{}{n}", if *t { "+" } else { "-" })).collect::<Vec<_>>(),
+                        g.shapes,
+                        if g.unhandled.is_empty() { String::new() } else { format!("\n  UNHANDLED {:?}", g.unhandled) },
+                        g.triangles.len(),
+                        g.positions.len(),
+                        fmt3(h.0),
+                        fmt3(h.1),
+                        r.render.map_or("?".to_string(), |rb| format!("{} .. {}", fmt3(rb.0), fmt3(rb.1))),
+                        verdict.map_or(String::new(), |(o, s)| format!("\n  over {o:.2} short {s:.2}")),
+                    );
+                }
+            }
+            println!(
+                "{} files: {} with collision ({} using detailed bodies), {} without triangles, {} errors; {tris} triangles",
+                rows.len(),
+                rows.len() - empty - errors,
+                detail_only,
+                empty,
+                errors
+            );
+            println!(
+                "bounds vs render: {agree} agree, {bad_over} reach past the render box, {bad_short} fall well short; overhang <0.1 m {}, <0.5 m {}, <2 m {}, more {}",
+                over_buckets[0], over_buckets[1], over_buckets[2], over_buckets[3]
+            );
+            println!("shapes {shapes:?}");
+            println!("unhandled {unhandled:?}");
+            // What the game leaves non-solid whatever the collision: models drawn
+            // as foliage, ones too small to block (from the converted cache),
+            // and ones made only of the no-impact material where the render mesh
+            // has nothing solid.
+            let root = fc3_formats::cache::default_cache_root();
+            let names = vfs.read(fc3_formats::havok::LOGIC_MATERIALS).ok().and_then(|b| fc3_formats::havok::logic_material_names(&b).ok()).unwrap_or_default();
+            let no_impact = names.iter().position(|n| n.to_ascii_lowercase().ends_with("noimpact")).map(|i| i as u32);
+            let (mut foliage, mut small, mut cached, mut soft) = (Vec::new(), 0, 0, Vec::new());
+            for r in rows.iter().filter(|r| r.geo.as_ref().is_some_and(|g| !g.triangles.is_empty())) {
+                let Some(m) =
+                    std::fs::read(root.join(fc3_formats::cache::model_rel(&r.name))).ok().and_then(|b| fc3_formats::cache::CachedModel::from_bytes(&b).ok())
+                else {
+                    continue;
+                };
+                cached += 1;
+                let palette = r.geo.as_ref().map(|g| g.palette.as_slice()).unwrap_or(&[]);
+                if !palette.is_empty() && palette.iter().all(|&l| Some(l) == no_impact) && m.collision_indices.is_empty() {
+                    soft.push(r.name.rsplit('\\').next().unwrap_or(""));
+                }
+                let flag = |p: &fc3_formats::cache::CachedPart| m.material_flags.get(p.material as usize).copied().unwrap_or(0);
+                let parts = m.lods.first().map(|l| l.parts.as_slice()).unwrap_or(&[]);
+                if !parts.is_empty() && parts.iter().all(|p| flag(p) & fc3_formats::cache::mat_flags::VEGETATION != 0) {
+                    foliage.push(r.name.as_str());
+                }
+                let half: Vec<f32> = (0..3).map(|k| (m.aabb_max[k] - m.aabb_min[k]) * 0.5).collect();
+                small += ((half.iter().map(|h| h * h).sum::<f32>()).sqrt() < 0.35) as usize;
+            }
+            println!(
+                "of {cached} converted: {} drawn as foliage {:?}, {small} under the collider size floor, {} no-impact only with no render collision {:?}",
+                foliage.len(),
+                &foliage[..foliage.len().min(12)],
+                soft.len(),
+                &soft[..soft.len().min(12)]
+            );
+            if survey {
+                flagged.sort_by(|a, b| b.0.total_cmp(&a.0));
+                for (_, line) in flagged.iter().take(worst) {
+                    println!("  {line}");
+                }
+            }
+        }
+        "col-ray" => {
+            // What a ray from Dunia (x, y, z) along (dx, dy, dz) hits among the placed
+            // models' colliders, from the converted cache: the render-derived mesh
+            // and the game's own (.col): col-ray <x> <y> <z> <dx> <dy> <dz> [length]
+            use fc3_formats::cache;
+            let num = |i: usize| args.get(i).and_then(|v| v.parse::<f32>().ok());
+            let (Some(x), Some(y), Some(z), Some(dx), Some(dy), Some(dz)) = (num(1), num(2), num(3), num(4), num(5), num(6)) else {
+                bail!("usage: col-ray <x> <y> <z> <dx> <dy> <dz> [length]")
+            };
+            let length = num(7).unwrap_or(10.0);
+            let root = cache::default_cache_root();
+            let centre = [x, z, -y];
+            let dir = {
+                let d = [dx, dz, -dy];
+                let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-9);
+                d.map(|e| e / n)
+            };
+            let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+            let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+            let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+            // Möller–Trumbore, both sides.
+            let hit = |a: [f32; 3], b: [f32; 3], c: [f32; 3]| -> Option<f32> {
+                let (e1, e2) = (sub(b, a), sub(c, a));
+                let p = cross(dir, e2);
+                let det = dot(e1, p);
+                if det.abs() < 1e-9 {
+                    return None;
+                }
+                let s = sub(centre, a);
+                let u = dot(s, p) / det;
+                let q = cross(s, e1);
+                let v = dot(dir, q) / det;
+                let t = dot(e2, q) / det;
+                (u >= 0.0 && v >= 0.0 && u + v <= 1.0 && t >= 0.0 && t <= length).then_some(t)
+            };
+            let rotate = |q: [f32; 4], v: [f32; 3]| {
+                let (u, w) = ([q[0], q[1], q[2]], q[3]);
+                let t = cross(u, v).map(|e| e * 2.0);
+                let ut = cross(u, t);
+                [0, 1, 2].map(|k| v[k] + w * t[k] + ut[k])
+            };
+            let here = fc3_formats::terrain::SectorCoord::containing(x, y);
+            for sy in -1..=1 {
+                for sx in -1..=1 {
+                    let s = fc3_formats::terrain::SectorCoord::new(here.x + sx, here.y + sy);
+                    let Some(sector) = std::fs::read(root.join(cache::sector_rel(s.id()))).ok().and_then(|b| cache::CachedSector::from_bytes(&b).ok()) else {
+                        continue;
+                    };
+                    for p in &sector.placements {
+                        let d = ((p.translation[0] - centre[0]).powi(2) + (p.translation[2] - centre[2]).powi(2)).sqrt();
+                        if d > 60.0 + length {
+                            continue;
+                        }
+                        let rel = &sector.models[p.model as usize];
+                        let stem = rel.trim_start_matches("models/").trim_end_matches(".fcm");
+                        let place = |v: [f32; 3]| {
+                            let r = rotate(p.rotation, v.map(|e| e * p.scale));
+                            [0, 1, 2].map(|k| r[k] + p.translation[k])
+                        };
+                        let first = |positions: &[[f32; 3]], indices: &[u32]| {
+                            indices
+                                .chunks_exact(3)
+                                .filter_map(|t| hit(place(positions[t[0] as usize]), place(positions[t[1] as usize]), place(positions[t[2] as usize])))
+                                .reduce(f32::min)
+                        };
+                        let model = std::fs::read(root.join(rel)).ok().and_then(|b| cache::CachedModel::from_bytes(&b).ok());
+                        let render = model.as_ref().and_then(|m| first(&m.collision_positions, &m.collision_indices));
+                        let own = u64::from_str_radix(stem, 16)
+                            .ok()
+                            .and_then(|h| std::fs::read(root.join(cache::collision_rel_of_hash(h))).ok())
+                            .and_then(|b| cache::CachedCollision::from_bytes(&b).ok());
+                        let havok = own.as_ref().map(|c| first(&c.positions, &c.indices));
+                        if render.is_some() || havok.flatten().is_some() {
+                            let name = sector.entities.get(p.entity as usize).map_or("?", |e| e.name.as_str());
+                            let radius = model.as_ref().map_or(0.0, |m| (0..3).map(|k| ((m.aabb_max[k] - m.aabb_min[k]) * 0.5).powi(2)).sum::<f32>().sqrt());
+                            let fmt = |t: Option<f32>| t.map_or("-".to_string(), |t| format!("{t:.2} m"));
+                            println!("{name}  {rel}  radius {radius:.2}: render mesh {}, own {}", fmt(render), havok.map_or("(none)".to_string(), fmt));
+                        }
+                    }
+                }
+            }
+        }
+        "col-near" => {
+            // Placed models whose collision reaches into a box round Dunia (x, y, z),
+            // from the converted cache: render-derived and the game's own (.col)
+            // triangles touching it: col-near <x> <y> <z> [half size, m]
+            use fc3_formats::cache;
+            let num = |i: usize| args.get(i).and_then(|v| v.parse::<f32>().ok());
+            let (Some(x), Some(y), Some(z)) = (num(1), num(2), num(3)) else { bail!("usage: col-near <x> <y> <z> [half]") };
+            let half = num(4).unwrap_or(1.0);
+            let root = cache::default_cache_root();
+            let centre = [x, z, -y];
+            let rotate = |q: [f32; 4], v: [f32; 3]| {
+                let (u, w) = ([q[0], q[1], q[2]], q[3]);
+                let c = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+                let t = c(u, v).map(|e| e * 2.0);
+                let ut = c(u, t);
+                [0, 1, 2].map(|k| v[k] + w * t[k] + ut[k])
+            };
+            let here = fc3_formats::terrain::SectorCoord::containing(x, y);
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let s = fc3_formats::terrain::SectorCoord::new(here.x + dx, here.y + dy);
+                    let Some(sector) = std::fs::read(root.join(cache::sector_rel(s.id()))).ok().and_then(|b| cache::CachedSector::from_bytes(&b).ok()) else {
+                        continue;
+                    };
+                    for p in &sector.placements {
+                        let d = ((p.translation[0] - centre[0]).powi(2) + (p.translation[2] - centre[2]).powi(2)).sqrt();
+                        if d > 60.0 {
+                            continue;
+                        }
+                        let rel = &sector.models[p.model as usize];
+                        let stem = rel.trim_start_matches("models/").trim_end_matches(".fcm");
+                        let place = |v: [f32; 3]| {
+                            let r = rotate(p.rotation, v.map(|e| e * p.scale));
+                            [0, 1, 2].map(|k| r[k] + p.translation[k])
+                        };
+                        let touching = |positions: &[[f32; 3]], indices: &[u32]| {
+                            indices
+                                .chunks_exact(3)
+                                .filter(|t| {
+                                    let c: Vec<[f32; 3]> = t.iter().map(|&i| place(positions[i as usize])).collect();
+                                    (0..3).all(|k| {
+                                        let lo = c.iter().map(|v| v[k]).fold(f32::MAX, f32::min);
+                                        let hi = c.iter().map(|v| v[k]).fold(f32::MIN, f32::max);
+                                        lo <= centre[k] + half && hi >= centre[k] - half
+                                    })
+                                })
+                                .count()
+                        };
+                        let model = std::fs::read(root.join(rel)).ok().and_then(|b| cache::CachedModel::from_bytes(&b).ok());
+                        let render = model.as_ref().map_or(0, |m| touching(&m.collision_positions, &m.collision_indices));
+                        let own = u64::from_str_radix(stem, 16)
+                            .ok()
+                            .and_then(|h| std::fs::read(root.join(cache::collision_rel_of_hash(h))).ok())
+                            .and_then(|b| cache::CachedCollision::from_bytes(&b).ok());
+                        let havok = own.as_ref().map(|c| touching(&c.positions, &c.indices));
+                        if render > 0 || havok.is_some_and(|n| n > 0) {
+                            let name = sector.entities.get(p.entity as usize).map_or("?", |e| e.name.as_str());
+                            let radius = model.as_ref().map_or(0.0, |m| (0..3).map(|k| ((m.aabb_max[k] - m.aabb_min[k]) * 0.5).powi(2)).sum::<f32>().sqrt());
+                            println!(
+                                "{d:5.1} m  {name}  {rel}  radius {radius:.2}  render tris {render}  own {}",
+                                havok.map_or("none".to_string(), |n| format!("tris {n}"))
+                            );
+                        }
+                    }
+                }
+            }
         }
         "water-headers" => {
             // Every sector's water fields: water-headers [level] -> id x y f34 f38 level min max
@@ -1103,7 +1507,8 @@ fn main() -> Result<()> {
                     for e in ents {
                         let d = ((e.pos[0] - x).powi(2) + (e.pos[1] - y).powi(2)).sqrt();
                         if d <= r {
-                            println!("{d:6.1}  {:28} {}", e.class, e.name);
+                            let mesh = e.meshes.first().map_or(String::new(), |m| format!("  {m}"));
+                            println!("{d:6.1}  {:28} {} at ({:.1}, {:.1}, {:.1}){mesh}", e.class, e.name, e.pos[0], e.pos[1], e.pos[2]);
                         }
                     }
                 }
@@ -1652,6 +2057,207 @@ fn main() -> Result<()> {
                 println!("  {c}");
             }
         }
+        "story-bytes" => {
+            // Finds story entities whose components hold a u32 or u64 value
+            // (hex): story-bytes <hex>
+            use fc3_formats::story;
+            let hex = args.get(1).context("usage: story-bytes <hex>")?;
+            let v = u64::from_str_radix(hex.trim_start_matches("0x").trim_start_matches('#'), 16)?;
+            let needle: Vec<u8> = if v <= u32::MAX as u64 { (v as u32).to_le_bytes().to_vec() } else { v.to_le_bytes().to_vec() };
+            let root = fc3_formats::cache::default_cache_root();
+            let entities = story::from_bytes(&std::fs::read(root.join(story::ENTITIES_REL))?)?;
+            let names = component_names();
+            for e in &entities {
+                let mut hits = Vec::new();
+                e.components.walk(&mut |o, _| {
+                    for (h, b) in &o.fields {
+                        if b.windows(needle.len()).any(|w| w == needle.as_slice()) {
+                            hits.push(format!("{}.{}", names.get(o.name_hash), names.get(*h)));
+                        }
+                    }
+                });
+                if !hits.is_empty() {
+                    println!("{} {} [{}] layer {:#x}: {}", e.id, e.name, e.class, e.layer, hits.join(" "));
+                }
+            }
+        }
+        "story-run" => {
+            // Boots the story headless from the cache and plays it with a
+            // stand-in world: cinematics, sounds and message boxes finish on
+            // timers, teleports move the player, and when nothing happens for
+            // a while the player steps into a trigger a script waits on.
+            // story-run [seconds] [console command [parameter]]
+            use fc3_story::{Arg, Command, Story, View};
+            let root = fc3_formats::cache::default_cache_root();
+            let seconds: f32 = args.get(1).map(|s| s.parse()).transpose()?.unwrap_or(10.0);
+            let mut story = Story::open(&root)?;
+            let data = story.data();
+            println!(
+                "{} entities, {} blocks, {} layers, {} strings; master on {:?}",
+                data.entities.len(),
+                data.blocks.len(),
+                data.layers.len(),
+                data.strings.len(),
+                data.root
+            );
+            if let Ok(p) = std::env::var("FC3_STORY_TRACE") {
+                story.domino().trace_calls(&p).map_err(|e| anyhow::anyhow!("{e}"))?;
+            }
+            // FC3_STORY_LOAD=<file>: from a kept checkpoint.
+            match std::env::var("FC3_STORY_LOAD").ok().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| fc3_story::save::StorySave::from_text(&t)) {
+                Some(save) => story.boot_saved(&save),
+                None => story.boot(),
+            }
+            if let Some(cmd) = args.get(2) {
+                let ok = story.console(cmd, args.get(3).map(String::as_str).unwrap_or(""));
+                println!("console {cmd}: {}", if ok { "ran" } else { "not registered" });
+            }
+            #[derive(Debug)]
+            enum Due {
+                Sequence(String, String, &'static str),
+                Sound(u64),
+                Answer(u64),
+                Group(u64, &'static str, u64),
+            }
+            let mut due: Vec<(f32, Due)> = Vec::new();
+            let mut view = View { time_of_day: 12.0, ..View::default() };
+            let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+            let mut unknown: BTreeMap<String, usize> = BTreeMap::new();
+            let (mut t, mut quiet, mut shown) = (0.0f32, 0.0f32, 0usize);
+            let mut used: std::collections::HashSet<(u64, String)> = Default::default();
+            let mut pending = story.take_commands();
+            loop {
+                for l in story.take_log() {
+                    if !l.starts_with("console:") {
+                        println!("  [{t:6.1}s] log: {l}");
+                    }
+                }
+                for u in story.take_unknown_calls() {
+                    *unknown.entry(u.split('(').next().unwrap_or_default().to_string()).or_default() += 1;
+                }
+                for c in pending.drain(..) {
+                    let text = format!("{c:?}");
+                    let kind = match &c {
+                        Command::Native { name, .. } => name.clone(),
+                        other => format!("{other:?}").split(['(', ' ', '{']).next().unwrap_or_default().to_string(),
+                    };
+                    *counts.entry(kind).or_default() += 1;
+                    if !matches!(c, Command::Layer { .. } | Command::Print(_) | Command::Dialog { .. }) {
+                        quiet = 0.0;
+                        if shown < 400 {
+                            println!("  [{t:6.1}s] {text}");
+                            shown += 1;
+                        }
+                    }
+                    // A character gets to its contextual action's spot.
+                    if let Command::Action { pawn, action: Some(ca) } = &c {
+                        due.push((t + 3.0, Due::Group(*pawn, "CA_Start", *ca)));
+                    }
+                    if let Command::Native { name, args } = &c {
+                        let a = |i: usize| args.get(i).cloned().unwrap_or_default();
+                        match name.as_str() {
+                            "Sequence" => match a(0).as_str() {
+                                "stop" => due.push((t, Due::Sequence(a(1), a(2), "Stopped"))),
+                                "skip" => due.push((t, Due::Sequence(a(1), a(2), "Skipped"))),
+                                "pause" => {}
+                                _ => {
+                                    due.push((t, Due::Sequence(a(1), a(2), "Started")));
+                                    due.push((t + 3.0, Due::Sequence(a(1), a(2), "Finished")));
+                                }
+                            },
+                            "PlaySound" => due.push((t + 1.0, Due::Sound(a(0).parse().unwrap_or(0)))),
+                            "CAPI_Entity.TeleportEntity" => {
+                                if let Some(p) = a(1).parse().ok().and_then(|d| data.position(d)) {
+                                    view.player = p;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if t >= seconds {
+                    break;
+                }
+                // Due host events.
+                due.sort_by(|a, b| a.0.total_cmp(&b.0));
+                while due.first().is_some_and(|d| d.0 <= t) {
+                    match due.remove(0).1 {
+                        Due::Sequence(scene, file, event) => story.sequence_event(&scene, &file, event, None),
+                        Due::Sound(id) => story.sound_finished(id, 0.0),
+                        Due::Answer(id) => story.box_answered(id, true),
+                        Due::Group(pawn, _event, ca) => {
+                            if let Some(p) = data.position(ca) {
+                                view.spawned.insert(pawn, fc3_story::Live { pos: p, alive: true, health: 1.0, ai_state: 0 });
+                            }
+                            story.action_started(pawn);
+                        }
+                    }
+                }
+                // Nothing for a while: walk into a trigger a script waits on.
+                if quiet > 4.0 && due.is_empty() {
+                    let watched = story.watched_triggers();
+                    if let Some((id, event, point, _)) = watched.iter().find(|w| w.3 && !used.contains(&(w.0, w.1.clone()))) {
+                        println!("  [{t:6.1}s] autopilot: {event} {} ({id})", data.name_of(*id).unwrap_or("?"));
+                        used.insert((*id, event.clone()));
+                        view.player = *point;
+                        if event == "Use" {
+                            story.entity_event(*id, "Use", vec![Arg::id(fc3_story::PLAYER)]);
+                        }
+                        quiet = 0.0;
+                    } else if quiet > 30.0 {
+                        println!("  [{t:6.1}s] stalled; watched triggers: {watched:?}");
+                        if std::env::var("FC3_STORY_WAITING").is_ok() {
+                            for w in story.waiting_on() {
+                                println!("    waiting on {w}");
+                            }
+                        }
+                        break;
+                    }
+                }
+                // FC3_STORY_RELOAD_AT=<s>: save there and carry on from the
+                // save in a fresh story (the reload path).
+                if let Some(at) = std::env::var("FC3_STORY_RELOAD_AT").ok().and_then(|v| v.parse::<f32>().ok()) {
+                    if t < at && t + 0.1 >= at {
+                        let saved = story.save();
+                        let text = saved.to_text();
+                        println!(
+                            "  [{t:6.1}s] reload: {} lines, {} missions, {} layers, {} globals",
+                            text.lines().count(),
+                            saved.missions.len(),
+                            saved.layers.len(),
+                            saved.persistent.len()
+                        );
+                        let back = fc3_story::save::StorySave::from_text(&text).context("save text")?;
+                        story = Story::open(&root)?;
+                        story.boot_saved(&back);
+                        for (name, state) in story.missions().into_iter().filter(|m| m.1 != "Locked") {
+                            println!("  [{t:6.1}s] after reload: mission {name}: {state}");
+                        }
+                    }
+                }
+                pending = story.update(0.1, view.clone());
+                t += 0.1;
+                quiet += 0.1;
+            }
+            println!("commands: {counts:#?}");
+            for (name, state) in story.missions().into_iter().filter(|m| m.1 != "Locked") {
+                println!("mission {name}: {state}");
+            }
+            for (name, state) in story.blocks() {
+                println!("block {name}: {state}");
+            }
+            println!("{} layers present, {} script errors", story.present_layers().len(), story.errors());
+            let mut u: Vec<(usize, String)> = unknown.into_iter().map(|(k, v)| (v, k)).collect();
+            u.sort_by(|a, b| b.cmp(a));
+            println!("natives not provided ({}):", u.len());
+            for (n, k) in u {
+                println!("  {n:6} {k}");
+            }
+        }
+        // Facial clips, face rigs and the definition table: facial <path> [--rig <.dpdx>] [--at <s>]
+        "facial" => facial_cmd::run(&vfs, &args)?,
+        // Parses every named .dpax and .dpdx: facial-survey [path substring]
+        "facial-survey" => facial_cmd::survey(&vfs, &args)?,
         "story-entities" => {
             // Searches the cache's story entity table by name, class, id,
             // layer or component: story-entities [text] (no text: a summary)
@@ -1683,10 +2289,87 @@ fn main() -> Result<()> {
                             println!("{} {:?} layer {:#x} {} [{}] at {:?}: {}", e.id, e.source, e.layer, e.name, e.class, e.pos, comps.join(" "));
                             if args.get(2).map(String::as_str) == Some("dump") {
                                 let mut s = String::new();
+                                fc3_formats::fcb::dump(&e.fields, &names, 16, &mut s);
                                 fc3_formats::fcb::dump(&e.components, &names, 16, &mut s);
                                 println!("{s}");
+                                if let Some(raw) = e.fields.field("hidShapePoints") {
+                                    let f = |c: &[u8], i: usize| f32::from_le_bytes(c[i * 4..i * 4 + 4].try_into().unwrap());
+                                    for c in raw.get(4..).unwrap_or_default().chunks_exact(12) {
+                                        println!("  point {:9.2} {:9.2} {:7.2}", f(c, 0), f(c, 1), f(c, 2));
+                                    }
+                                }
                             }
                         }
+                    }
+                }
+            }
+        }
+        "ca-moves" => {
+            // How the story's contextual actions' moves find clips:
+            // ca-moves [show (the unmatched) | write (the cache's table)]
+            use fc3_formats::{moves, story};
+            let root = fc3_formats::cache::default_cache_root();
+            let entities = story::from_bytes(&std::fs::read(root.join(story::ENTITIES_REL))?)?;
+            let mut names: BTreeSet<String> = BTreeSet::new();
+            let mut actions = 0;
+            for e in &entities {
+                let Some(ca) = e.components.children.iter().find(|c| c.is("CAIContextualActionComponent")) else { continue };
+                actions += 1;
+                if let Some(p) = ca.children.iter().find(|c| c.is("Parameters")) {
+                    names.extend(moves::move_names(p));
+                }
+            }
+            let clips: Vec<&str> = vfs.names.values().filter(|n| n.ends_with(".mab")).map(String::as_str).collect();
+            let db = moves::parse_move_db(&vfs.read(moves::MOVE_DB)?);
+            let table = moves::ca_clips(names.iter().map(String::as_str), &db, &clips);
+            println!("{} of the moves in the move database", names.iter().filter(|n| db.contains_key(*n)).count());
+            println!("{actions} actions, {} moves, {} with clips ({} clips listed)", names.len(), table.len(), clips.len());
+            if args.get(1).map(String::as_str) == Some("write") {
+                std::fs::write(root.join(moves::CA_MOVES_REL), moves::to_text(&table))?;
+                println!("written to {}", root.join(moves::CA_MOVES_REL).display());
+            }
+            if args.get(1).map(String::as_str) == Some("show") {
+                for n in names.iter().filter(|n| !table.contains_key(*n)) {
+                    println!("  no clip: {n}");
+                }
+            }
+        }
+        "moves" => {
+            // The engine's named moves, their states and clips: moves [name
+            // part]
+            let data = vfs.read(fc3_formats::moves::MOVE_DB)?;
+            let moves = fc3_formats::moves::parse_move_db(&data);
+            let filter = args.get(1).map(|s| s.to_ascii_lowercase()).unwrap_or_default();
+            println!("{} moves, {} with clips", moves.len(), moves.values().filter(|v| !v.is_empty()).count());
+            for (m, states) in moves.iter().filter(|(m, _)| m.contains(&filter)).take(40) {
+                println!("{m}");
+                for (s, c) in states {
+                    println!("    {s}: {c}");
+                }
+            }
+        }
+        "oasis" => {
+            // Strings by id: oasis <id>...
+            let root = fc3_formats::cache::default_cache_root();
+            let strings = fc3_formats::oasis::Strings::from_bytes(&std::fs::read(root.join("story/strings.bin"))?)?;
+            for id in &args[1..] {
+                println!("{id}: {:?}", id.parse().ok().and_then(|i| strings.get(i)));
+            }
+        }
+        "script-grep" => {
+            // The script pack's lines containing a text, with their graph:
+            // script-grep <text> [path filter]
+            let needle = args.get(1).context("usage: script-grep <text> [path filter]")?;
+            let filter = args.get(2).map(|s| s.to_ascii_lowercase()).unwrap_or_default();
+            let root = fc3_formats::cache::default_cache_root();
+            let pack = fc3_formats::scripts::ScriptPack::from_bytes(&std::fs::read(root.join(fc3_formats::scripts::DOMINO_PACK_REL))?)?;
+            let mut paths: Vec<String> = pack.paths().filter(|p| p.contains(&filter)).map(str::to_string).collect();
+            paths.sort();
+            for p in paths {
+                let Some(text) = pack.get(&p) else { continue };
+                for (i, line) in text.lines().enumerate() {
+                    if line.contains(needle.as_str()) {
+                        println!("{p}:{}: {}", i + 1, line.trim());
                     }
                 }
             }

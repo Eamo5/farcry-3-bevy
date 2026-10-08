@@ -75,7 +75,9 @@ fn describe_all(args: MultiValue) -> Vec<String> {
 
 impl Domino {
     pub fn new(source: impl ScriptSource + 'static) -> mlua::Result<Domino> {
-        let lua = Lua::new();
+        // The engine's VM has every standard library, `debug` included (the
+        // scripts read call stacks); these are the game's own scripts.
+        let lua = unsafe { Lua::unsafe_new_with(mlua::StdLib::ALL_SAFE | mlua::StdLib::DEBUG, mlua::LuaOptions::default()) };
         let state = Rc::new(RefCell::new(State::default()));
         let g = lua.globals();
         g.set("GetPathID", lua.create_function(|_, path: String| Ok(path_id(&path)))?)?;
@@ -162,6 +164,28 @@ impl Domino {
     /// Calls one of a box's inputs (`In`, `Start`, ...).
     pub fn call(&self, box_: &Table, input: &str) -> mlua::Result<()> {
         self.call_with(box_, input, ()).map(|_| ())
+    }
+
+    /// Logs every call into a script whose path contains `pattern` (its
+    /// method name and line), for following a graph's flow; an empty pattern
+    /// stops tracing.
+    pub fn trace_calls(&self, pattern: &str) -> mlua::Result<()> {
+        if pattern.is_empty() {
+            return self.lua.load("debug.sethook()").exec();
+        }
+        self.lua
+            .load(
+                r#"
+                local pattern = string.lower(...)
+                debug.sethook(function()
+                    local info = debug.getinfo(2, "Sn")
+                    if info ~= nil and info.source ~= nil and string.find(string.lower(info.source), pattern, 1, true) then
+                        __domino_log("call", info.source, info.name or "?", info.linedefined)
+                    end
+                end, "c")
+                "#,
+            )
+            .call::<()>(pattern)
     }
 
     /// The unknown natives called since the last time, with their arguments.

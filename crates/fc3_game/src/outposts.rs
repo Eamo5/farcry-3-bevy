@@ -8,7 +8,6 @@
 //! it stops spawning enemies, shows as friendly on the map, and becomes a
 //! fast-travel destination. Liberated outposts are saved.
 
-
 use bevy::prelude::*;
 use fc3_formats::outposts::Outpost;
 
@@ -22,25 +21,22 @@ pub struct OutpostsPlugin;
 
 impl Plugin for OutpostsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Outposts>()
-            .add_message::<AlarmRaised>()
-            .add_message::<OutpostLiberated>()
-            .add_systems(
-                Update,
-                (
-                    load_outposts.run_if(resource_exists::<CacheInfo>),
-                    assign_runners,
-                    sound_alarms,
-                    reinforce,
-                    sabotage_alarms.before(crate::hud::HudSet).after(crate::turrets::man_turrets),
-                    liberate,
-                    outpost_status.before(crate::hud::HudSet),
-                    outpost_test,
-                    convoy_test,
-                )
-                    .chain()
-                    .run_if(in_state(crate::menu::GameState::Playing)),
-            );
+        app.init_resource::<Outposts>().add_message::<AlarmRaised>().add_message::<OutpostLiberated>().add_systems(
+            Update,
+            (
+                load_outposts.run_if(resource_exists::<CacheInfo>),
+                assign_runners,
+                sound_alarms,
+                reinforce,
+                sabotage_alarms.before(crate::hud::HudSet).after(crate::turrets::man_turrets),
+                liberate,
+                outpost_status.before(crate::hud::HudSet),
+                outpost_test,
+                convoy_test,
+            )
+                .chain()
+                .run_if(in_state(crate::menu::GameState::Playing)),
+        );
     }
 }
 
@@ -273,17 +269,16 @@ fn convoy_test(
     if time.elapsed_secs() < start + 5.0 {
         return;
     }
-    let Some((i, o)) = outposts.list.iter().enumerate().min_by(|a, b| a.1.centre.distance(pt.translation).total_cmp(&b.1.centre.distance(pt.translation))) else { return };
+    let Some((i, o)) = outposts.list.iter().enumerate().min_by(|a, b| a.1.centre.distance(pt.translation).total_cmp(&b.1.centre.distance(pt.translation)))
+    else {
+        return;
+    };
     convoys.write(crate::patrols::Convoy { to: o.centre, radius: o.radius, garrison: i });
     *sent = Some(-1.0);
 }
 
 /// Reinforcements arrive at the outpost's edge, hunting the player.
-fn reinforce(
-    time: Res<Time>,
-    mut outposts: ResMut<Outposts>,
-    mut convoys: MessageWriter<crate::patrols::Convoy>,
-) {
+fn reinforce(time: Res<Time>, mut outposts: ResMut<Outposts>, mut convoys: MessageWriter<crate::patrols::Convoy>) {
     let now = time.elapsed_secs();
     for (i, o) in outposts.list.iter_mut().enumerate() {
         let Some(at) = o.reinforce_at else { continue };
@@ -377,13 +372,21 @@ fn outpost_status(
     players: Query<(&Transform, &Player)>,
     garrison: Query<(&Health, &Garrison)>,
     mut hud: ResMut<HudState>,
+    area: Res<crate::story::MissionArea>,
 ) {
     let Ok((pt, p)) = players.single() else { return };
     // The vehicle readout takes the line while driving.
     if p.driving {
         return;
     }
-    let Some(i) = outposts.list.iter().position(|o| !o.liberated && Vec2::new(pt.translation.x - o.centre.x, pt.translation.z - o.centre.z).length() < o.radius + 60.0) else {
+    // No outpost play inside a mission being played.
+    if area.contains(pt.translation) {
+        hud.status = None;
+        return;
+    }
+    let Some(i) =
+        outposts.list.iter().position(|o| !o.liberated && Vec2::new(pt.translation.x - o.centre.x, pt.translation.z - o.centre.z).length() < o.radius + 60.0)
+    else {
         hud.status = None;
         return;
     };
@@ -437,12 +440,7 @@ fn outpost_test(
         return;
     }
     let Some(i) = test.target.or_else(|| {
-        outposts
-            .list
-            .iter()
-            .enumerate()
-            .min_by(|a, b| a.1.centre.distance(pt.translation).total_cmp(&b.1.centre.distance(pt.translation)))
-            .map(|(i, _)| i)
+        outposts.list.iter().enumerate().min_by(|a, b| a.1.centre.distance(pt.translation).total_cmp(&b.1.centre.distance(pt.translation))).map(|(i, _)| i)
     }) else {
         return;
     };

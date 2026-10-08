@@ -22,7 +22,9 @@ impl Plugin for SyringesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Boosts>().init_resource::<Breath>().add_systems(
             Update,
-            (tick_boosts, breath.before(crate::hud::HudSet), syringe_key.before(crate::hud::HudSet), hunter_marks).chain().run_if(in_state(crate::menu::GameState::Playing)),
+            (tick_boosts, breath.before(crate::hud::HudSet), syringe_key.before(crate::hud::HudSet), hunter_marks)
+                .chain()
+                .run_if(in_state(crate::menu::GameState::Playing)),
         );
     }
 }
@@ -310,7 +312,14 @@ fn hunter_marks(
         }
         let Ok(px) = cam.world_to_viewport(cam_t, at) else { continue };
         commands.spawn((
-            Node { position_type: PositionType::Absolute, left: Val::Px(px.x - 6.0), top: Val::Px(px.y - 6.0), width: Val::Px(12.0), height: Val::Px(12.0), ..default() },
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(px.x - 6.0),
+                top: Val::Px(px.y - 6.0),
+                width: Val::Px(12.0),
+                height: Val::Px(12.0),
+                ..default()
+            },
             BackgroundColor(Color::srgba(0.95, 0.75, 0.25, 0.85)),
             UiTransform::from_rotation(Rot2::degrees(45.0)),
             HunterMark,
