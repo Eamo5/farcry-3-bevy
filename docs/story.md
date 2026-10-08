@@ -164,7 +164,15 @@ is the story's own:
   the story hears them start and end.
 * **Phone calls** show the caller in a panel until the scripts' `PhoneCallEnd`.
 * **Story teleports** keep to the height they give (a cave floor, not the rock
-  over it).
+  over it). Actor and prop destinations are resolved when the native runs,
+  including chained teleports. Actors not streamed in yet spawn at their new
+  positions; already loaded actors replan their contextual-action routes.
+  Scripted collision enable/disable state also applies to later-streamed roots.
+* **Mission interactions**: holding the bound interact control uses a nearby
+  enabled, usable proximity trigger. Prompts use localized interaction text
+  when supplied; use, look and angle restrictions are checked. Releasing the
+  control or changing targets cancels the hold, and one hold triggers at most
+  one use. A gamepad's shared reload control is suppressed during the hold.
 * **Faces** (`faces`): characters with a `CFacialPoseComponent` get its face
   rig; a scene's facial track poses the face over the body clip, and a spoken
   line plays its lip-sync clip on the speaker.
@@ -208,12 +216,19 @@ is the story's own:
 
 ## Current validation gaps
 
+The parity target currently covers single-player: the campaign, open world
+and side activities, including their visuals and UX.
+
 The live campaign smoke test reaches the map-pickup objective in `JAS_020_B10`
-and advances into `JAS_020_B15`. A longer autopilot run and a reload from its
-checkpoint still stall in the rock-distraction section: the latest reload
-waits on a guard's `CA_Start` and `Follow_4_RockTutorial`'s `Enter` event. The
-next investigation is the contextual-action path/arrival and scene ownership
-at that checkpoint. The opening mission is not yet verified end to end.
+and advances into `JAS_020_B15`. Tracing confirmed the guard's `CA_Start`
+callback is delivered. Implementing non-player teleports fixes Grant's reload
+placement and allows the checkpoint to reach the rock-distraction objective.
+The guard hears the distraction and emits `CA_Interrupt`, but the latest live
+run still stalls while he investigates: the navigation path starts at 36
+waypoints, remains near 30, then he times out and returns to his post. The next
+investigation is the selected navigation polygons, path and obstacle steering
+between the guard and the rock target. The opening mission is not yet verified
+end to end, and autopilot progression alone does not verify manual gameplay.
 
 Regression tests cover live player queries, deferred inventory spawn/remove
 callbacks, meta-sequence teardown, timers, binding-aware prompts and modal
