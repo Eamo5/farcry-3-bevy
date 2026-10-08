@@ -36,6 +36,7 @@ impl Plugin for WildlifePlugin {
                 despawn_animals,
             )
                 .chain()
+                .after(crate::story_actors::ActorSet)
                 .run_if(in_state(crate::menu::GameState::Playing)),
         );
     }
@@ -420,10 +421,51 @@ const SPECIES: &[Species] = &[
 ];
 
 #[derive(Resource)]
-struct AnimalAssets {
+pub(crate) struct AnimalAssets {
     models: Vec<Handle<Fc3Model>>,
     sets: Vec<Arc<ClipSet>>,
     skins: Vec<Option<Handle<StandardMaterial>>>,
+}
+
+/// Supported normal story animals. Use the authored family, not the shared
+/// model (a pig can use a boar's skeleton); don't flatten rare loot variants.
+pub(crate) fn story_species(name: &str) -> Option<usize> {
+    let name = name.to_ascii_lowercase();
+    if name.contains("rare") { return None }
+    let family = name.rsplit('/').next()?.split('.').next()?;
+    let family = family.rsplit_once('_').filter(|(_, suffix)| !suffix.is_empty() && suffix.bytes().all(|c| c.is_ascii_digit()))
+        .map_or(family, |(family, _)| family);
+    let animal = match family {
+        "boar" => Animal::Boar, "deerfc3" => Animal::Deer, "goat" => Animal::Goat,
+        "dogs_rapid" | "attackdog_fc3" => Animal::Dog, "asiantapir" => Animal::Tapir,
+        "leopard" => Animal::Leopard, "asianblackbear" | "bear_young" | "bear_huge" => Animal::Bear,
+        "tiger" => Animal::Tiger, "komododragon" => Animal::Komodo, "cassowary" => Animal::Cassowary,
+        "buffalo" => Animal::Buffalo, "crocodile" => Animal::Crocodile, "bullshark" => Animal::Shark,
+        _ => return None,
+    };
+    SPECIES.iter().position(|s| s.animal == animal)
+}
+
+impl AnimalAssets {
+    pub(crate) fn ready_for_story(&self, species: usize, server: &AssetServer) -> bool {
+        self.sets[species].ready(server)
+    }
+
+    /// Keep the authored graphic kit and story id, but give this root actual
+    /// animal behavior, clips, health and the wildlife death/skinning path.
+    pub(crate) fn bind_story(&self, commands: &mut Commands, root: Entity, species: usize, rig: Option<Entity>, at: Vec3, yaw: f32, rng: &mut Rng) {
+        let s = &SPECIES[species];
+        commands.entity(root).insert((WildAnimal {
+            species, mood: Mood::Graze, call_in: rng.range(CALL_EVERY.0, CALL_EVERY.1),
+            health_seen: f32::MAX, timer: rng.range(2.0, 8.0), goal: at, yaw,
+            velocity: Vec3::ZERO, rig, attack_cooldown: 0.0, frozen: None,
+            body_lift: crate::player::HALF_HEIGHT,
+        }, Health::new(s.health), Collider::capsule(s.size.0, s.size.1 * 2.0)));
+        if let Some(rig) = rig {
+            let clips = self.sets[species].clone();
+            commands.entity(rig).entry::<crate::characters::CharacterRig>().and_modify(move |mut r| r.set_clips(clips.clone()));
+        }
+    }
 }
 
 fn load_animals(mut commands: Commands, server: Res<AssetServer>) {
@@ -516,6 +558,9 @@ pub struct WildAnimal {
     attack_cooldown: f32,
     /// Posed for a test: no AI.
     frozen: Option<AnimKind>,
+    /// Story roots share the story host's capsule offset; ordinary wildlife
+    /// uses the species' own offset. Keep both feet and graphic kits grounded.
+    body_lift: f32,
 }
 
 impl WildAnimal {
@@ -647,6 +692,7 @@ fn spawn_animal(commands: &mut Commands, assets: &AnimalAssets, model: &Fc3Model
                 rig: None,
                 attack_cooldown: 0.0,
                 frozen: None,
+                body_lift: radius + 0.25,
             },
             Health::new(s.health),
             RigidBody::Kinematic,
@@ -750,7 +796,7 @@ fn animal_ai(
     mut noises: MessageReader<crate::npc::Noise>,
     players: Query<(Entity, &Transform, &Player, &Health), Without<WildAnimal>>,
     people: Query<(Entity, &Transform, &Health), (With<crate::npc::Npc>, Without<WildAnimal>, Without<Player>)>,
-    mut animals: Query<(Entity, &mut Transform, &mut WildAnimal, &Health), Without<Carcass>>,
+    mut animals: Query<(Entity, &mut Transform, &mut WildAnimal, &Health, Option<&crate::story_actors::StoryActor>), Without<Carcass>>,
     mut anims: Query<&mut AnimRequest>,
     mut damage: MessageWriter<DamageEvent>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
@@ -766,8 +812,8 @@ fn animal_ai(
     // Pirates, privateers and rebels nearby are prey (or a threat) too.
     let npcs: Vec<(Entity, Vec3)> =
         people.iter().filter(|(_, t, h)| !h.dead && t.translation.distance(pt.translation) < 160.0).map(|(e, t, _)| (e, t.translation)).collect();
-    for (e, mut t, mut a, h) in &mut animals {
-        if h.dead {
+    for (e, mut t, mut a, h, story) in &mut animals {
+        if h.dead || story.is_some_and(|s| s.script_driven()) {
             continue;
         }
         if let Some(kind) = a.frozen {
@@ -918,7 +964,7 @@ fn animal_ai(
         let sea = crate::sky::SEA_LEVEL;
         // Rivers and lakes as well as the sea for those on land and shore.
         let water = heights.height_at(next).map_or(sea, |g| crate::water::surface(next, Some(g)));
-        let lift = SPECIES[a.species].size.0 + 0.25;
+        let lift = a.body_lift;
         match (s.habitat, heights.height_at(next)) {
             // Sharks keep to deep water, below the surface (or up to a swimmer).
             (Habitat::Sea, Some(g)) if g > sea - 3.0 => {
@@ -1027,7 +1073,7 @@ fn skin_animals(
 fn despawn_animals(
     time: Res<Time>,
     players: Query<&Transform, With<Player>>,
-    mut animals: Query<(Entity, &Transform, Option<&mut Carcass>), With<WildAnimal>>,
+    mut animals: Query<(Entity, &Transform, Option<&mut Carcass>), (With<WildAnimal>, Without<crate::story_actors::StoryActor>)>,
     mut commands: Commands,
 ) {
     let Ok(pt) = players.single() else { return };
@@ -1049,6 +1095,92 @@ mod tests {
     use crate::controls::{Action, ActionState};
     use crate::progression::{ItemLooted, LootKind, Progress};
 
+    fn player() -> Player {
+        Player {
+            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: true,
+            crouching: false, swimming: false, noclip: false, spawning: false,
+            keep_height: false, last_landing_speed: 0.0, sprinting: false,
+            spawned_at: 0.0, driving: false, eye: crate::player::EYE_HEIGHT,
+            air: crate::player::AirMode::None, mantle: None, mounted: None,
+            sliding: None, dragging: false,
+        }
+    }
+
+    #[test]
+    fn story_species_recognizes_placed_normal_families_without_flattening_pigs_or_rares() {
+        for (name, animal) in [
+            ("FC3_Quadrupeds/Boar.Boar_normal.Boar_Jas_080_2", Animal::Boar),
+            ("FC3_Quadrupeds/Boar_0", Animal::Boar),
+            ("FC3_Quadrupeds/DeerFC3_18", Animal::Deer),
+            ("FC3_Quadrupeds/AsianBlackBear.Bear_Jas_020_0", Animal::Bear),
+            ("FC3_Quadrupeds/Dogs_Rapid.Black_0", Animal::Dog),
+            ("FC3_Aquatic/BullShark_0", Animal::Shark),
+        ] {
+            assert_eq!(SPECIES[story_species(name).unwrap()].animal, animal, "{name}");
+        }
+        for name in ["FC3_Domestic/Pig_0", "FC3_Quadrupeds/Pig_Wild_0", "FC3_Quadrupeds/Boar.Boar_boss_rare_1",
+            "FC3_Quadrupeds/Leopard.Panther_rare_0", "Merc/UniqueMerc_FC3.Grant_0", "BoarDecoration_0"] {
+            assert!(story_species(name).is_none(), "{name}");
+        }
+    }
+
+    #[test]
+    fn bound_story_boars_keep_their_id_and_offset_and_die_into_skinnable_carcasses() {
+        use crate::story_actors::StoryActor;
+        fn bind(assets: Res<AnimalAssets>, roots: Query<(Entity, &Transform), Added<StoryActor>>, mut commands: Commands, mut rng: ResMut<Rng>) {
+            for (root, at) in &roots {
+                assets.bind_story(&mut commands, root, story_species("FC3_Quadrupeds/Boar_0").unwrap(), None, at.translation, 0.0, &mut rng);
+            }
+        }
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<ActionState>().init_resource::<crate::settings::Settings>()
+            .init_resource::<Progress>().init_resource::<crate::hud::HudState>()
+            .init_resource::<crate::fp::HandsBusy>().init_resource::<crate::story::ScriptedPlayer>()
+            .init_resource::<Heightfield>()
+            .insert_resource(Rng::seeded(1)).insert_resource(AnimalAssets {
+                models: Vec::new(), skins: Vec::new(),
+                sets: SPECIES.iter().map(|_| Arc::new(ClipSet { skeleton: Handle::default(), clips: std::collections::HashMap::new() })).collect(),
+            })
+            .add_message::<ItemLooted>().add_message::<crate::fp::FpAction>().add_message::<Died>()
+            .add_message::<crate::progression::XpGain>().add_message::<crate::sound::PlaySfx>()
+            .add_message::<crate::npc::Noise>().add_message::<DamageEvent>()
+            .add_systems(Update, (bind, animal_ai, animal_deaths, skin_animals, despawn_animals).chain());
+        let player = app.world_mut().spawn((player(), Transform::from_xyz(0.0, crate::player::HALF_HEIGHT, 0.0), Health::new(100.0))).id();
+        let position = Transform::from_xyz(1.0, crate::player::HALF_HEIGHT, 0.0);
+        let mut actor = StoryActor::new(42, None, false);
+        actor.in_scene = true;
+        let root = app.world_mut().spawn((actor, position, GlobalTransform::from(position), Health::new(150.0), RigidBody::Kinematic)).id();
+        app.update();
+        let animal = app.world().get::<WildAnimal>(root).unwrap();
+        assert_eq!(SPECIES[animal.species].animal, Animal::Boar);
+        assert_eq!(animal.body_lift, crate::player::HALF_HEIGHT);
+        assert_eq!(app.world().get::<Health>(root).unwrap().max, SPECIES[animal.species].health);
+        assert_eq!(app.world().get::<StoryActor>(root).unwrap().id, 42);
+        assert_eq!(*app.world().get::<Transform>(root).unwrap(), position);
+        assert!(matches!(animal.mood, Mood::Graze)); // The scene retains control.
+        assert!(app.world().get::<Collider>(root).is_some());
+        app.world_mut().get_mut::<StoryActor>(root).unwrap().in_scene = false;
+        app.update();
+        assert!(matches!(app.world().get::<WildAnimal>(root).unwrap().mood, Mood::Hunt | Mood::Attack));
+        app.world_mut().get_mut::<Health>(root).unwrap().dead = true;
+        app.world_mut().write_message(Died { entity: root, killer: Some(player), kind: crate::combat::DamageKind::Bullet });
+        app.update();
+        assert!(app.world().get::<Carcass>(root).is_some());
+        assert!(app.world().get::<Collider>(root).is_none());
+        assert!(app.world().get::<RigidBody>(root).is_none());
+        // Wildlife's generic rot/despawn path must not discard story-owned roots.
+        app.world_mut().get_mut::<Carcass>(root).unwrap().age = 181.0;
+        app.world_mut().resource_mut::<crate::hud::HudState>().prompt = None;
+        app.world_mut().resource_mut::<ActionState>().press(Action::Interact);
+        app.update();
+        assert_eq!(app.world().get::<StoryActor>(root).unwrap().id, 42);
+        assert!(app.world().get::<Carcass>(root).unwrap().skinned);
+        assert_eq!(app.world().resource::<Progress>().skins[&Animal::Boar], 1);
+        let mut cursor = bevy::ecs::message::MessageCursor::<ItemLooted>::default();
+        assert_eq!(cursor.read(app.world().resource::<Messages<ItemLooted>>()).map(|e| e.0).collect::<Vec<_>>(), vec![LootKind::Skin(Animal::Boar)]);
+    }
+
     #[test]
     fn skinning_requires_a_live_player_an_enabled_category_and_free_hands_and_emits_once() {
         let mut app = App::new();
@@ -1058,14 +1190,7 @@ mod tests {
             .init_resource::<crate::fp::HandsBusy>().init_resource::<crate::story::ScriptedPlayer>()
             .add_message::<ItemLooted>().add_message::<crate::fp::FpAction>()
             .add_systems(Update, skin_animals);
-        let player = app.world_mut().spawn((Player {
-            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: true,
-            crouching: false, swimming: false, noclip: false, spawning: false,
-            keep_height: false, last_landing_speed: 0.0, sprinting: false,
-            spawned_at: 0.0, driving: false, eye: crate::player::EYE_HEIGHT,
-            air: crate::player::AirMode::None, mantle: None, mounted: None,
-            sliding: None, dragging: false,
-        }, Transform::default(), Health::new(100.0))).id();
+        let player = app.world_mut().spawn((player(), Transform::default(), Health::new(100.0))).id();
         let species = SPECIES.iter().position(|s| s.animal == Animal::Boar).unwrap();
         let carcass = app.world_mut().spawn((GlobalTransform::from_xyz(1.0, 0.0, 0.0), Carcass { species, age: 0.0, skinned: false })).id();
         let mut cursor = bevy::ecs::message::MessageCursor::<ItemLooted>::default();
@@ -1164,6 +1289,7 @@ fn animal_test(
                     rig: None,
                     attack_cooldown: 0.0,
                     frozen: (!hunt).then_some(kind),
+                    body_lift: radius + 0.25,
                 },
                 Health::new(s.health),
                 Collider::capsule(radius, half * 2.0),

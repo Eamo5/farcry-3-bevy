@@ -172,6 +172,13 @@ is the story's own:
   Scripts' plant/animal looting permissions gate interactions, which consume
   their input press so another interaction cannot reuse it that frame.
   This does not yet replace the sandbox crafting recipes or automatic medkits.
+* **Story wildlife**: supported normal animals retain their authored graphic
+  kit and mission id while using the wildlife species' clips, behavior, health
+  and death/skinning path. Their feet retain the story host's placement offset.
+  Contextual actions and cinematics own their movement until released, and
+  story-layer streaming owns their lifetime rather than generic carcass rot.
+  Shared-model pigs and rare loot variants are not substituted as base animals;
+  those unsupported families/variants still require their own implementations.
 * **Player queries**: money, medkits, carry slots, equipped and carried
   weapons (using the shop's archetype names), gadgets, learned skills,
   stance, zip-line state, look angles, tagged story actors, difficulty and
@@ -269,8 +276,13 @@ the boar-skinning/plant-gathering tutorial in `JAS_080_B20`. Loot callbacks and
 live quantity queries are now wired and covered by inventory/interaction tests.
 An additional live smoke run loaded 20 supported ingredient identities and
 reached the hunting objective, but did not collect ingredients or complete it.
-The mission boars still spawn as generic story characters rather than
-skinnable wildlife, and the autopilot does not hunt or gather. The autopilot
+The mission boars previously spawned as generic story characters rather than
+skinnable wildlife. They now bind to the wildlife path; a subsequent live run
+confirmed all four authored mission boars were bound, without a crash or
+failure/reload loop. A regression exercises a bound story boar's death and
+skinning on its original root, including cinematic movement ownership.
+The autopilot still does not hunt or gather, so `JAS_080_B20` remains uncompleted
+in live validation. The autopilot
 stands in for the tower panel, zipline use and world-map input; these aren't
 manual traversal/UI validation. These runs skipped scenes and automatically ended the
 unimplemented Grant-death gameplay; they do not establish cinematic or
@@ -283,7 +295,8 @@ selection, catalog parsing, tutorial stock restrictions, priced inventory
 transactions, the shop button path, purchase delivery across paused frames,
 authored tower-freebie thresholds, player-only mission-boundary contacts,
 authored loot-source identities, combined leaf quantities, skinning/gathering
-permissions and exactly-once loot delivery after paused frames.
+permissions, exactly-once loot delivery after paused frames, normal story-animal
+family matching, and story-owned boar death/skinning/cinematic control.
 Run `cargo test --locked --release --workspace`; the
 release test profile also avoids the Windows linker PDB-size limit encountered
 when this full Bevy dependency graph is linked with development debug symbols.

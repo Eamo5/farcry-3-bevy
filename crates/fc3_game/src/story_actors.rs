@@ -27,6 +27,9 @@ use crate::weapons::Rng;
 
 pub struct StoryActorsPlugin;
 
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct ActorSet;
+
 impl Plugin for StoryActorsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<StoryKits>()
@@ -38,7 +41,7 @@ impl Plugin for StoryActorsPlugin {
             .add_systems(
                 Update,
                 (spawn_actors, despawn_actors, actor_tasks, actor_alerts, actor_idle, actor_deaths).chain()
-                    .after(crate::story::EntityPosesSet).run_if(in_state(crate::menu::GameState::Playing)),
+                    .in_set(ActorSet).after(crate::story::EntityPosesSet).run_if(in_state(crate::menu::GameState::Playing)),
             );
     }
 }
@@ -98,6 +101,16 @@ pub struct StoryActor {
 }
 
 impl StoryActor {
+    pub(crate) fn new(id: u64, rig: Option<Entity>, armed: bool) -> Self {
+        Self { id, rig, dead: false, armed, base_clips: None, ca_then: None,
+            task: None, path: Vec::new(), in_scene: false }
+    }
+
+    /// Authored actions and cinematics own this actor until released.
+    pub(crate) fn script_driven(&self) -> bool {
+        self.in_scene || self.task.is_some()
+    }
+
     /// A teleport invalidates the route from the old position. Keep the
     /// action itself, but find a fresh route to its spot or next patrol leg.
     pub fn relocate(&mut self, at: Vec3, nav: &crate::nav::NavMesh) {
@@ -176,6 +189,7 @@ fn spawn_actors(
     host: Option<NonSend<StoryHost>>,
     layers: Res<MissionLayers>,
     chars: Option<Res<CharacterAssets>>,
+    animals: Option<Res<crate::wildlife::AnimalAssets>>,
     mut kits: ResMut<StoryKits>,
     server: Res<AssetServer>,
     models: Res<Assets<Fc3Model>>,
@@ -206,6 +220,12 @@ fn spawn_actors(
         let Some(kit_id) = kit_of(e) else { continue };
         if have.contains(&e.id) || !host.story.is_loaded(e.id) || host.story.is_dead(e.id) {
             continue;
+        }
+        let animal = e.component("CAnimalNetworkComponent").and_then(|_| crate::wildlife::story_species(&e.name));
+        if let Some(species) = animal {
+            if animals.as_ref().is_none_or(|a| !a.ready_for_story(species, &server)) {
+                continue;
+            }
         }
         if e.layer != fc3_formats::world::DEFAULT_MISSION_LAYER && !layers.present.contains(&e.layer) {
             continue;
@@ -252,17 +272,11 @@ fn spawn_actors(
                 commands.entity(rig).insert(crate::faces::Face::new(face, faces.idle(), phase));
             }
         }
-        commands.entity(root).insert(StoryActor {
-            id: e.id,
-            rig,
-            dead: false,
-            armed: fighter.is_some(),
-            base_clips: None,
-            ca_then: None,
-            task: None,
-            path: Vec::new(),
-            in_scene: false,
-        });
+        commands.entity(root).insert(StoryActor::new(e.id, rig, fighter.is_some()));
+        if let (Some(species), Some(animals)) = (animal, animals.as_ref()) {
+            animals.bind_story(&mut commands, root, species, rig, at, yaw, &mut rng);
+            debug!("story animal {} ({}) bound to wildlife", e.name, e.id);
+        }
         if let Some(f) = fighter {
             commands.entity(root).insert(crate::npc::story_npc(f.faction, f.role, at, yaw, e.id, rig, &mut rng));
             if f.scripted {
@@ -528,7 +542,7 @@ fn actor_alerts(
 /// Characters stand at their places on the human idle until scripts or AI
 /// move them.
 fn actor_idle(
-    actors: Query<&StoryActor, Or<(Without<crate::npc::Npc>, With<crate::npc::Scripted>)>>,
+    actors: Query<&StoryActor, (Without<crate::wildlife::WildAnimal>, Or<(Without<crate::npc::Npc>, With<crate::npc::Scripted>)>)>,
     mut anims: Query<&mut AnimRequest>,
     rigs: Query<&crate::characters::CharacterRig>,
     mut commands: Commands,
