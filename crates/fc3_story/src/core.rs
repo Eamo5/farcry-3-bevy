@@ -165,6 +165,10 @@ pub struct Core {
     pub objective_markers: BTreeMap<u64, String>,
     /// Entities bound to others (`CAPI_Entity.Bind`): child -> parent.
     pub binds: HashMap<u64, u64>,
+    /// Scripted poses for entities not currently reported by the host.
+    pub poses: HashMap<u64, crate::Pose>,
+    /// Runtime overrides of proximity-trigger use restrictions.
+    pub use_rules: HashMap<u64, crate::triggers::UseRules>,
 }
 
 impl Core {
@@ -209,6 +213,8 @@ impl Core {
             respawn: None,
             objective_markers: BTreeMap::new(),
             binds: HashMap::new(),
+            poses: HashMap::new(),
+            use_rules: HashMap::new(),
         }
     }
 
@@ -323,7 +329,21 @@ impl Core {
                 }
             }
         }
-        self.view.spawned.get(&id).map(|l| l.pos).or_else(|| self.data.position(id))
+        self.view.spawned.get(&id).map(|l| l.pos).or_else(|| self.poses.get(&id).map(|p| p.position)).or_else(|| self.data.position(id))
+    }
+
+    pub fn angles(&self, id: u64) -> [f32; 3] {
+        if id == crate::PLAYER {
+            return [0.0, 0.0, self.view.player_yaw];
+        }
+        self.poses.get(&id).map(|p| p.angles)
+            .or_else(|| self.data.entities.get(&id).map(|e| e.angles))
+            .or_else(|| self.data.spawn_points.get(&id).map(|s| s.angles))
+            .unwrap_or_default()
+    }
+
+    pub fn pose(&self, id: u64) -> Option<crate::Pose> {
+        Some(crate::Pose { position: self.position(id)?, angles: self.angles(id) })
     }
 
     /// Sets a block's state (0 disable, 1 enable, 2 activate, 3 deactivate)

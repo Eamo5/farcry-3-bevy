@@ -121,6 +121,20 @@ pub struct Timer {
     pub append_time: bool,
 }
 
+/// An entity's world-space pose in Dunia coordinates (Z up, degrees).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pose {
+    pub position: [f32; 3],
+    pub angles: [f32; 3],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UseTarget {
+    pub entity: u64,
+    pub position: [f32; 3],
+    pub text: String,
+}
+
 /// Something the world should do.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
@@ -174,6 +188,12 @@ pub enum Command {
     },
     /// An entity removed by a script.
     Remove(u64),
+    /// A script moved an entity to another entity's current pose. The pose
+    /// is resolved when the native runs, before later commands can move it.
+    Teleport {
+        entity: u64,
+        pose: Pose,
+    },
     /// A safehouse or outpost unlocked / locked.
     SafeHouse {
         id: u64,
@@ -526,6 +546,36 @@ impl Story {
     /// present, not removed by a script).
     pub fn is_loaded(&self, id: u64) -> bool {
         self.core.borrow().is_loaded(id)
+    }
+
+    /// The nearest usable mission trigger within reach, respecting the
+    /// script's use/inside/look/angle restrictions and current placement.
+    pub fn use_target(&self, player: [f32; 3], eye: [f32; 3], look: [f32; 3]) -> Option<UseTarget> {
+        let c = self.core.borrow();
+        let ids: std::collections::BTreeSet<u64> = c.listeners.values().filter_map(|l| match &l.on {
+            Listen::Entity(id, event) if event == "Use" => Some(*id),
+            _ => None,
+        }).collect();
+        ids.into_iter().filter_map(|id| {
+            if !c.is_loaded(id) || !c.trigger_on(id) {
+                return None;
+            }
+            let mut e = c.data.entities.get(&id)?.clone();
+            if let Some(pose) = c.pose(id) {
+                e.pos = pose.position;
+                e.angles = pose.angles;
+            }
+            if !triggers::can_use(&e, c.use_rules.get(&id).copied().unwrap_or_default(), player, eye, look) {
+                return None;
+            }
+            let prox = e.component("CProximityTriggerComponent")?;
+            let text = prox.u32("locidDisplayInteractionString").and_then(|id| c.data.strings.get(id)).map(str::to_string)
+                .or_else(|| prox.str("sUsageString").filter(|s| !s.is_empty())).unwrap_or_else(|| "Interact".into());
+            Some(UseTarget { entity: id, position: e.pos, text })
+        }).min_by(|a, b| {
+            let distance = |p: [f32; 3]| (0..3).map(|i| (p[i] - player[i]).powi(2)).sum::<f32>();
+            distance(a.position).total_cmp(&distance(b.position))
+        })
     }
 
     /// The entities scripts have removed (saves keep them).
@@ -1064,5 +1114,89 @@ mod tests {
         story.update(0.0, View::default());
         assert_eq!(target.get::<u32>("count").unwrap(), 1);
         assert_eq!(story.errors(), 0);
+    }
+
+    #[test]
+    fn entity_teleport_resolves_live_destination_and_updates_queries_immediately() {
+        let mut story = empty_story();
+        let mut view = View::default();
+        view.spawned.insert(10, Live { pos: [1.0, 2.0, 3.0], alive: true, ..Default::default() });
+        view.spawned.insert(20, Live { pos: [40.0, 50.0, 60.0], alive: true, ..Default::default() });
+        story.core.borrow_mut().poses.insert(20, Pose { position: [0.0; 3], angles: [0.0, 0.0, 90.0] });
+        story.update(0.0, view.clone());
+        let values: (Vec<f32>, Vec<f32>) = story.domino().lua().load(r#"
+            CAPI_Entity.TeleportEntity("10", "20", false, false)
+            return CAPI_Entity.GetEntityPositionVec3("10"), CAPI_Entity.GetEntityAngles("10")
+        "#).eval().unwrap();
+        assert_eq!(values, (vec![40.0, 50.0, 60.0], vec![0.0, 0.0, 90.0]));
+        assert_eq!(story.take_commands(), vec![Command::Teleport {
+            entity: 10, pose: Pose { position: [40.0, 50.0, 60.0], angles: [0.0, 0.0, 90.0] },
+        }]);
+        // Once the host moves the actor, queries follow its live movement.
+        view.spawned.get_mut(&10).unwrap().pos = [41.0, 50.0, 60.0];
+        story.update(0.0, view);
+        assert_eq!(story.core.borrow().position(10), Some([41.0, 50.0, 60.0]));
+    }
+
+    #[test]
+    fn teleport_before_streaming_and_chained_teleports_keep_the_resolved_pose() {
+        let mut story = empty_story();
+        story.update(0.0, View { player: [100.0, 200.0, 12.0], player_yaw: 45.0, ..Default::default() });
+        story.domino().lua().load(r#"
+            CAPI_Entity.TeleportEntity("10", "1", false, false)
+            CAPI_Entity.TeleportEntity("20", "10", false, false)
+        "#).exec().unwrap();
+        let pose = Pose { position: [100.0, 200.0, 12.0], angles: [0.0, 0.0, 45.0] };
+        assert_eq!(story.take_commands(), vec![Command::Teleport { entity: 10, pose }, Command::Teleport { entity: 20, pose }]);
+        assert_eq!(story.core.borrow().pose(20), Some(pose));
+        story.domino().lua().load(r#"CAPI_Entity.TeleportEntity("30", "invalid", false, false)"#).exec().unwrap();
+        assert!(story.take_commands().is_empty());
+    }
+
+    #[test]
+    fn mission_use_target_respects_enable_use_and_view_restrictions() {
+        use fc3_formats::{fcb::Object, hash::name_hash};
+        use std::sync::Arc;
+        let object = |name: &str, fields: Vec<(&str, Vec<u8>)>, children| Arc::new(Object {
+            name_hash: name_hash(name), fields: fields.into_iter().map(|(n, v)| (name_hash(n), v)).collect(), children,
+        });
+        let restrictions = object("UseRestrictions", vec![("bIsInsideToUse", vec![0]), ("bLookAtCheck", vec![1]), ("bAngleCheck", vec![1])], vec![]);
+        let prox = object("CProximityTriggerComponent", vec![
+            ("bEnabled", vec![0]), ("bUsable", vec![0]),
+            ("vectorSize", [2.0f32; 3].into_iter().flat_map(f32::to_le_bytes).collect()),
+            ("sUsageString", b"Use test item\0".to_vec()),
+        ], vec![restrictions]);
+        let mut data = StoryData::default();
+        data.entities.insert(100, data::Entry {
+            id: 100, name: "Test trigger".into(), class: "CEntity".into(), pos: [0.0, 0.0, 1.0], angles: [0.0; 3],
+            layer: fc3_formats::world::DEFAULT_MISSION_LAYER, origin: data::Origin::Global,
+            components: object("Components", vec![], vec![prox]), fields: object("Entity", vec![], vec![]),
+        });
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        story.domino().lua().load(r#"
+            target = { uses = 0 }
+            target._type = { Use = function(self, user) assert(user == "1"); self.uses = self.uses + 1 end }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("100", target, "Use", "Use")
+        "#).exec().unwrap();
+        let (player, eye, forward) = ([0.0, -1.8, 1.0], [0.0, -1.8, 1.75], [0.0, 1.0, -0.4]);
+        assert!(story.use_target(player, eye, forward).is_none());
+        story.domino().lua().load(r#"
+            SendRegisteredEventToEntity("100", "CBaseTriggerComponent_SetEnabled", {})
+            SendRegisteredEventToEntity("100", "CProximityTriggerComponent_SetAsUsable", {})
+        "#).exec().unwrap();
+        let target = story.use_target(player, eye, forward).unwrap();
+        assert_eq!((target.entity, target.text.as_str()), (100, "Use test item"));
+        assert!(story.use_target([0.0, -8.0, 1.0], eye, forward).is_none());
+        assert!(story.use_target(player, eye, [0.0, -1.0, 0.0]).is_none());
+        story.domino().lua().load(r#"
+            SendRegisteredEventToEntity("100", "CProximityTriggerComponent_SetNotCheckLookAt", {})
+            SendRegisteredEventToEntity("100", "CProximityTriggerComponent_SetNotCheckAngle", {})
+        "#).exec().unwrap();
+        assert!(story.use_target(player, eye, [0.0, -1.0, 0.0]).is_some());
+        story.entity_event(target.entity, "Use", vec![Arg::id(PLAYER)]);
+        let listener: Table = story.domino().lua().globals().get("target").unwrap();
+        assert_eq!(listener.get::<u32>("uses").unwrap(), 1);
+        story.domino().lua().load(r#"SendRegisteredEventToEntity("100", "CProximityTriggerComponent_SetAsUnusable", {})"#).exec().unwrap();
+        assert!(story.use_target(player, eye, forward).is_none());
     }
 }

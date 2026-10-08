@@ -32,9 +32,13 @@ impl Plugin for StoryPlugin {
             .init_resource::<MissionArea>()
             .init_resource::<ObjectiveMarkers>()
             .init_resource::<HiddenEntities>()
+            .init_resource::<EntityPlacements>()
             .add_systems(Update, hide_entities.after(StorySet))
+            .add_systems(Update, apply_entity_poses.after(StorySet).in_set(EntityPosesSet))
+            .add_systems(Update, apply_entity_physics.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, draw_markers.after(StorySet))
             .add_systems(PreUpdate, story_boxes.after(crate::controls::update_actions))
+            .add_systems(PreUpdate, story_interactions.after(story_boxes))
             .add_systems(Startup, setup_story_ui)
             .add_systems(Update, fade_screen)
             .add_systems(Update, start_story.after(crate::save::continue_game).run_if(in_state(GameState::Playing)))
@@ -46,6 +50,122 @@ impl Plugin for StoryPlugin {
 /// The story's frame; systems acting on what it asked run after it.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StorySet;
+
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EntityPosesSet;
+
+/// Scripted placements survive streaming, so a character teleported before
+/// its models load spawns at the destination rather than its editor position.
+#[derive(Resource, Default)]
+pub struct EntityPlacements {
+    poses: HashMap<u64, (u64, Transform)>,
+    revision: u64,
+    physics: HashMap<u64, (u64, bool)>,
+}
+
+impl EntityPlacements {
+    pub fn pose(&self, id: u64) -> Option<Transform> {
+        self.poses.get(&id).map(|(_, t)| *t)
+    }
+
+    fn set(&mut self, id: u64, pose: fc3_story::Pose) {
+        self.revision += 1;
+        let transform = Transform {
+            translation: to_bevy(pose.position),
+            rotation: Quat::from_array(fc3_formats::world::angles_to_bevy_quat(pose.angles)),
+            scale: Vec3::ONE,
+        };
+        self.poses.insert(id, (self.revision, transform));
+    }
+
+    fn reset(&mut self, data: &fc3_story::data::StoryData) {
+        let ids: Vec<u64> = self.poses.keys().copied().collect();
+        for id in ids {
+            if let Some(e) = data.entities.get(&id) {
+                self.set(id, fc3_story::Pose { position: e.pos, angles: e.angles });
+            }
+        }
+        let ids: Vec<u64> = self.physics.keys().copied().collect();
+        for id in ids {
+            self.set_physics(id, true);
+        }
+    }
+
+    fn set_physics(&mut self, id: u64, enabled: bool) {
+        self.revision += 1;
+        self.physics.insert(id, (self.revision, enabled));
+    }
+}
+
+#[derive(Component)]
+struct AppliedPose(u64);
+
+#[derive(Component)]
+struct AppliedPhysics(u64);
+
+#[allow(clippy::type_complexity)]
+fn apply_entity_physics(
+    placements: Res<EntityPlacements>,
+    roots: Query<(Entity, Option<&crate::objects::PlacedId>, Option<&crate::story_actors::StoryActor>, Option<&AppliedPhysics>),
+        Or<(With<crate::objects::PlacedId>, With<crate::story_actors::StoryActor>)>>,
+    mut commands: Commands,
+) {
+    if placements.physics.is_empty() {
+        return;
+    }
+    for (root, prop, actor, applied) in &roots {
+        let Some(id) = prop.map(|p| p.0).or_else(|| actor.map(|a| a.id)) else { continue };
+        let Some(&(revision, enabled)) = placements.physics.get(&id) else { continue };
+        if applied.is_some_and(|a| a.0 == revision) {
+            continue;
+        }
+        if enabled {
+            commands.entity(root).remove::<avian3d::prelude::ColliderDisabled>();
+        } else {
+            commands.entity(root).insert(avian3d::prelude::ColliderDisabled);
+        }
+        commands.entity(root).insert(AppliedPhysics(revision));
+    }
+}
+
+/// Applies each teleport once to every visual root of the entity, including
+/// roots that stream in later. Props retain their model's scale.
+#[allow(clippy::type_complexity)]
+fn apply_entity_poses(
+    poses: Res<EntityPlacements>,
+    nav: Res<crate::nav::NavMesh>,
+    mut actors: Query<(Entity, &mut crate::story_actors::StoryActor, &mut Transform, Option<&AppliedPose>)>,
+    mut props: Query<(Entity, Ref<crate::objects::PlacedId>, &mut Transform, Option<&AppliedPose>, Option<&ChildOf>), Without<crate::story_actors::StoryActor>>,
+    parents: Query<&GlobalTransform>,
+    mut commands: Commands,
+) {
+    if poses.poses.is_empty() {
+        return;
+    }
+    for (entity, mut actor, mut at, applied) in &mut actors {
+        let Some(&(revision, mut pose)) = poses.poses.get(&actor.id) else { continue };
+        if !actor.is_added() && applied.is_some_and(|a| a.0 == revision) {
+            continue;
+        }
+        pose.translation += Vec3::Y * crate::player::HALF_HEIGHT;
+        pose.scale = at.scale;
+        *at = pose;
+        actor.relocate(pose.translation, &nav);
+        commands.entity(entity).insert(AppliedPose(revision));
+    }
+    for (entity, id, mut at, applied, parent) in &mut props {
+        let Some(&(revision, mut pose)) = poses.poses.get(&id.0) else { continue };
+        if !id.is_added() && applied.is_some_and(|a| a.0 == revision) {
+            continue;
+        }
+        if let Some(parent) = parent.and_then(|p| parents.get(p.parent()).ok()) {
+            pose = Transform::from_matrix(parent.to_matrix().inverse() * pose.to_matrix());
+        }
+        pose.scale = at.scale;
+        *at = pose;
+        commands.entity(entity).insert(AppliedPose(revision));
+    }
+}
 
 /// The running story (its Lua state lives on the main thread).
 pub struct StoryHost {
@@ -467,7 +587,7 @@ fn run_story(
     mut orders: ResMut<crate::story_actors::ActorOrders>,
     mut scripted: ResMut<ScriptedPlayer>,
     (mut inventory, mut clock): (Query<&mut crate::weapons::Inventory, With<Player>>, ResMut<crate::sky::TimeOfDay>),
-    (mut area, mut cinema): (ResMut<MissionArea>, ResMut<crate::cinema::Cinema>),
+    (mut area, mut cinema, mut placements): (ResMut<MissionArea>, ResMut<crate::cinema::Cinema>, ResMut<EntityPlacements>),
     (actions, mut markers, heights, mut voices): (
         Res<crate::controls::ActionState>,
         ResMut<ObjectiveMarkers>,
@@ -527,6 +647,7 @@ fn run_story(
         if let Some(story) = open_story(&info.root, checkpoint.as_ref()) {
             info!("story: back to the last checkpoint");
             host.story = story;
+            placements.reset(&host.story.data());
             host.hidden_synced = false;
             host.due.clear();
             layers.present.clear();
@@ -873,6 +994,13 @@ fn run_story(
             Command::Remove(id) => {
                 hidden.0.insert(id);
             }
+            Command::Teleport { entity, pose } => {
+                if entity == fc3_story::PLAYER {
+                    teleport(&mut t, &mut p, pose.position, pose.angles[2]);
+                } else {
+                    placements.set(entity, pose);
+                }
+            }
             Command::RespawnPoint(spawn) => {
                 // A cinematic block hands over where its scene left the
                 // player: there (cinematics aren't played yet).
@@ -1042,6 +1170,11 @@ fn run_story(
                             }
                         }
                     }
+                    "CAPI_Entity.SetPhysicsEnabled" => {
+                        if let Ok(id) = a(0).parse::<u64>() {
+                            placements.set_physics(id, a(1) != "false" && a(1) != "0");
+                        }
+                    }
                     "CAPI_Player.AddGadget" if a(0) == fc3_story::PLAYER.to_string() => {
                         scripted.gadgets.insert(host.story.item_name(&a(1)));
                     }
@@ -1060,14 +1193,6 @@ fn run_story(
                             inv.current = 0;
                             crate::weapons::settle_unarmed(&mut inv);
                             (inv.grenades, inv.molotovs, inv.c4, inv.mines) = (n[0], n[1], n[2], n[3]);
-                        }
-                    }
-                    "CAPI_Entity.TeleportEntity" => {
-                        if a(0).parse() == Ok(fc3_story::PLAYER) {
-                            if let Some(pos) = a(1).parse().ok().and_then(|d| data.position(d)) {
-                                let yaw = a(1).parse().ok().and_then(|d| data.spawn_points.get(&d).map(|s| s.angles[2])).unwrap_or(0.0);
-                                teleport(&mut t, &mut p, pos, yaw);
-                            }
                         }
                     }
                     _ => {}
@@ -1096,6 +1221,96 @@ fn run_story(
 
 #[derive(Component)]
 struct BoxPanel(u64);
+
+const USE_HOLD_SECONDS: f32 = 0.5;
+
+#[derive(Default)]
+struct StoryInteraction {
+    target: Option<u64>,
+    held: f32,
+    latched: bool,
+}
+
+impl StoryInteraction {
+    fn advance(&mut self, target: Option<u64>, pressed: bool, dt: f32) -> bool {
+        if !pressed {
+            *self = Self::default();
+            return false;
+        }
+        if self.latched {
+            return false;
+        }
+        if self.target != target {
+            self.target = target;
+            self.held = 0.0;
+        }
+        if target.is_none() {
+            self.held = 0.0;
+            return false;
+        }
+        self.held += dt.max(0.0);
+        if self.held >= USE_HOLD_SECONDS {
+            self.latched = true;
+            return true;
+        }
+        false
+    }
+}
+
+/// Mission use triggers are driven by the player's real interact control,
+/// before ordinary pickups, reloads and vehicles can claim the same press.
+#[allow(clippy::too_many_arguments)]
+fn story_interactions(
+    host: Option<NonSendMut<StoryHost>>,
+    state: Res<State<GameState>>,
+    time: Res<Time>,
+    virtual_time: Res<Time<Virtual>>,
+    ui: Res<StoryUi>,
+    cinema: Res<crate::cinema::Cinema>,
+    qtes: Res<crate::qte::Qtes>,
+    cinematic: Res<crate::fp::Cinematic>,
+    players: Query<(&Transform, &Player, &crate::combat::Health)>,
+    mut actions: ResMut<crate::controls::ActionState>,
+    settings: Res<crate::settings::Settings>,
+    mut hud: ResMut<crate::hud::HudState>,
+    mut hold: Local<StoryInteraction>,
+) {
+    let Some(mut host) = host else { return };
+    if *state.get() != GameState::Playing || virtual_time.is_paused() || !ui.boxes.is_empty()
+        || cinema.view.is_some() || qtes.active() || cinematic.0 > 0.0 {
+        hold.held = 0.0;
+        return;
+    }
+    let Ok((at, player, health)) = players.single() else { return };
+    if health.dead || player.driving {
+        *hold = StoryInteraction::default();
+        return;
+    }
+    let pressed = actions.pressed(crate::controls::Action::Interact);
+    let look = Quat::from_euler(EulerRot::YXZ, player.yaw, player.pitch, 0.0) * Vec3::NEG_Z;
+    let eye = at.translation + Vec3::Y * (crate::player::EYE_HEIGHT - crate::player::HALF_HEIGHT);
+    let target = host.story.use_target(to_dunia(at.translation), to_dunia(eye), to_dunia(look));
+    let used = hold.advance(target.as_ref().map(|t| t.entity), pressed, time.delta_secs());
+    if target.is_some() || hold.latched {
+        if pressed {
+            actions.suppress(crate::controls::Action::Interact);
+            if actions.gamepad_active {
+                actions.suppress(crate::controls::Action::Reload);
+            }
+        }
+    }
+    let Some(target) = target else { return };
+    let key = actions.label(crate::controls::Action::Interact, &settings);
+    let progress = (hold.held / USE_HOLD_SECONDS).clamp(0.0, 1.0);
+    hud.prompt = Some(if pressed && !hold.latched {
+        format!("[{key}]  {}  {:.0}%", plain(&target.text), progress * 100.0)
+    } else {
+        format!("Hold [{key}]  {}", plain(&target.text))
+    });
+    if used {
+        host.story.entity_event(target.entity, "Use", vec![Arg::id(fc3_story::PLAYER)]);
+    }
+}
 
 /// The first waiting box: the game stops (time and input) until the player
 /// accepts, or cancels one that asks.
@@ -1528,5 +1743,69 @@ mod tests {
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyE);
         app.update();
         assert!(app.world().resource::<StoryUi>().boxes.is_empty());
+    }
+
+    #[test]
+    fn scripted_prop_teleports_preserve_scale_and_apply_once_per_revision() {
+        let mut app = App::new();
+        app.init_resource::<EntityPlacements>().init_resource::<crate::nav::NavMesh>()
+            .add_systems(Update, apply_entity_poses);
+        let parent_pose = Transform::from_xyz(10.0, 0.0, 0.0).with_rotation(Quat::from_rotation_y(0.5));
+        let parent = app.world_mut().spawn((parent_pose, GlobalTransform::from(parent_pose))).id();
+        let root = app.world_mut().spawn((crate::objects::PlacedId(10), Transform::default().with_scale(Vec3::splat(2.0)), ChildOf(parent))).id();
+        app.world_mut().resource_mut::<EntityPlacements>().set(10, fc3_story::Pose { position: [20.0, 30.0, 5.0], angles: [0.0; 3] });
+        app.update();
+        let local = *app.world().get::<Transform>(root).unwrap();
+        assert_eq!(local.scale, Vec3::splat(2.0));
+        assert!((parent_pose.transform_point(local.translation) - to_bevy([20.0, 30.0, 5.0])).length() < 1e-4);
+        app.world_mut().get_mut::<Transform>(root).unwrap().translation = Vec3::ZERO;
+        app.update();
+        assert_eq!(app.world().get::<Transform>(root).unwrap().translation, Vec3::ZERO);
+        // An identical later teleport is a fresh command, not a no-op.
+        app.world_mut().resource_mut::<EntityPlacements>().set(10, fc3_story::Pose { position: [20.0, 30.0, 5.0], angles: [0.0; 3] });
+        app.update();
+        assert!((app.world().get::<Transform>(root).unwrap().translation - local.translation).length() < 1e-4);
+        let streamed = app.world_mut().spawn((crate::objects::PlacedId(10), Transform::default())).id();
+        app.update();
+        assert_eq!(app.world().get::<Transform>(streamed).unwrap().translation, to_bevy([20.0, 30.0, 5.0]));
+    }
+
+    #[test]
+    fn mission_use_hold_cancels_on_release_or_target_change_and_requires_a_fresh_press() {
+        let mut hold = StoryInteraction::default();
+        assert!(!hold.advance(Some(10), true, 0.3));
+        assert!(!hold.advance(Some(20), true, 0.3));
+        assert!(hold.advance(Some(20), true, 0.2));
+        assert!(!hold.advance(Some(20), true, 1.0));
+        assert!(!hold.advance(Some(30), true, 1.0));
+        assert!(!hold.advance(None, false, 0.0));
+        assert!(!hold.advance(Some(20), true, 0.0));
+        assert!(hold.advance(Some(20), true, USE_HOLD_SECONDS));
+        hold.advance(None, false, 0.0);
+        hold.advance(Some(20), true, 0.3);
+        hold.advance(None, true, 0.2);
+        assert!(!hold.advance(Some(20), true, 0.3));
+    }
+
+    #[test]
+    fn scripted_collision_control_survives_streaming_and_can_be_reenabled() {
+        use avian3d::prelude::{Collider, ColliderDisabled};
+        let mut app = App::new();
+        app.init_resource::<EntityPlacements>().add_systems(Update, apply_entity_physics);
+        app.world_mut().resource_mut::<EntityPlacements>().set_physics(10, false);
+        // The disable can arrive before either the entity or its collider.
+        let root = app.world_mut().spawn(crate::objects::PlacedId(10)).id();
+        app.update();
+        assert!(app.world().get::<ColliderDisabled>(root).is_some());
+        app.world_mut().entity_mut(root).insert(Collider::cuboid(1.0, 1.0, 1.0));
+        app.update();
+        assert!(app.world().get::<ColliderDisabled>(root).is_some());
+        let later = app.world_mut().spawn((crate::objects::PlacedId(10), Collider::cuboid(1.0, 1.0, 1.0))).id();
+        app.update();
+        assert!(app.world().get::<ColliderDisabled>(later).is_some());
+        app.world_mut().resource_mut::<EntityPlacements>().set_physics(10, true);
+        app.update();
+        assert!(app.world().get::<ColliderDisabled>(root).is_none());
+        assert!(app.world().get::<ColliderDisabled>(later).is_none());
     }
 }

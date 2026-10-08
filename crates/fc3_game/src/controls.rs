@@ -394,6 +394,12 @@ impl ActionState {
         self.just_pressed.remove(&a);
     }
 
+    /// An exclusive interaction owns both the tap and the held control.
+    pub fn suppress(&mut self, a: Action) {
+        self.pressed.remove(&a);
+        self.just_pressed.remove(&a);
+    }
+
     /// Drops this frame's input (a box on screen has it).
     pub fn clear(&mut self) {
         self.pressed.clear();

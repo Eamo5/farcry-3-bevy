@@ -100,13 +100,7 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.f("CAPI_Entity.GetEntityPosition", |c, (id, axis): (Text, Num)| {
         id.id().and_then(|i| c.position(i)).map(|p| p[(axis.or(0.0) as usize).min(2)] as f64).unwrap_or(0.0)
     })?;
-    let angles = |c: &Core, id: Option<u64>| -> [f32; 3] {
-        match id {
-            Some(PLAYER) => [0.0, 0.0, c.view.player_yaw],
-            Some(i) => c.data.entities.get(&i).map(|e| e.angles).or_else(|| c.data.spawn_points.get(&i).map(|s| s.angles)).unwrap_or_default(),
-            None => [0.0; 3],
-        }
-    };
+    let angles = |c: &Core, id: Option<u64>| id.map(|i| c.angles(i)).unwrap_or_default();
     r.lua("CAPI_Entity.GetEntityAngles", move |lua, c, id: Text| vec3(lua, angles(c, id.id())))?;
     r.f("CAPI_Entity.GetEntityAngle", move |c, (id, axis): (Text, Num)| angles(c, id.id())[(axis.or(0.0) as usize).min(2)] as f64)?;
     r.lua("CAPI_Entity.GetBonePos", |lua, c, (id, bone): (Text, Text)| {
@@ -343,11 +337,20 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     // A teleported player waits (behind a loading screen) for the world
     // round them: `DominoGameReady` comes once it has had time to stream.
     r.f("CAPI_Entity.TeleportEntity", |c, args: mlua::Variadic<Text>| {
-        let args: Vec<String> = args.into_iter().map(|t| t.0).collect();
-        if args.first().and_then(|a| a.parse::<u64>().ok()) == Some(PLAYER) {
+        let (Some(entity), Some(destination)) = (args.first().and_then(Text::id), args.get(1).and_then(Text::id)) else { return };
+        let Some(pose) = c.pose(destination) else { return };
+        c.poses.insert(entity, pose);
+        // Queries made later in this same script call see the new position.
+        if let Some(live) = c.view.spawned.get_mut(&entity) {
+            live.pos = pose.position;
+        }
+        if entity == PLAYER {
+            c.view.player = pose.position;
+            c.view.player_yaw = pose.angles[2];
+            c.last_player = None;
             c.world_ready_at = Some(c.time + 1.0);
         }
-        c.emit(Command::Native { name: "CAPI_Entity.TeleportEntity".into(), args });
+        c.emit(Command::Teleport { entity, pose });
     })?;
     r.f("SendRegisteredEventToEntity", |c, (entity, event, _params): (Text, Text, Value)| {
         let Some(e) = entity.id() else { return };
@@ -362,6 +365,12 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
                 c.trigger_enabled.insert(e, false);
                 c.trigger_contacts.remove(&e);
             }
+            "CProximityTriggerComponent_SetAsUsable" => c.use_rules.entry(e).or_default().usable = Some(true),
+            "CProximityTriggerComponent_SetAsUnusable" => c.use_rules.entry(e).or_default().usable = Some(false),
+            "CProximityTriggerComponent_SetCheckLookAt" => c.use_rules.entry(e).or_default().look_at = Some(true),
+            "CProximityTriggerComponent_SetNotCheckLookAt" => c.use_rules.entry(e).or_default().look_at = Some(false),
+            "CProximityTriggerComponent_SetCheckAngle" => c.use_rules.entry(e).or_default().angle = Some(true),
+            "CProximityTriggerComponent_SetNotCheckAngle" => c.use_rules.entry(e).or_default().angle = Some(false),
             _ => {}
         }
         c.emit(Command::EntityEvent { entity: e, event: event.0 });

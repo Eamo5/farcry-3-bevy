@@ -2150,6 +2150,14 @@ fn main() -> Result<()> {
                         }
                     }
                     // A character gets to its contextual action's spot.
+                    if let Command::Teleport { entity, pose } = &c {
+                        if *entity == fc3_story::PLAYER {
+                            view.player = pose.position;
+                            view.player_yaw = pose.angles[2];
+                        } else {
+                            view.spawned.entry(*entity).or_insert(fc3_story::Live { alive: true, health: 1.0, ..Default::default() }).pos = pose.position;
+                        }
+                    }
                     if let Command::Action { pawn, action: Some(ca) } = &c {
                         due.push((t + 3.0, Due::Group(*pawn, "CA_Start", *ca)));
                     }

@@ -6,6 +6,48 @@
 
 use crate::data::Entry;
 
+/// Restrictions scripts can change while a proximity trigger is active.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UseRules {
+    pub usable: Option<bool>,
+    pub inside: Option<bool>,
+    pub look_at: Option<bool>,
+    pub angle: Option<bool>,
+}
+
+/// Whether the player can use this proximity trigger from their current
+/// capsule and view. The caller checks layer, enabled state and listeners.
+pub fn can_use(e: &Entry, rules: UseRules, player: [f32; 3], eye: [f32; 3], look: [f32; 3]) -> bool {
+    let Some(prox) = e.component("CProximityTriggerComponent") else { return false };
+    if !rules.usable.unwrap_or_else(|| prox.bool("bUsable").unwrap_or(false)) {
+        return false;
+    }
+    let restrictions = prox.child("UseRestrictions");
+    let flag = |name| restrictions.and_then(|r| r.bool(name)).unwrap_or(false);
+    let inside = rules.inside.unwrap_or_else(|| flag("bIsInsideToUse"));
+    let reach = if inside { 0.0 } else { 1.0 };
+    let Some(shape) = shape_of(e) else { return false };
+    if !shape.holds(player, BODY_RADIUS + reach, BODY_HALF_HEIGHT) {
+        return false;
+    }
+    if rules.look_at.unwrap_or_else(|| flag("bLookAtCheck")) {
+        let to = [e.pos[0] - eye[0], e.pos[1] - eye[1], e.pos[2] - eye[2]];
+        let distance = to.iter().map(|v| v * v).sum::<f32>().sqrt();
+        let length = look.iter().map(|v| v * v).sum::<f32>().sqrt();
+        if distance > 0.3 && (length < 1e-6 || to.iter().zip(look).map(|(a, b)| a * b).sum::<f32>() / (distance * length) < 0.6) {
+            return false;
+        }
+    }
+    if rules.angle.unwrap_or_else(|| flag("bAngleCheck")) {
+        let length = (look[0] * look[0] + look[1] * look[1]).sqrt();
+        let (s, c) = e.angles[2].to_radians().sin_cos();
+        if length < 1e-6 || (-s * look[0] + c * look[1]) / length < 0.6 {
+            return false;
+        }
+    }
+    true
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shape {
     /// Centre, half sizes and yaw (degrees, about Dunia Z).

@@ -37,7 +37,8 @@ impl Plugin for StoryActorsPlugin {
             .init_resource::<ActorOrders>()
             .add_systems(
                 Update,
-                (spawn_actors, despawn_actors, actor_tasks, actor_alerts, actor_idle, actor_deaths).chain().run_if(in_state(crate::menu::GameState::Playing)),
+                (spawn_actors, despawn_actors, actor_tasks, actor_alerts, actor_idle, actor_deaths).chain()
+                    .after(crate::story::EntityPosesSet).run_if(in_state(crate::menu::GameState::Playing)),
             );
     }
 }
@@ -94,6 +95,22 @@ pub struct StoryActor {
     path: Vec<Vec3>,
     /// A scene (`cinema`) is playing it.
     pub in_scene: bool,
+}
+
+impl StoryActor {
+    /// A teleport invalidates the route from the old position. Keep the
+    /// action itself, but find a fresh route to its spot or next patrol leg.
+    pub fn relocate(&mut self, at: Vec3, nav: &crate::nav::NavMesh) {
+        let Some(task) = self.task.as_ref().filter(|t| !t.arrived) else { return };
+        if task.patrol.is_some() {
+            if let Some(&next) = self.path.first() {
+                let rest = self.path.iter().skip(1).copied();
+                self.path = nav.path(at, next).unwrap_or_else(|| vec![next]).into_iter().chain(rest).collect();
+            }
+        } else {
+            self.path = nav.path(at, task.target).unwrap_or_else(|| vec![task.target]);
+        }
+    }
 }
 
 /// A contextual action (a "smart terrain point"): go to its spot, then do
@@ -169,6 +186,7 @@ fn spawn_actors(
     mut last: Local<f32>,
     time: Res<Time>,
     faces: Option<ResMut<crate::faces::FaceLibrary>>,
+    placements: Res<crate::story::EntityPlacements>,
 ) {
     let (Some(host), Some(chars)) = (host, chars) else { return };
     let mut faces = faces;
@@ -192,7 +210,12 @@ fn spawn_actors(
         if e.layer != fc3_formats::world::DEFAULT_MISSION_LAYER && !layers.present.contains(&e.layer) {
             continue;
         }
-        let at = to_bevy(e.pos);
+        let pose = placements.pose(e.id).unwrap_or_else(|| Transform {
+            translation: to_bevy(e.pos),
+            rotation: Quat::from_array(fc3_formats::world::angles_to_bevy_quat(e.angles)),
+            scale: Vec3::ONE,
+        });
+        let at = pose.translation;
         if at.distance(pt.translation) > SPAWN {
             continue;
         }
@@ -206,12 +229,12 @@ fn spawn_actors(
             continue;
         }
         budget -= 1;
-        let yaw = (e.angles[2]).to_radians();
+        let yaw = pose.rotation.to_euler(EulerRot::YXZ).0;
         let fighter = fighter_of(e);
         let health = fighter.map_or(100.0, |f| f.role.stats(f.faction).health);
         let root = commands
             .spawn((
-                Transform::from_translation(at + Vec3::Y * HALF_HEIGHT).with_rotation(Quat::from_rotation_y(yaw)),
+                Transform { translation: at + Vec3::Y * HALF_HEIGHT, ..pose },
                 Visibility::Visible,
                 Health::new(health),
                 RigidBody::Kinematic,
@@ -481,12 +504,14 @@ fn actor_alerts(
             continue;
         }
         debug!(
-            "story actor {}: alerted (awareness {:.2}, sees the player {}, by {:.0?} {:.0} m off), AI takes over",
+            "story actor {}: alerted (awareness {:.2}, sees the player {}, by {:.0?} {:.0} m off), AI takes over; task {:?}, story action {:?}",
             a.id,
             npc.awareness,
             npc.sees_player,
             npc.last_known,
-            npc.last_known.map_or(0.0, |k| k.distance(t.translation))
+            npc.last_known.map_or(0.0, |k| k.distance(t.translation)),
+            a.task.as_ref().map(|t| t.action),
+            host.story.current_action(a.id)
         );
         commands.entity(entity).remove::<crate::npc::Scripted>();
         npc.post = t.translation - Vec3::Y * HALF_HEIGHT;
