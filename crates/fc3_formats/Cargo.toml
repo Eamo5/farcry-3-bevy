@@ -1,0 +1,9 @@
+[package]
+name = "fc3_formats"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+memmap2.workspace = true
+flate2.workspace = true

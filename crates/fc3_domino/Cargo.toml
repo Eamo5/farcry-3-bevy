@@ -1,0 +1,10 @@
+[package]
+name = "fc3_domino"
+description = "Runs the game's Domino mission scripts on an embedded Lua 5.1"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+fc3_formats.workspace = true
+mlua = { version = "0.12", features = ["lua51", "vendored"] }

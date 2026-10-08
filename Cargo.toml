@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/fc3_formats", "crates/fc3_tool", "crates/fc3_game", "crates/fc3_convert", "crates/fc3_domino", "crates/fc3_story"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+
+[workspace.dependencies]
+fc3_formats = { path = "crates/fc3_formats" }
+fc3_convert = { path = "crates/fc3_convert" }
+fc3_domino = { path = "crates/fc3_domino" }
+fc3_story = { path = "crates/fc3_story" }
+anyhow = "1"
+memmap2 = "0.9"
+flate2 = "1"
+
+# Bevy's mesh crate with a streaming fix (see vendor/README.md).
+[patch.crates-io]
+bevy_mesh = { path = "vendor/bevy_mesh" }
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

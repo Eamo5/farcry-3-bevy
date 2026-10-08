@@ -1,0 +1,15 @@
+[package]
+name = "fc3_tool"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "fc3tool"
+path = "src/main.rs"
+
+[dependencies]
+fc3_formats.workspace = true
+fc3_domino.workspace = true
+anyhow.workspace = true
+naga = { version = "29", features = ["wgsl-in"] }
+rayon = "1"

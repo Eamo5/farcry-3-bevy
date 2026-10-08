@@ -1,0 +1,40 @@
+//! Readers for Far Cry 3 (Dunia 2 engine) data formats.
+
+pub mod anim;
+pub mod archive;
+pub mod audio;
+pub mod cache;
+pub mod d3d9;
+pub mod d3d9_interp;
+pub mod d3d9_wgsl;
+pub mod engine;
+pub mod environment;
+pub mod fcb;
+pub mod grade;
+pub mod hash;
+pub mod havok;
+pub mod kits;
+pub mod lzo;
+pub mod material;
+pub mod original;
+pub mod lights;
+pub mod outposts;
+pub mod nav;
+pub mod oasis;
+pub mod patrols;
+pub mod traversal;
+pub mod mesh;
+pub mod reader;
+pub mod realtree;
+pub mod rml;
+pub mod scripts;
+pub mod story;
+pub mod splines;
+pub mod terrain;
+pub mod texture;
+pub mod vegetation;
+pub mod world;
+pub mod worldmap;
+pub mod xbg;
+
+pub use archive::{find_install, Vfs};

@@ -1,0 +1,18 @@
+[package]
+name = "fc3_convert"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "fc3convert"
+path = "src/main.rs"
+
+[dependencies]
+fc3_formats.workspace = true
+anyhow.workspace = true
+rayon = "1.10"
+naga = { version = "29", features = ["wgsl-in"] }
+sysinfo = { version = "0.38", default-features = false, features = ["disk"] }

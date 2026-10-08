@@ -1,0 +1,11 @@
+[package]
+name = "fc3_story"
+description = "Far Cry 3's mission system around the game's own Domino scripts"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+fc3_formats.workspace = true
+fc3_domino.workspace = true
+mlua = { version = "0.12", features = ["lua51", "vendored"] }

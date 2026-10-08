@@ -1,0 +1,27 @@
+[package]
+name = "fc3_game"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "farcry3"
+path = "src/main.rs"
+
+[dependencies]
+fc3_formats.workspace = true
+fc3_convert.workspace = true
+fc3_domino.workspace = true
+mlua = { version = "0.12", features = ["lua51", "vendored"] }
+anyhow.workspace = true
+bevy = { version = "0.19", features = ["dds"] }
+# Sounds are decoded by our own loader (`sound_source.rs`), Bevy's none.
+rodio = { version = "0.22", default-features = false, features = ["lewton", "hound"] }
+serde = { version = "1", features = ["derive"] }
+half = "2"
+# Wakes model loads waiting on the per-frame upload budget (`upload_budget.rs`).
+event-listener = "5"
+avian3d = { version = "0.7", default-features = false, features = ["3d", "f32", "parry-f32", "parallel", "collider-from-mesh", "debug-plugin"] }
+
+[features]
+# Per-system frame profiling (see `profile.rs`).
+profile = ["bevy/trace", "bevy/debug"]

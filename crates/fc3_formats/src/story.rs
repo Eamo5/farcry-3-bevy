@@ -1,0 +1,207 @@
+//! What the story runtime reads, kept in the cache at conversion.
+//!
+//! The missions are Domino scripts (see `scripts`); around them the engine
+//! keeps world data they rely on: the mission block table, always-loaded
+//! ("omni") entities such as the one running the master graph, map data,
+//! spawn points, objective markers, the reward and music templates, and the
+//! localised strings. Those generated files are copied as they are
+//! ([`RAW_FILES`]). From the world itself the story needs the entities scripts
+//! name or host, with their components: [`StoryEntity`], gathered from every
+//! sector and metasector, every mission layer included.
+
+use std::sync::Arc;
+
+use anyhow::{bail, Context, Result};
+
+use crate::fcb::Object;
+
+/// Generated game files copied into the cache as they are: (archive path,
+/// cache path).
+pub const RAW_FILES: [(&str, &str); 11] = [
+    (r"worlds\fc3_main\generated\fc3_main.managers.fcb", "story/managers.fcb"),
+    (r"worlds\fc3_main\generated\fc3_main.omnis.fcb", "story/omnis.fcb"),
+    (r"worlds\fc3_main\generated\fc3_main.mapsdata.fcb", "story/mapsdata.fcb"),
+    (r"worlds\fc3_main\generated\fc3_main.mapsdatamain.fcb", "story/mapsdatamain.fcb"),
+    (r"worlds\fc3_main\generated\fc3_main.metasectorinfos.fcb", "story/metasectorinfos.fcb"),
+    (r"worlds\fc3_main\generated\spawnpointslibrary.fcb", "story/spawnpoints.fcb"),
+    (r"worlds\fc3_main\generated\mapobjectivemarkerslibrary.fcb", "story/markers.fcb"),
+    (r"worlds\fc3_main\generated\entitylibrary_full.fcb", "story/entitylibrary.fcb"),
+    (r"generated\nomadobjecttemplates.fcb", "story/templates.fcb"),
+    (r"languages\english\oasisstrings_compressed.bin", "story/strings.bin"),
+    (r"languages\english\speechlength.bin", "story/speechlength.bin"),
+];
+
+/// The story entities, in the cache.
+pub const ENTITIES_REL: &str = "story/entities.bin";
+
+const MAGIC: &[u8; 4] = b"FCSE";
+const VERSION: u32 = 1;
+
+/// Where an entity was found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// A world sector (by id).
+    Sector(u32),
+    /// A metasector (large entities: zones, regions, mission zones).
+    Metasector(u32),
+}
+
+/// An entity the story runtime may need: one scripts name, host or switch
+/// on with a mission layer, with its components as the game stores them.
+#[derive(Debug, Clone)]
+pub struct StoryEntity {
+    pub id: u64,
+    pub layer: u64,
+    pub source: Source,
+    pub name: String,
+    pub class: String,
+    /// Dunia space (Z up) metres, and degrees.
+    pub pos: [f32; 3],
+    pub angles: [f32; 3],
+    /// The entity's `Components` object (empty when it has none).
+    pub components: Arc<Object>,
+}
+
+/// Component classes that make an entity matter to the story whatever its
+/// layer: scripts, mission zones, triggers, cinematic scenes, markers.
+pub const STORY_COMPONENTS: [&str; 8] = [
+    "CDominoComponent",
+    "CMissionZoneComponent",
+    "CTriggerComponent",
+    "CProximityTriggerComponent",
+    "CTrigger2DComponent",
+    "CCinematicSceneComponent",
+    "CMapObjectiveComponent",
+    "CSafeHouseComponent",
+];
+
+/// Whether an entity's components include one of [`STORY_COMPONENTS`].
+pub fn has_story_component(components: &Object) -> bool {
+    components.children.iter().any(|c| STORY_COMPONENTS.iter().any(|n| c.is(n)))
+}
+
+/// Entity ids written in a script (the graphs carry them as decimal
+/// strings of the 64-bit `disEntityId`).
+pub fn script_entity_ids(text: &str) -> Vec<u64> {
+    let b = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'"' {
+            let start = i + 1;
+            let mut j = start;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j < b.len() && b[j] == b'"' && j - start >= 12 {
+                if let Ok(id) = text[start..j].parse::<u64>() {
+                    out.push(id);
+                }
+            }
+            i = j.max(start);
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+pub fn to_bytes(entities: &[StoryEntity]) -> Vec<u8> {
+    let mut body = Vec::new();
+    let s = |out: &mut Vec<u8>, text: &str| {
+        out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+        out.extend_from_slice(text.as_bytes());
+    };
+    body.extend_from_slice(&(entities.len() as u32).to_le_bytes());
+    for e in entities {
+        body.extend_from_slice(&e.id.to_le_bytes());
+        body.extend_from_slice(&e.layer.to_le_bytes());
+        let (kind, id) = match e.source {
+            Source::Sector(id) => (0u8, id),
+            Source::Metasector(id) => (1u8, id),
+        };
+        body.push(kind);
+        body.extend_from_slice(&id.to_le_bytes());
+        s(&mut body, &e.name);
+        s(&mut body, &e.class);
+        for v in e.pos.iter().chain(&e.angles) {
+            body.extend_from_slice(&v.to_le_bytes());
+        }
+        let c = crate::fcb::encode(&e.components);
+        body.extend_from_slice(&(c.len() as u32).to_le_bytes());
+        body.extend_from_slice(&c);
+    }
+    let mut out = Vec::new();
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&VERSION.to_le_bytes());
+    out.extend_from_slice(&crate::cache::compress(&body));
+    out
+}
+
+pub fn from_bytes(data: &[u8]) -> Result<Vec<StoryEntity>> {
+    if data.len() < 8 || &data[..4] != MAGIC {
+        bail!("not a story entity table");
+    }
+    if data[4..8] != VERSION.to_le_bytes() {
+        bail!("story entity table version");
+    }
+    let body = crate::cache::decompress(&data[8..])?;
+    let mut r = crate::reader::Reader::new(&body);
+    let n = r.u32()? as usize;
+    let mut out = Vec::with_capacity(n);
+    let text = |r: &mut crate::reader::Reader| -> Result<String> {
+        let len = r.u32()? as usize;
+        Ok(String::from_utf8_lossy(r.bytes(len)?).into_owned())
+    };
+    for _ in 0..n {
+        let id = r.u64()?;
+        let layer = r.u64()?;
+        let kind = r.u8()?;
+        let source_id = r.u32()?;
+        let source = if kind == 0 { Source::Sector(source_id) } else { Source::Metasector(source_id) };
+        let name = text(&mut r)?;
+        let class = text(&mut r)?;
+        let mut v = [0f32; 6];
+        for x in &mut v {
+            *x = r.f32()?;
+        }
+        let len = r.u32()? as usize;
+        let components = crate::fcb::decode(r.bytes(len)?).context("story entity components")?;
+        out.push(StoryEntity { id, layer, source, name, class, pos: [v[0], v[1], v[2]], angles: [v[3], v[4], v[5]], components });
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_roundtrip() {
+        let comp = Arc::new(Object {
+            name_hash: crate::hash::name_hash("Components"),
+            fields: vec![],
+            children: vec![Arc::new(Object { name_hash: crate::hash::name_hash("CDominoComponent"), fields: vec![(1, vec![1])], children: vec![] })],
+        });
+        let e = StoryEntity {
+            id: 2074483636964429852,
+            layer: 0x64,
+            source: Source::Metasector(270583456),
+            name: "Zone".into(),
+            class: "CEntity".into(),
+            pos: [1.0, 2.0, 3.0],
+            angles: [0.0, 0.0, 90.0],
+            components: comp,
+        };
+        let back = from_bytes(&to_bytes(&[e.clone()])).unwrap();
+        assert_eq!(back.len(), 1);
+        assert_eq!((back[0].id, back[0].source, back[0].name.as_str(), back[0].angles), (e.id, e.source, "Zone", e.angles));
+        assert!(has_story_component(&back[0].components));
+    }
+
+    #[test]
+    fn finds_entity_ids_in_scripts() {
+        let text = r##"l0.Door = "2074866577666216923"; l0.Count = "12"; x = "abc"; y = "#70B1A04C""##;
+        assert_eq!(script_entity_ids(text), vec![2074866577666216923]);
+    }
+}

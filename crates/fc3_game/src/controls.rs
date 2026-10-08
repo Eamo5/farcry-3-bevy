@@ -1,0 +1,450 @@
+//! Player input as actions: rebindable keyboard and mouse bindings plus a fixed
+//! gamepad layout, merged once per frame into [`ActionState`], which gameplay
+//! systems read instead of raw devices.
+
+use std::collections::{HashMap, HashSet};
+
+use bevy::input::gamepad::{Gamepad, GamepadAxis, GamepadButton};
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
+use bevy::input::InputSystems;
+use bevy::prelude::*;
+
+use crate::player::InputCaptured;
+use crate::settings::Settings;
+
+pub struct ControlsPlugin;
+
+impl Plugin for ControlsPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<ActionState>().add_systems(PreUpdate, update_actions.after(InputSystems));
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Action {
+    Forward,
+    Back,
+    Left,
+    Right,
+    Jump,
+    Crouch,
+    Sprint,
+    SwimDown,
+    Fire,
+    Aim,
+    Reload,
+    Interact,
+    Grenade,
+    Molotov,
+    Medkit,
+    Melee,
+    NextWeapon,
+    PrevWeapon,
+    Map,
+    Tag,
+    ThrowRock,
+    C4,
+    Mine,
+}
+
+impl Action {
+    /// Rebindable actions, in the order the options screen lists them.
+    pub const ALL: [Action; 23] = [
+        Action::Forward,
+        Action::Back,
+        Action::Left,
+        Action::Right,
+        Action::Jump,
+        Action::Crouch,
+        Action::Sprint,
+        Action::SwimDown,
+        Action::Fire,
+        Action::Aim,
+        Action::Reload,
+        Action::Interact,
+        Action::Grenade,
+        Action::Molotov,
+        Action::Medkit,
+        Action::Melee,
+        Action::NextWeapon,
+        Action::PrevWeapon,
+        Action::Map,
+        Action::Tag,
+        Action::ThrowRock,
+        Action::C4,
+        Action::Mine,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Action::Forward => "Move forward",
+            Action::Back => "Move back",
+            Action::Left => "Move left",
+            Action::Right => "Move right",
+            Action::Jump => "Jump / swim up",
+            Action::Crouch => "Crouch",
+            Action::Sprint => "Sprint",
+            Action::SwimDown => "Swim down",
+            Action::Fire => "Fire",
+            Action::Aim => "Aim",
+            Action::Reload => "Reload",
+            Action::Interact => "Interact",
+            Action::Grenade => "Throw grenade",
+            Action::Molotov => "Throw molotov",
+            Action::Medkit => "Use medkit",
+            Action::Melee => "Melee / takedown",
+            Action::NextWeapon => "Next weapon",
+            Action::PrevWeapon => "Previous weapon",
+            Action::Map => "Map",
+            Action::Tag => "Tag enemies",
+            Action::ThrowRock => "Throw rock",
+            Action::C4 => "C4 (hold: detonate)",
+            Action::Mine => "Lay a mine",
+        }
+    }
+
+    /// Stable key for the settings file.
+    pub fn id(self) -> &'static str {
+        match self {
+            Action::Forward => "forward",
+            Action::Back => "back",
+            Action::Left => "left",
+            Action::Right => "right",
+            Action::Jump => "jump",
+            Action::Crouch => "crouch",
+            Action::Sprint => "sprint",
+            Action::SwimDown => "swim_down",
+            Action::Fire => "fire",
+            Action::Aim => "aim",
+            Action::Reload => "reload",
+            Action::Interact => "interact",
+            Action::Grenade => "grenade",
+            Action::Molotov => "molotov",
+            Action::Medkit => "medkit",
+            Action::Melee => "melee",
+            Action::NextWeapon => "next_weapon",
+            Action::PrevWeapon => "prev_weapon",
+            Action::Map => "map",
+            Action::Tag => "tag",
+            Action::ThrowRock => "rock",
+            Action::C4 => "c4",
+            Action::Mine => "mine",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Action> {
+        Action::ALL.into_iter().find(|a| a.id() == id)
+    }
+
+    fn gamepad(self) -> &'static [GamepadButton] {
+        use GamepadButton as B;
+        match self {
+            Action::Jump => &[B::South],
+            Action::Crouch => &[B::East],
+            Action::Sprint => &[B::LeftThumb],
+            Action::SwimDown => &[B::DPadDown],
+            Action::Fire => &[B::RightTrigger2],
+            Action::Aim => &[B::LeftTrigger2],
+            Action::Reload | Action::Interact => &[B::West],
+            Action::Grenade => &[B::LeftTrigger],
+            Action::Molotov => &[B::DPadDown],
+            Action::Medkit => &[B::DPadUp],
+            Action::Melee => &[B::RightThumb],
+            Action::NextWeapon => &[B::North],
+            Action::PrevWeapon => &[],
+            // D-pad left: a tap throws a rock, a hold lays a mine (see `update_actions`).
+            Action::ThrowRock | Action::Mine => &[B::DPadLeft],
+            Action::C4 => &[B::DPadRight],
+            Action::Map => &[B::Select],
+            Action::Tag => &[B::RightTrigger],
+            Action::Forward | Action::Back | Action::Left | Action::Right => &[],
+        }
+    }
+}
+
+/// A keyboard key or mouse button.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Binding {
+    Key(KeyCode),
+    Mouse(MouseButton),
+}
+
+impl Binding {
+    pub fn label(self) -> String {
+        match self {
+            Binding::Mouse(MouseButton::Left) => "LMB".into(),
+            Binding::Mouse(MouseButton::Right) => "RMB".into(),
+            Binding::Mouse(MouseButton::Middle) => "MMB".into(),
+            Binding::Mouse(MouseButton::Back) => "Mouse 4".into(),
+            Binding::Mouse(MouseButton::Forward) => "Mouse 5".into(),
+            Binding::Mouse(m) => format!("{m:?}"),
+            Binding::Key(k) => {
+                let s = format!("{k:?}");
+                let s = s.strip_prefix("Key").or_else(|| s.strip_prefix("Digit")).unwrap_or(&s).to_string();
+                match s.as_str() {
+                    "ShiftLeft" => "Shift".into(),
+                    "ControlLeft" => "Ctrl".into(),
+                    "AltLeft" => "Alt".into(),
+                    _ => s,
+                }
+            }
+        }
+    }
+
+    /// Settings-file form (`key:KeyW`, `mouse:Left`).
+    pub fn id(self) -> String {
+        match self {
+            Binding::Key(k) => format!("key:{k:?}"),
+            Binding::Mouse(m) => format!("mouse:{m:?}"),
+        }
+    }
+
+    pub fn from_id(s: &str) -> Option<Binding> {
+        if let Some(m) = s.strip_prefix("mouse:") {
+            return Some(Binding::Mouse(match m {
+                "Left" => MouseButton::Left,
+                "Right" => MouseButton::Right,
+                "Middle" => MouseButton::Middle,
+                "Back" => MouseButton::Back,
+                "Forward" => MouseButton::Forward,
+                _ => return None,
+            }));
+        }
+        let k = s.strip_prefix("key:")?;
+        KEYS.iter().find(|key| format!("{key:?}") == k).map(|key| Binding::Key(*key))
+    }
+}
+
+/// Keys that can be bound (and parsed back from the settings file).
+pub const KEYS: &[KeyCode] = &{
+    use KeyCode as K;
+    [
+        K::KeyA, K::KeyB, K::KeyC, K::KeyD, K::KeyE, K::KeyF, K::KeyG, K::KeyH, K::KeyI, K::KeyJ, K::KeyK, K::KeyL, K::KeyM,
+        K::KeyN, K::KeyO, K::KeyP, K::KeyQ, K::KeyR, K::KeyS, K::KeyT, K::KeyU, K::KeyV, K::KeyW, K::KeyX, K::KeyY, K::KeyZ,
+        K::Digit0, K::Digit9, K::Space, K::ShiftLeft, K::ShiftRight, K::ControlLeft, K::ControlRight, K::AltLeft, K::Tab,
+        K::CapsLock, K::Backquote, K::Enter, K::Backspace, K::ArrowUp, K::ArrowDown, K::ArrowLeft, K::ArrowRight,
+        K::Insert, K::Delete, K::Home, K::End, K::PageUp, K::PageDown, K::Numpad0, K::Numpad1, K::Numpad2, K::Numpad3,
+        K::Numpad4, K::Numpad5, K::Numpad6, K::Numpad7, K::Numpad8, K::Numpad9, K::F5, K::F6, K::F7, K::F8, K::F9,
+        K::Comma, K::Period, K::Slash, K::Semicolon, K::Quote, K::BracketLeft, K::BracketRight, K::Backslash, K::Minus, K::Equal,
+    ]
+};
+
+/// Default keyboard and mouse bindings.
+pub fn default_bindings() -> HashMap<Action, Binding> {
+    use Binding::{Key, Mouse};
+    use KeyCode as K;
+    HashMap::from([
+        (Action::Forward, Key(K::KeyW)),
+        (Action::Back, Key(K::KeyS)),
+        (Action::Left, Key(K::KeyA)),
+        (Action::Right, Key(K::KeyD)),
+        (Action::Jump, Key(K::Space)),
+        (Action::Crouch, Key(K::ControlLeft)),
+        (Action::Sprint, Key(K::ShiftLeft)),
+        (Action::SwimDown, Key(K::KeyC)),
+        (Action::Fire, Mouse(MouseButton::Left)),
+        (Action::Aim, Mouse(MouseButton::Right)),
+        (Action::Reload, Key(K::KeyR)),
+        (Action::Interact, Key(K::KeyE)),
+        (Action::Grenade, Key(K::KeyG)),
+        (Action::Molotov, Key(K::KeyQ)),
+        (Action::Medkit, Key(K::KeyH)),
+        (Action::Melee, Key(K::KeyF)),
+        (Action::NextWeapon, Key(K::KeyX)),
+        (Action::PrevWeapon, Key(K::KeyZ)),
+        (Action::Map, Key(K::KeyM)),
+        (Action::Tag, Key(K::KeyB)),
+        (Action::ThrowRock, Mouse(MouseButton::Middle)),
+        (Action::C4, Key(K::KeyJ)),
+        (Action::Mine, Key(K::KeyK)),
+    ])
+}
+
+/// This frame's player input.
+#[derive(Resource, Default)]
+pub struct ActionState {
+    pressed: HashSet<Action>,
+    just_pressed: HashSet<Action>,
+    /// Movement: x right, y forward, length up to 1 (analogue on a gamepad).
+    pub movement: Vec2,
+    /// View turn this frame in radians: x yaw right, y pitch up.
+    pub look: Vec2,
+    /// Weapon cycling from the mouse wheel (-1, 0, 1).
+    pub cycle: i32,
+    /// Whether the gamepad was the last device used (for prompts).
+    pub gamepad_active: bool,
+    sprint_latch: bool,
+    crouch_latch: bool,
+    /// How long the gamepad's D-pad left has been held.
+    pad_hold: f32,
+}
+
+/// Holding D-pad left this long lays a mine instead of throwing a rock.
+const PAD_HOLD: f32 = 0.35;
+
+impl ActionState {
+    pub fn pressed(&self, a: Action) -> bool {
+        self.pressed.contains(&a)
+    }
+
+    pub fn just_pressed(&self, a: Action) -> bool {
+        self.just_pressed.contains(&a)
+    }
+
+    /// Presses an action this frame (scripted tests).
+    pub fn press(&mut self, a: Action) {
+        self.pressed.insert(a);
+        self.just_pressed.insert(a);
+    }
+
+    /// Holds an action down this frame without a fresh press (scripted tests).
+    pub fn hold(&mut self, a: Action) {
+        self.pressed.insert(a);
+    }
+
+    /// Marks a press as handled so later systems don't act on it too.
+    pub fn consume(&mut self, a: Action) {
+        self.just_pressed.remove(&a);
+    }
+
+    /// Prompt label for an action on the device in use.
+    pub fn label(&self, a: Action, settings: &Settings) -> String {
+        if self.gamepad_active {
+            if a == Action::Mine {
+                return "hold DPadLeft".into();
+            }
+            return match a.gamepad().first() {
+                Some(GamepadButton::South) => "A".into(),
+                Some(GamepadButton::East) => "B".into(),
+                Some(GamepadButton::West) => "X".into(),
+                Some(GamepadButton::North) => "Y".into(),
+                Some(b) => format!("{b:?}"),
+                None => "-".into(),
+            };
+        }
+        settings.binding(a).map(|b| b.label()).unwrap_or_else(|| "-".into())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn update_actions(
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    motion: Res<AccumulatedMouseMotion>,
+    scroll: Res<AccumulatedMouseScroll>,
+    gamepads: Query<&Gamepad>,
+    captured: Res<InputCaptured>,
+    settings: Res<Settings>,
+    time: Res<Time<Real>>,
+    mut state: ResMut<ActionState>,
+) {
+    let previous = std::mem::take(&mut state.pressed);
+    state.just_pressed.clear();
+    state.look = Vec2::ZERO;
+    state.cycle = 0;
+    state.movement = Vec2::ZERO;
+    let mut pressed = HashSet::new();
+    let mut device_keyboard = false;
+    let mut device_pad = false;
+
+    // Keyboard and mouse, only while the game has the cursor.
+    if captured.0 {
+        for a in Action::ALL {
+            let down = match settings.binding(a) {
+                Some(Binding::Key(k)) => keys.pressed(k),
+                Some(Binding::Mouse(m)) => mouse.pressed(m),
+                None => false,
+            };
+            if down {
+                pressed.insert(a);
+                device_keyboard = true;
+            }
+        }
+        let invert = if settings.invert_y { -1.0 } else { 1.0 };
+        let mouse_scale = 0.0022 * settings.sensitivity;
+        state.look += Vec2::new(motion.delta.x, -motion.delta.y * invert) * mouse_scale;
+        if motion.delta.length_squared() > 4.0 {
+            device_keyboard = true;
+        }
+        state.cycle = -scroll.delta.y.signum() as i32;
+        let axis = |pos: Action, neg: Action| f32::from(u8::from(pressed.contains(&pos))) - f32::from(u8::from(pressed.contains(&neg)));
+        state.movement = Vec2::new(axis(Action::Right, Action::Left), axis(Action::Forward, Action::Back));
+    }
+
+    // Gamepad: works whenever play has focus (no cursor capture needed).
+    if let Some(pad) = gamepads.iter().next() {
+        let dead = |v: Vec2, zone: f32| {
+            let l = v.length();
+            if l < zone {
+                Vec2::ZERO
+            } else {
+                v / l * ((l - zone) / (1.0 - zone)).min(1.0)
+            }
+        };
+        let stick = |x, y| Vec2::new(pad.get(x).unwrap_or(0.0), pad.get(y).unwrap_or(0.0));
+        let left = dead(stick(GamepadAxis::LeftStickX, GamepadAxis::LeftStickY), 0.18);
+        let right = dead(stick(GamepadAxis::RightStickX, GamepadAxis::RightStickY), 0.15);
+        if left != Vec2::ZERO || right != Vec2::ZERO {
+            device_pad = true;
+        }
+        let invert = if settings.invert_y { -1.0 } else { 1.0 };
+        // Response curve: fine aim near the centre, fast turns at full tilt.
+        let curved = right * right.length();
+        let rate = 3.2 * settings.gamepad_sensitivity;
+        state.look += Vec2::new(curved.x, curved.y * invert) * rate * time.delta_secs().min(0.05);
+        state.movement += left;
+        // D-pad left: a rock on a tap (on letting go), a mine on a hold.
+        if pad.pressed(GamepadButton::DPadLeft) {
+            device_pad = true;
+            let before = state.pad_hold;
+            state.pad_hold += time.delta_secs();
+            if before < PAD_HOLD && state.pad_hold >= PAD_HOLD {
+                pressed.insert(Action::Mine);
+            }
+        } else {
+            if state.pad_hold > 0.0 && state.pad_hold < PAD_HOLD {
+                pressed.insert(Action::ThrowRock);
+            }
+            state.pad_hold = 0.0;
+        }
+        for a in Action::ALL {
+            if matches!(a, Action::ThrowRock | Action::Mine) {
+                continue;
+            }
+            let buttons = a.gamepad();
+            if buttons.iter().any(|b| pad.pressed(*b)) {
+                pressed.insert(a);
+                device_pad = true;
+            }
+            // Click-to-sprint and press-to-crouch latch on a gamepad.
+            if a == Action::Sprint && buttons.iter().any(|b| pad.just_pressed(*b)) {
+                state.sprint_latch = true;
+            }
+            if a == Action::Crouch && buttons.iter().any(|b| pad.just_pressed(*b)) {
+                state.crouch_latch = !state.crouch_latch;
+            }
+        }
+        if left.length() < 0.3 {
+            state.sprint_latch = false;
+        }
+        if state.sprint_latch {
+            pressed.insert(Action::Sprint);
+            state.crouch_latch = false;
+        }
+        if state.crouch_latch {
+            pressed.insert(Action::Crouch);
+        }
+    }
+    state.movement = state.movement.clamp_length_max(1.0);
+    if device_pad {
+        state.gamepad_active = true;
+    } else if device_keyboard {
+        state.gamepad_active = false;
+    }
+    for a in &pressed {
+        if !previous.contains(a) {
+            state.just_pressed.insert(*a);
+        }
+    }
+    state.pressed = pressed;
+}
