@@ -33,12 +33,14 @@ impl Plugin for StoryPlugin {
             .init_resource::<ObjectiveMarkers>()
             .init_resource::<HiddenEntities>()
             .init_resource::<EntityPlacements>()
+            .init_resource::<StoryPurchases>()
             .add_systems(Update, hide_entities.after(StorySet))
             .add_systems(Update, apply_entity_poses.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, apply_entity_physics.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, draw_markers.after(StorySet))
             .add_systems(PreUpdate, story_boxes.after(crate::controls::update_actions))
             .add_systems(PreUpdate, story_interactions.after(story_boxes))
+            .add_systems(PreUpdate, collect_shop_purchases)
             .add_systems(Startup, setup_story_ui)
             .add_systems(Update, fade_screen)
             .add_systems(Update, start_story.after(crate::save::continue_game).run_if(in_state(GameState::Playing)))
@@ -167,6 +169,25 @@ fn apply_entity_poses(
     }
 }
 
+/// Purchases made while mission simulation is paused (the shop).
+#[derive(Resource, Default)]
+struct StoryPurchases(Vec<crate::progression::ItemBought>);
+
+/// Bevy messages expire after two frames, even while virtual time is paused.
+/// Keep shop events until the mission can consume them with play resumed.
+fn collect_shop_purchases(
+    host: Option<NonSend<StoryHost>>,
+    mut bought: MessageReader<crate::progression::ItemBought>,
+    mut pending: ResMut<StoryPurchases>,
+) {
+    if host.is_some() {
+        pending.0.extend(bought.read().cloned());
+    } else {
+        bought.clear();
+        pending.0.clear();
+    }
+}
+
 /// The running story (its Lua state lives on the main thread).
 pub struct StoryHost {
     pub story: Story,
@@ -197,6 +218,15 @@ pub struct StoryHost {
 }
 
 impl StoryHost {
+    fn forward_purchases(&mut self, purchases: &mut StoryPurchases) {
+        for b in purchases.0.drain(..) {
+            if let Some((archetype, id)) = b.model.as_ref().and_then(|m| self.shop_items.get(m)) {
+                self.story.entity_event(fc3_story::PLAYER, "CPawnBuyItemEvent",
+                    vec![Arg::Str(archetype.clone()), Arg::Str("Name".into()), Arg::Str(id.to_string())]);
+            }
+        }
+    }
+
     fn new(story: Story, checkpoint: Option<fc3_story::save::StorySave>) -> StoryHost {
         StoryHost {
             story,
@@ -427,6 +457,10 @@ impl ScriptedPlayer {
         self.gadgets.iter().any(|g| g.eq_ignore_ascii_case(archetype))
     }
 
+    pub fn has_camera(&self) -> bool {
+        self.gadgets.iter().any(|g| camera_gadget(g))
+    }
+
     fn backup_inventory(&mut self, inv: &crate::weapons::Inventory) {
         self.backup = Some(InventoryBackup {
             slots: inv.slots.clone(), current: inv.current,
@@ -445,6 +479,10 @@ impl ScriptedPlayer {
         self.gadgets = backup.gadgets;
         crate::weapons::settle_unarmed(inv);
     }
+}
+
+fn camera_gadget(archetype: &str) -> bool {
+    ["gadgets:Equipped/Tablet", "gadgets:Equipped/Binoculars"].iter().any(|g| archetype.eq_ignore_ascii_case(g))
 }
 
 /// Inventory entries as the original scripts name them. Empty hands are not
@@ -598,6 +636,13 @@ fn start_story(world: &mut World, mut tried: Local<bool>) {
             Some((it.next()?.to_string(), (it.next()?.to_string(), it.next()?.parse().ok()?)))
         })
         .collect();
+    // The old model-name lookup includes menu and signature prototypes that
+    // share a model. Prefer the shopping database's actual base item identity.
+    if let Some(catalog) = world.get_resource::<crate::progression::ShopCatalog>() {
+        for weapon in catalog.0.iter().filter(|w| w.is_base()) {
+            host.shop_items.insert(weapon.model.clone(), (weapon.archetype.clone(), weapon.name_id));
+        }
+    }
     world.insert_non_send(host);
 }
 
@@ -618,7 +663,10 @@ fn run_story(
     actors: Query<(&crate::story_actors::StoryActor, &Transform, Option<&crate::npc::Npc>), Without<Player>>,
     mut orders: ResMut<crate::story_actors::ActorOrders>,
     mut scripted: ResMut<ScriptedPlayer>,
-    (mut inventory, mut clock): (Query<&mut crate::weapons::Inventory, With<Player>>, ResMut<crate::sky::TimeOfDay>),
+    (mut inventory, mut clock, catalog, mut shop_override): (
+        Query<&mut crate::weapons::Inventory, With<Player>>, ResMut<crate::sky::TimeOfDay>,
+        Res<crate::progression::ShopCatalog>, ResMut<crate::progression::ShopOverride>,
+    ),
     (mut area, mut cinema, mut placements): (ResMut<MissionArea>, ResMut<crate::cinema::Cinema>, ResMut<EntityPlacements>),
     (actions, mut markers, heights, mut voices): (
         Res<crate::controls::ActionState>,
@@ -630,7 +678,7 @@ fn run_story(
         Res<CacheInfo>,
         Res<crate::save::SaveSlot>,
         Res<crate::settings::Settings>,
-        MessageReader<crate::progression::ItemBought>,
+        ResMut<StoryPurchases>,
         MessageReader<crate::traversal::TowerTaken>,
         Res<crate::traversal::Ways>,
     ),
@@ -686,6 +734,8 @@ fn run_story(
             orders.0.clear();
             cinema.reset();
             *scripted = ScriptedPlayer::default();
+            shop_override.0 = None;
+            bought.0.clear();
             ui.objective = None;
             ui.hints.clear();
             ui.boxes.clear();
@@ -745,7 +795,7 @@ fn run_story(
         }
     }
     view.player_state.gadgets.extend(scripted.gadgets.iter().map(|name| {
-        let camera = name.ends_with("/Tablet");
+        let camera = camera_gadget(name);
         fc3_story::Item {
             name: name.clone(), count: 1,
             category: if camera { "binoculars" } else { "" }.into(),
@@ -814,15 +864,7 @@ fn run_story(
     }
     // Purchases, as the shop's buy event on the player (the game's item,
     // its name's section and string id).
-    for b in bought.read() {
-        if let Some((archetype, id)) = b.model.as_ref().and_then(|m| host.shop_items.get(m)) {
-            host.story.entity_event(
-                fc3_story::PLAYER,
-                "CPawnBuyItemEvent",
-                vec![Arg::Str(archetype.clone()), Arg::Str("Name".into()), Arg::Str(id.to_string())],
-            );
-        }
-    }
+    host.forward_purchases(&mut bought);
     let commands = host.story.update(dt, view);
     ui.timers = host.story.timers();
     let data = host.story.data();
@@ -898,14 +940,20 @@ fn run_story(
             noise.write(crate::npc::Noise { at: at + Vec3::new(3.0, 0.0, 0.0), radius: 6.0 });
             host.quiet = 0.0;
         } else if !host.used.contains(&(0, "buy".into())) && host.story.waiting_on().iter().any(|w| w.contains("CPawnBuyItemEvent")) {
-            // A purchase awaited: everything is bought (scripts keep to theirs).
-            info!("story autopilot: buy");
-            host.used.insert((0, "buy".into()));
-            let items: Vec<(String, u32)> = host.shop_items.values().cloned().collect();
-            for (archetype, id) in items {
-                host.story.entity_event(fc3_story::PLAYER, "CPawnBuyItemEvent", vec![Arg::Str(archetype), Arg::Str("Name".into()), Arg::Str(id.to_string())]);
+            if shop_override.0.is_some() {
+                // The tutorial's smoke purchase uses the UI's real transaction,
+                // rather than emitting a purchase for an unowned weapon.
+                if let Some(item) = inventory.single_mut().ok().and_then(|mut inv|
+                    crate::progression::purchase_tutorial_weapon(&mut inv, &mut progress, &perks, &catalog, &shop_override)) {
+                    if let Some((archetype, id)) = item.model.as_ref().and_then(|m| host.shop_items.get(m)) {
+                        info!("story autopilot: bought {archetype}");
+                        host.story.entity_event(fc3_story::PLAYER, "CPawnBuyItemEvent",
+                            vec![Arg::Str(archetype.clone()), Arg::Str("Name".into()), Arg::Str(id.to_string())]);
+                        host.used.insert((0, "buy".into()));
+                        host.quiet = 0.0;
+                    }
+                }
             }
-            host.quiet = 0.0;
         } else if let Some((id, name)) = host.story.gameplays().into_iter().find(|g| g.1 != "QTEGSF") {
             // A minigame or QTE the game doesn't play yet: done.
             info!("story autopilot: end gameplay {name}");
@@ -1146,6 +1194,7 @@ fn run_story(
                     "CAPI_Player.SetMovementSensitivity" => scripted.movement = a(1).parse().unwrap_or(1.0f32).clamp(0.0, 2.0),
                     "EnableGodMode" => scripted.god = a(0) != "0" && a(0) != "false",
                     "SetHudVisible" => scripted.hud_hidden = a(0) == "0" || a(0) == "false",
+                    "OverrideShopMenu" => shop_override.set(a(0) == "true" || a(0) == "1", a(1).parse().unwrap_or(0), a(2).parse().unwrap_or(0)),
                     "CAPI_Player.StartPostFX" | "CAPI_Player.StopPostFX" => {
                         let on = name.ends_with("StartPostFX");
                         match a(1).to_ascii_lowercase().as_str() {
@@ -1678,6 +1727,50 @@ mod tests {
     use super::*;
     use crate::controls::{Action, ActionState, Binding};
     use crate::settings::Settings;
+
+    #[test]
+    fn a_shop_purchase_survives_paused_frames_and_reaches_the_mission_once() {
+        let pack = fc3_formats::scripts::ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap();
+        let story = Story::new(pack, fc3_story::data::StoryData::default()).unwrap();
+        story.domino().lua().load(r#"
+            purchase = { count = 0 }
+            purchase._type = { Got = function(self, archetype, field, id)
+                self.count = self.count + 1
+                self.archetype, self.field, self.id = archetype, field, id
+            end }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("1", purchase, "Got", "CPawnBuyItemEvent")
+        "#).exec().unwrap();
+        let mut host = StoryHost::new(story, None);
+        host.shop_items.insert("pistol.xbg".into(), ("weapons:TestPistol".into(), 999));
+        fn forward(mut host: NonSendMut<StoryHost>, mut pending: ResMut<StoryPurchases>) {
+            host.forward_purchases(&mut pending);
+        }
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(State::new(GameState::Shop))
+            .insert_non_send(host)
+            .init_resource::<StoryPurchases>()
+            .add_message::<crate::progression::ItemBought>()
+            .add_systems(PreUpdate, collect_shop_purchases)
+            .add_systems(Update, forward.run_if(in_state(GameState::Playing)));
+        app.world_mut().write_message(crate::progression::ItemBought { model: Some("pistol.xbg".into()) });
+        app.world_mut().write_message(crate::progression::ItemBought { model: None });
+        for _ in 0..8 { app.update(); }
+        assert_eq!(app.world().resource::<StoryPurchases>().0.len(), 2);
+        let count = |app: &App| app.world().non_send::<StoryHost>().story.domino().lua()
+            .globals().get::<mlua::Table>("purchase").unwrap().get::<u32>("count").unwrap();
+        assert_eq!(count(&app), 0);
+        app.insert_resource(State::new(GameState::Playing));
+        app.update();
+        assert!(app.world().resource::<StoryPurchases>().0.is_empty());
+        assert_eq!(count(&app), 1);
+        let purchase = app.world().non_send::<StoryHost>().story.domino().lua().globals().get::<mlua::Table>("purchase").unwrap();
+        assert_eq!(purchase.get::<String>("archetype").unwrap(), "weapons:TestPistol");
+        assert_eq!(purchase.get::<String>("field").unwrap(), "Name");
+        assert_eq!(purchase.get::<String>("id").unwrap(), "999");
+        for _ in 0..4 { app.update(); }
+        assert_eq!(count(&app), 1);
+    }
 
     #[test]
     fn campaign_prompts_follow_rebinding_and_device() {

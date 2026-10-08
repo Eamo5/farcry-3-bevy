@@ -840,6 +840,28 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
+    // ---- weapon stock: authored item/category ids and prices
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::shop::WEAPONS_REL) {
+        let stock = (|| -> Result<_> {
+            let items = job.vfs.read(fc3_formats::shop::ITEMS_LIB)?;
+            let at = items.windows(4).position(|w| w == b"nbCF").context("no shopping FCB header")?;
+            let items = fc3_formats::fcb::parse(&items[at..])?;
+            let library = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
+            let at = library.windows(4).position(|w| w == b"nbCF").context("no entity library FCB header")?;
+            let library = fc3_formats::fcb::parse(&library[at..])?;
+            Ok(fc3_formats::shop::weapons(&items, &library))
+        })();
+        match stock {
+            Ok(stock) => {
+                let text = fc3_formats::shop::to_text(&stock);
+                if let Err(e) = write_atomic(job.root(), fc3_formats::shop::WEAPONS_REL, text.as_bytes(), job.ctx) {
+                    job.error(format!("weapon shop: {e:#}"));
+                }
+            }
+            Err(e) => job.error(format!("weapon shop: {e:#}")),
+        }
+    }
+
     // ---- the clips the story's contextual actions play
     if opts.only_sectors.is_none() && (job.should_write(fc3_formats::moves::CA_MOVES_REL) || job.should_write(fc3_formats::moves::MOVES_REL)) {
         if let Err(e) = convert_ca_moves(&job) {

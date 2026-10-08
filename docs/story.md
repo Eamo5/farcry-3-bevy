@@ -147,7 +147,12 @@ is the story's own:
   `QTE0_Fail` (and `PlayerDie`), then the gameplay ends.
 * **Shops**: liberated outposts and the world's shopkeepers keep one; a
   weapon bought raises `CPawnBuyItemEvent` (archetype, `Name`, the shop name's
-  string id) on the player.
+  string id) on the player. The converter joins the shopping database to the
+  entity library in `story/shop_weapons.txt`; supported base weapons use their
+  authored prices. Shared-model signature/DLC variants are not treated as
+  base weapons. `OverrideShopMenu` restricts the first-shop tutorial to its
+  requested item, until the script releases it. Purchases made while the shop
+  pauses gameplay are retained and delivered once when play resumes.
 * **Player queries**: money, medkits, carry slots, equipped and carried
   weapons (using the shop's archetype names), gadgets, learned skills,
   stance, zip-line state, look angles, tagged story actors, difficulty and
@@ -159,6 +164,7 @@ is the story's own:
   removal clears carried explosives as well.
   Mission inventory backups restore those gadgets, carried ammunition and
   explosives, and the previously selected weapon, once.
+  The camera accepts both the tablet and the binoculars granted by Dennis.
 * **Scene lifetime**: sequences retain their meta-sequence owner; stopping
   that owner releases its looping scenes and character overrides, without
   stopping unrelated scenes or the host's QTE phases.
@@ -205,8 +211,9 @@ is the story's own:
 * In the game: `FC3_STORY_AUTOPILOT=1` plays without a player: it steps
   into the triggers scripts wait on, looks at look-at triggers, gives the
   inputs they listen for, makes a noise by a guard whose action a script
-  waits to see broken off, accepts boxes, buys from the shop when a script
-  waits on a purchase, wins QTEs, ends other specific gameplays, and is
+  waits to see broken off, accepts boxes, buys the tutorial shop's selected
+  weapon using the actual priced inventory transaction, wins QTEs, ends other
+  specific gameplays, and is
   unseen by enemies. When nothing happens for 20 s it logs what the scripts
   wait on and why the watched triggers don't see the player; after 25 s it
   steps into triggers it already used again.
@@ -220,8 +227,8 @@ is the story's own:
 
 ## Current validation gaps
 
-The parity target currently covers single-player: the campaign, open world
-and side activities, including their visuals and UX.
+Validation currently focuses on single-player: the campaign, open world and
+side activities, including their visuals and UX.
 
 The live campaign smoke test reaches the map-pickup objective in `JAS_020_B10`
 and advances into `JAS_020_B15`. Tracing confirmed the guard's `CA_Start`
@@ -229,16 +236,23 @@ callback is delivered. Implementing non-player teleports fixes Grant's reload
 placement and allows the checkpoint to reach the rock-distraction objective.
 The guard hears the distraction and emits `CA_Interrupt`. Selecting navigation
 polygons by surface distance rather than preferring an overlapping roof fixes
-his investigation route. An extended live autopilot run completed `JAS_020_B15`
-and `JAS_020_B20C`, then reached `JAS_020_B30` ("Run into the jungle"). That run
-skipped scenes and automatically ended the unimplemented Grant-death gameplay;
-it does not establish cinematic or manual-gameplay parity. The opening mission
-is not yet verified end to end.
+his investigation route. The rebuilt navigation/gadget changes cleared
+`JAS_020_B15` and `JAS_020_B20C` again. Extended live autopilot runs also completed
+`JAS_020_B30`, `JAS_030_B10` and the `JAS_030_B12` knife QTE, then reached Dennis
+and the first shop. The catalog-backed 1911 purchase grants and equips the gun
+for $60, with the balance reduced from $150 to $90; the run completed
+`JAS_060_B10C` and reached the first radio-tower climb in `JAS_060_B20`.
+That run then entered a repeated mission-failure/reload loop, still requiring
+investigation. These runs skipped scenes and automatically ended the
+unimplemented Grant-death gameplay; they do not establish cinematic or
+manual-gameplay parity. The opening mission is not manually verified end to end.
 
 Regression tests cover live player queries, deferred inventory spawn/remove
 callbacks, meta-sequence teardown, timers, binding-aware prompts, modal
-pause/input ownership, gadget control gates and navigation surface/portal
-selection. Run `cargo test --locked --release --workspace`; the
+pause/input ownership, gadget control gates, navigation surface/portal
+selection, catalog parsing, tutorial stock restrictions, priced inventory
+transactions, the shop button path and purchase delivery across paused frames.
+Run `cargo test --locked --release --workspace`; the
 release test profile also avoids the Windows linker PDB-size limit encountered
 when this full Bevy dependency graph is linked with development debug symbols.
 

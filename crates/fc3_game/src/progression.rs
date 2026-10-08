@@ -26,6 +26,9 @@ impl Plugin for ProgressionPlugin {
             .add_message::<XpGain>()
             .add_message::<ItemBought>()
             .init_resource::<Shops>()
+            .init_resource::<ShopCatalog>()
+            .init_resource::<ShopOverride>()
+            .add_systems(OnExit(GameState::Loading), load_shop_catalog)
             .add_systems(Update, find_shops)
             .add_systems(Startup, (setup_journal, setup_shop, setup_popups))
             .add_systems(
@@ -903,10 +906,13 @@ enum ShopItem {
 
 impl ShopItem {
     /// Price, with the weapons freed by `towers` radio towers costing nothing.
-    fn price(self, inv: &Inventory, towers: usize) -> u32 {
+    fn price(self, inv: &Inventory, towers: usize, catalog: &ShopCatalog) -> u32 {
         if let ShopItem::Weapon(d) = self {
             if inv.defs.get(d).is_some_and(|d| crate::traversal::FREE_WEAPONS[..towers.min(crate::traversal::FREE_WEAPONS.len())].contains(&d.name)) {
                 return 0;
+            }
+            if let Some(weapon) = catalog.weapon(inv, d) {
+                return weapon.cost;
             }
         }
         match self {
@@ -975,6 +981,66 @@ const PAINT_PRICE: u32 = 500;
 #[derive(Resource, Default)]
 struct ShopTab(usize);
 
+/// Authored weapon stock, including the ids used by the first-shop tutorial.
+#[derive(Resource, Default)]
+pub struct ShopCatalog(pub Vec<fc3_formats::shop::Weapon>);
+
+impl ShopCatalog {
+    fn weapon(&self, inv: &Inventory, def: usize) -> Option<&fc3_formats::shop::Weapon> {
+        let model = inv.defs.get(def)?.model_path();
+        self.0.iter().find(|w| w.is_base() && w.model.eq_ignore_ascii_case(&model))
+    }
+
+    fn selected_weapon(&self, inv: &Inventory, selection: (u32, u32)) -> Option<usize> {
+        let weapon = self.0.iter().find(|w| w.is_base() && (w.category, w.id) == selection)?;
+        inv.defs.iter().position(|d| d.model_path().eq_ignore_ascii_case(&weapon.model))
+    }
+}
+
+/// Restricts a tutorial shop to the item the mission requested. It does not
+/// purchase the item or open the shop without the player's interaction.
+#[derive(Resource, Default)]
+pub struct ShopOverride(pub Option<(u32, u32)>);
+
+impl ShopOverride {
+    pub fn set(&mut self, active: bool, category: u32, item: u32) {
+        self.0 = active.then_some((category, item));
+    }
+}
+
+fn load_shop_catalog(info: Res<crate::data::CacheInfo>, mut catalog: ResMut<ShopCatalog>) {
+    match std::fs::read_to_string(info.root.join(fc3_formats::shop::WEAPONS_REL))
+        .map_err(anyhow::Error::from).and_then(|t| fc3_formats::shop::from_text(&t)) {
+        Ok(stock) => {
+            info!("shop: {} authored weapon entries", stock.len());
+            catalog.0 = stock;
+        }
+        Err(e) => warn!("shop: cannot read weapon catalog: {e:#}"),
+    }
+}
+
+/// Uses the same priced weapon transaction for the UI and campaign smoke
+/// tests. A purchase event must describe a gun actually added to inventory.
+pub fn purchase_tutorial_weapon(inv: &mut Inventory, progress: &mut Progress, perks: &Perks, catalog: &ShopCatalog, restriction: &ShopOverride) -> Option<ItemBought> {
+    let def = catalog.selected_weapon(inv, restriction.0?)?;
+    purchase_weapon(inv, progress, perks, catalog, def).map(|(bought, _)| bought)
+}
+
+fn purchase_weapon(inv: &mut Inventory, progress: &mut Progress, perks: &Perks, catalog: &ShopCatalog, def: usize) -> Option<(ItemBought, crate::weapons::Granted)> {
+    let price = ShopItem::Weapon(def).price(inv, progress.towers.len(), catalog);
+    if progress.money < price || inv.slots.iter().any(|s| s.def == def) { return None }
+    let name = inv.defs.get(def)?.name;
+    let granted = crate::weapons::grant_weapon(inv, name, perks.weapon_slots);
+    match granted {
+        crate::weapons::Granted::New | crate::weapons::Granted::Swapped(_) => {
+            progress.money -= price;
+            info!("shop: purchased {name} for ${price}, balance ${}", progress.money);
+            Some((ItemBought { model: Some(inv.defs[def].model_path()) }, granted))
+        }
+        crate::weapons::Granted::Ammo => None,
+    }
+}
+
 fn shop_tab(class: crate::weapons::WeaponClass) -> usize {
     use crate::weapons::WeaponClass::*;
     match class {
@@ -999,7 +1065,10 @@ struct ShopHeader;
 
 /// Shop stock in a tab: supplies, or the weapons of one kind (owned ones
 /// show as owned).
-fn shop_items(inv: &Inventory, tab: usize) -> Vec<ShopItem> {
+fn shop_items(inv: &Inventory, tab: usize, catalog: &ShopCatalog, restriction: &ShopOverride) -> Vec<ShopItem> {
+    if let Some(selection) = restriction.0 {
+        return catalog.selected_weapon(inv, selection).map(ShopItem::Weapon).into_iter().collect();
+    }
     if tab == 0 {
         return vec![
             ShopItem::AmmoRefill,
@@ -1152,10 +1221,12 @@ fn shop_prompt(
     actions: Res<crate::controls::ActionState>,
     settings: Res<crate::settings::Settings>,
     outposts: Res<crate::outposts::Outposts>,
-    players: Query<(&Transform, &Health), With<Player>>,
+    players: Query<(&Transform, &Health, &Inventory), With<Player>>,
     mut hud: ResMut<HudState>,
     mut next: ResMut<NextState<GameState>>,
     shops: Res<Shops>,
+    catalog: Res<ShopCatalog>,
+    restriction: Res<ShopOverride>,
 ) {
     if *state.get() != GameState::Playing || hud.prompt.is_some() {
         return;
@@ -1167,7 +1238,7 @@ fn shop_prompt(
         next.set(GameState::Shop);
         return;
     }
-    let Ok((t, h)) = players.single() else { return };
+    let Ok((t, h, inv)) = players.single() else { return };
     if h.dead {
         return;
     }
@@ -1178,6 +1249,9 @@ fn shop_prompt(
     }
     hud.prompt = Some(format!("{}  shop", actions.label(crate::controls::Action::Interact, &settings)));
     if actions.just_pressed(crate::controls::Action::Interact) {
+        if let Some(def) = restriction.0.and_then(|s| catalog.selected_weapon(inv, s)) {
+            tab.0 = shop_tab(inv.defs[def].class);
+        }
         next.set(GameState::Shop);
     }
 }
@@ -1194,12 +1268,14 @@ fn shop_buttons(
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     mut tab: ResMut<ShopTab>,
     mut bought_items: MessageWriter<ItemBought>,
+    catalog: Res<ShopCatalog>,
+    restriction: Res<ShopOverride>,
 ) {
     if *state.get() != GameState::Shop {
         return;
     }
     let Ok((mut inv, mut stats)) = players.single_mut() else { return };
-    let items = shop_items(&inv, tab.0);
+    let items = shop_items(&inv, tab.0, &catalog, &restriction);
     for (interaction, kind, mut bg) in &mut buttons {
         match interaction {
             Interaction::Pressed => {
@@ -1207,7 +1283,7 @@ fn shop_buttons(
                 let i = match *kind {
                     ShopButton::Buy(i) => i,
                     ShopButton::Tab(t) => {
-                        tab.0 = t;
+                        if restriction.0.is_none() { tab.0 = t; }
                         continue;
                     }
                     ShopButton::Close => {
@@ -1216,9 +1292,20 @@ fn shop_buttons(
                     }
                 };
                 let Some(&item) = items.get(i) else { continue };
-                let price = item.price(&inv, progress.towers.len());
+                let price = item.price(&inv, progress.towers.len(), &catalog);
                 if progress.money < price {
                     hud.notify("Not enough money");
+                    continue;
+                }
+                if let ShopItem::Weapon(def) = item {
+                    if let Some((bought, granted)) = purchase_weapon(&mut inv, &mut progress, &perks, &catalog, def) {
+                        if let crate::weapons::Granted::Swapped(old) = granted {
+                            hud.notify(&format!("Swapped the {old} for the {}", inv.defs[def].name));
+                        }
+                        bought_items.write(bought);
+                    } else {
+                        hud.notify("Already owned");
+                    }
                     continue;
                 }
                 let bought = match item {
@@ -1276,17 +1363,6 @@ fn shop_buttons(
                         progress.upgrades.insert(id.to_string(), 1);
                         true
                     }
-                    ShopItem::Weapon(d) => {
-                        let name = inv.defs[d].name;
-                        match crate::weapons::grant_weapon(&mut inv, name, perks.weapon_slots) {
-                            crate::weapons::Granted::New => true,
-                            crate::weapons::Granted::Swapped(old) => {
-                                hud.notify(&format!("Swapped the {old} for the {name}"));
-                                true
-                            }
-                            crate::weapons::Granted::Ammo => false,
-                        }
-                    }
                     _ => false,
                 };
                 if bought {
@@ -1318,6 +1394,8 @@ fn refresh_shop(
     mut tabs: Query<(&ShopButton, &Interaction, &mut BackgroundColor)>,
     tab: Res<ShopTab>,
     perks: Res<Perks>,
+    catalog: Res<ShopCatalog>,
+    restriction: Res<ShopOverride>,
 ) {
     let open = *state.get() == GameState::Shop;
     if let Ok(mut v) = root.single_mut() {
@@ -1327,7 +1405,7 @@ fn refresh_shop(
         return;
     }
     let Ok(inv) = players.single() else { return };
-    let items = shop_items(inv, tab.0);
+    let items = shop_items(inv, tab.0, &catalog, &restriction);
     if let Ok(mut t) = header.single_mut() {
         let guns = inv.slots.iter().filter(|s| inv.defs[s.def].class != crate::weapons::WeaponClass::Melee).count();
         t.0 = format!("${} / {}      weapons carried {} / {}", progress.money, progress.money_cap(), guns, perks.weapon_slots);
@@ -1335,7 +1413,8 @@ fn refresh_shop(
     for (b, interaction, mut bg) in &mut tabs {
         if let ShopButton::Tab(i) = b {
             if *interaction == Interaction::None {
-                bg.0 = if *i == tab.0 { Color::srgba(0.85, 0.55, 0.15, 0.9) } else { IDLE };
+                bg.0 = if restriction.0.is_some() { Color::srgba(0.15, 0.15, 0.15, 0.7) }
+                    else if *i == tab.0 { Color::srgba(0.85, 0.55, 0.15, 0.9) } else { IDLE };
             }
         }
     }
@@ -1352,9 +1431,153 @@ fn refresh_shop(
             ShopItem::Paint(d, p) => inv.paints.get(d).copied().flatten() == Some(p),
             _ => false,
         };
-        let price = item.price(inv, progress.towers.len());
+        let price = item.price(inv, progress.towers.len(), &catalog);
         t.0 = if owned { format!("{:<38} owned", item.label(inv)) } else { format!("{:<38} ${price}", item.label(inv)) };
         c.0 = if owned || progress.money < price { Color::srgba(0.8, 0.8, 0.8, 0.5) } else { TEXT };
+    }
+}
+
+#[cfg(test)]
+mod shop_tests {
+    use super::*;
+
+    fn inventory() -> Inventory {
+        let defs = crate::weapons::weapon_defs();
+        let unarmed = defs.iter().position(|d| d.name == crate::weapons::UNARMED).unwrap();
+        Inventory {
+            defs, models: Vec::new(), slots: vec![crate::weapons::WeaponSlot { def: unarmed, mag: 0, reserve: 0 }], current: 0,
+            grenades: 0, molotovs: 0, c4: 0, mines: 0,
+            cooldown: 0.0, reloading: 0.0, switching: 0.0, aiming: false,
+            aim_blend: 0.0, recoil_kick: 0.0, spread_bloom: 0.0, shots_fired: 0,
+            recoil_offset: 0.0, since_shot: 0.0, reserve_scale: 1.0,
+            attachments: Vec::new(), attachment_models: Vec::new(), mounted_from: None,
+            auto_tail: 0, arrow_kind: 0, special_arrows: [0; 2],
+            paints: Vec::new(), paint_options: Vec::new(),
+        }
+    }
+
+    fn catalog(inv: &Inventory) -> (ShopCatalog, usize) {
+        let def = inv.defs.iter().position(|d| d.name == "1911").unwrap();
+        (ShopCatalog(vec![fc3_formats::shop::Weapon {
+            id: 42, category: 7, cost: 75, sort: 0, name_id: 999,
+            unlock_script: String::new(), unlock_mission: String::new(),
+            archetype: "weapons:TestPistol".into(), model: inv.defs[def].model_path(),
+        }]), def)
+    }
+
+    #[test]
+    fn tutorial_purchase_grants_and_equips_the_selected_weapon_and_charges_its_authored_price_once() {
+        let mut inv = inventory();
+        let (catalog, def) = catalog(&inv);
+        let mut progress = Progress::default();
+        let perks = Perks::default();
+        let restriction = ShopOverride(Some((7, 42)));
+        let bought = purchase_tutorial_weapon(&mut inv, &mut progress, &perks, &catalog, &restriction).unwrap();
+        assert_eq!(bought.model, Some(inv.defs[def].model_path()));
+        assert_eq!(progress.money, 75);
+        assert_eq!(inv.slot().def, def);
+        assert_eq!(inv.slot().mag, inv.defs[def].magazine);
+        let ammo = (inv.slot().mag, inv.slot().reserve);
+        assert!(purchase_tutorial_weapon(&mut inv, &mut progress, &perks, &catalog, &restriction).is_none());
+        assert_eq!(progress.money, 75);
+        assert_eq!((inv.slot().mag, inv.slot().reserve), ammo);
+    }
+
+    #[test]
+    fn insufficient_funds_or_an_unknown_tutorial_item_do_not_generate_a_purchase() {
+        let mut inv = inventory();
+        let (catalog, _) = catalog(&inv);
+        let mut progress = Progress { money: 74, ..default() };
+        let perks = Perks::default();
+        assert!(purchase_tutorial_weapon(&mut inv, &mut progress, &perks, &catalog, &ShopOverride(Some((7, 42)))).is_none());
+        assert_eq!(progress.money, 74);
+        assert_eq!(inv.slots.len(), 1);
+        assert!(purchase_tutorial_weapon(&mut inv, &mut progress, &perks, &catalog, &ShopOverride(Some((7, 43)))).is_none());
+        assert_eq!(progress.money, 74);
+    }
+
+    #[test]
+    fn tutorial_stock_is_restricted_until_the_mission_clears_its_override() {
+        let inv = inventory();
+        let (catalog, def) = catalog(&inv);
+        let mut restriction = ShopOverride::default();
+        restriction.set(true, 7, 42);
+        for tab in 0..SHOP_TABS.len() {
+            assert!(matches!(shop_items(&inv, tab, &catalog, &restriction).as_slice(), [ShopItem::Weapon(d)] if *d == def));
+        }
+        restriction.set(true, 7, 43);
+        assert!(shop_items(&inv, 0, &catalog, &restriction).is_empty());
+        restriction.set(false, 0, 0);
+        assert!(shop_items(&inv, 0, &catalog, &restriction).len() > 1);
+    }
+
+    #[test]
+    fn radio_tower_free_weapons_still_override_the_catalog_price() {
+        let inv = inventory();
+        let (catalog, def) = catalog(&inv);
+        assert_eq!(ShopItem::Weapon(def).price(&inv, 0, &catalog), 75);
+        assert_eq!(ShopItem::Weapon(def).price(&inv, 1, &catalog), 0);
+    }
+
+    #[test]
+    fn a_shared_model_does_not_sell_a_variant_as_its_base_weapon() {
+        let inv = inventory();
+        let (mut catalog, def) = catalog(&inv);
+        let mut variant = catalog.0[0].clone();
+        variant.id = 43;
+        variant.cost = 0;
+        variant.archetype.push_str(".Special");
+        catalog.0.insert(0, variant);
+        assert_eq!(ShopItem::Weapon(def).price(&inv, 0, &catalog), 75);
+        assert_eq!(catalog.selected_weapon(&inv, (7, 42)), Some(def));
+        assert_eq!(catalog.selected_weapon(&inv, (7, 43)), None);
+    }
+
+    #[test]
+    fn pressing_the_shop_button_uses_the_real_transaction_and_emits_one_purchase() {
+        let inv = inventory();
+        let (catalog, def) = catalog(&inv);
+        let stats = PlayerStats {
+            medkits: 0, kills: 0, deaths: 0, respawn_timer: 0.0,
+            spawn_point: Vec3::ZERO, hurt_dir: None, burning: 0.0, last_hurt: DamageKind::Bullet,
+        };
+        let mut app = App::new();
+        app.set_error_handler(|error, context| panic!("{error:?}: {context:?}"));
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(State::new(GameState::Shop))
+            .init_resource::<NextState<GameState>>()
+            .init_resource::<Progress>()
+            .init_resource::<Perks>()
+            .init_resource::<HudState>()
+            .init_resource::<ShopTab>()
+            .insert_resource(catalog)
+            .insert_resource(ShopOverride(Some((7, 42))))
+            .add_message::<ItemBought>()
+            .add_message::<crate::sound::PlaySfx>()
+            .add_systems(Update, shop_buttons);
+        let player = app.world_mut().spawn((inv, stats, Player {
+            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: true,
+            crouching: false, swimming: false, noclip: false, spawning: false,
+            keep_height: false, last_landing_speed: 0.0, sprinting: false,
+            spawned_at: 0.0, driving: false, eye: crate::player::EYE_HEIGHT,
+            air: crate::player::AirMode::None, mantle: None, mounted: None,
+            sliding: None, dragging: false,
+        })).id();
+        app.update();
+        let button = app.world_mut().spawn((Interaction::Pressed, ShopButton::Buy(0), BackgroundColor(IDLE))).id();
+        assert_eq!(*app.world().resource::<State<GameState>>().get(), GameState::Shop);
+        assert_eq!(app.world().get::<Interaction>(button), Some(&Interaction::Pressed));
+        app.update();
+        assert_eq!(app.world().resource::<Progress>().money, 75);
+        assert_eq!(app.world().get::<Inventory>(player).unwrap().slot().def, def);
+        let messages = app.world().resource::<Messages<ItemBought>>();
+        let mut cursor = messages.get_cursor();
+        let bought: Vec<_> = cursor.read(messages).collect();
+        assert_eq!(bought.len(), 1);
+        assert_eq!(bought[0].model.as_deref(), Some(app.world().get::<Inventory>(player).unwrap().defs[def].model_path().as_str()));
+        app.update();
+        assert_eq!(app.world().resource::<Progress>().money, 75);
+        assert!(cursor.read(app.world().resource::<Messages<ItemBought>>()).next().is_none());
     }
 }
 

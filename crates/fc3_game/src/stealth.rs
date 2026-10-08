@@ -221,7 +221,7 @@ fn fly_rocks(
 const TAG_RANGE: f32 = 180.0;
 
 fn camera_available(actions: &ActionState, player: &Player, health: &Health, scripted: &crate::story::ScriptedPlayer) -> bool {
-    actions.pressed(Action::Tag) && scripted.has_gadget("gadgets:Equipped/Tablet")
+    actions.pressed(Action::Tag) && scripted.has_camera()
         && !health.dead && !player.swimming && !player.noclip && !player.driving
 }
 
@@ -331,6 +331,9 @@ mod tests {
         scripted.gadgets.clear();
         assert!(!camera_available(&actions, &player, &health, &scripted));
         scripted.gadgets.insert("gadgets:equipped/tablet".into());
+        assert!(camera_available(&actions, &player, &health, &scripted));
+        scripted.gadgets.clear();
+        scripted.gadgets.insert("gadgets:Equipped/Binoculars".into());
         assert!(camera_available(&actions, &player, &health, &scripted));
         player.driving = true;
         assert!(!camera_available(&actions, &player, &health, &scripted));

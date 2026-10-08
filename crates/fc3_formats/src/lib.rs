@@ -31,6 +31,7 @@ pub mod reader;
 pub mod realtree;
 pub mod rml;
 pub mod scripts;
+pub mod shop;
 pub mod story;
 pub mod splines;
 pub mod terrain;

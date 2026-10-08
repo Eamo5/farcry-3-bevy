@@ -21,6 +21,7 @@ pub struct CacheInfo {
 impl CacheInfo {
     pub fn load(root: PathBuf) -> anyhow::Result<CacheInfo> {
         let m = Manifest::load(&root)?;
+        anyhow::ensure!(root.join(fc3_formats::shop::WEAPONS_REL).is_file(), "weapon shop table missing; re-run the converter");
         Ok(CacheInfo {
             root,
             terrain: m.sectors_with_terrain.into_iter().collect(),
