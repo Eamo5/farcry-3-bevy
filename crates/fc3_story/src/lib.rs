@@ -1199,4 +1199,85 @@ mod tests {
         story.domino().lua().load(r#"SendRegisteredEventToEntity("100", "CProximityTriggerComponent_SetAsUnusable", {})"#).exec().unwrap();
         assert!(story.use_target(player, eye, forward).is_none());
     }
+
+    #[test]
+    fn player_only_boundary_events_ignore_npcs_moving_or_streaming_out() {
+        use fc3_formats::{fcb::Object, hash::name_hash};
+        use std::sync::Arc;
+        let region = Arc::new(Object {
+            name_hash: name_hash("CTrigger2DComponent"),
+            fields: vec![(0xB3C7_40E6, b"PlayerOnly\0".to_vec())], children: vec![],
+        });
+        let points = [[-5.0f32, -5.0, 0.0], [5.0, -5.0, 0.0], [5.0, 5.0, 0.0], [-5.0, 5.0, 0.0]];
+        let mut shape = 4u32.to_le_bytes().to_vec();
+        shape.extend(points.into_iter().flatten().flat_map(f32::to_le_bytes));
+        let mut data = StoryData::default();
+        data.entities.insert(100, data::Entry {
+            id: 100, name: "Player boundary".into(), class: "CBasicRegionEntity".into(),
+            pos: [0.0; 3], angles: [0.0; 3], layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
+            origin: data::Origin::Global,
+            components: Arc::new(Object { children: vec![region], ..Default::default() }),
+            fields: Arc::new(Object { fields: vec![
+                (name_hash("hidShapePoints"), shape), (name_hash("fHeight"), (-1.0f32).to_le_bytes().to_vec()),
+            ], ..Default::default() }),
+        });
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        story.domino().lua().load(r#"
+            boundary = { entered = 0, left = 0 }
+            boundary._type = {
+                Enter = function(self, id) assert(id == "1"); self.entered = self.entered + 1 end,
+                Leave = function(self, id) assert(id == "1"); self.left = self.left + 1 end,
+            }
+            local callbacks = CScriptCallbackSystem_GetInstance()
+            callbacks:RegisterEventCallback("100", boundary, "Enter", "Enter")
+            callbacks:RegisterEventCallback("100", boundary, "Leave", "Leave")
+        "#).exec().unwrap();
+        let mut view = View::default();
+        view.spawned.insert(20, Live { pos: [0.0; 3], alive: true, ..Default::default() });
+        view.contacts.insert(100, vec![20]);
+        story.update(0.1, view.clone());
+        assert_eq!(story.core.borrow().contacts(100), vec![PLAYER]);
+        view.spawned.get_mut(&20).unwrap().pos = [50.0, 0.0, 0.0];
+        view.contacts.clear();
+        story.update(0.1, view.clone());
+        view.spawned.clear();
+        story.update(0.1, view.clone());
+        let boundary: Table = story.domino().lua().globals().get("boundary").unwrap();
+        assert_eq!((boundary.get::<u32>("entered").unwrap(), boundary.get::<u32>("left").unwrap()), (1, 0));
+        view.player = [50.0, 0.0, 0.0];
+        story.update(0.1, view);
+        assert_eq!(boundary.get::<u32>("left").unwrap(), 1);
+        assert_eq!(story.errors(), 0);
+    }
+
+    #[test]
+    fn proximity_contacts_respect_the_authored_nonplayer_filter() {
+        use fc3_formats::{fcb::Object, hash::name_hash};
+        use std::sync::Arc;
+        let mut data = StoryData::default();
+        for (id, allow) in [(100, false), (200, true)] {
+            let prox = Arc::new(Object {
+                name_hash: name_hash("CProximityTriggerComponent"), fields: vec![
+                    (name_hash("bAllowTriggerByNonPlayers"), vec![u8::from(allow)]),
+                    (name_hash("vectorSize"), [10.0f32; 3].into_iter().flat_map(f32::to_le_bytes).collect()),
+                ], children: vec![],
+            });
+            data.entities.insert(id, data::Entry {
+                id, name: "Test proximity".into(), class: "CEntity".into(), pos: [0.0; 3], angles: [0.0; 3],
+                layer: fc3_formats::world::DEFAULT_MISSION_LAYER, origin: data::Origin::Global,
+                components: Arc::new(Object { children: vec![prox], ..Default::default() }), fields: Arc::new(Object::default()),
+            });
+        }
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        let mut view = View::default();
+        view.spawned.insert(20, Live { pos: [0.0; 3], alive: true, ..Default::default() });
+        view.contacts.insert(100, vec![20]);
+        story.update(0.1, view.clone());
+        assert_eq!(story.core.borrow().contacts(100), vec![PLAYER]);
+        assert_eq!(story.core.borrow().contacts(200), vec![PLAYER, 20]);
+        view.player = [50.0, 0.0, 0.0];
+        story.update(0.1, view);
+        assert!(story.core.borrow().contacts(100).is_empty());
+        assert_eq!(story.core.borrow().contacts(200), vec![20]);
+    }
 }

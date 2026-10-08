@@ -908,11 +908,8 @@ impl ShopItem {
     /// Price, with the weapons freed by `towers` radio towers costing nothing.
     fn price(self, inv: &Inventory, towers: usize, catalog: &ShopCatalog) -> u32 {
         if let ShopItem::Weapon(d) = self {
-            if inv.defs.get(d).is_some_and(|d| crate::traversal::FREE_WEAPONS[..towers.min(crate::traversal::FREE_WEAPONS.len())].contains(&d.name)) {
-                return 0;
-            }
             if let Some(weapon) = catalog.weapon(inv, d) {
-                return weapon.cost;
+                return if weapon.tower_requirement().is_some_and(|n| towers >= n) { 0 } else { weapon.cost };
             }
         }
         match self {
@@ -986,6 +983,14 @@ struct ShopTab(usize);
 pub struct ShopCatalog(pub Vec<fc3_formats::shop::Weapon>);
 
 impl ShopCatalog {
+    /// Supported base weapons freed by this particular tower, not an
+    /// invented one-weapon-per-tower reward list.
+    pub fn freed_weapons<'a>(&self, defs: &'a [crate::weapons::WeaponDef], towers: usize) -> Vec<&'a str> {
+        self.0.iter().filter(|w| w.is_base() && w.tower_requirement() == Some(towers))
+            .filter_map(|w| defs.iter().find(|d| d.model_path().eq_ignore_ascii_case(&w.model)).map(|d| d.name))
+            .collect()
+    }
+
     fn weapon(&self, inv: &Inventory, def: usize) -> Option<&fc3_formats::shop::Weapon> {
         let model = inv.defs.get(def)?.model_path();
         self.0.iter().find(|w| w.is_base() && w.model.eq_ignore_ascii_case(&model))
@@ -1512,11 +1517,50 @@ mod shop_tests {
     }
 
     #[test]
-    fn radio_tower_free_weapons_still_override_the_catalog_price() {
+    fn radio_tower_thresholds_override_the_catalog_price_not_a_sandbox_list() {
         let inv = inventory();
-        let (catalog, def) = catalog(&inv);
-        assert_eq!(ShopItem::Weapon(def).price(&inv, 0, &catalog), 75);
-        assert_eq!(ShopItem::Weapon(def).price(&inv, 1, &catalog), 0);
+        let (mut catalog, def) = catalog(&inv);
+        // Even the 1911 follows the authored threshold, not its hard-coded
+        // position in an old reward list.
+        catalog.0[0].unlock_script = "Tower2".into();
+        assert_eq!(ShopItem::Weapon(def).price(&inv, 1, &catalog), 75);
+        assert_eq!(ShopItem::Weapon(def).price(&inv, 2, &catalog), 0);
+        assert_eq!(ShopItem::Weapon(def).price(&inv, 18, &catalog), 0);
+        catalog.0[0].unlock_script.clear();
+        assert_eq!(ShopItem::Weapon(def).price(&inv, 18, &catalog), 75);
+    }
+
+    #[test]
+    fn a_tower_can_free_multiple_weapons_without_granting_or_rebuying_them() {
+        let mut inv = inventory();
+        let mut catalog = ShopCatalog::default();
+        let index = |name| inv.defs.iter().position(|d| d.name == name).unwrap();
+        let defs = [index("1911"), index("6P9"), index("STG-90"), index("AK-74M Rifle")];
+        for (id, def) in defs.into_iter().enumerate() {
+            catalog.0.push(fc3_formats::shop::Weapon {
+                id: id as u32, category: 7, cost: 600, sort: 0, name_id: 999,
+                unlock_script: format!("Tower{}", if id == 3 { 2 } else { 1 }), unlock_mission: String::new(),
+                archetype: format!("weapons:Test{id}"), model: inv.defs[def].model_path(),
+            });
+            assert_eq!(ShopItem::Weapon(def).price(&inv, 0, &catalog), 600);
+            assert_eq!(ShopItem::Weapon(def).price(&inv, 1, &catalog), if id == 3 { 600 } else { 0 });
+        }
+        let mut variant = catalog.0[0].clone();
+        variant.archetype.push_str(".Special");
+        catalog.0.insert(0, variant);
+        assert_eq!(catalog.freed_weapons(&inv.defs, 0), Vec::<&str>::new());
+        assert_eq!(catalog.freed_weapons(&inv.defs, 1), vec!["1911", "6P9", "STG-90"]);
+        assert_eq!(catalog.freed_weapons(&inv.defs, 2), vec!["AK-74M Rifle"]);
+        assert!(catalog.freed_weapons(&inv.defs, 18).is_empty());
+        assert_eq!(inv.slots.len(), 1); // A tower frees stock, not carried guns.
+        let mut progress = Progress { money: 0, ..default() };
+        progress.towers.insert(0);
+        let perks = Perks::default();
+        let bought = purchase_weapon(&mut inv, &mut progress, &perks, &catalog, defs[1]).unwrap();
+        assert_eq!(bought.0.model, Some(inv.defs[defs[1]].model_path()));
+        assert_eq!(progress.money, 0);
+        assert_eq!(inv.slot().def, defs[1]);
+        assert!(purchase_weapon(&mut inv, &mut progress, &perks, &catalog, defs[1]).is_none());
     }
 
     #[test]

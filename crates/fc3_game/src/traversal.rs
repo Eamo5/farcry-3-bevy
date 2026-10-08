@@ -41,28 +41,6 @@ impl Plugin for TraversalPlugin {
     }
 }
 
-/// Weapons a radio tower frees in the shops, one per tower, in order.
-pub const FREE_WEAPONS: [&str; 18] = [
-    "1911",
-    "A2000",
-    "F1",
-    "1887",
-    "SVD",
-    "Recurve Bow",
-    "P416",
-    "Vector .45 ACP",
-    "SPAS-12",
-    "MKG",
-    "D50",
-    "ACE",
-    "Z93",
-    "U100",
-    "GL-94",
-    "STG-90",
-    "MS16",
-    "Flamethrower",
-];
-
 /// The world's cables, ladders and towers.
 #[derive(Resource, Default)]
 pub struct Ways {
@@ -331,14 +309,15 @@ fn tower_prompt(
     mut actions: ResMut<ActionState>,
     settings: Res<crate::settings::Settings>,
     ways: Res<Ways>,
+    catalog: Res<crate::progression::ShopCatalog>,
     mut progress: ResMut<crate::progression::Progress>,
     mut explored: ResMut<crate::map::Explored>,
     mut hud: ResMut<HudState>,
     mut xp: MessageWriter<crate::progression::XpGain>,
-    players: Query<(&Transform, &Health), With<Player>>,
+    players: Query<(&Transform, &Health, &crate::weapons::Inventory), With<Player>>,
     mut taken: MessageWriter<TowerTaken>,
 ) {
-    let Ok((t, h)) = players.single() else { return };
+    let Ok((t, h, inv)) = players.single() else { return };
     if hud.prompt.is_some() || h.dead {
         return;
     }
@@ -354,8 +333,9 @@ fn tower_prompt(
         taken.write(TowerTaken { at: Vec3::from(*at) });
         explored.reveal(Vec3::from(*at), 1100.0);
         xp.write(crate::progression::XpGain { amount: 300, reason: "Radio tower" });
-        let freed = FREE_WEAPONS.get(progress.towers.len() - 1).copied().unwrap_or("");
-        hud.notify(&format!("Radio tower taken: map revealed. The {freed} is free in the shops."));
+        let freed = catalog.freed_weapons(&inv.defs, progress.towers.len());
+        let reward = if freed.is_empty() { String::new() } else { format!(" Free in shops: {}.", freed.join(", ")) };
+        hud.notify(format!("Radio tower taken: map revealed.{reward}"));
     }
 }
 

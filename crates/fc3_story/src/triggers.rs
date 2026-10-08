@@ -191,6 +191,22 @@ pub fn starts_enabled(e: &Entry) -> bool {
         .unwrap_or(true)
 }
 
+/// The authored collision filter applies to both the host's overlaps and
+/// characters tested from their live positions. Mission-boundary regions
+/// marked `PlayerOnly` must not report NPCs leaving or being streamed out.
+pub fn allows_entity(e: &Entry, id: u64) -> bool {
+    if id == crate::PLAYER {
+        return true;
+    }
+    if let Some(region) = e.component("CTrigger2DComponent") {
+        // The region's filter string (the original field's name is unknown).
+        if region.str_h(0xB3C7_40E6).is_some_and(|s| s.eq_ignore_ascii_case("PlayerOnly")) {
+            return false;
+        }
+    }
+    e.component("CProximityTriggerComponent").is_none_or(|c| c.bool("bAllowTriggerByNonPlayers").unwrap_or(false))
+}
+
 /// Whether the player sees a look-at trigger: within its range, and inside
 /// its share of the view's half angle around where the player looks.
 pub fn looked_at(e: &Entry, eye: [f32; 3], look: [f32; 3], fov_deg: f32) -> bool {

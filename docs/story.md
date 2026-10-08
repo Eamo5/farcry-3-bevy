@@ -101,6 +101,10 @@ is the story's own:
   Holding the close control does not dismiss the next queued tutorial.
 * **Teleports**: a teleported player is followed by `DominoGameReady`, which
   boxes behind a loading screen wait for.
+* **Trigger contacts**: authored player-only regions and the proximity
+  trigger's non-player flag filter both host overlaps and live character
+  positions. NPCs moving or streaming out cannot fail a player-only mission
+  boundary; the player leaving it still delivers `Leave`.
 * **Specific gameplays** (`CreateSpecificGameplay`: QTEs, minigames, boss
   fights): the host plays them; they end (`OnDestroyed`) when destroyed, when
   the host says, or when a sequence sets a scripted QTE's result.
@@ -153,6 +157,10 @@ is the story's own:
   base weapons. `OverrideShopMenu` restricts the first-shop tutorial to its
   requested item, until the script releases it. Purchases made while the shop
   pauses gameplay are retained and delivered once when play resumes.
+  Base weapon freebies follow the catalog's `TowerN` thresholds, not a
+  one-weapon-per-tower list. The first tower frees the 1911, 6P9 and STG-90;
+  the reward notification lists every supported weapon freed by that tower.
+  Free stock still has to be collected from a shop; it is not granted on unlock.
 * **Player queries**: money, medkits, carry slots, equipped and carried
   weapons (using the shop's archetype names), gadgets, learned skills,
   stance, zip-line state, look angles, tagged story actors, difficulty and
@@ -242,8 +250,14 @@ his investigation route. The rebuilt navigation/gadget changes cleared
 and the first shop. The catalog-backed 1911 purchase grants and equips the gun
 for $60, with the balance reduced from $150 to $90; the run completed
 `JAS_060_B10C` and reached the first radio-tower climb in `JAS_060_B20`.
-That run then entered a repeated mission-failure/reload loop, still requiring
-investigation. These runs skipped scenes and automatically ended the
+That run then entered a repeated mission-failure/reload loop. The tower's
+authored `PlayerOnly` boundary was incorrectly counting live NPC contacts.
+After applying its filter, another live run completed `JAS_060_B20`,
+`JAS_060_B30C`, `JAS_060_B40` and `JAS_060_MAIN`, then `JAS_080_B10`. It reached
+the boar-skinning/plant-gathering tutorial in `JAS_080_B20`, which waits on
+`CPawnLootItemEvent` callbacks not yet forwarded by the host. The autopilot
+stands in for the tower panel, zipline use and world-map input; these aren't
+manual traversal/UI validation. These runs skipped scenes and automatically ended the
 unimplemented Grant-death gameplay; they do not establish cinematic or
 manual-gameplay parity. The opening mission is not manually verified end to end.
 
@@ -251,7 +265,8 @@ Regression tests cover live player queries, deferred inventory spawn/remove
 callbacks, meta-sequence teardown, timers, binding-aware prompts, modal
 pause/input ownership, gadget control gates, navigation surface/portal
 selection, catalog parsing, tutorial stock restrictions, priced inventory
-transactions, the shop button path and purchase delivery across paused frames.
+transactions, the shop button path, purchase delivery across paused frames,
+authored tower-freebie thresholds and player-only mission-boundary contacts.
 Run `cargo test --locked --release --workspace`; the
 release test profile also avoids the Windows linker PDB-size limit encountered
 when this full Bevy dependency graph is linked with development debug symbols.

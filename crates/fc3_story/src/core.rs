@@ -434,8 +434,10 @@ impl Core {
         if !self.trigger_on(trigger) || !self.is_loaded(trigger) {
             return Vec::new();
         }
-        let mut out = self.view.contacts.get(&trigger).cloned().unwrap_or_default();
-        let Some(shape) = self.data.entities.get(&trigger).and_then(crate::triggers::shape_of) else { return out };
+        let entry = self.data.entities.get(&trigger);
+        let allows = |id: u64| entry.is_none_or(|e| crate::triggers::allows_entity(e, id));
+        let mut out: Vec<u64> = self.view.contacts.get(&trigger).into_iter().flatten().copied().filter(|id| allows(*id)).collect();
+        let Some(shape) = entry.and_then(crate::triggers::shape_of) else { return out };
         // Bodies, not points; the player's since last frame (thin triggers
         // across a path are crossed between frames).
         use crate::triggers::{BODY_HALF_HEIGHT as H, BODY_RADIUS as R};
@@ -451,7 +453,7 @@ impl Core {
             .view
             .spawned
             .iter()
-            .filter(|(id, l)| l.alive && !out.contains(id) && shape.holds([l.pos[0], l.pos[1], l.pos[2] + H], R, H))
+            .filter(|(id, l)| allows(**id) && l.alive && !out.contains(id) && shape.holds([l.pos[0], l.pos[1], l.pos[2] + H], R, H))
             .map(|(id, _)| *id)
             .collect();
         chars.sort_unstable();

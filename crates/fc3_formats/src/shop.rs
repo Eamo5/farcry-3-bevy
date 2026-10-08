@@ -32,6 +32,14 @@ impl Weapon {
     pub fn is_base(&self) -> bool {
         !self.archetype.contains('.')
     }
+
+    /// The shopping database's `TowerN` script frees this item after N radio
+    /// towers, independently of whether it can already be bought for money.
+    pub fn tower_requirement(&self) -> Option<usize> {
+        let number = self.unlock_script.strip_prefix("Tower")?;
+        if number.is_empty() || !number.bytes().all(|c| c.is_ascii_digit()) { return None }
+        number.parse().ok().filter(|&n| n > 0)
+    }
 }
 
 fn uint(o: &Object, name: &str) -> Option<u64> {
@@ -142,5 +150,15 @@ mod tests {
         assert!(from_text("fc3shop 1\n1\t2\n").is_err());
         assert!(from_text("fc3shop 1\na\t2\t3\t4\t5\t\t\tweapon\tmodel\n").is_err());
         assert!(from_text("fc3shop 1\n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn only_positive_tower_scripts_define_a_free_weapon_threshold() {
+        let mut weapon = from_text("fc3shop 1\n1\t2\t3\t4\t5\t\t\tweapon\tmodel\n").unwrap().remove(0);
+        for (script, requirement) in [("Tower1", Some(1)), ("Tower15", Some(15)), ("Tower99", Some(99)),
+            ("", None), ("Tower", None), ("Tower0", None), ("Tower-1", None), ("Tower+1", None), ("Tower1_extra", None), ("Mission1", None)] {
+            weapon.unlock_script = script.into();
+            assert_eq!(weapon.tower_requirement(), requirement, "{script}");
+        }
     }
 }
