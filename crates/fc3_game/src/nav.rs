@@ -204,17 +204,29 @@ impl NavGraph {
 
     /// The polygon under (or nearest to, within a few metres) a point.
     fn locate(&self, p: Vec3) -> Option<usize> {
-        let &(start, count) = self.by_sector.get(&sector_of(p))?;
+        let sector = sector_of(p);
         let mut best: Option<(f32, usize)> = None;
-        for i in start..start + count {
-            let poly = &self.polys[i];
-            let inside = p.x >= poly.min.x && p.x <= poly.max.x && p.z >= poly.min.y && p.z <= poly.max.y && contains(&poly.verts, p);
-            let score = if inside { (plane_height(&poly.verts, p) - p.y).abs() } else { 100.0 + poly.centre.distance(p) };
-            if best.is_none_or(|(s, _)| score < s) {
-                best = Some((score, i));
+        // Close to a sector border the nearest surface may be next door.
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                let Some(&(start, count)) = self.by_sector.get(&SectorCoord::new(sector.x + dx, sector.y + dz)) else { continue };
+                for i in start..start + count {
+                    let poly = &self.polys[i];
+                    if p.xz().distance_squared(p.xz().clamp(poly.min, poly.max)) > 16.0 {
+                        continue;
+                    }
+                    let nearest = closest_point(&poly.verts, p);
+                    if (nearest.y - p.y).abs() >= 3.0 {
+                        continue;
+                    }
+                    let score = nearest.distance_squared(p);
+                    if score < 16.0 && best.is_none_or(|(s, _)| score < s) {
+                        best = Some((score, i));
+                    }
+                }
             }
         }
-        best.filter(|(s, _)| *s < 3.0 || (*s >= 100.0 && *s < 104.0)).map(|(_, i)| i)
+        best.map(|(_, i)| i)
     }
 }
 
@@ -252,6 +264,20 @@ fn plane_height(verts: &[Vec3], p: Vec3) -> f32 {
         }
     }
     verts.iter().map(|v| v.y).sum::<f32>() / verts.len() as f32
+}
+
+/// Projects onto a polygon's actual surface, not its centre. A noise just
+/// outside a wall can be close to a large polygon whose centre is far away.
+fn closest_point(verts: &[Vec3], p: Vec3) -> Vec3 {
+    if contains(verts, p) {
+        return Vec3::new(p.x, plane_height(verts, p), p.z);
+    }
+    (0..verts.len()).map(|i| {
+        let (a, b) = (verts[i], verts[(i + 1) % verts.len()]);
+        let edge = (b - a).xz();
+        let t = ((p.xz() - a.xz()).dot(edge) / edge.length_squared().max(1e-8)).clamp(0.0, 1.0);
+        a.lerp(b, t)
+    }).min_by(|a, b| a.distance_squared(p).total_cmp(&b.distance_squared(p))).unwrap_or(p)
 }
 
 #[derive(PartialEq)]
@@ -305,8 +331,10 @@ impl NavMesh {
     pub fn path(&self, from: Vec3, to: Vec3) -> Option<Vec<Vec3>> {
         let g = &self.graph;
         let (start, goal) = (g.locate(from)?, g.locate(to)?);
+        let on_start = closest_point(&g.polys[start].verts, from);
+        let on_goal = closest_point(&g.polys[goal].verts, to);
         if start == goal {
-            return Some(vec![to]);
+            return Some(vec![on_goal]);
         }
         // A* over polygon centres.
         let mut came: HashMap<u32, (u32, Vec3, Vec3)> = HashMap::new();
@@ -350,17 +378,22 @@ impl NavMesh {
             at = prev;
         }
         portals.reverse();
-        let finish = if end as usize == goal { to } else { g.polys[end as usize].centre };
+        let finish = if end as usize == goal { on_goal } else { closest_point(&g.polys[end as usize].verts, to) };
         // Left and right as seen travelling from one polygon into the next.
-        let mut sides = vec![(from, from)];
-        for (a, b, p, q) in portals {
+        let mut sides = vec![(on_start, on_start)];
+        for &(a, b, p, q) in &portals {
             let dir = g.polys[b as usize].centre - g.polys[a as usize].centre;
             let mid = (p + q) * 0.5;
             let s = dir.x * (p.z - mid.z) - dir.z * (p.x - mid.x);
             sides.push(if s < 0.0 { (q, p) } else { (p, q) });
         }
         sides.push((finish, finish));
-        Some(funnel(&sides))
+        let path = funnel(&sides);
+        if std::env::var_os("FC3_NAV_TRACE").is_some() {
+            debug!("nav path: from {from:.3?} (poly {start}, centre {:.3?}), to {to:.3?} (poly {goal}, centre {:.3?}), reached {end}; {} portals, waypoints {path:.3?}",
+                g.polys[start].centre, g.polys[goal].centre, portals.len());
+        }
+        Some(path)
     }
 }
 
@@ -382,7 +415,7 @@ fn funnel(portals: &[(Vec3, Vec3)]) -> Vec<Vec3> {
         let (l, r) = portals[i];
         // Tighten the right side.
         if area2(apex, right, r) <= 0.0 {
-            if apex.distance_squared(right) < 1e-8 || area2(apex, left, r) > 0.0 {
+            if apex.xz().distance_squared(right.xz()) < 1e-8 || area2(apex, left, r) > 0.0 {
                 right = r;
                 right_i = i;
             } else {
@@ -398,7 +431,7 @@ fn funnel(portals: &[(Vec3, Vec3)]) -> Vec<Vec3> {
         }
         // Tighten the left side.
         if area2(apex, left, l) >= 0.0 {
-            if apex.distance_squared(left) < 1e-8 || area2(apex, right, l) < 0.0 {
+            if apex.xz().distance_squared(left.xz()) < 1e-8 || area2(apex, right, l) < 0.0 {
                 left = l;
                 left_i = i;
             } else {
@@ -414,11 +447,13 @@ fn funnel(portals: &[(Vec3, Vec3)]) -> Vec<Vec3> {
         i += 1;
     }
     let end = portals[portals.len() - 1].0;
-    if out.last().is_none_or(|p| p.distance_squared(end) > 1e-6) {
+    if out.last().is_none_or(|p| p.xz().distance_squared(end.xz()) > 1e-6) {
         out.push(end);
+    } else if let Some(last) = out.last_mut() {
+        *last = end;
     }
     // The start itself isn't a waypoint.
-    out.retain(|p| p.distance_squared(portals[0].0) > 1e-6);
+    out.retain(|p| p.xz().distance_squared(portals[0].0.xz()) > 1e-6);
     out
 }
 
@@ -478,5 +513,85 @@ mod tests {
         let p = vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(4.0, 2.0, 0.0), Vec3::new(4.0, 2.0, 4.0), Vec3::new(0.0, 0.0, 4.0)];
         assert!((plane_height(&p, Vec3::new(2.0, 0.0, 1.0)) - 1.0).abs() < 1e-4);
         assert!(contains(&p, Vec3::new(2.0, 9.0, 2.0)) && !contains(&p, Vec3::new(5.0, 0.0, 2.0)));
+    }
+
+    #[test]
+    fn nearby_polygon_is_selected_by_its_surface_not_its_centre() {
+        let sector = CachedNav {
+            verts: vec![[4.0, 0.0, -10.0], [24.0, 0.0, -10.0], [24.0, 0.0, -30.0], [4.0, 0.0, -30.0]],
+            polys: vec![vec![0, 1, 2, 3]],
+            ..Default::default()
+        };
+        let graph = NavGraph::build(&HashMap::from([(sector_of(Vec3::new(1.0, 0.0, -11.0)), Arc::new(sector))]));
+        assert_eq!(graph.locate(Vec3::new(3.8, 0.0, -20.0)), Some(0));
+    }
+
+    #[test]
+    fn nearest_surface_can_be_across_a_sector_border() {
+        let graph = corridor();
+        assert_eq!(graph.locate(Vec3::new(-0.2, 0.0, -39.0)), Some(0));
+    }
+
+    #[test]
+    fn stacked_floors_select_the_nearest_height() {
+        let mut sector = CachedNav::default();
+        for height in [0.0, 4.0] {
+            let base = sector.verts.len() as u32;
+            sector.verts.extend([[1.0, height, -1.0], [5.0, height, -1.0], [5.0, height, -5.0], [1.0, height, -5.0]]);
+            sector.polys.push(vec![base, base + 1, base + 2, base + 3]);
+        }
+        let graph = NavGraph::build(&HashMap::from([(sector_of(Vec3::new(2.0, 0.0, -2.0)), Arc::new(sector))]));
+        assert_eq!(graph.locate(Vec3::new(2.0, 0.1, -2.0)), Some(0));
+        assert_eq!(graph.locate(Vec3::new(2.0, 4.1, -2.0)), Some(1));
+        assert_eq!(graph.locate(Vec3::new(2.0, 9.0, -2.0)), None);
+    }
+
+    #[test]
+    fn a_nearby_floor_edge_wins_over_an_overlapping_roof() {
+        let sector = CachedNav {
+            verts: vec![[2.0, 0.0, -2.0], [6.0, 0.0, -2.0], [6.0, 0.0, -6.0], [2.0, 0.0, -6.0],
+                [1.0, 1.5, -1.0], [7.0, 1.5, -1.0], [7.0, 1.5, -7.0], [1.0, 1.5, -7.0]],
+            polys: vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7]],
+            ..Default::default()
+        };
+        let graph = NavGraph::build(&HashMap::from([(sector_of(Vec3::new(3.0, 0.0, -3.0)), Arc::new(sector))]));
+        assert_eq!(graph.locate(Vec3::new(1.8, 0.1, -3.0)), Some(0));
+    }
+
+    #[test]
+    fn path_stops_at_walkable_surface_for_an_off_mesh_goal() {
+        let nav = NavMesh { graph: corridor(), ..default() };
+        let path = nav.path(Vec3::new(1.0, 0.0, -39.0), Vec3::new(7.7, 0.0, -45.0)).expect("nearby surface");
+        assert_eq!(path.last().copied(), Some(Vec3::new(8.0, 0.0, -45.0)));
+    }
+
+    #[test]
+    fn sloped_triangulated_corridor_has_no_spurious_corners() {
+        let mut sector = CachedNav::default();
+        for k in 0..8 {
+            let x = k as f32 * 2.0;
+            let base = sector.verts.len() as u32;
+            sector.verts.extend([[x, x * 0.1, -4.0], [x + 2.0, (x + 2.0) * 0.1, -4.0],
+                [x + 2.0, (x + 2.0) * 0.1, -2.0], [x, x * 0.1, -2.0]]);
+            sector.polys.extend([vec![base, base + 1, base + 2], vec![base, base + 2, base + 3]]);
+            sector.links.push(NavLink { a: k * 2, b: k * 2 + 1, left: sector.verts[base as usize], right: sector.verts[base as usize + 2] });
+            if k > 0 {
+                sector.links.push(NavLink { a: k * 2 - 2, b: k * 2 + 1, left: sector.verts[base as usize], right: sector.verts[base as usize + 3] });
+            }
+        }
+        let nav = NavMesh { graph: NavGraph::build(&HashMap::from([(sector_of(Vec3::new(1.0, 0.0, -3.0)), Arc::new(sector))])), ..default() };
+        let to = Vec3::new(15.0, 1.5, -3.0);
+        assert_eq!(nav.path(Vec3::new(1.0, 0.1, -3.0), to).unwrap(), vec![to]);
+    }
+
+    #[test]
+    fn portal_height_seams_do_not_repeat_a_corner() {
+        let from = Vec3::new(1.0, 0.0, 1.0);
+        let to = Vec3::new(5.0, 0.4, -2.0);
+        let path = funnel(&[(from, from), (Vec3::new(3.0, 0.0, 0.0), Vec3::new(3.0, 0.0, 0.0)),
+            (Vec3::new(3.0, 0.2, 0.0), Vec3::new(3.0, 0.2, 0.0)), (to, to)]);
+        assert_eq!(path.len(), 2, "{path:?}");
+        assert_eq!(path[0].xz(), Vec2::new(3.0, 0.0));
+        assert_eq!(path[1], to);
     }
 }

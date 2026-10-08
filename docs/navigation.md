@@ -67,10 +67,17 @@ polygons, links and border edges. 10,423 sectors have one (293 MB).
   polygon centres through portal midpoints, opening at most 6,000 polygons. It
   straightens the corridor with the funnel algorithm. If the goal can't be
   reached, it leads to the nearest polygon it found.
-* NPCs heading for anything more than 4 m away follow these paths. They re-plan
-  when the goal moves 2 m or every 1.5-2.5 s, with three searches a frame shared
-  between them. Nearer goals (combat strafing) are steered to directly, with the
-  ray-cast sidestep as before.
+* Polygon selection measures distance to the surface, including its edges,
+  rather than its centre. It also checks adjacent sectors. This keeps an NPC
+  near a floor's edge on that floor instead of routing over an overlapping roof.
+  Endpoints outside the walkable area are projected onto the selected surface.
+  The funnel compares corners in the ground plane, so small height differences
+  across portals do not repeat a waypoint.
+* NPCs follow these paths even for nearby investigation targets or guard posts:
+  a fence can separate two points only a few metres apart. Only short combat
+  strafes (under 4 m) bypass the mesh. NPCs re-plan when the goal moves 2 m or
+  every 1.5-2.5 s, with three searches a frame shared between them. Local
+  obstacle avoidance still uses a ray-cast sidestep.
 * Cover: polygon edges with no portal along them are walls. Spots 0.45 m in
   from them, every 2 m or so, are kept on an 8 m grid. An NPC in a fight takes
   the nearest spot whose wall faces its target, checked with two rays toward
@@ -80,3 +87,8 @@ polygons, links and border edges. 10,423 sectors have one (293 MB).
   moves on after 12-25 s or when rushed.
 * `NavMesh::height_at` gives the walkable height. NPCs stand on it where it is
   clearly above the terrain (floors and platforms) or well below it (caves).
+
+`FC3_NAV_TRACE=1` with `RUST_LOG=info,farcry3::nav=debug,farcry3::npc=debug`
+logs path endpoints, selected polygons, portals and waypoints, plus half-second
+NPC movement and blocking-collider samples. It is opt-in to keep normal runs
+quiet.

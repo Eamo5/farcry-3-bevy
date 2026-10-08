@@ -1283,11 +1283,12 @@ fn act(
     mut noises: MessageWriter<Noise>,
     mut damage: MessageWriter<DamageEvent>,
     (mut loops, mut sfx): (MessageWriter<crate::sound::LoopSfx>, MessageWriter<crate::sound::PlaySfx>),
-    (mut alarms, mut throw_clock, nav, probe): (
+    (mut alarms, mut throw_clock, nav, probe, collider_names): (
         MessageWriter<crate::outposts::AlarmRaised>,
         Local<f32>,
         Res<crate::nav::NavMesh>,
         crate::surfaces::SurfaceProbe,
+        Query<&Name>,
     ),
     players: Query<(Entity, &Transform, &Player), Without<Npc>>,
     mut npcs: Query<
@@ -1301,6 +1302,8 @@ fn act(
 ) {
     let Some(fx) = fx else { return };
     let dt = time.delta_secs();
+    let trace_nav = std::env::var_os("FC3_NAV_TRACE").is_some();
+    let log_nav = trace_nav && (time.elapsed_secs() * 2.0) as u32 != ((time.elapsed_secs() - dt) * 2.0) as u32;
     // Path searches allowed this frame (the rest wait their turn).
     let mut plan_budget = 3;
     let Ok((pe, pt, player)) = players.single() else { return };
@@ -1521,8 +1524,9 @@ fn act(
         // The way round buildings and fences, over the navigation mesh.
         let feet = pos - Vec3::Y * HALF_HEIGHT;
         let goal = goal.map(|g| {
-            // Close goals (combat strafing) are steered to directly.
-            if !nav.ready() || flat_distance(pos, g) < 4.0 {
+            // Only short combat strafes bypass the mesh. A nearby noise or
+            // guard post can be on the other side of a fence or a doorway.
+            if !nav.ready() || (npc.state == NpcState::Combat && flat_distance(pos, g) < 4.0) {
                 npc.path.clear();
                 return g;
             }
@@ -1548,7 +1552,11 @@ fn act(
                 dir = dir.normalize();
                 let filter = SpatialQueryFilter::from_excluded_entities([e, pe]);
                 if let Ok(d) = Dir3::new(dir) {
-                    if spatial.cast_ray(pos, d, 1.2, true, &filter).is_some() {
+                    if let Some(hit) = spatial.cast_ray(pos, d, 1.2, true, &filter) {
+                        if log_nav {
+                            debug!("npc {}: blocked at {pos:.3?}, toward {g:.3?}, by {:?} ({:?}) at {:.3} m, normal {:.3?}",
+                                npc.marker_id, hit.entity, collider_names.get(hit.entity).ok().map(|n| n.as_str()), hit.distance, hit.normal);
+                        }
                         // Blocked: try sidestepping.
                         let side = Vec3::new(-dir.z, 0.0, dir.x) * npc.strafe_dir;
                         dir = (dir * 0.2 + side).normalize();
@@ -1617,6 +1625,10 @@ fn act(
             }
         }
         t.translation = next;
+        if log_nav && goal.is_some() {
+            debug!("npc {}: {:?} at {next:.3?}, target {:?}, {} waypoints, next {goal:.3?}, velocity {:.3?}",
+                npc.marker_id, npc.state, npc.last_known, npc.path.len(), npc.velocity);
+        }
         if let Some(target_yaw) = face {
             npc.yaw = turn_toward(npc.yaw, target_yaw, dt * 4.0);
         }

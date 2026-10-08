@@ -141,6 +141,7 @@ fn throw_rock(
     let Ok((p, h)) = players.single() else { return };
     if !actions.just_pressed(Action::ThrowRock)
         || scripted.ignored.contains("throw_rock")
+        || !scripted.has_gadget("gadgets:FC3/Rock")
         || *cooldown > 0.0
         || h.dead
         || p.swimming
@@ -219,6 +220,11 @@ fn fly_rocks(
 }
 const TAG_RANGE: f32 = 180.0;
 
+fn camera_available(actions: &ActionState, player: &Player, health: &Health, scripted: &crate::story::ScriptedPlayer) -> bool {
+    actions.pressed(Action::Tag) && scripted.has_gadget("gadgets:Equipped/Tablet")
+        && !health.dead && !player.swimming && !player.noclip && !player.driving
+}
+
 #[allow(clippy::too_many_arguments)]
 fn binoculars(
     time: Res<Time>,
@@ -231,10 +237,11 @@ fn binoculars(
     mut commands: Commands,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     perks: Res<crate::progression::Perks>,
+    scripted: Res<crate::story::ScriptedPlayer>,
 ) {
     let dt = time.delta_secs();
     let Ok((pe, p, h)) = players.single() else { return };
-    let active = actions.pressed(Action::Tag) && !h.dead && !p.swimming && !p.noclip && !p.driving;
+    let active = camera_available(&actions, p, h, &scripted);
     bino.held = if active { bino.held + dt } else { 0.0 };
     let target = if bino.held >= CAMERA_RAISE { 1.0 } else { 0.0 };
     bino.blend += (target - bino.blend) * (dt * 10.0).min(1.0);
@@ -271,6 +278,62 @@ fn binoculars(
             commands.entity(e).insert(Tagged);
             sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 0.5 });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::story::ScriptedPlayer;
+
+    fn player() -> Player {
+        Player {
+            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: true,
+            crouching: false, swimming: false, noclip: false, spawning: false,
+            keep_height: false, last_landing_speed: 0.0, sprinting: false,
+            spawned_at: 0.0, driving: false, eye: crate::player::EYE_HEIGHT,
+            air: crate::player::AirMode::None, mantle: None, mounted: None,
+            sliding: None, dragging: false,
+        }
+    }
+
+    #[test]
+    fn rock_throws_require_the_mission_gadget_and_obey_signal_locks() {
+        let mut app = App::new();
+        app.init_resource::<Time>().init_resource::<ActionState>()
+            .init_resource::<crate::fp::FpState>().init_resource::<crate::fp::HandsBusy>()
+            .init_resource::<ScriptedPlayer>().add_systems(Update, throw_rock);
+        app.world_mut().spawn((player(), Health::new(100.0)));
+        app.world_mut().spawn((PlayerCamera, GlobalTransform::default()));
+        app.world_mut().resource_mut::<ActionState>().press(Action::ThrowRock);
+        app.world_mut().resource_mut::<ScriptedPlayer>().gadgets.clear();
+        app.update();
+        let count = |app: &mut App| app.world_mut().query::<&Rock>().iter(app.world()).count();
+        assert_eq!(count(&mut app), 0);
+        app.world_mut().resource_mut::<ScriptedPlayer>().gadgets.insert("gadgets:fc3/rock".into());
+        app.world_mut().resource_mut::<ScriptedPlayer>().ignored.insert("throw_rock".into());
+        app.update();
+        assert_eq!(count(&mut app), 0);
+        app.world_mut().resource_mut::<ScriptedPlayer>().ignored.clear();
+        app.update();
+        assert_eq!(count(&mut app), 1);
+        assert_eq!(app.world().resource::<crate::fp::FpState>().gesture, Some("rock"));
+    }
+
+    #[test]
+    fn removing_the_camera_disables_tagging_while_the_button_is_held() {
+        let mut scripted = ScriptedPlayer::default();
+        let mut actions = ActionState::default();
+        actions.hold(Action::Tag);
+        let mut player = player();
+        let health = Health::new(100.0);
+        assert!(camera_available(&actions, &player, &health, &scripted));
+        scripted.gadgets.clear();
+        assert!(!camera_available(&actions, &player, &health, &scripted));
+        scripted.gadgets.insert("gadgets:equipped/tablet".into());
+        assert!(camera_available(&actions, &player, &health, &scripted));
+        player.driving = true;
+        assert!(!camera_available(&actions, &player, &health, &scripted));
     }
 }
 

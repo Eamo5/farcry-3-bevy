@@ -263,9 +263,16 @@ pub struct ScriptedPlayer {
     /// the fallback).
     pub black_for: f32,
     /// The inventory a mission put aside (`BackupInventory`).
-    pub backup: Option<(Vec<crate::weapons::WeaponSlot>, [u32; 4])>,
+    backup: Option<InventoryBackup>,
     /// Non-weapon inventory entries missions give and take (rock, camera).
     pub gadgets: std::collections::HashSet<String>,
+}
+
+struct InventoryBackup {
+    slots: Vec<crate::weapons::WeaponSlot>,
+    current: usize,
+    explosives: [u32; 4],
+    gadgets: std::collections::HashSet<String>,
 }
 
 impl Default for ScriptedPlayer {
@@ -413,6 +420,31 @@ fn draw_markers(
 fn weapon_def(inv: &crate::weapons::Inventory, archetype: &str) -> Option<usize> {
     let short = archetype.rsplit(['/', ':']).next().unwrap_or(archetype).to_ascii_lowercase();
     inv.defs.iter().position(|d| d.name.to_ascii_lowercase() == short || d.model.split('\\').next().is_some_and(|folder| folder.eq_ignore_ascii_case(&short)))
+}
+
+impl ScriptedPlayer {
+    pub fn has_gadget(&self, archetype: &str) -> bool {
+        self.gadgets.iter().any(|g| g.eq_ignore_ascii_case(archetype))
+    }
+
+    fn backup_inventory(&mut self, inv: &crate::weapons::Inventory) {
+        self.backup = Some(InventoryBackup {
+            slots: inv.slots.clone(), current: inv.current,
+            explosives: [inv.grenades, inv.molotovs, inv.c4, inv.mines],
+            gadgets: self.gadgets.clone(),
+        });
+    }
+
+    fn restore_inventory(&mut self, inv: &mut crate::weapons::Inventory) {
+        let Some(backup) = self.backup.take() else { return };
+        inv.slots = backup.slots;
+        inv.current = backup.current;
+        (inv.grenades, inv.molotovs, inv.c4, inv.mines) = (
+            backup.explosives[0], backup.explosives[1], backup.explosives[2], backup.explosives[3],
+        );
+        self.gadgets = backup.gadgets;
+        crate::weapons::settle_unarmed(inv);
+    }
 }
 
 /// Inventory entries as the original scripts name them. Empty hands are not
@@ -1182,17 +1214,20 @@ fn run_story(
                         let name = host.story.item_name(&a(1));
                         scripted.gadgets.retain(|g| !g.eq_ignore_ascii_case(&name));
                     }
+                    "CAPI_Player.RemoveAllGadget" if a(0) == fc3_story::PLAYER.to_string() => {
+                        scripted.gadgets.clear();
+                        if let Ok(mut inv) = inventory.single_mut() {
+                            (inv.grenades, inv.molotovs, inv.c4, inv.mines) = (0, 0, 0, 0);
+                        }
+                    }
                     "CAPI_Pawn.BackupInventory" if a(0) == fc3_story::PLAYER.to_string() => {
                         if let Ok(inv) = inventory.single() {
-                            scripted.backup = Some((inv.slots.clone(), [inv.grenades, inv.molotovs, inv.c4, inv.mines]));
+                            scripted.backup_inventory(inv);
                         }
                     }
                     "CAPI_Pawn.RestoreBackupInventory" if a(0) == fc3_story::PLAYER.to_string() => {
-                        if let (Ok(mut inv), Some((slots, n))) = (inventory.single_mut(), scripted.backup.take()) {
-                            inv.slots = slots;
-                            inv.current = 0;
-                            crate::weapons::settle_unarmed(&mut inv);
-                            (inv.grenades, inv.molotovs, inv.c4, inv.mines) = (n[0], n[1], n[2], n[3]);
+                        if let Ok(mut inv) = inventory.single_mut() {
+                            scripted.restore_inventory(&mut inv);
                         }
                     }
                     _ => {}
@@ -1685,6 +1720,46 @@ mod tests {
         assert_eq!(items[1].count, 1);
         assert_eq!(items[1].category, "handgun");
         assert!(story_weapons(&defs, &slots, 2, &shop).1.is_none());
+    }
+
+    #[test]
+    fn mission_inventory_backup_restores_gadgets_ammo_and_the_selected_weapon_once() {
+        let defs = crate::weapons::weapon_defs();
+        let machete = defs.iter().position(|d| d.name == "Machete").unwrap();
+        let pistol = defs.iter().position(|d| d.name == "1911").unwrap();
+        let slots = vec![
+            crate::weapons::WeaponSlot { def: machete, mag: 0, reserve: 0 },
+            crate::weapons::WeaponSlot { def: pistol, mag: 4, reserve: 19 },
+        ];
+        let mut inv = crate::weapons::Inventory {
+            defs, models: Vec::new(), slots, current: 1,
+            grenades: 2, molotovs: 1, c4: 3, mines: 2,
+            cooldown: 0.0, reloading: 0.0, switching: 0.0, aiming: false,
+            aim_blend: 0.0, recoil_kick: 0.0, spread_bloom: 0.0, shots_fired: 0,
+            recoil_offset: 0.0, since_shot: 0.0, reserve_scale: 1.0,
+            attachments: Vec::new(), attachment_models: Vec::new(), mounted_from: None,
+            auto_tail: 0, arrow_kind: 0, special_arrows: [0; 2],
+            paints: Vec::new(), paint_options: Vec::new(),
+        };
+        let mut scripted = ScriptedPlayer::default();
+        scripted.backup_inventory(&inv);
+        scripted.gadgets.clear();
+        inv.slots.clear();
+        inv.current = 0;
+        (inv.grenades, inv.molotovs, inv.c4, inv.mines) = (0, 0, 0, 0);
+        crate::weapons::settle_unarmed(&mut inv);
+        scripted.restore_inventory(&mut inv);
+        assert!(scripted.has_gadget("gadgets:FC3/Rock"));
+        assert!(scripted.has_gadget("gadgets:Equipped/Tablet"));
+        assert_eq!(inv.slots.len(), 2);
+        assert_eq!(inv.current, 1);
+        assert_eq!((inv.slots[1].def, inv.slots[1].mag, inv.slots[1].reserve), (pistol, 4, 19));
+        assert_eq!((inv.grenades, inv.molotovs, inv.c4, inv.mines), (2, 1, 3, 2));
+        scripted.gadgets.clear();
+        inv.slots[1].mag = 1;
+        scripted.restore_inventory(&mut inv);
+        assert!(scripted.gadgets.is_empty());
+        assert_eq!(inv.slots[1].mag, 1);
     }
 
     fn modal_app() -> App {

@@ -155,6 +155,10 @@ is the story's own:
   resolve back to their archetypes when commands remove weapons or gadgets.
   Inventory spawn/remove callbacks follow host-reported availability;
   subscriptions made after an entity arrives still receive its spawn callback.
+  Removing the rock or camera also disables its player control; gadget-wide
+  removal clears carried explosives as well.
+  Mission inventory backups restore those gadgets, carried ammunition and
+  explosives, and the previously selected weapon, once.
 * **Scene lifetime**: sequences retain their meta-sequence owner; stopping
   that owner releases its looping scenes and character overrides, without
   stopping unrelated scenes or the host's QTE phases.
@@ -223,16 +227,18 @@ The live campaign smoke test reaches the map-pickup objective in `JAS_020_B10`
 and advances into `JAS_020_B15`. Tracing confirmed the guard's `CA_Start`
 callback is delivered. Implementing non-player teleports fixes Grant's reload
 placement and allows the checkpoint to reach the rock-distraction objective.
-The guard hears the distraction and emits `CA_Interrupt`, but the latest live
-run still stalls while he investigates: the navigation path starts at 36
-waypoints, remains near 30, then he times out and returns to his post. The next
-investigation is the selected navigation polygons, path and obstacle steering
-between the guard and the rock target. The opening mission is not yet verified
-end to end, and autopilot progression alone does not verify manual gameplay.
+The guard hears the distraction and emits `CA_Interrupt`. Selecting navigation
+polygons by surface distance rather than preferring an overlapping roof fixes
+his investigation route. An extended live autopilot run completed `JAS_020_B15`
+and `JAS_020_B20C`, then reached `JAS_020_B30` ("Run into the jungle"). That run
+skipped scenes and automatically ended the unimplemented Grant-death gameplay;
+it does not establish cinematic or manual-gameplay parity. The opening mission
+is not yet verified end to end.
 
 Regression tests cover live player queries, deferred inventory spawn/remove
-callbacks, meta-sequence teardown, timers, binding-aware prompts and modal
-pause/input ownership. Run `cargo test --locked --release --workspace`; the
+callbacks, meta-sequence teardown, timers, binding-aware prompts, modal
+pause/input ownership, gadget control gates and navigation surface/portal
+selection. Run `cargo test --locked --release --workspace`; the
 release test profile also avoids the Windows linker PDB-size limit encountered
 when this full Bevy dependency graph is linked with development debug symbols.
 
