@@ -29,7 +29,7 @@ impl Plugin for SyringesPlugin {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Plant {
     Arrowroot,
     TorchGinger,

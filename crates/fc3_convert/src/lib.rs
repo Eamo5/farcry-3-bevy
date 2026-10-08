@@ -862,6 +862,17 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
+    // ---- authored crafting/loot metadata (runtime rules migrate separately)
+    if opts.only_sectors.is_none() {
+        let current = std::fs::read_to_string(job.root().join(fc3_formats::progression::RECIPES_REL))
+            .map_err(anyhow::Error::from).and_then(|text| fc3_formats::progression::Crafting::from_text(&text)).is_ok();
+        if job.should_write(fc3_formats::progression::RECIPES_REL) || !current {
+            if let Err(e) = convert_crafting(&job) {
+                job.error(format!("crafting metadata: {e:#}"));
+            }
+        }
+    }
+
     // ---- the clips the story's contextual actions play
     if opts.only_sectors.is_none() && (job.should_write(fc3_formats::moves::CA_MOVES_REL) || job.should_write(fc3_formats::moves::MOVES_REL)) {
         if let Err(e) = convert_ca_moves(&job) {
@@ -1552,6 +1563,29 @@ fn convert_story(job: &Job) -> Result<()> {
     })?;
     let entities: Vec<story::StoryEntity> = lists.into_iter().flatten().collect();
     write_atomic(job.root(), story::ENTITIES_REL, &story::to_bytes(&entities), job.ctx)
+}
+
+/// Crafting ingredients, their authored loot sources and localized ids.
+fn convert_crafting(job: &Job) -> Result<()> {
+    use fc3_formats::{fcb, oasis, progression as p};
+    let parse = |bytes: Vec<u8>| -> Result<std::sync::Arc<fcb::Object>> {
+        let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+        fcb::parse(&bytes[at..])
+    };
+    let read = |path| parse(job.vfs.read(path)?);
+    let templates = read(p::TEMPLATES)?;
+    let recipes = read(p::RECIPE_LIB)?;
+    let types = read(p::RECIPE_TYPE_LIB)?;
+    let subtypes = read(p::RECIPE_SUBTYPE_LIB)?;
+    let shop_items = read(p::SHOP_ITEMS_LIB)?;
+    let loot_groups = read(p::LOOT_GROUPS)?;
+    let library = parse(std::fs::read(job.root().join("story/entitylibrary.fcb"))?)?;
+    let strings = oasis::Strings::from_bytes(&job.vfs.read(r"languages\english\oasisstrings_compressed.bin")?)?;
+    let metadata = p::crafting(&p::CraftingFiles {
+        templates: &templates, recipes: &recipes, types: &types, subtypes: &subtypes,
+        shop_items: &shop_items, loot_groups: &loot_groups, library: &library,
+    }, &|id| strings.get(id).unwrap_or_default().to_string());
+    write_atomic(job.root(), p::RECIPES_REL, metadata.to_text().as_bytes(), job.ctx)
 }
 
 /// The moves the story's contextual actions name, with the clips found for

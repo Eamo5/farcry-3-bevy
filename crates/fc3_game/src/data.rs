@@ -22,6 +22,8 @@ impl CacheInfo {
     pub fn load(root: PathBuf) -> anyhow::Result<CacheInfo> {
         let m = Manifest::load(&root)?;
         anyhow::ensure!(root.join(fc3_formats::shop::WEAPONS_REL).is_file(), "weapon shop table missing; re-run the converter");
+        let ingredients = std::fs::read_to_string(root.join(fc3_formats::progression::RECIPES_REL))?;
+        fc3_formats::progression::Crafting::from_text(&ingredients)?;
         Ok(CacheInfo {
             root,
             terrain: m.sectors_with_terrain.into_iter().collect(),

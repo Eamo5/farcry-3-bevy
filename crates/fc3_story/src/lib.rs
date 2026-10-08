@@ -78,6 +78,8 @@ pub struct PlayerView {
     pub weapon_slots: u32,
     pub weapons: Vec<Item>,
     pub gadgets: Vec<Item>,
+    /// Carried loot counts, keyed by the item's localized name id (not CRC).
+    pub loot: HashMap<u32, u32>,
     /// The name of what is in the player's hands.
     pub in_hands: Option<String>,
     /// Unlocked skills (lower-case names).
@@ -1015,6 +1017,7 @@ mod tests {
         let mut story = empty_story();
         let mut view = View { difficulty: 2, time_of_day: 18.5, ..Default::default() };
         view.player_state.money = 425;
+        view.player_state.loot.insert(126007, 2);
         view.player_state.medpacks = 3;
         view.player_state.weapon_slots = 4;
         view.player_state.weapons.push(Item { name: "weapons:FC3/Kimber".into(), category: "handgun".into(), count: 1, ..Default::default() });
@@ -1027,11 +1030,19 @@ mod tests {
                 CAPI_Pawn.CheckPawnWeaponInventoryByName("1", "Kimber")
         "#).eval().unwrap();
         assert_eq!(values, (425, 3, 4, 2, 1));
+        let loot: (u32, u32, u32) = lua.load(r#"
+            return CAPI_Pawn.GetLootQuantity("1", "126007"),
+                CAPI_Pawn.GetLootQuantity("1", "104580"),
+                CAPI_Pawn.GetLootQuantity("1", GetHashKey("weapons:fc3/kimber"))
+        "#).eval().unwrap();
+        assert_eq!(loot, (2, 0, 0));
         let clock: Vec<u32> = lua.load("return GetTimeOfDay()").eval().unwrap();
         assert_eq!(clock, vec![18, 30, 0]);
         view.player_state.in_hands = None;
+        view.player_state.loot.clear();
         story.update(0.0, view);
         assert_eq!(story.domino().lua().load(r#"return CAPI_Pawn.CheckPawnWeaponInventoryByName("1", "Kimber")"#).eval::<u32>().unwrap(), 2);
+        assert_eq!(story.domino().lua().load(r#"return CAPI_Pawn.GetLootQuantity("1", "126007")"#).eval::<u32>().unwrap(), 0);
     }
 
     #[test]

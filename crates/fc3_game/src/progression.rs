@@ -25,10 +25,12 @@ impl Plugin for ProgressionPlugin {
             .init_resource::<Popups>()
             .add_message::<XpGain>()
             .add_message::<ItemBought>()
+            .add_message::<ItemLooted>()
             .init_resource::<Shops>()
             .init_resource::<ShopCatalog>()
+            .init_resource::<LootCatalog>()
             .init_resource::<ShopOverride>()
-            .add_systems(OnExit(GameState::Loading), load_shop_catalog)
+            .add_systems(OnExit(GameState::Loading), (load_shop_catalog, load_loot_catalog))
             .add_systems(Update, find_shops)
             .add_systems(Startup, (setup_journal, setup_shop, setup_popups))
             .add_systems(
@@ -451,6 +453,88 @@ impl Perks {
 pub struct XpGain {
     pub amount: u32,
     pub reason: &'static str,
+}
+
+/// A real ingredient added by gathering or skinning, not a mission shortcut.
+#[derive(Message, Clone, Copy)]
+pub struct ItemLooted(pub LootKind);
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum LootKind {
+    Skin(Animal),
+    Plant(crate::syringes::Plant),
+}
+
+/// The identities of supported ingredients in the installed game. Counts
+/// still come from live inventory; crafting rules migrate independently.
+#[derive(Resource, Default)]
+pub struct LootCatalog(HashMap<LootKind, fc3_formats::progression::Item>);
+
+impl LootCatalog {
+    pub(crate) fn from_metadata(metadata: &fc3_formats::progression::Crafting) -> Self {
+        let mut out = HashMap::new();
+        let dropped_item = |source: &fc3_formats::progression::Source| {
+            source.items.iter().filter(|(_, chance)| *chance >= 100.0)
+                .find_map(|(id, _)| metadata.items.iter().find(|i| i.id == *id && i.loot && !i.rare && i.name_id != 0))
+        };
+        for animal in Animal::ALL {
+            // Prototype identity, not a shared skeleton or localized name:
+            // pigs and rare variants can use a boar's/bear's model too.
+            let prototype = match animal {
+                Animal::Boar => "FC3_Quadrupeds/Boar", Animal::Deer => "FC3_Quadrupeds/DeerFC3",
+                Animal::Goat => "FC3_Quadrupeds/Goat", Animal::Dog => "FC3_Quadrupeds/Dogs_Rapid",
+                Animal::Tapir => "FC3_Quadrupeds/AsianTapir", Animal::Leopard => "FC3_Quadrupeds/Leopard",
+                Animal::Bear => "FC3_Quadrupeds/AsianBlackBear", Animal::Tiger => "FC3_Quadrupeds/Tiger",
+                Animal::Komodo => "FC3_Quadrupeds/KomodoDragon", Animal::Cassowary => "FC3_Quadrupeds/Cassowary",
+                Animal::Buffalo => "FC3_Quadrupeds/Buffalo", Animal::Shark => "FC3_Aquatic/BullShark",
+                // No authored ingredient/source identity in this catalog.
+                Animal::Crocodile | Animal::Macaque | Animal::Chicken => continue,
+            };
+            let full = format!("FC3_Animals:{prototype}");
+            if let Some(item) = metadata.sources.iter().find(|s| s.prototype.eq_ignore_ascii_case(&full)).and_then(dropped_item) {
+                out.insert(LootKind::Skin(animal), item.clone());
+            }
+        }
+        for plant in crate::syringes::Plant::ALL {
+            let prefix = format!("Pickups/Plants/{}_", plant.name().replace(['\'', ' '], ""));
+            let source = metadata.sources.iter().find(|s| !s.skeleton && s.key.to_ascii_lowercase().starts_with(&prefix.to_ascii_lowercase()));
+            let item = source.and_then(dropped_item);
+            if let Some(item) = item { out.insert(LootKind::Plant(plant), item.clone()); }
+        }
+        Self(out)
+    }
+
+    pub fn item(&self, kind: LootKind) -> Option<&fc3_formats::progression::Item> {
+        self.0.get(&kind)
+    }
+
+    /// Several plants yield the same leaf item; scripts see the combined
+    /// amount actually carried, including after consumption or save loading.
+    pub fn quantities(&self, progress: &Progress) -> HashMap<u32, u32> {
+        let mut quantities: HashMap<u32, u32> = HashMap::new();
+        for (kind, item) in &self.0 {
+            let count = match kind {
+                LootKind::Skin(animal) => progress.skins.get(animal).copied().unwrap_or(0),
+                LootKind::Plant(plant) => progress.plants[plant.index()],
+            };
+            if count > 0 {
+                let total = quantities.entry(item.name_id).or_default();
+                *total = total.saturating_add(count);
+            }
+        }
+        quantities
+    }
+}
+
+fn load_loot_catalog(info: Res<crate::data::CacheInfo>, mut catalog: ResMut<LootCatalog>) {
+    match std::fs::read_to_string(info.root.join(fc3_formats::progression::RECIPES_REL))
+        .map_err(anyhow::Error::from).and_then(|text| fc3_formats::progression::Crafting::from_text(&text)) {
+        Ok(metadata) => {
+            *catalog = LootCatalog::from_metadata(&metadata);
+            info!("loot: {} supported ingredient identities", catalog.0.len());
+        }
+        Err(e) => warn!("loot: cannot read ingredient catalog: {e:#}"),
+    }
 }
 
 // ---------------------------------------------------------------- awards ---
@@ -1439,6 +1523,68 @@ fn refresh_shop(
         let price = item.price(inv, progress.towers.len(), &catalog);
         t.0 = if owned { format!("{:<38} owned", item.label(inv)) } else { format!("{:<38} ${price}", item.label(inv)) };
         c.0 = if owned || progress.money < price { Color::srgba(0.8, 0.8, 0.8, 0.5) } else { TEXT };
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod loot_tests {
+    use super::*;
+    use crate::syringes::Plant;
+
+    pub(crate) fn metadata() -> fc3_formats::progression::Crafting {
+        fc3_formats::progression::Crafting::from_text(concat!(
+            "fc3-recipes 2\n",
+            "item\t10\t1\t0\t0\tBoar hide\tHide\t900\n",
+            "item\t11\t1\t0\t0\tGreen leaf\tLeaf\t901\n",
+            "item\t12\t1\t0\t0\tCrimson leaf\tLeaf\t902\n",
+            "item\t13\t1\t1\t0\tRare hide\tRare\t903\n",
+            "item\t14\t1\t0\t0\tPig hide\tPig\t904\n",
+            "source\tskeleton\tboar.skeleton\tFC3_Animals:FC3_Domestic/Pig\t14:100\n",
+            "source\tskeleton\tboar.skeleton\tFC3_Animals:FC3_Quadrupeds/Boar.Rare\t13:100\n",
+            "source\tskeleton\tboar.skeleton\tFC3_Animals:FC3_Quadrupeds/Boar\t10:100\n",
+            "source\tentity\tPickups/Plants/Arrowroot_01\tArrowroot\t11:100\n",
+            "source\tentity\tPickups/Plants/ScrewPine_01\tScrewPine\t11:100\n",
+            "source\tentity\tPickups/Plants/TorchGinger_01\tTorchGinger\t12:100\n",
+            "source\tentity\tPickups/Plants/StarRhododendron_01\tStarRhododendron\t12:100\n",
+        )).unwrap()
+    }
+
+    #[test]
+    fn ingredient_identity_comes_from_authored_sources_not_shared_models_or_name_guesses() {
+        let mut metadata = metadata();
+        let catalog = LootCatalog::from_metadata(&metadata);
+        assert_eq!(catalog.item(LootKind::Skin(Animal::Boar)).unwrap().name_id, 900);
+        assert_eq!(catalog.item(LootKind::Plant(Plant::Arrowroot)).unwrap().name_id, 901);
+        assert_eq!(catalog.item(LootKind::Plant(Plant::ScrewPine)).unwrap().name_id, 901);
+        assert_eq!(catalog.item(LootKind::Plant(Plant::TorchGinger)).unwrap().name_id, 902);
+        assert!(catalog.item(LootKind::Skin(Animal::Chicken)).is_none());
+        assert!(catalog.item(LootKind::Plant(Plant::StoutKelp)).is_none());
+        metadata.sources.retain(|s| s.prototype != "FC3_Animals:FC3_Quadrupeds/Boar");
+        assert!(LootCatalog::from_metadata(&metadata).item(LootKind::Skin(Animal::Boar)).is_none());
+    }
+
+    #[test]
+    fn loot_quantities_combine_leaf_sources_follow_consumption_and_survive_save_loading() {
+        let catalog = LootCatalog::from_metadata(&metadata());
+        let mut progress = Progress::default();
+        assert!(catalog.quantities(&progress).is_empty());
+        progress.skins.insert(Animal::Boar, 2);
+        progress.plants[Plant::Arrowroot.index()] = 2;
+        progress.plants[Plant::ScrewPine.index()] = 3;
+        progress.plants[Plant::TorchGinger.index()] = 1;
+        progress.plants[Plant::StarRhododendron.index()] = 4;
+        assert_eq!(catalog.quantities(&progress), HashMap::from([(900, 2), (901, 5), (902, 5)]));
+        let mut loaded = Progress::default();
+        for line in progress.to_lines().lines() {
+            let (key, rest) = line.split_once(' ').unwrap();
+            assert!(loaded.read_line(key, rest));
+        }
+        assert_eq!(catalog.quantities(&loaded), catalog.quantities(&progress));
+        loaded.skins.clear();
+        loaded.plants[Plant::Arrowroot.index()] = 0;
+        loaded.plants[Plant::ScrewPine.index()] = 0;
+        loaded.plants[Plant::TorchGinger.index()] -= 1;
+        assert_eq!(catalog.quantities(&loaded), HashMap::from([(902, 4)]));
     }
 }
 

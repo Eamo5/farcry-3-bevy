@@ -333,7 +333,7 @@ fn spin_weapon_pickups(time: Res<Time>, mut q: Query<&mut Transform, With<Spinni
 
 #[allow(clippy::too_many_arguments)]
 fn interact(
-    actions: Res<crate::controls::ActionState>,
+    mut actions: ResMut<crate::controls::ActionState>,
     settings: Res<crate::settings::Settings>,
     mut world: ResMut<WorldState>,
     mut hud: ResMut<HudState>,
@@ -344,7 +344,7 @@ fn interact(
     pickups: Query<(Entity, &Pickup, &GlobalTransform)>,
     mut players: Query<(&Transform, &Player, &mut Inventory, &Health, &mut PlayerStats)>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
-    (busy, mut gestures, mut xp): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>, MessageWriter<crate::progression::XpGain>),
+    (busy, mut gestures, mut xp, mut looted, scripted): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>, MessageWriter<crate::progression::XpGain>, MessageWriter<crate::progression::ItemLooted>, Res<crate::story::ScriptedPlayer>),
 ) {
     let Ok((pt, player, mut inv, health, mut stats)) = players.single_mut() else { return };
     if health.dead || player.noclip || player.driving || busy.busy() {
@@ -353,7 +353,10 @@ fn interact(
     let fwd = Vec3::new(-player.yaw.sin(), 0.0, -player.yaw.cos());
     let feet = pt.translation - Vec3::Y * crate::player::HALF_HEIGHT;
     let mut best: Option<(f32, Entity)> = None;
-    for (e, _, gt) in &pickups {
+    for (e, pickup, gt) in &pickups {
+        if matches!(pickup.kind, PickupKind::Plant(_)) && !scripted.plant_looting {
+            continue;
+        }
         let to = gt.translation() - feet;
         let flat = Vec3::new(to.x, 0.0, to.z);
         let d = flat.length();
@@ -377,6 +380,10 @@ fn interact(
         gestures.write(crate::fp::FpAction::LootPlant { crouch: player.crouching });
     }
     let msg = apply_reward(p.kind, &mut inv, &mut stats, &mut world, &mut progress, &perks, &mut rng);
+    if let PickupKind::Plant(plant) = p.kind {
+        looted.write(crate::progression::ItemLooted(crate::progression::LootKind::Plant(plant)));
+    }
+    actions.consume(crate::controls::Action::Interact);
     hud.notify(msg);
     // Collectibles are worth experience as well as cash.
     let found = match p.kind {
@@ -517,5 +524,69 @@ fn detonate_explosives(
         world.removed.insert(ex.id);
         explosions.write(Explosion { at: gt.translation() + Vec3::Y * 0.5, radius: 9.0, damage: 220.0, instigator: d.killer });
         commands.entity(d.entity).despawn();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::controls::{Action, ActionState};
+    use crate::progression::{ItemLooted, LootKind, Progress};
+    use crate::syringes::Plant;
+
+    #[test]
+    fn plant_interaction_respects_the_mission_lock_and_updates_inventory_and_loot_once() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<ActionState>().init_resource::<crate::settings::Settings>()
+            .init_resource::<WorldState>().init_resource::<HudState>().init_resource::<Progress>()
+            .init_resource::<crate::progression::Perks>().init_resource::<crate::fp::HandsBusy>()
+            .init_resource::<crate::story::ScriptedPlayer>().insert_resource(Rng::seeded(1))
+            .add_message::<ItemLooted>().add_message::<crate::fp::FpAction>()
+            .add_message::<crate::progression::XpGain>().add_message::<crate::sound::PlaySfx>()
+            .add_systems(Update, interact);
+        let defs = crate::weapons::weapon_defs();
+        let unarmed = defs.iter().position(|d| d.name == crate::weapons::UNARMED).unwrap();
+        let inv = Inventory {
+            defs, models: Vec::new(), slots: vec![crate::weapons::WeaponSlot { def: unarmed, mag: 0, reserve: 0 }], current: 0,
+            grenades: 0, molotovs: 0, c4: 0, mines: 0,
+            cooldown: 0.0, reloading: 0.0, switching: 0.0, aiming: false,
+            aim_blend: 0.0, recoil_kick: 0.0, spread_bloom: 0.0, shots_fired: 0,
+            recoil_offset: 0.0, since_shot: 0.0, reserve_scale: 1.0,
+            attachments: Vec::new(), attachment_models: Vec::new(), mounted_from: None,
+            auto_tail: 0, arrow_kind: 0, special_arrows: [0; 2], paints: Vec::new(), paint_options: Vec::new(),
+        };
+        let player = app.world_mut().spawn((Player {
+            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: true,
+            crouching: false, swimming: false, noclip: false, spawning: false,
+            keep_height: false, last_landing_speed: 0.0, sprinting: false,
+            spawned_at: 0.0, driving: false, eye: crate::player::EYE_HEIGHT,
+            air: crate::player::AirMode::None, mantle: None, mounted: None,
+            sliding: None, dragging: false,
+        }, Transform::from_xyz(0.0, crate::player::HALF_HEIGHT, 0.0), inv, Health::new(100.0), PlayerStats {
+            medkits: 0, kills: 0, deaths: 0, respawn_timer: 0.0, spawn_point: Vec3::ZERO,
+            hurt_dir: None, burning: 0.0, last_hurt: crate::combat::DamageKind::Bullet,
+        })).id();
+        let pickup = app.world_mut().spawn((Pickup { kind: PickupKind::Plant(Plant::ScrewPine), id: 42, visual: None }, GlobalTransform::from_xyz(0.0, 0.0, -1.0))).id();
+        let mut cursor = bevy::ecs::message::MessageCursor::<ItemLooted>::default();
+        app.world_mut().resource_mut::<ActionState>().press(Action::Interact);
+        app.world_mut().resource_mut::<crate::story::ScriptedPlayer>().plant_looting = false;
+        app.update();
+        assert_eq!(app.world().resource::<Progress>().plants[Plant::ScrewPine.index()], 0);
+        assert!(app.world().get::<Pickup>(pickup).is_some());
+        app.world_mut().resource_mut::<crate::story::ScriptedPlayer>().plant_looting = true;
+        app.world_mut().get_mut::<Health>(player).unwrap().dead = true;
+        app.update();
+        assert_eq!(cursor.read(app.world().resource::<Messages<ItemLooted>>()).count(), 0);
+        app.world_mut().get_mut::<Health>(player).unwrap().dead = false;
+        app.update();
+        assert_eq!(app.world().resource::<Progress>().plants[Plant::ScrewPine.index()], 1);
+        assert!(app.world().get::<Pickup>(pickup).is_none());
+        assert!(app.world().resource::<WorldState>().removed.contains(&42));
+        assert!(!app.world().resource::<ActionState>().just_pressed(Action::Interact));
+        assert_eq!(cursor.read(app.world().resource::<Messages<ItemLooted>>()).map(|e| e.0).collect::<Vec<_>>(), vec![LootKind::Plant(Plant::ScrewPine)]);
+        app.update();
+        assert_eq!(app.world().resource::<Progress>().plants[Plant::ScrewPine.index()], 1);
+        assert_eq!(cursor.read(app.world().resource::<Messages<ItemLooted>>()).count(), 0);
     }
 }

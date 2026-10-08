@@ -141,6 +141,8 @@ pub struct Category {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Item {
     pub id: u32,
+    /// Localized name id used by `GetLootQuantity` and `CPawnLootItemEvent`.
+    pub name_id: u32,
     /// Looted (skins, plant parts).
     pub loot: bool,
     pub rare: bool,
@@ -490,6 +492,7 @@ pub fn crafting(f: &CraftingFiles, strings: &dyn Fn(u32) -> String) -> Crafting 
         let gadget = u32f(e, "selGadgetType");
         out.items.push(Item {
             id,
+            name_id: num(e, "locidItemNameId"),
             loot: e.bool("bIsLootItem").unwrap_or(false),
             rare: e.bool("bIsRareItem").unwrap_or(false),
             gadget: if gadget == NONE { 0 } else { gadget },
@@ -535,7 +538,7 @@ pub fn crafting(f: &CraftingFiles, strings: &dyn Fn(u32) -> String) -> Crafting 
 // ------------------------------------------------------------ text form ---
 
 const SKILLS_MAGIC: &str = "fc3-skills 1";
-const RECIPES_MAGIC: &str = "fc3-recipes 1";
+const RECIPES_MAGIC: &str = "fc3-recipes 2";
 
 /// A string as one tab-free, newline-free field.
 fn esc(s: &str) -> String {
@@ -673,7 +676,7 @@ impl Crafting {
             }
         }
         for i in &self.items {
-            s += &format!("item\t{}\t{}\t{}\t{}\t{}\t{}\n", i.id, u8::from(i.loot), u8::from(i.rare), i.gadget, esc(&i.key), esc(&i.name));
+            s += &format!("item\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", i.id, u8::from(i.loot), u8::from(i.rare), i.gadget, esc(&i.key), esc(&i.name), i.name_id);
         }
         for r in &self.recipes {
             s += &format!(
@@ -732,9 +735,10 @@ impl Crafting {
                         c.subtypes.push(cat);
                     }
                 }
-                "item" if f.len() >= 7 => {
-                    c.items.push(Item { id: n(1), loot: f[2] == "1", rare: f[3] == "1", gadget: n(4), key: unesc(f[5]), name: unesc(f[6]) })
+                "item" if f.len() >= 8 => {
+                    c.items.push(Item { id: n(1), name_id: n(7), loot: f[2] == "1", rare: f[3] == "1", gadget: n(4), key: unesc(f[5]), name: unesc(f[6]) })
                 }
+                "item" => bail!("ingredient entry lacks its localized name id"),
                 "recipe" if f.len() >= 16 => {
                     let r = Recipe {
                         id: unesc(f[1]),
@@ -980,7 +984,7 @@ mod tests {
             ],
         );
         let item = |id: u16, key: &'static str, rare: u8| {
-            obj("Entry", vec![("disId", V::U16(id)), ("text_hidName", V::S(key)), ("bIsLootItem", V::U8(1)), ("bIsRareItem", V::U8(rare)), ("selGadgetType", V::U32(0))], vec![])
+            obj("Entry", vec![("disId", V::U16(id)), ("locidItemNameId", V::U32(id as u32 + 1000)), ("text_hidName", V::S(key)), ("bIsLootItem", V::U8(1)), ("bIsRareItem", V::U8(rare)), ("selGadgetType", V::U32(0))], vec![])
         };
         let shop = obj("lib", vec![], vec![item(1280, "Parts/Skin", 0), item(1281, "Parts/Rare skin", 1), item(7, "Other", 0)]);
         let group = |id: u32, item: u32| {
@@ -1049,6 +1053,7 @@ mod tests {
         assert_eq!(a.bonuses, vec![Bonus { plan: "slots".into(), attribute: 7, value: 1.0, additive: true }]);
         assert_eq!((b.requires.as_str(), b.name.as_str(), b.description.as_str()), ("Recipes:Gear/Holster 1", "s50", ""));
         assert_eq!(c.items.iter().map(|i| (i.id, i.rare)).collect::<Vec<_>>(), vec![(1280, false), (1281, true)]);
+        assert_eq!(c.items[0].name_id, 2280);
         assert_eq!(c.sources.len(), 2);
         assert_eq!((c.sources[0].skeleton, c.sources[0].key.as_str(), c.sources[0].items.clone()), (false, "Pickups/Plant_01", vec![(1280, 50.0)]));
         assert_eq!((c.sources[1].skeleton, c.sources[1].key.as_str()), (true, r"graphics\goat.skeleton"));
@@ -1065,5 +1070,7 @@ mod tests {
         assert_eq!(SkillTree::from_text(&t.to_text()).unwrap(), t);
         assert!(SkillTree::from_text("other").is_err());
         assert!(Crafting::from_text("fc3-skills 1\n").is_err());
+        assert!(Crafting::from_text("fc3-recipes 1\n").is_err());
+        assert!(Crafting::from_text("fc3-recipes 2\nitem\t1\t1\t0\t0\tkey\tname\n").is_err());
     }
 }

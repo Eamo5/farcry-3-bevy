@@ -991,16 +991,17 @@ fn animal_deaths(
 /// Skinning a carcass yields one skin of its species.
 #[allow(clippy::too_many_arguments)]
 fn skin_animals(
-    actions: Res<crate::controls::ActionState>,
+    mut actions: ResMut<crate::controls::ActionState>,
     settings: Res<crate::settings::Settings>,
     players: Query<(&Transform, &Health), With<Player>>,
     mut carcasses: Query<(Entity, &GlobalTransform, &mut Carcass)>,
     mut progress: ResMut<crate::progression::Progress>,
     mut hud: ResMut<crate::hud::HudState>,
-    (busy, mut gestures): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>),
+    mut looted: MessageWriter<crate::progression::ItemLooted>,
+    (busy, mut gestures, scripted): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>, Res<crate::story::ScriptedPlayer>),
 ) {
     let Ok((pt, h)) = players.single() else { return };
-    if h.dead || hud.prompt.is_some() || busy.busy() {
+    if h.dead || hud.prompt.is_some() || busy.busy() || !scripted.animal_looting {
         return;
     }
     let Some((_, _, mut c)) = carcasses
@@ -1014,6 +1015,8 @@ fn skin_animals(
     hud.prompt = Some(format!("{}  skin {}", actions.label(crate::controls::Action::Interact, &settings), animal.name().to_lowercase()));
     if actions.just_pressed(crate::controls::Action::Interact) {
         *progress.skins.entry(animal).or_insert(0) += 1;
+        looted.write(crate::progression::ItemLooted(crate::progression::LootKind::Skin(animal)));
+        actions.consume(crate::controls::Action::Interact);
         hud.notify(format!("+1 {} skin", animal.name()));
         // The skinning plays out with the machete; the carcass stays.
         c.skinned = true;
@@ -1037,6 +1040,67 @@ fn despawn_animals(
         if far || rotten {
             commands.entity(e).despawn();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::controls::{Action, ActionState};
+    use crate::progression::{ItemLooted, LootKind, Progress};
+
+    #[test]
+    fn skinning_requires_a_live_player_an_enabled_category_and_free_hands_and_emits_once() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<ActionState>().init_resource::<crate::settings::Settings>()
+            .init_resource::<Progress>().init_resource::<crate::hud::HudState>()
+            .init_resource::<crate::fp::HandsBusy>().init_resource::<crate::story::ScriptedPlayer>()
+            .add_message::<ItemLooted>().add_message::<crate::fp::FpAction>()
+            .add_systems(Update, skin_animals);
+        let player = app.world_mut().spawn((Player {
+            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: true,
+            crouching: false, swimming: false, noclip: false, spawning: false,
+            keep_height: false, last_landing_speed: 0.0, sprinting: false,
+            spawned_at: 0.0, driving: false, eye: crate::player::EYE_HEIGHT,
+            air: crate::player::AirMode::None, mantle: None, mounted: None,
+            sliding: None, dragging: false,
+        }, Transform::default(), Health::new(100.0))).id();
+        let species = SPECIES.iter().position(|s| s.animal == Animal::Boar).unwrap();
+        let carcass = app.world_mut().spawn((GlobalTransform::from_xyz(1.0, 0.0, 0.0), Carcass { species, age: 0.0, skinned: false })).id();
+        let mut cursor = bevy::ecs::message::MessageCursor::<ItemLooted>::default();
+        app.world_mut().resource_mut::<ActionState>().press(Action::Interact);
+        app.world_mut().resource_mut::<crate::story::ScriptedPlayer>().animal_looting = false;
+        app.update();
+        assert!(app.world().resource::<Progress>().skins.is_empty());
+        app.world_mut().resource_mut::<crate::story::ScriptedPlayer>().animal_looting = true;
+        app.world_mut().get_mut::<Health>(player).unwrap().dead = true;
+        app.update();
+        assert!(app.world().resource::<Progress>().skins.is_empty());
+        app.world_mut().get_mut::<Health>(player).unwrap().dead = false;
+        app.world_mut().resource_mut::<crate::fp::HandsBusy>().0 = 1.0;
+        app.update();
+        assert!(app.world().resource::<Progress>().skins.is_empty());
+        app.world_mut().resource_mut::<crate::fp::HandsBusy>().0 = 0.0;
+        app.world_mut().get_mut::<Transform>(player).unwrap().translation = Vec3::splat(20.0);
+        app.update();
+        assert!(app.world().resource::<Progress>().skins.is_empty());
+        app.world_mut().get_mut::<Transform>(player).unwrap().translation = Vec3::ZERO;
+        app.world_mut().resource_mut::<ActionState>().clear();
+        app.update();
+        assert!(app.world().resource::<Progress>().skins.is_empty());
+        assert!(!app.world().get::<Carcass>(carcass).unwrap().skinned);
+        app.world_mut().resource_mut::<crate::hud::HudState>().prompt = None;
+        app.world_mut().resource_mut::<ActionState>().press(Action::Interact);
+        app.update();
+        assert_eq!(app.world().resource::<Progress>().skins[&Animal::Boar], 1);
+        assert!(app.world().get::<Carcass>(carcass).unwrap().skinned);
+        assert!(!app.world().resource::<ActionState>().just_pressed(Action::Interact));
+        assert_eq!(cursor.read(app.world().resource::<Messages<ItemLooted>>()).map(|e| e.0).collect::<Vec<_>>(), vec![LootKind::Skin(Animal::Boar)]);
+        app.world_mut().resource_mut::<crate::hud::HudState>().prompt = None;
+        app.update();
+        assert_eq!(app.world().resource::<Progress>().skins[&Animal::Boar], 1);
+        assert_eq!(cursor.read(app.world().resource::<Messages<ItemLooted>>()).count(), 0);
     }
 }
 

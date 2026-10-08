@@ -161,6 +161,17 @@ is the story's own:
   one-weapon-per-tower list. The first tower frees the 1911, 6P9 and STG-90;
   the reward notification lists every supported weapon freed by that tower.
   Free stock still has to be collected from a shop; it is not granted on unlock.
+* **Ingredient loot**: skinning and plant gathering raise `CPawnLootItemEvent`
+  (`Name`, localized item id) after the live inventory snapshot updates.
+  Events survive paused tutorial/menu frames and are delivered once. The
+  converted `progression/recipes.txt` table joins authored loot groups to
+  shopping items and source prototypes; shared-model pigs/rare animals are
+  not used as base ingredient identities. `GetLootQuantity` reads carried
+  skins and leaves by localized id, combining plants yielding the same leaf;
+  consumption and save loading change those queries without inventing events.
+  Scripts' plant/animal looting permissions gate interactions, which consume
+  their input press so another interaction cannot reuse it that frame.
+  This does not yet replace the sandbox crafting recipes or automatic medkits.
 * **Player queries**: money, medkits, carry slots, equipped and carried
   weapons (using the shop's archetype names), gadgets, learned skills,
   stance, zip-line state, look angles, tagged story actors, difficulty and
@@ -254,8 +265,12 @@ That run then entered a repeated mission-failure/reload loop. The tower's
 authored `PlayerOnly` boundary was incorrectly counting live NPC contacts.
 After applying its filter, another live run completed `JAS_060_B20`,
 `JAS_060_B30C`, `JAS_060_B40` and `JAS_060_MAIN`, then `JAS_080_B10`. It reached
-the boar-skinning/plant-gathering tutorial in `JAS_080_B20`, which waits on
-`CPawnLootItemEvent` callbacks not yet forwarded by the host. The autopilot
+the boar-skinning/plant-gathering tutorial in `JAS_080_B20`. Loot callbacks and
+live quantity queries are now wired and covered by inventory/interaction tests.
+An additional live smoke run loaded 20 supported ingredient identities and
+reached the hunting objective, but did not collect ingredients or complete it.
+The mission boars still spawn as generic story characters rather than
+skinnable wildlife, and the autopilot does not hunt or gather. The autopilot
 stands in for the tower panel, zipline use and world-map input; these aren't
 manual traversal/UI validation. These runs skipped scenes and automatically ended the
 unimplemented Grant-death gameplay; they do not establish cinematic or
@@ -266,7 +281,9 @@ callbacks, meta-sequence teardown, timers, binding-aware prompts, modal
 pause/input ownership, gadget control gates, navigation surface/portal
 selection, catalog parsing, tutorial stock restrictions, priced inventory
 transactions, the shop button path, purchase delivery across paused frames,
-authored tower-freebie thresholds and player-only mission-boundary contacts.
+authored tower-freebie thresholds, player-only mission-boundary contacts,
+authored loot-source identities, combined leaf quantities, skinning/gathering
+permissions and exactly-once loot delivery after paused frames.
 Run `cargo test --locked --release --workspace`; the
 release test profile also avoids the Windows linker PDB-size limit encountered
 when this full Bevy dependency graph is linked with development debug symbols.

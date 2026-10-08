@@ -20,7 +20,7 @@ pub struct WeaponsPlugin;
 
 impl Plugin for WeaponsPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Rng(0x9E37_79B9_7F4A_7C15))
+        app.insert_resource(Rng::seeded(0x9E37_79B9_7F4A_7C15))
             .init_resource::<PaintTable>()
             .init_resource::<TestScript>()
             .init_resource::<ScopeSway>()
@@ -603,6 +603,10 @@ pub struct Muzzle;
 pub struct Rng(u64);
 
 impl Rng {
+    pub fn seeded(seed: u64) -> Self {
+        Self(seed)
+    }
+
     pub fn next_u32(&mut self) -> u32 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;

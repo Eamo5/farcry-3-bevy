@@ -88,14 +88,7 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         c.item_id(&name.0)
     })?;
     r.f("CAPI_Pawn.GetLootQuantity", |c, (_pawn, item): (Text, Num)| {
-        let crc = item.or(-1.0) as u32;
-        let p = &c.view.player_state;
-        p.gadgets
-            .iter()
-            .chain(&p.weapons)
-            .find(|i| fc3_formats::hash::crc32(i.name.to_ascii_lowercase().as_bytes()) == crc)
-            .map(|i| i.count as f64)
-            .unwrap_or(0.0)
+        c.view.player_state.loot.get(&(item.or(-1.0) as u32)).copied().unwrap_or(0) as f64
     })?;
     r.f("CAPI_Player.GetPlayerMoney", |c, _p: Text| c.view.player_state.money as f64)?;
     r.f("CAPI_Player.GetPlayerMedPackCount", |c, _p: Text| c.view.player_state.medpacks as f64)?;

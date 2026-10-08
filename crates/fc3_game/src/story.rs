@@ -34,6 +34,7 @@ impl Plugin for StoryPlugin {
             .init_resource::<HiddenEntities>()
             .init_resource::<EntityPlacements>()
             .init_resource::<StoryPurchases>()
+            .init_resource::<StoryLoot>()
             .add_systems(Update, hide_entities.after(StorySet))
             .add_systems(Update, apply_entity_poses.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, apply_entity_physics.after(StorySet).in_set(EntityPosesSet))
@@ -41,6 +42,7 @@ impl Plugin for StoryPlugin {
             .add_systems(PreUpdate, story_boxes.after(crate::controls::update_actions))
             .add_systems(PreUpdate, story_interactions.after(story_boxes))
             .add_systems(PreUpdate, collect_shop_purchases)
+            .add_systems(PreUpdate, collect_loot)
             .add_systems(Startup, setup_story_ui)
             .add_systems(Update, fade_screen)
             .add_systems(Update, start_story.after(crate::save::continue_game).run_if(in_state(GameState::Playing)))
@@ -188,6 +190,24 @@ fn collect_shop_purchases(
     }
 }
 
+/// Gathering may open a tutorial that pauses mission simulation; keep its
+/// event until the story can read the updated inventory on a playing frame.
+#[derive(Resource, Default)]
+struct StoryLoot(Vec<crate::progression::ItemLooted>);
+
+fn collect_loot(
+    host: Option<NonSend<StoryHost>>,
+    mut looted: MessageReader<crate::progression::ItemLooted>,
+    mut pending: ResMut<StoryLoot>,
+) {
+    if host.is_some() {
+        pending.0.extend(looted.read().copied());
+    } else {
+        looted.clear();
+        pending.0.clear();
+    }
+}
+
 /// The running story (its Lua state lives on the main thread).
 pub struct StoryHost {
     pub story: Story,
@@ -218,6 +238,17 @@ pub struct StoryHost {
 }
 
 impl StoryHost {
+    /// Called after updating the story's view, so loot callbacks querying
+    /// quantities see the items just collected, not the preceding frame.
+    fn forward_loot(&mut self, loot: &mut StoryLoot, catalog: &crate::progression::LootCatalog) {
+        for looted in loot.0.drain(..) {
+            if let Some(item) = catalog.item(looted.0) {
+                self.story.entity_event(fc3_story::PLAYER, "CPawnLootItemEvent",
+                    vec![Arg::Str("Name".into()), Arg::Str(item.name_id.to_string())]);
+            }
+        }
+    }
+
     fn forward_purchases(&mut self, purchases: &mut StoryPurchases) {
         for b in purchases.0.drain(..) {
             if let Some((archetype, id)) = b.model.as_ref().and_then(|m| self.shop_items.get(m)) {
@@ -296,6 +327,8 @@ pub struct ScriptedPlayer {
     backup: Option<InventoryBackup>,
     /// Non-weapon inventory entries missions give and take (rock, camera).
     pub gadgets: std::collections::HashSet<String>,
+    pub animal_looting: bool,
+    pub plant_looting: bool,
 }
 
 struct InventoryBackup {
@@ -311,6 +344,7 @@ impl Default for ScriptedPlayer {
             ignored: Default::default(), movement: 1.0, god: false, hud_hidden: false,
             fade: (0.0, 0.0, 0.0), black_for: 0.0, backup: None,
             gadgets: ["gadgets:FC3/Rock".into(), "gadgets:Equipped/Tablet".into()].into_iter().collect(),
+            animal_looting: true, plant_looting: true,
         }
     }
 }
@@ -674,13 +708,15 @@ fn run_story(
         Res<crate::terrain::Heightfield>,
         ResMut<crate::faces::Voices>,
     ),
-    (info, slot, fov, mut bought, mut towers, ways): (
+    (info, slot, fov, mut bought, mut towers, ways, mut looted, loot_catalog): (
         Res<CacheInfo>,
         Res<crate::save::SaveSlot>,
         Res<crate::settings::Settings>,
         ResMut<StoryPurchases>,
         MessageReader<crate::traversal::TowerTaken>,
         Res<crate::traversal::Ways>,
+        ResMut<StoryLoot>,
+        Res<crate::progression::LootCatalog>,
     ),
     (story_actors, mut commands_out, mut hidden, tagged): (
         Query<Entity, With<crate::story_actors::StoryActor>>, Commands, ResMut<HiddenEntities>,
@@ -736,6 +772,7 @@ fn run_story(
             *scripted = ScriptedPlayer::default();
             shop_override.0 = None;
             bought.0.clear();
+            looted.0.clear();
             ui.objective = None;
             ui.hints.clear();
             ui.boxes.clear();
@@ -781,6 +818,7 @@ fn run_story(
         view.player_state.max_health = h.max;
     }
     view.player_state.money = progress.money;
+    view.player_state.loot = loot_catalog.quantities(&progress);
     view.player_state.medpacks = stats.single().map_or(0, |s| s.medkits);
     view.player_state.weapon_slots = perks.weapon_slots as u32;
     view.player_state.skills = progress.skills.iter().map(|s| s.to_ascii_lowercase()).collect();
@@ -865,7 +903,9 @@ fn run_story(
     // Purchases, as the shop's buy event on the player (the game's item,
     // its name's section and string id).
     host.forward_purchases(&mut bought);
-    let commands = host.story.update(dt, view);
+    let mut commands = host.story.update(dt, view);
+    host.forward_loot(&mut looted, &loot_catalog);
+    commands.extend(host.story.take_commands());
     ui.timers = host.story.timers();
     let data = host.story.data();
     let now_markers: Vec<Vec3> = host.story.objective_markers().into_iter().map(|(_, p)| to_bevy(p)).collect();
@@ -1258,6 +1298,12 @@ fn run_story(
                     }
                     "CAPI_Player.AddGadget" if a(0) == fc3_story::PLAYER.to_string() => {
                         scripted.gadgets.insert(host.story.item_name(&a(1)));
+                    }
+                    "CAPI_Player.EnableAnimalLooting" if a(0) == fc3_story::PLAYER.to_string() => {
+                        scripted.animal_looting = a(1) != "false" && a(1) != "0";
+                    }
+                    "CAPI_Player.EnablePlantLooting" if a(0) == fc3_story::PLAYER.to_string() => {
+                        scripted.plant_looting = a(1) != "false" && a(1) != "0";
                     }
                     "CAPI_Player.RemoveGadget" if a(0) == fc3_story::PLAYER.to_string() => {
                         let name = host.story.item_name(&a(1));
@@ -1727,6 +1773,65 @@ mod tests {
     use super::*;
     use crate::controls::{Action, ActionState, Binding};
     use crate::settings::Settings;
+
+    #[test]
+    fn gathered_loot_survives_paused_frames_and_callbacks_read_the_updated_inventory_once() {
+        use crate::progression::{ItemLooted, LootCatalog, LootKind, Progress, Animal};
+        use crate::syringes::Plant;
+        let pack = fc3_formats::scripts::ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap();
+        let story = Story::new(pack, fc3_story::data::StoryData::default()).unwrap();
+        story.domino().lua().load(r#"
+            loot = { count = 0, quantities = {} }
+            loot._type = { Got = function(self, field, id)
+                assert(field == "Name")
+                self.count = self.count + 1
+                self.quantities[tonumber(id)] = CAPI_Pawn.GetLootQuantity("1", id)
+            end }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("1", loot, "Got", "CPawnLootItemEvent")
+        "#).exec().unwrap();
+        fn forward(mut host: NonSendMut<StoryHost>, mut pending: ResMut<StoryLoot>, catalog: Res<LootCatalog>, progress: Res<Progress>) {
+            let mut view = View::default();
+            view.player_state.loot = catalog.quantities(&progress);
+            host.story.update(0.0, view);
+            host.forward_loot(&mut pending, &catalog);
+        }
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(State::new(GameState::Journal))
+            .insert_non_send(StoryHost::new(story, None))
+            .insert_resource(LootCatalog::from_metadata(&crate::progression::loot_tests::metadata()))
+            .init_resource::<Progress>()
+            .init_resource::<StoryLoot>()
+            .add_message::<ItemLooted>()
+            .add_systems(PreUpdate, collect_loot)
+            .add_systems(Update, forward.run_if(in_state(GameState::Playing)));
+        app.world_mut().resource_mut::<Progress>().skins.insert(Animal::Boar, 2);
+        app.world_mut().resource_mut::<Progress>().plants[Plant::ScrewPine.index()] = 1;
+        for kind in [LootKind::Skin(Animal::Boar), LootKind::Plant(Plant::ScrewPine), LootKind::Skin(Animal::Chicken)] {
+            app.world_mut().write_message(ItemLooted(kind));
+        }
+        let count = |app: &App| app.world().non_send::<StoryHost>().story.domino().lua()
+            .globals().get::<mlua::Table>("loot").unwrap().get::<u32>("count").unwrap();
+        for _ in 0..8 { app.update(); }
+        assert_eq!(count(&app), 0);
+        assert_eq!(app.world().resource::<StoryLoot>().0.len(), 3);
+        app.insert_resource(State::new(GameState::Playing));
+        app.update();
+        assert_eq!(count(&app), 2);
+        assert!(app.world().resource::<StoryLoot>().0.is_empty());
+        let quantities = app.world().non_send::<StoryHost>().story.domino().lua().globals()
+            .get::<mlua::Table>("loot").unwrap().get::<mlua::Table>("quantities").unwrap();
+        assert_eq!(quantities.get::<u32>(900).unwrap(), 2);
+        assert_eq!(quantities.get::<u32>(901).unwrap(), 1);
+        for _ in 0..4 { app.update(); }
+        assert_eq!(count(&app), 2);
+        // Consumed loot leaves the inventory without fabricating another event.
+        app.world_mut().resource_mut::<Progress>().skins.clear();
+        app.update();
+        assert_eq!(app.world().non_send::<StoryHost>().story.domino().lua()
+            .load(r#"return CAPI_Pawn.GetLootQuantity("1", "900")"#).eval::<u32>().unwrap(), 0);
+        assert_eq!(count(&app), 2);
+    }
 
     #[test]
     fn a_shop_purchase_survives_paused_frames_and_reaches_the_mission_once() {
