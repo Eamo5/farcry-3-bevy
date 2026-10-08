@@ -136,6 +136,26 @@ impl Action {
         Action::ALL.into_iter().find(|a| a.id() == id)
     }
 
+    /// Action names embedded in the game's localized tutorial text.
+    pub fn from_prompt(name: &str) -> Option<Action> {
+        match name.to_ascii_lowercase().as_str() {
+            "moveforward" => Some(Action::Forward),
+            "movebackward" => Some(Action::Back),
+            "moveleft" => Some(Action::Left),
+            "moveright" => Some(Action::Right),
+            "throwrock" => Some(Action::ThrowRock),
+            "throwgrenade" => Some(Action::Grenade),
+            "throwmolotov" => Some(Action::Molotov),
+            "heal" => Some(Action::Medkit),
+            "takedown" => Some(Action::Melee),
+            "nextweapon" => Some(Action::NextWeapon),
+            "previousweapon" => Some(Action::PrevWeapon),
+            "showmap" => Some(Action::Map),
+            "binoculars" | "camera" => Some(Action::Tag),
+            other => Action::from_id(other),
+        }
+    }
+
     fn gamepad(self) -> &'static [GamepadButton] {
         use GamepadButton as B;
         match self {

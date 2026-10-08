@@ -878,8 +878,11 @@ impl FaceChoice { fn from_component(&fcb::Object); fn definition(head_tags) -> O
   nearby faces with a clip playing are posed from it: the scene's facial track
   (`CFacialClip`, from its start frame) and the speaker's lip-sync clip for a
   spoken line add up. `FC3_NO_FACES=1` leaves faces on the body pose (A/B).
-* Not yet: generic characters' rigs (by archetype and kit head tag), idle
-  blinks, gameplay `*_facial` clips.
+* Faces outside scenes also play the library's neutral blink loop, with
+  staggered phases. The library loads when conversion finishes, including
+  on first launch.
+* Not yet: generic characters' rigs (by archetype and kit head tag),
+  gameplay `*_facial` clips.
 
 ### Tools
 

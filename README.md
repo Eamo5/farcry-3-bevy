@@ -236,12 +236,22 @@ No game data is included in this repository, and none is written into it.
   before). F4 or `--standard-shaders` switches to plain materials.
   See `docs/shaders.md`.
 
-## What is deliberately not included
+## Campaign support
 
-This is a sandbox built on the engine, not a re-creation of the campaign. It does not use the game's
-music or voiced dialogue, its named story characters, or its missions and story. Side activities
-(hunting and assassination contracts, races, supply runs) count as missions here and are left out
-as well. Enemies come from the generic enemy pool.
+New games run the installed game's original single-player mission graphs, with mission layers,
+named characters, objectives, checkpoint reloads, voiced dialogue and subtitles, music, cinematic
+sequences, facial animation, Bink videos and quick-time events. The scripts read the player's live
+inventory, money, health, difficulty and time of day. Tutorials display the current keyboard or
+gamepad bindings; visible mission timers follow the story clock and pause with the game.
+
+Campaign support is still in development. End-to-end completion of every mission and side activity
+has not been verified, and specific gameplays other than `QTEGSF` (including minigames) still need
+host implementations. The skill tree, crafting and weapon tuning also retain sandbox rules. Full
+visual, gameplay and UX parity with the original is the target, not a completed claim. See
+[`docs/story.md`](docs/story.md) for the current runtime and test tools.
+
+Options can select a free-roam new game, adjust music volume and toggle subtitles.
+`FC3_STORY=0/1` overrides the new-game mode for testing.
 
 ## Requirements
 
@@ -420,5 +430,8 @@ gamepad, and `FC3_FIRE_DEBUG` logs shots and projectile hits.
 | `fc3_convert` | The one-time converter (library plus the `fc3convert` CLI). It is parallel, incremental, writes files atomically and checks free disk space. |
 | `fc3_game`    | The Bevy game. |
 | `fc3_tool`    | Exploration CLIs (`fc3tool`, `fc3anim`, `fc3audio`, `fc3veg`). |
+| `fc3_domino`  | Embedded Lua 5.1 runtime for the original mission graphs. |
+| `fc3_story`   | Mission management, native services and headless campaign state. |
+| `fc3_bink`    | Bink 1 video and audio decoding. |
 
 The `docs/` folder describes the reverse-engineered formats.

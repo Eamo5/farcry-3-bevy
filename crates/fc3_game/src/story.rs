@@ -114,6 +114,7 @@ pub struct StoryUi {
     pub boxes: std::collections::VecDeque<StoryBox>,
     /// A phone call: who, incoming, and how long it has gone on.
     pub phone: Option<(String, bool, f32)>,
+    pub timers: Vec<fc3_story::Timer>,
 }
 
 /// A box the game stops for until the player closes it.
@@ -123,6 +124,8 @@ pub struct StoryBox {
     pub body: String,
     /// Accept or cancel (else just closed).
     pub choice: bool,
+    /// A localized footer supplied by a queued tutorial.
+    pub prompt: Option<String>,
 }
 
 /// What missions set on the player: signals ignored (jumping, sprinting
@@ -141,11 +144,17 @@ pub struct ScriptedPlayer {
     pub black_for: f32,
     /// The inventory a mission put aside (`BackupInventory`).
     pub backup: Option<(Vec<crate::weapons::WeaponSlot>, [u32; 4])>,
+    /// Non-weapon inventory entries missions give and take (rock, camera).
+    pub gadgets: std::collections::HashSet<String>,
 }
 
 impl Default for ScriptedPlayer {
     fn default() -> Self {
-        ScriptedPlayer { ignored: Default::default(), movement: 1.0, god: false, hud_hidden: false, fade: (0.0, 0.0, 0.0), black_for: 0.0, backup: None }
+        ScriptedPlayer {
+            ignored: Default::default(), movement: 1.0, god: false, hud_hidden: false,
+            fade: (0.0, 0.0, 0.0), black_for: 0.0, backup: None,
+            gadgets: ["gadgets:FC3/Rock".into(), "gadgets:Equipped/Tablet".into()].into_iter().collect(),
+        }
     }
 }
 
@@ -286,6 +295,36 @@ fn weapon_def(inv: &crate::weapons::Inventory, archetype: &str) -> Option<usize>
     inv.defs.iter().position(|d| d.name.to_ascii_lowercase() == short || d.model.split('\\').next().is_some_and(|folder| folder.eq_ignore_ascii_case(&short)))
 }
 
+/// Inventory entries as the original scripts name them. Empty hands are not
+/// a weapon, and the currently held entry uses the same name as the list.
+fn story_weapons(
+    defs: &[crate::weapons::WeaponDef],
+    slots: &[crate::weapons::WeaponSlot],
+    current: usize,
+    shop: &HashMap<String, (String, u32)>,
+) -> (Vec<fc3_story::Item>, Option<String>) {
+    use crate::weapons::{WeaponClass as W, UNARMED};
+    let mut items = Vec::new();
+    let mut held = None;
+    for (i, slot) in slots.iter().enumerate() {
+        let Some(def) = defs.get(slot.def).filter(|d| d.name != UNARMED) else { continue };
+        let name = shop.get(&def.model_path()).map(|(a, _)| a.clone()).unwrap_or_else(|| {
+            format!("weapons:FC3/{}", def.model.split('\\').next().unwrap_or(def.name))
+        });
+        let category = match def.class {
+            W::Melee => "melee", W::Pistol => "handgun", W::Smg => "smg",
+            W::Rifle => "assault", W::Shotgun => "shotgun", W::Sniper => "sniper",
+            W::Lmg | W::Mounted => "lmg", W::Launcher => "rpg", W::Bow => "bow",
+            W::Flamethrower => "flamethrower", W::GrenadeLauncher => "grenadelauncher",
+        };
+        if i == current {
+            held = Some(name.clone());
+        }
+        items.push(fc3_story::Item { name, class: category.into(), category: category.into(), count: 1 });
+    }
+    (items, held)
+}
+
 /// The story's texts carry the game's UI markup (`<br>`, `<font>`, images).
 pub fn plain(text: &str) -> String {
     let text = text.replace("<br>", "\n").replace("<BR>", "\n");
@@ -300,6 +339,41 @@ pub fn plain(text: &str) -> String {
         }
     }
     out.trim().to_string()
+}
+
+/// Replaces action placeholders with the current device's bound controls;
+/// unfamiliar bracketed text (including subtitles) is kept verbatim.
+fn prompt_text(text: &str, actions: &crate::controls::ActionState, settings: &crate::settings::Settings) -> String {
+    let mut rest = text;
+    let mut out = String::new();
+    while let Some(open) = rest.find('[') {
+        out.push_str(&rest[..open]);
+        rest = &rest[open..];
+        let Some(close) = rest.find(']') else { break };
+        if let Some(action) = crate::controls::Action::from_prompt(&rest[1..close]) {
+            out.push_str(&format!("[{}]", actions.label(action, settings)));
+        } else {
+            out.push_str(&rest[..=close]);
+        }
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn timer_text(timer: &fc3_story::Timer) -> String {
+    if !timer.append_time && !timer.label.is_empty() {
+        return plain(&timer.label);
+    }
+    let value = timer.seconds.max(0.0);
+    let seconds = if timer.increasing { value.floor() } else { value.ceil() } as u64;
+    let time = if seconds >= 3600 {
+        format!("{}:{:02}:{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60)
+    } else {
+        format!("{}:{:02}", seconds / 60, seconds % 60)
+    };
+    let label = plain(&timer.label);
+    if label.is_empty() { time } else { format!("{label}  {time}") }
 }
 
 /// Opens the story from the cache, from a save when given one.
@@ -382,7 +456,12 @@ fn run_story(
     mut ui: ResMut<StoryUi>,
     mut layers: ResMut<MissionLayers>,
     mut hud: ResMut<crate::hud::HudState>,
-    mut players: Query<(&mut Transform, &mut Player, Option<&mut crate::combat::Health>)>,
+    (mut players, stats, perks, mount): (
+        Query<(&mut Transform, &mut Player, Option<&mut crate::combat::Health>)>,
+        Query<&crate::combat::PlayerStats, With<Player>>,
+        Res<crate::progression::Perks>,
+        Res<crate::traversal::Mount>,
+    ),
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     actors: Query<(&crate::story_actors::StoryActor, &Transform, Option<&crate::npc::Npc>), Without<Player>>,
     mut orders: ResMut<crate::story_actors::ActorOrders>,
@@ -403,7 +482,10 @@ fn run_story(
         MessageReader<crate::traversal::TowerTaken>,
         Res<crate::traversal::Ways>,
     ),
-    (story_actors, mut commands_out, mut hidden): (Query<Entity, With<crate::story_actors::StoryActor>>, Commands, ResMut<HiddenEntities>),
+    (story_actors, mut commands_out, mut hidden, tagged): (
+        Query<Entity, With<crate::story_actors::StoryActor>>, Commands, ResMut<HiddenEntities>,
+        Query<&crate::story_actors::StoryActor, With<crate::stealth::Tagged>>,
+    ),
     (mut xp_gain, mut progress, mut music, mut noise, mut videos, mut qtes): (
         MessageWriter<crate::progression::XpGain>,
         ResMut<crate::progression::Progress>,
@@ -455,6 +537,7 @@ fn run_story(
             ui.hints.clear();
             ui.boxes.clear();
             ui.phone = None;
+            ui.timers.clear();
             music.reset();
             videos.reset();
             qtes.reset();
@@ -479,7 +562,14 @@ fn run_story(
         player_yaw: -p.yaw.to_degrees(),
         look: [forward.x, -forward.z, forward.y],
         fov: fov.fov,
-        time_of_day: 12.0,
+        time_of_day: clock.hours,
+        difficulty: match fov.difficulty {
+            crate::settings::Difficulty::Casual => 0,
+            crate::settings::Difficulty::Adventurer => 1,
+            crate::settings::Difficulty::Warrior => 2,
+        },
+        player_in_vehicle: p.driving,
+        tagged: tagged.iter().map(|a| a.id).collect(),
         ..View::default()
     };
     if let Some(h) = health.as_ref() {
@@ -487,6 +577,28 @@ fn run_story(
         view.player_state.health = h.current;
         view.player_state.max_health = h.max;
     }
+    view.player_state.money = progress.money;
+    view.player_state.medpacks = stats.single().map_or(0, |s| s.medkits);
+    view.player_state.weapon_slots = perks.weapon_slots as u32;
+    view.player_state.skills = progress.skills.iter().map(|s| s.to_ascii_lowercase()).collect();
+    view.player_state.on_zipline = matches!(*mount, crate::traversal::Mount::Zip { .. });
+    view.player_state.look_angles = [p.pitch.to_degrees(), 0.0, -p.yaw.to_degrees()];
+    if let Ok(inv) = inventory.single() {
+        (view.player_state.weapons, view.player_state.in_hands) = story_weapons(&inv.defs, &inv.slots, inv.current, &host.shop_items);
+        for (name, count) in [("Grenade", inv.grenades), ("Molotov", inv.molotovs), ("C4", inv.c4), ("Mine", inv.mines)] {
+            if count > 0 {
+                view.player_state.gadgets.push(fc3_story::Item { name: format!("gadgets:FC3/{name}"), count, ..Default::default() });
+            }
+        }
+    }
+    view.player_state.gadgets.extend(scripted.gadgets.iter().map(|name| {
+        let camera = name.ends_with("/Tablet");
+        fc3_story::Item {
+            name: name.clone(), count: 1,
+            category: if camera { "binoculars" } else { "" }.into(),
+            class: if camera { "binoculars" } else { "" }.into(),
+        }
+    }));
     // FC3_STORY_LOOK=<entity id>: face that character once it is in (tests).
     if let Some(id) = std::env::var("FC3_STORY_LOOK").ok().and_then(|v| v.parse::<u64>().ok()) {
         if let Some((_, at, _)) = actors.iter().find(|(a, _, _)| a.id == id) {
@@ -559,6 +671,7 @@ fn run_story(
         }
     }
     let commands = host.story.update(dt, view);
+    ui.timers = host.story.timers();
     let data = host.story.data();
     let now_markers: Vec<Vec3> = host.story.objective_markers().into_iter().map(|(_, p)| to_bevy(p)).collect();
     if now_markers.len() != markers.0.len() {
@@ -804,8 +917,12 @@ fn run_story(
                             scene: a(1).parse().unwrap_or(0),
                             file: a(2),
                             sync: Some(a(4)).filter(|s| !s.is_empty()),
+                            meta: a(3).parse().ok(),
                         });
                     }
+                    "CSequenceManager:StopCinematicMetaSequence" => cinema.requests.push(crate::cinema::Request {
+                        mode: "stop_meta".into(), scene: 0, file: String::new(), sync: None, meta: a(0).parse().ok(),
+                    }),
                     // Videos play in `video` (which tells the story when
                     // they start and end).
                     "PlayBinkVideo" | "PlayFullscreenVideo" => videos.requests.push(crate::video::VideoRequest {
@@ -846,7 +963,17 @@ fn run_story(
                         ui.hints.remove(&a(0).parse().unwrap_or(0));
                     }
                     "ShowDialogBox" | "ShowTutorialBox" => {
-                        ui.boxes.push_back(StoryBox { id: a(0).parse().unwrap_or(0), title: plain(&a(1)), body: plain(&a(2)), choice: a(3) == "true" })
+                        let box_ = StoryBox {
+                            id: a(0).parse().unwrap_or(0), title: plain(&a(1)), body: plain(&a(2)), choice: a(3) == "true",
+                            prompt: Some(plain(&a(4))).filter(|p| !p.is_empty()),
+                        };
+                        // A high-priority tutorial goes immediately after the
+                        // current box, keeping that box's answer target intact.
+                        if a(5) == "true" && !ui.boxes.is_empty() {
+                            ui.boxes.insert(1, box_);
+                        } else {
+                            ui.boxes.push_back(box_);
+                        }
                     }
                     // What a mission does to the player.
                     "CAPI_Player.SetIgnorePlayerSignal" => {
@@ -890,11 +1017,15 @@ fn run_story(
                             inv.current = 0;
                             if name.ends_with("RemoveAllInventory") {
                                 (inv.grenades, inv.molotovs, inv.c4, inv.mines) = (0, 0, 0, 0);
+                                scripted.gadgets.clear();
                             }
                             crate::weapons::settle_unarmed(&mut inv);
                         }
                     }
                     "CAPI_Pawn.SpawnWeapon" if a(0) == fc3_story::PLAYER.to_string() => {
+                        if a(1).starts_with("gadgets:") {
+                            scripted.gadgets.insert(a(1));
+                        }
                         if let Ok(mut inv) = inventory.single_mut() {
                             if let Some(def) = weapon_def(&inv, &a(1)) {
                                 let wname = inv.defs[def].name;
@@ -904,12 +1035,19 @@ fn run_story(
                     }
                     "CAPI_Pawn.RemoveWeapon" if a(0) == fc3_story::PLAYER.to_string() => {
                         if let Ok(mut inv) = inventory.single_mut() {
-                            if let Some(def) = weapon_def(&inv, &a(1)) {
+                            if let Some(def) = weapon_def(&inv, &host.story.item_name(&a(1))) {
                                 inv.slots.retain(|w| w.def != def);
                                 inv.current = inv.current.min(inv.slots.len().saturating_sub(1));
                                 crate::weapons::settle_unarmed(&mut inv);
                             }
                         }
+                    }
+                    "CAPI_Player.AddGadget" if a(0) == fc3_story::PLAYER.to_string() => {
+                        scripted.gadgets.insert(host.story.item_name(&a(1)));
+                    }
+                    "CAPI_Player.RemoveGadget" if a(0) == fc3_story::PLAYER.to_string() => {
+                        let name = host.story.item_name(&a(1));
+                        scripted.gadgets.retain(|g| !g.eq_ignore_ascii_case(&name));
                     }
                     "CAPI_Pawn.BackupInventory" if a(0) == fc3_story::PLAYER.to_string() => {
                         if let Ok(inv) = inventory.single() {
@@ -966,7 +1104,10 @@ fn story_boxes(
     host: Option<NonSendMut<StoryHost>>,
     mut ui: ResMut<StoryUi>,
     mut actions: ResMut<crate::controls::ActionState>,
+    settings: Res<crate::settings::Settings>,
+    state: Res<State<GameState>>,
     keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
     gamepads: Query<&Gamepad>,
     mut time: ResMut<Time<Virtual>>,
     mut paused: Local<bool>,
@@ -980,7 +1121,7 @@ fn story_boxes(
         }
     }
     let Some(b) = ui.boxes.front() else {
-        if std::mem::take(&mut *paused) {
+        if std::mem::take(&mut *paused) && matches!(state.get(), GameState::Playing | GameState::MainMenu) {
             time.unpause();
         }
         return;
@@ -992,18 +1133,27 @@ fn story_boxes(
     let pad = actions.gamepad_active;
     let pad_pressed = |button| gamepads.iter().any(|g| g.just_pressed(button));
     // (The autopilot accepts whatever is asked.)
-    let accept = keys.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::KeyE, KeyCode::Space])
+    // Raw edges preserve release-to-press semantics while the modal clears
+    // ActionState every frame, and work even when a menu releases the cursor.
+    let interact = match settings.binding(crate::controls::Action::Interact) {
+        Some(crate::controls::Binding::Key(key)) => keys.just_pressed(key),
+        Some(crate::controls::Binding::Mouse(button)) => mouse.just_pressed(button),
+        None => false,
+    };
+    let accept = interact
+        || keys.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space])
         || pad_pressed(GamepadButton::South)
         || std::env::var("FC3_STORY_AUTOPILOT").is_ok();
     let cancel = b.choice && (keys.any_just_pressed([KeyCode::Backspace, KeyCode::KeyQ]) || pad_pressed(GamepadButton::East));
     actions.clear();
     if !panels.iter().any(|(_, p)| p.0 == b.id) {
-        let prompt = match (b.choice, pad) {
+        let fallback = match (b.choice, pad) {
             (true, false) => "[Enter]  Accept        [Backspace]  Cancel",
             (true, true) => "A  Accept        B  Cancel",
             (false, false) => "[Enter]  Continue",
             (false, true) => "A  Continue",
         };
+        let prompt = b.prompt.as_ref().map(|p| prompt_text(p, &actions, &settings)).unwrap_or_else(|| fallback.to_string());
         commands.spawn((
             Node {
                 position_type: PositionType::Absolute,
@@ -1033,7 +1183,7 @@ fn story_boxes(
                         TextFont { font_size: bevy::text::FontSize::Px(28.0), ..default() },
                         TextColor(Color::srgb(1.0, 0.82, 0.35))
                     ),
-                    (Text::new(b.body.clone()), TextFont { font_size: bevy::text::FontSize::Px(19.0), ..default() }, TextColor(Color::srgb(0.93, 0.93, 0.9))),
+                    (Text::new(prompt_text(&b.body, &actions, &settings)), TextFont { font_size: bevy::text::FontSize::Px(19.0), ..default() }, TextColor(Color::srgb(0.93, 0.93, 0.9))),
                     (Text::new(prompt), TextFont { font_size: bevy::text::FontSize::Px(16.0), ..default() }, TextColor(Color::srgba(0.85, 0.85, 0.8, 0.85))),
                 ],
             )],
@@ -1120,12 +1270,20 @@ struct HintText;
 struct PhoneText;
 #[derive(Component)]
 struct PhonePanel;
+#[derive(Component)]
+struct TimerText;
 
 fn story_text(size: f32) -> (Text, TextFont, TextColor) {
     (Text::new(""), TextFont { font_size: bevy::text::FontSize::Px(size), ..default() }, TextColor(Color::srgba(0.95, 0.95, 0.92, 0.95)))
 }
 
 fn setup_story_ui(mut commands: Commands) {
+    commands.spawn((
+        Node { position_type: PositionType::Absolute, top: Val::Px(72.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, ..default() },
+        GlobalZIndex(2),
+        crate::hud::HudElement,
+        children![(story_text(26.0), TextLayout::justify(Justify::Center), TimerText)],
+    ));
     commands.spawn((
         Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
@@ -1194,6 +1352,7 @@ fn setup_story_ui(mut commands: Commands) {
 fn show_story_ui(
     time: Res<Time>,
     settings: Res<crate::settings::Settings>,
+    actions: Res<crate::controls::ActionState>,
     mut ui: ResMut<StoryUi>,
     mut texts: ParamSet<(
         Query<&mut Text, With<ObjectiveText>>,
@@ -1201,6 +1360,7 @@ fn show_story_ui(
         Query<&mut Text, With<BannerText>>,
         Query<&mut Text, With<HintText>>,
         Query<&mut Text, With<PhoneText>>,
+        Query<&mut Text, With<TimerText>>,
     )>,
     mut phone_panel: Query<&mut Visibility, With<PhonePanel>>,
 ) {
@@ -1214,14 +1374,18 @@ fn show_story_ui(
             }
         }
     }
-    let objective = ui.objective.clone().unwrap_or_default();
+    let objective = ui.objective.as_ref().map(|s| prompt_text(s, &actions, &settings)).unwrap_or_default();
     let subtitle = if settings.subtitles { ui.subtitle.as_ref().map(|s| s.0.clone()).unwrap_or_default() } else { String::new() };
     let banner = ui.banner.as_ref().map(|s| s.0.clone()).unwrap_or_default();
-    let hints = ui.hints.values().cloned().collect::<Vec<_>>().join("\n\n");
+    let mut hint_ids: Vec<_> = ui.hints.keys().copied().collect();
+    hint_ids.sort_unstable();
+    let hints = hint_ids.iter().map(|id| prompt_text(&ui.hints[id], &actions, &settings)).collect::<Vec<_>>().join("\n\n");
     set_text(&mut texts.p0(), &objective);
     set_text(&mut texts.p1(), &subtitle);
     set_text(&mut texts.p2(), &banner);
     set_text(&mut texts.p3(), &hints);
+    let timers = ui.timers.iter().map(timer_text).collect::<Vec<_>>().join("\n");
+    set_text(&mut texts.p5(), &timers);
     // The call: ringing first, then its running time (it ends with the
     // scripts' `PhoneCallEnd`, or after two minutes at most).
     if let Some((_, _, age)) = &mut ui.phone {
@@ -1256,5 +1420,113 @@ fn set_text<F: bevy::ecs::query::QueryFilter>(q: &mut Query<&mut Text, F>, value
         if t.0 != value {
             t.0 = value.to_string();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::controls::{Action, ActionState, Binding};
+    use crate::settings::Settings;
+
+    #[test]
+    fn campaign_prompts_follow_rebinding_and_device() {
+        let mut settings = Settings::default();
+        settings.rebind(Action::Interact, Binding::Key(KeyCode::KeyV));
+        let mut actions = ActionState::default();
+        assert_eq!(prompt_text("[Interact] Use — [ThrowRock] Distract [unknown] [unfinished", &actions, &settings),
+            "[V] Use — [MMB] Distract [unknown] [unfinished");
+        actions.gamepad_active = true;
+        assert_eq!(prompt_text("[Interact] Use / [Crouch] Hide", &actions, &settings), "[X] Use / [B] Hide");
+    }
+
+    #[test]
+    fn mission_timer_rounding_and_zero() {
+        let mut timer = fc3_story::Timer { id: 1, label: "Escape".into(), seconds: 60.2, increasing: false, append_time: true };
+        assert_eq!(timer_text(&timer), "Escape  1:01");
+        timer.increasing = true;
+        assert_eq!(timer_text(&timer), "Escape  1:00");
+        timer.seconds = -5.0;
+        assert_eq!(timer_text(&timer), "Escape  0:00");
+        timer.seconds = 3601.0;
+        assert_eq!(timer_text(&timer), "Escape  1:00:01");
+        timer.append_time = false;
+        assert_eq!(timer_text(&timer), "Escape");
+    }
+
+    #[test]
+    fn script_inventory_uses_archetypes_and_excludes_empty_hands() {
+        let defs = crate::weapons::weapon_defs();
+        let index = |name| defs.iter().position(|d| d.name == name).unwrap();
+        let slots = vec![
+            crate::weapons::WeaponSlot { def: index("Machete"), mag: 0, reserve: 0 },
+            crate::weapons::WeaponSlot { def: index("1911"), mag: 7, reserve: 21 },
+            crate::weapons::WeaponSlot { def: index(crate::weapons::UNARMED), mag: 0, reserve: 0 },
+        ];
+        let shop = [(defs[index("1911")].model_path(), ("weapons:FC3/Kimber".to_string(), 123))].into_iter().collect();
+        let (items, held) = story_weapons(&defs, &slots, 1, &shop);
+        assert_eq!(items.len(), 2);
+        assert_eq!(held.as_deref(), Some("weapons:FC3/Kimber"));
+        assert_eq!(items[1].count, 1);
+        assert_eq!(items[1].category, "handgun");
+        assert!(story_weapons(&defs, &slots, 2, &shop).1.is_none());
+    }
+
+    fn modal_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<StoryUi>().init_resource::<ActionState>()
+            .init_resource::<Settings>().init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<Time<Virtual>>()
+            .insert_resource(State::new(GameState::Playing))
+            .add_systems(Update, story_boxes);
+        app.world_mut().resource_mut::<StoryUi>().boxes.push_back(StoryBox {
+            id: 1, title: "Tutorial".into(), body: "[Interact] Continue".into(), choice: false, prompt: None,
+        });
+        app
+    }
+
+    #[test]
+    fn closing_tutorial_does_not_unpause_pause_menu() {
+        let mut app = modal_app();
+        app.update();
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+        app.world_mut().resource_mut::<StoryUi>().boxes.clear();
+        app.insert_resource(State::new(GameState::Paused));
+        app.update();
+        assert!(app.world().resource::<Time<Virtual>>().is_paused());
+    }
+
+    #[test]
+    fn tutorial_consumes_interact_and_resumes_after_closing() {
+        let mut app = modal_app();
+        app.world_mut().resource_mut::<Settings>().rebind(Action::Interact, Binding::Key(KeyCode::KeyV));
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyV);
+        app.world_mut().resource_mut::<ActionState>().press(Action::Interact);
+        app.update();
+        assert!(app.world().resource::<StoryUi>().boxes.is_empty());
+        assert!(!app.world().resource::<ActionState>().just_pressed(Action::Interact));
+        app.update();
+        assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+    }
+
+    #[test]
+    fn holding_interact_does_not_dismiss_the_next_tutorial() {
+        let mut app = modal_app();
+        app.world_mut().resource_mut::<StoryUi>().boxes.push_back(StoryBox {
+            id: 2, title: "Next".into(), body: "Release and press again".into(), choice: false, prompt: None,
+        });
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyE);
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut().resource_mut::<ActionState>().press(Action::Interact);
+        app.update();
+        assert_eq!(app.world().resource::<StoryUi>().boxes.front().unwrap().id, 2);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyE);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyE);
+        app.update();
+        assert!(app.world().resource::<StoryUi>().boxes.is_empty());
     }
 }

@@ -94,7 +94,11 @@ is the story's own:
   is interruptible), waits for it (when it may queue) or is turned away, as
   `DisplayText`'s 0 / 2 / 1 tell the scripts.
 * **Message and tutorial boxes**: the host shows them over a paused game;
-  the answer goes back as `ACCEPT` or `CANCEL`.
+  the answer goes back as `ACCEPT` or `CANCEL`. `PushTutorialBox` queues its
+  localized title, body and footer too; a high-priority tutorial goes next
+  without replacing the current box's answer target. Action placeholders
+  such as `[Interact]` and `[ThrowRock]` use the current device's bindings.
+  Holding the close control does not dismiss the next queued tutorial.
 * **Teleports**: a teleported player is followed by `DominoGameReady`, which
   boxes behind a loading screen wait for.
 * **Specific gameplays** (`CreateSpecificGameplay`: QTEs, minigames, boss
@@ -105,7 +109,9 @@ is the story's own:
 * **Saves**: blocks a save left running play again as their missions
   register.
 * **Script control**, **on-screen timers**, **water levels**: state and
-  timing in the story, display in the host.
+  timing in the story. Visible named timers expose their localized labels
+  and current values to the host HUD; hidden timers still run and deliver
+  callbacks. Water-level commands still need host integration.
 
 ## In the game
 
@@ -142,6 +148,16 @@ is the story's own:
 * **Shops**: liberated outposts and the world's shopkeepers keep one; a
   weapon bought raises `CPawnBuyItemEvent` (archetype, `Name`, the shop name's
   string id) on the player.
+* **Player queries**: money, medkits, carry slots, equipped and carried
+  weapons (using the shop's archetype names), gadgets, learned skills,
+  stance, zip-line state, look angles, tagged story actors, difficulty and
+  time of day come from live game state. Inventory ids returned to scripts
+  resolve back to their archetypes when commands remove weapons or gadgets.
+  Inventory spawn/remove callbacks follow host-reported availability;
+  subscriptions made after an entity arrives still receive its spawn callback.
+* **Scene lifetime**: sequences retain their meta-sequence owner; stopping
+  that owner releases its looping scenes and character overrides, without
+  stopping unrelated scenes or the host's QTE phases.
 * **Videos** (`video`, decoded by `fc3_bink`): full screen when the screen is
   the player (or names no material), else a picture in a corner; the stereo
   bed and the voice track (`FC3_VIDEO_VOICE`, by default 1) mixed; skippable;
@@ -189,3 +205,22 @@ is the story's own:
   `story-run` takes it too; `FC3_STORY_WAITING=1` makes it list what the
   scripts wait on when it stalls).
 * `fc3tool moves [name part]`: the move database's moves, states and clips.
+
+## Current validation gaps
+
+The live campaign smoke test reaches the map-pickup objective in `JAS_020_B10`
+and advances into `JAS_020_B15`. A longer autopilot run and a reload from its
+checkpoint still stall in the rock-distraction section: the latest reload
+waits on a guard's `CA_Start` and `Follow_4_RockTutorial`'s `Enter` event. The
+next investigation is the contextual-action path/arrival and scene ownership
+at that checkpoint. The opening mission is not yet verified end to end.
+
+Regression tests cover live player queries, deferred inventory spawn/remove
+callbacks, meta-sequence teardown, timers, binding-aware prompts and modal
+pause/input ownership. Run `cargo test --locked --release --workspace`; the
+release test profile also avoids the Windows linker PDB-size limit encountered
+when this full Bevy dependency graph is linked with development debug symbols.
+
+Full campaign and side-activity completion, the original progression/crafting
+rules, remaining minigames and host commands, and matched original-game visual
+and UX comparisons are still required before declaring parity.

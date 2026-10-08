@@ -35,6 +35,9 @@ pub struct HudText {
 pub struct NamedTimer {
     pub value: f64,
     pub increasing: bool,
+    pub shown: bool,
+    pub label: String,
+    pub append_time: bool,
     /// (callback id, time, fired)
     pub marks: Vec<(u64, f64, bool)>,
 }
@@ -271,6 +274,16 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         c.emit(Command::Native { name: "ShowTutorialBox".into(), args: vec![id.to_string(), t, m] });
         id.to_string()
     })?;
+    // The newer tutorial box queues localized text without an answer callback.
+    r.f("PushTutorialBox", |c, (_package, title, message, prompt, priority): (Text, Value, Value, Value, Flag)| {
+        let text = |value: &Value| oasis_id(value).and_then(|i| c.data.strings.get(i)).unwrap_or_default().to_string();
+        let (title, body, prompt) = (text(&title), text(&message), text(&prompt));
+        let id = c.next_id();
+        c.emit(Command::Native {
+            name: "ShowTutorialBox".into(),
+            args: vec![id.to_string(), title, body, "false".into(), prompt, priority.0.to_string()],
+        });
+    })?;
     for name in ["UnregisterDialogMsgBoxCb", "UnregisterTutorialCb"] {
         r.f(name, |c, id: Text| {
             if let Some(i) = id.id() {
@@ -288,9 +301,13 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.constant("GetFlashOverrideLoadingScreen", "")?;
 
     // ---- on-screen timers
-    r.f("RegisterNamedTimerLocalized", |c, (name, initial, increasing, show, _section, item, _append): (Text, Num, Flag, Flag, Text, Text, Flag)| {
+    r.f("RegisterNamedTimerLocalized", |c, (name, initial, increasing, show, section, item, append): (Text, Num, Flag, Flag, Text, Text, Flag)| {
         let id = c.next_id();
-        c.media.timers.insert(id, NamedTimer { value: initial.or(0.0), increasing: increasing.0, marks: Vec::new() });
+        let label = c.data.strings.named(&section.0, &item.0).unwrap_or(&name.0).to_string();
+        c.media.timers.insert(id, NamedTimer {
+            value: initial.or(0.0), increasing: increasing.0, shown: show.0,
+            label, append_time: append.0, marks: Vec::new(),
+        });
         c.emit(Command::Native { name: "ShowTimer".into(), args: vec![id.to_string(), name.0, show.0.to_string(), item.0] });
         id as f64
     })?;

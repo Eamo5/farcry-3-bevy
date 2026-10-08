@@ -48,6 +48,8 @@ pub struct Request {
     pub file: String,
     /// A sync point to start from, by index or name.
     pub sync: Option<String>,
+    /// The original manager's meta-sequence id, which owns looping scenes.
+    pub meta: Option<u64>,
 }
 
 #[derive(Resource, Default)]
@@ -106,6 +108,23 @@ impl Cinema {
         }
     }
 
+    /// Stops every sequence owned by a meta-sequence, releasing its actors
+    /// through the same path as a normal stop. Built QTEs have no owner.
+    fn stop_meta(&mut self, meta: u64) -> Vec<(u64, String)> {
+        let mut stopped = Vec::new();
+        let mut i = 0;
+        while i < self.playing.len() {
+            if self.playing[i].meta == Some(meta) {
+                let p = self.playing.remove(i);
+                stopped.push((p.scene, p.file.clone()));
+                self.released.push(p);
+            } else {
+                i += 1;
+            }
+        }
+        stopped
+    }
+
     /// A cutscene is playing (input, HUD and weapon are the scene's).
     pub fn cutscene(&self) -> bool {
         self.playing.iter().any(|p| p.seq.cutscene)
@@ -114,6 +133,7 @@ impl Cinema {
 
 struct Playing {
     scene: u64,
+    meta: Option<u64>,
     file: String,
     seq: Sequence,
     t: f32,
@@ -170,10 +190,18 @@ fn start_scenes(host: Option<NonSendMut<StoryHost>>, mut cinema: ResMut<Cinema>,
     for b in std::mem::take(&mut cinema.built) {
         let clips = clip_handles(&b.seq, &server);
         debug!("cinema: built {} ({:.1} s)", b.name, b.seq.duration);
-        cinema.playing.push(Playing { scene: 0, file: b.name, bindings: b.bindings, origin: b.origin, seq: b.seq, t: 0.0, paused: false, clips, waited: 0.0 });
+        cinema.playing.push(Playing { scene: 0, meta: None, file: b.name, bindings: b.bindings, origin: b.origin, seq: b.seq, t: 0.0, paused: false, clips, waited: 0.0 });
     }
     for r in requests {
         debug!("cinema request: {} {} {} {:?}", r.mode, r.scene, r.file, r.sync);
+        if r.mode == "stop_meta" {
+            if let Some(meta) = r.meta {
+                for (scene, file) in cinema.stop_meta(meta) {
+                    host.story.sequence_event(&scene.to_string(), &file, "Stopped", None);
+                }
+            }
+            continue;
+        }
         let archive = cinema::archive_path(&r.file);
         let found = cinema.playing.iter().position(|p| p.scene == r.scene && p.file.eq_ignore_ascii_case(&r.file));
         match r.mode.as_str() {
@@ -200,6 +228,9 @@ fn start_scenes(host: Option<NonSendMut<StoryHost>>, mut cinema: ResMut<Cinema>,
                 if let Some(i) = found {
                     // Resume (or restart, or jump to a sync point).
                     let p = &mut cinema.playing[i];
+                    if r.meta.is_some() {
+                        p.meta = r.meta;
+                    }
                     p.paused = false;
                     match (r.mode.as_str(), r.sync.as_deref()) {
                         ("play_from_start", _) => p.t = 0.0,
@@ -230,6 +261,7 @@ fn start_scenes(host: Option<NonSendMut<StoryHost>>, mut cinema: ResMut<Cinema>,
                 );
                 let playing = Playing {
                     scene: r.scene,
+                    meta: r.meta,
                     file: r.file.clone(),
                     bindings: bindings(&data, r.scene, &archive),
                     origin: origin_of(&data, r.scene),
@@ -628,5 +660,26 @@ fn scene_view(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn meta_stop_releases_loops_without_stopping_other_scenes_or_qtes() {
+        let playing = |scene, meta, name: &str| Playing {
+            scene, meta, file: name.into(), seq: Sequence { looping: true, ..Default::default() },
+            t: 0.0, paused: false, origin: Transform::default(),
+            bindings: HashMap::new(), clips: HashMap::new(), waited: 0.0,
+        };
+        let mut cinema = Cinema::default();
+        cinema.playing = vec![playing(1, Some(10), "grant_loop"), playing(2, Some(20), "other"),
+            playing(3, Some(10), "prop_loop"), playing(0, None, "qte")];
+        assert_eq!(cinema.stop_meta(10), vec![(1, "grant_loop".into()), (3, "prop_loop".into())]);
+        assert_eq!(cinema.released.len(), 2);
+        assert_eq!(cinema.playing.iter().map(|p| p.file.as_str()).collect::<Vec<_>>(), vec!["other", "qte"]);
+        assert!(cinema.stop_meta(10).is_empty());
     }
 }

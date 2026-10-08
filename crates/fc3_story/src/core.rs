@@ -300,6 +300,10 @@ impl Core {
         if self.view.spawned.contains_key(&id) {
             return true;
         }
+        if let Some(name) = self.item_ids.get(&id) {
+            let p = &self.view.player_state;
+            return p.weapons.iter().chain(&p.gadgets).any(|i| i.count > 0 && i.name.eq_ignore_ascii_case(name));
+        }
         match self.data.layer_of(id) {
             Some(layer) => self.layer_state(layer).present(),
             None => false,

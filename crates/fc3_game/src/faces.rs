@@ -26,7 +26,7 @@ pub struct FacesPlugin;
 impl Plugin for FacesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Voices>()
-            .add_systems(Startup, load_faces)
+            .add_systems(OnExit(crate::menu::GameState::Loading), load_faces)
             .add_systems(Update, start_voices)
             .add_systems(PostUpdate, pose_faces.after(crate::characters::animate_characters).before(TransformSystems::Propagate));
     }

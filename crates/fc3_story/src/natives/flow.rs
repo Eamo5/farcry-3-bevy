@@ -52,7 +52,14 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     })?;
     r.f("CScriptCallbackSystem:RegisterOnSpawnCallback", |c, (entity, target, method): (Text, Value, Option<String>)| {
         let cb = callback(target, method)?;
-        Some(c.listen(Listen::Spawn(entity.id().unwrap_or(u64::MAX)), cb).to_string())
+        let entity = entity.id().unwrap_or(u64::MAX);
+        let id = c.listen(Listen::Spawn(entity), cb.clone());
+        // Subscriptions often come after the layer was made present. Queue
+        // the callback so the script can finish storing its subscription id.
+        if c.is_loaded(entity) {
+            c.call(cb, vec![]);
+        }
+        Some(id.to_string())
     })?;
     r.f("CScriptCallbackSystem:RegisterOnRemoveCallback", |c, (entity, target, method): (Text, Value, Option<String>)| {
         let cb = callback(target, method)?;

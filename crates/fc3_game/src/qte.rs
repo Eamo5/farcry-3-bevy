@@ -30,7 +30,7 @@ impl Plugin for QtePlugin {
         app.init_resource::<Qtes>()
             .init_resource::<MoveTable>()
             .add_systems(OnExit(crate::menu::GameState::Loading), load_moves)
-            .add_systems(Update, run_qtes.after(crate::story::StorySet));
+            .add_systems(Update, run_qtes.after(crate::story::StorySet).run_if(in_state(crate::menu::GameState::Playing)));
     }
 }
 
@@ -151,6 +151,11 @@ fn run_qtes(
     mut meters: Query<&mut Node, With<QteMeter>>,
     mut commands: Commands,
 ) {
+    // Tutorial modals pause virtual time while remaining in Playing. Their
+    // inputs must not also fill a struggle meter in the paused world.
+    if time.delta_secs() <= 0.0 {
+        return;
+    }
     let Some(mut host) = host else { return };
     let qtes = &mut *qtes;
     for start in std::mem::take(&mut qtes.pending) {

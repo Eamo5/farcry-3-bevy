@@ -111,6 +111,16 @@ pub struct View {
     pub time_of_day: f32,
 }
 
+/// A mission timer the host should display, sampled from the story clock.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Timer {
+    pub id: u64,
+    pub label: String,
+    pub seconds: f64,
+    pub increasing: bool,
+    pub append_time: bool,
+}
+
 /// Something the world should do.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
@@ -242,6 +252,21 @@ impl Story {
         &self.domino
     }
 
+    /// The archetype behind an inventory entity id returned to a script.
+    /// Commands also accept archetype names directly.
+    pub fn item_name(&self, name_or_id: &str) -> String {
+        name_or_id.parse::<u64>().ok().and_then(|id| self.core.borrow().item_ids.get(&id).cloned()).unwrap_or_else(|| name_or_id.to_string())
+    }
+
+    /// Visible named timers, in registration order. Hidden timers still run
+    /// and deliver their callbacks, but take no space in the HUD.
+    pub fn timers(&self) -> Vec<Timer> {
+        self.core.borrow().media.timers.iter().filter(|(_, t)| t.shown).map(|(&id, t)| Timer {
+            id, label: t.label.clone(), seconds: t.value,
+            increasing: t.increasing, append_time: t.append_time,
+        }).collect()
+    }
+
     /// Starts a new game: the blocks active from the start, then the master
     /// graph.
     pub fn boot(&mut self) {
@@ -370,6 +395,14 @@ impl Story {
     pub fn update(&mut self, dt: f32, view: View) -> Vec<Command> {
         {
             let mut c = self.core.borrow_mut();
+            // Inventory entities have no world placement. Their availability
+            // changes when the host reports a weapon/gadget was actually
+            // given or removed, including subscriptions made before it arrived.
+            let watched: HashSet<u64> = c.listeners.values().filter_map(|l| match l.on {
+                Listen::Spawn(id) | Listen::Remove(id) if c.item_ids.contains_key(&id) => Some(id),
+                _ => None,
+            }).collect();
+            let before: Vec<(u64, bool)> = watched.into_iter().map(|id| (id, c.is_loaded(id))).collect();
             // Stance changes are events on the player.
             let stance = view.player_state.stance;
             if c.view.player_state.stance != stance && c.time > 0.0 {
@@ -377,6 +410,12 @@ impl Story {
                 c.raise(&Listen::Entity(PLAYER, event.into()), vec![Arg::id(PLAYER)]);
             }
             c.view = view;
+            for (id, was_loaded) in before {
+                let loaded = c.is_loaded(id);
+                if loaded != was_loaded {
+                    c.raise(&if loaded { Listen::Spawn(id) } else { Listen::Remove(id) }, vec![]);
+                }
+            }
             c.time += dt as f64;
             // Timers.
             let mut due = Vec::new();
@@ -910,5 +949,120 @@ fn in_sectors(e: &data::Entry, sectors: Option<&HashSet<u32>>) -> bool {
     match (e.origin, sectors) {
         (data::Origin::Sector(id), Some(s)) => s.contains(&id),
         _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_story() -> Story {
+        Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), StoryData::default()).unwrap()
+    }
+
+    #[test]
+    fn native_player_queries_follow_host_updates() {
+        let mut story = empty_story();
+        let mut view = View { difficulty: 2, time_of_day: 18.5, ..Default::default() };
+        view.player_state.money = 425;
+        view.player_state.medpacks = 3;
+        view.player_state.weapon_slots = 4;
+        view.player_state.weapons.push(Item { name: "weapons:FC3/Kimber".into(), category: "handgun".into(), count: 1, ..Default::default() });
+        view.player_state.in_hands = Some("weapons:FC3/Kimber".into());
+        story.update(0.0, view.clone());
+        let lua = story.domino().lua();
+        let values: (u32, u32, u32, u32, u32) = lua.load(r#"
+            return CAPI_Player.GetPlayerMoney("1"), CAPI_Player.GetPlayerMedPackCount("1"),
+                CAPI_Player.GetNumWeaponSlotsUnlocked("1"), GetDifficulty(),
+                CAPI_Pawn.CheckPawnWeaponInventoryByName("1", "Kimber")
+        "#).eval().unwrap();
+        assert_eq!(values, (425, 3, 4, 2, 1));
+        let clock: Vec<u32> = lua.load("return GetTimeOfDay()").eval().unwrap();
+        assert_eq!(clock, vec![18, 30, 0]);
+        view.player_state.in_hands = None;
+        story.update(0.0, view);
+        assert_eq!(story.domino().lua().load(r#"return CAPI_Pawn.CheckPawnWeaponInventoryByName("1", "Kimber")"#).eval::<u32>().unwrap(), 2);
+    }
+
+    #[test]
+    fn spawned_inventory_ids_resolve_for_host_commands() {
+        let story = empty_story();
+        let id: String = story.domino().lua().load(r#"return CAPI_Pawn.SpawnWeapon("1", "gadgets:FC3/Rock")"#).eval().unwrap();
+        assert_eq!(story.item_name(&id), "gadgets:FC3/Rock");
+        assert_eq!(story.item_name("weapons:FC3/Kimber"), "weapons:FC3/Kimber");
+    }
+
+    #[test]
+    fn named_timers_pause_with_story_time_and_unregister() {
+        let mut story = empty_story();
+        let id: u64 = story.domino().lua().load(r#"return RegisterNamedTimerLocalized("Escape", 65, false, true, "", "", true)"#).eval().unwrap();
+        story.domino().lua().load(r#"RegisterNamedTimerLocalized("Hidden", 20, true, false, "", "", true)"#).exec().unwrap();
+        story.update(1.5, View::default());
+        assert_eq!(story.timers(), vec![Timer { id, label: "Escape".into(), seconds: 63.5, increasing: false, append_time: true }]);
+        story.update(0.0, View::default());
+        assert_eq!(story.timers()[0].seconds, 63.5);
+        story.domino().lua().load(format!("UnregisterNamedTimer({id})")).exec().unwrap();
+        assert!(story.timers().is_empty());
+    }
+
+    #[test]
+    fn queued_tutorial_is_a_host_modal() {
+        let mut story = empty_story();
+        story.domino().lua().load(r#"PushTutorialBox("tutorial.feu", 1, 2, 3, true)"#).exec().unwrap();
+        let commands = story.take_commands();
+        let Command::Native { name, args } = &commands[0] else { panic!("expected a tutorial command") };
+        assert_eq!(name, "ShowTutorialBox");
+        assert!(args[0].parse::<u64>().is_ok());
+        assert_eq!(&args[3..], &["false", "", "true"]);
+        story.box_answered(args[0].parse().unwrap(), true);
+        assert_eq!(story.errors(), 0);
+    }
+
+    #[test]
+    fn inventory_spawn_and_remove_callbacks_follow_host_availability() {
+        let mut story = empty_story();
+        let id: String = story.domino().lua().load(r#"
+            counts = { spawned = 0, removed = 0 }
+            counts._type = {
+                Spawn = function(self) self.spawned = self.spawned + 1 end,
+                Remove = function(self) self.removed = self.removed + 1 end,
+            }
+            local id = CAPI_Pawn.SpawnWeapon("1", "gadgets:FC3/Rock")
+            local callbacks = CScriptCallbackSystem_GetInstance()
+            callbacks:RegisterOnSpawnCallback(id, counts, "Spawn")
+            callbacks:RegisterOnRemoveCallback(id, counts, "Remove")
+            return id
+        "#).eval().unwrap();
+        story.update(0.1, View::default());
+        let counts: Table = story.domino().lua().globals().get("counts").unwrap();
+        assert_eq!(counts.get::<u32>("spawned").unwrap(), 0);
+        let mut view = View::default();
+        view.player_state.gadgets.push(Item { name: "gadgets:FC3/Rock".into(), count: 1, ..Default::default() });
+        story.update(0.1, view.clone());
+        story.update(0.1, view.clone());
+        assert_eq!(counts.get::<u32>("spawned").unwrap(), 1);
+        assert!(story.core.borrow().is_loaded(id.parse().unwrap()));
+        story.update(0.1, View::default());
+        assert_eq!(counts.get::<u32>("removed").unwrap(), 1);
+        story.update(0.1, view);
+        assert_eq!(counts.get::<u32>("spawned").unwrap(), 2);
+    }
+
+    #[test]
+    fn spawn_callback_registered_after_arrival_is_deferred_and_delivered() {
+        let mut story = empty_story();
+        story.domino().lua().load(r#"
+            target = { count = 0 }
+            target._type = { Spawn = function(self)
+                assert(self.subscription ~= nil)
+                self.count = self.count + 1
+            end }
+            target.subscription = CScriptCallbackSystem_GetInstance():RegisterOnSpawnCallback("1", target, "Spawn")
+        "#).exec().unwrap();
+        let target: Table = story.domino().lua().globals().get("target").unwrap();
+        assert_eq!(target.get::<u32>("count").unwrap(), 0);
+        story.update(0.0, View::default());
+        assert_eq!(target.get::<u32>("count").unwrap(), 1);
+        assert_eq!(story.errors(), 0);
     }
 }
