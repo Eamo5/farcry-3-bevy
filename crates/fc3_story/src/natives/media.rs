@@ -66,6 +66,19 @@ fn fill(format: &str, value: &str) -> String {
     format.to_string()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::fill;
+
+    #[test]
+    fn checklist_values_fill_the_localized_counter_not_its_goal() {
+        assert_eq!(fill("Green leaves: %d/2", "1"), "Green leaves: 1/2");
+        assert_eq!(fill("Boar hides: %i/2", "2"), "Boar hides: 2/2");
+        assert_eq!(fill("Collected %ls", "3"), "Collected 3");
+        assert_eq!(fill("Fixed objective", "4"), "Fixed objective");
+    }
+}
+
 /// The name a sequence's events carry (`<name>Started`, ...).
 pub fn sequence_name(scene: &str, file: &str) -> String {
     let base = file.rsplit(['/', '\\']).next().unwrap_or(file);
@@ -139,6 +152,15 @@ impl Core {
 }
 
 pub(super) fn register(r: &Reg) -> mlua::Result<()> {
+    r.f("SetDynamicCheckListObjective", |c, (shown, id, value): (Flag, Num, Num)| {
+        let id = id.or(0.0) as u32;
+        let format = c.data.strings.get(id).unwrap_or_default();
+        let text = fill(format, &(value.or(0.0) as i32).to_string());
+        c.emit(Command::Native {
+            name: "ChecklistObjective".into(),
+            args: vec![shown.0.to_string(), id.to_string(), text],
+        });
+    })?;
     // ---- HUD texts (`DisplayText` answers 0 shown, 1 turned away, 2
     // waiting for the slot)
     r.lua(

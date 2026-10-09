@@ -1105,8 +1105,11 @@ fn fire(
     inv.recoil_offset -= recover;
     player.pitch -= recover;
     let scripted = script.t(&time, &args).is_some();
+    // Automated screenshots deliberately don't capture the OS cursor. The
+    // story driver supplies ordinary actions, not scripted infinite firing.
+    let story_input = args.automated() && std::env::var("FC3_STORY_AUTOPILOT").is_ok();
     let can_act =
-        (captured.0 || scripted) && !health.dead && !player.noclip && !player.swimming && !player.driving && bino.blend < 0.3 && !busy.busy() && !wheel.open;
+        (captured.0 || scripted || story_input) && !health.dead && !player.noclip && !player.swimming && !player.driving && bino.blend < 0.3 && !busy.busy() && !wheel.open;
     // FC3_AIM (tests): hold aim down the sights.
     let aim_held = actions.pressed(Action::Aim) || std::env::var("FC3_AIM").is_ok();
     inv.aiming = (can_act || std::env::var("FC3_AIM").is_ok()) && aim_held && inv.reloading <= 0.0 && inv.def().class != WeaponClass::Melee;

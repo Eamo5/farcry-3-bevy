@@ -858,6 +858,43 @@ impl Story {
         out
     }
 
+    /// Filtered ingredient ids awaited by the player's loot listeners. Test
+    /// drivers use these to gather real items, without guessing mission counts
+    /// or sending a loot event for an item the player never collected.
+    pub fn watched_loot_filters(&self) -> Vec<u32> {
+        let c = self.core.borrow();
+        let mut out: Vec<u32> = c.listeners.values().filter_map(|l| {
+            if !matches!(&l.on, Listen::Entity(id, event) if *id == PLAYER && event == "CPawnLootItemEvent") {
+                return None;
+            }
+            let filter = l.callback.target.get::<Table>("filterItemID").ok()?;
+            if filter.get::<String>("section").ok()?.as_str() != "Name" { return None }
+            filter.get::<values::Text>("id").ok()?.0.parse().ok()
+        }).collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// Active player-only regions with exit listeners. Automated gathering
+    /// keeps targets inside these authored boundaries instead of disabling
+    /// their legitimate mission-failure callbacks.
+    pub fn watched_exit_regions(&self) -> Vec<triggers::Shape> {
+        let c = self.core.borrow();
+        let mut ids: Vec<_> = c.listeners.values().filter_map(|l| {
+            let Listen::Entity(id, event) = &l.on else { return None };
+            (event == "Leave" && c.is_loaded(*id) && c.trigger_on(*id)).then_some(*id)
+        }).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids.into_iter().filter_map(|id| {
+            let entry = c.data.entities.get(&id)?;
+            let region = entry.component("CTrigger2DComponent")?;
+            region.str_h(0xB3C7_40E6).filter(|s| s.eq_ignore_ascii_case("PlayerOnly"))?;
+            triggers::shape_of(entry)
+        }).collect()
+    }
+
     pub fn layer_state(&self, layer: u64) -> LayerState {
         self.core.borrow().layer_state(layer)
     }
@@ -1013,6 +1050,39 @@ mod tests {
     }
 
     #[test]
+    fn watched_loot_filters_track_only_live_player_ingredient_subscriptions() {
+        let story = empty_story();
+        story.domino().lua().load(r#"
+            local callbacks = CScriptCallbackSystem_GetInstance()
+            subscriptions = {}
+            local function watch(entity, event, section, id)
+                local target = { filterItemID = { section = section, id = id } }
+                target._type = { Got = function() end }
+                return callbacks:RegisterEventCallback(entity, target, "Got", event)
+            end
+            subscriptions[1] = watch("1", "CPawnLootItemEvent", "Name", "126007")
+            subscriptions[2] = watch("1", "CPawnLootItemEvent", "Name", 104580)
+            subscriptions[3] = watch("1", "CPawnLootItemEvent", "Name", "126007")
+            watch("2", "CPawnLootItemEvent", "Name", "104581")
+            watch("1", "CPawnBuyItemEvent", "Name", "142502")
+            watch("1", "CPawnLootItemEvent", "Other", "142503")
+            watch("1", "CPawnLootItemEvent", "Name", "not-an-id")
+            watch("1", "CPawnLootItemEvent", nil, nil)
+        "#).exec().unwrap();
+        assert_eq!(story.watched_loot_filters(), vec![104580, 126007]);
+        story.domino().lua().load(r#"
+            local callbacks = CScriptCallbackSystem_GetInstance()
+            callbacks:RemoveCallback("1", subscriptions[1])
+            callbacks:RemoveCallback("1", subscriptions[3])
+        "#).exec().unwrap();
+        assert_eq!(story.watched_loot_filters(), vec![104580]);
+        story.domino().lua().load(r#"
+            CScriptCallbackSystem_GetInstance():RemoveCallback("1", subscriptions[2])
+        "#).exec().unwrap();
+        assert!(story.watched_loot_filters().is_empty());
+    }
+
+    #[test]
     fn native_player_queries_follow_host_updates() {
         let mut story = empty_story();
         let mut view = View { difficulty: 2, time_of_day: 18.5, ..Default::default() };
@@ -1077,6 +1147,19 @@ mod tests {
         assert_eq!(&args[3..], &["false", "", "true"]);
         story.box_answered(args[0].parse().unwrap(), true);
         assert_eq!(story.errors(), 0);
+    }
+
+    #[test]
+    fn checklist_commands_preserve_row_identity_and_show_hide_state() {
+        let mut story = empty_story();
+        story.domino().lua().load(r#"
+            SetDynamicCheckListObjective(true, "166310", 2)
+            SetDynamicCheckListObjective(false, "166310", -1)
+        "#).exec().unwrap();
+        assert_eq!(story.take_commands(), vec![
+            Command::Native { name: "ChecklistObjective".into(), args: vec!["true".into(), "166310".into(), "".into()] },
+            Command::Native { name: "ChecklistObjective".into(), args: vec!["false".into(), "166310".into(), "".into()] },
+        ]);
     }
 
     #[test]
@@ -1248,6 +1331,10 @@ mod tests {
         view.contacts.insert(100, vec![20]);
         story.update(0.1, view.clone());
         assert_eq!(story.core.borrow().contacts(100), vec![PLAYER]);
+        let regions = story.watched_exit_regions();
+        assert_eq!(regions.len(), 1);
+        assert!(regions[0].contains([0.0; 3]));
+        assert!(!regions[0].contains([50.0, 0.0, 0.0]));
         view.spawned.get_mut(&20).unwrap().pos = [50.0, 0.0, 0.0];
         view.contacts.clear();
         story.update(0.1, view.clone());
@@ -1259,6 +1346,8 @@ mod tests {
         story.update(0.1, view);
         assert_eq!(boundary.get::<u32>("left").unwrap(), 1);
         assert_eq!(story.errors(), 0);
+        story.domino().lua().load(r#"SendRegisteredEventToEntity("100", "CBaseTriggerComponent_SetDisabled", {})"#).exec().unwrap();
+        assert!(story.watched_exit_regions().is_empty());
     }
 
     #[test]

@@ -41,6 +41,7 @@ impl Plugin for StoryPlugin {
             .add_systems(Update, draw_markers.after(StorySet))
             .add_systems(PreUpdate, story_boxes.after(crate::controls::update_actions))
             .add_systems(PreUpdate, story_interactions.after(story_boxes))
+            .add_systems(PreUpdate, autopilot_loot.after(story_interactions).run_if(in_state(GameState::Playing)))
             .add_systems(PreUpdate, collect_shop_purchases)
             .add_systems(PreUpdate, collect_loot)
             .add_systems(Startup, setup_story_ui)
@@ -243,8 +244,9 @@ impl StoryHost {
     fn forward_loot(&mut self, loot: &mut StoryLoot, catalog: &crate::progression::LootCatalog) {
         for looted in loot.0.drain(..) {
             if let Some(item) = catalog.item(looted.0) {
+                info!("story loot: {} ({})", item.name, item.name_id);
                 self.story.entity_event(fc3_story::PLAYER, "CPawnLootItemEvent",
-                    vec![Arg::Str("Name".into()), Arg::Str(item.name_id.to_string())]);
+                    vec![Arg::Str(item.key.clone()), Arg::Str("Name".into()), Arg::Str(item.name_id.to_string())]);
             }
         }
     }
@@ -291,6 +293,8 @@ pub struct StoryUi {
     pub banner: Option<(String, f32)>,
     /// Hint texts by id (tutorial boxes).
     pub hints: HashMap<u64, String>,
+    /// Authored checklist rows, updated and hidden individually by missions.
+    pub checklist: std::collections::BTreeMap<u32, String>,
     /// Message and tutorial boxes waiting, the first one shown.
     pub boxes: std::collections::VecDeque<StoryBox>,
     /// A phone call: who, incoming, and how long it has gone on.
@@ -936,7 +940,7 @@ fn run_story(
             info!("story autopilot: trigger {} {}: {}", w.0, w.1, host.story.trigger_debug(w.0));
         }
     }
-    if std::env::var("FC3_STORY_AUTOPILOT").is_ok() && host.quiet > 6.0 {
+    if std::env::var("FC3_STORY_AUTOPILOT").is_ok() && host.quiet > 6.0 && host.story.watched_loot_filters().is_empty() {
         let watched = host.story.watched_triggers();
         // Stuck: triggers stepped into before they were armed go again.
         if host.quiet > 25.0 {
@@ -1209,6 +1213,14 @@ fn run_story(
                     }
                     "HudTextHidden" => {
                         ui.hints.remove(&a(0).parse().unwrap_or(0));
+                    }
+                    "ChecklistObjective" => {
+                        let id = a(1).parse().unwrap_or(0);
+                        if a(0) == "true" {
+                            ui.checklist.insert(id, plain(&a(2)));
+                        } else {
+                            ui.checklist.remove(&id);
+                        }
                     }
                     "ShowDialogBox" | "ShowTutorialBox" => {
                         let box_ = StoryBox {
@@ -1724,7 +1736,8 @@ fn show_story_ui(
     let banner = ui.banner.as_ref().map(|s| s.0.clone()).unwrap_or_default();
     let mut hint_ids: Vec<_> = ui.hints.keys().copied().collect();
     hint_ids.sort_unstable();
-    let hints = hint_ids.iter().map(|id| prompt_text(&ui.hints[id], &actions, &settings)).collect::<Vec<_>>().join("\n\n");
+    let hints = hint_ids.iter().map(|id| &ui.hints[id]).chain(ui.checklist.values())
+        .map(|text| prompt_text(text, &actions, &settings)).collect::<Vec<_>>().join("\n\n");
     set_text(&mut texts.p0(), &objective);
     set_text(&mut texts.p1(), &subtitle);
     set_text(&mut texts.p2(), &banner);
@@ -1768,11 +1781,128 @@ fn set_text<F: bevy::ecs::query::QueryFilter>(q: &mut Query<&mut Text, F>, value
     }
 }
 
+/// Smoke-test hunting/gathering uses the same controls, finite ammunition,
+/// damage, carcasses and pickup transactions as a player. Repositioning still
+/// makes this automation evidence, not manual traversal or UX validation.
+#[allow(clippy::too_many_arguments)]
+fn autopilot_loot(
+    host: Option<NonSendMut<StoryHost>>,
+    time: Res<Time<Virtual>>,
+    ui: Res<StoryUi>,
+    cinema: Res<crate::cinema::Cinema>,
+    qtes: Res<crate::qte::Qtes>,
+    busy: Res<crate::fp::HandsBusy>,
+    scripted: Res<ScriptedPlayer>,
+    catalog: Res<crate::progression::LootCatalog>,
+    heights: Res<crate::terrain::Heightfield>,
+    mut players: Query<(&mut Transform, &mut Player, &crate::combat::Health, &crate::weapons::Inventory)>,
+    animals: Query<(Entity, &Transform, &crate::wildlife::WildAnimal, &crate::combat::Health, Option<&crate::wildlife::Carcass>, Option<&crate::story_actors::StoryActor>), Without<Player>>,
+    plants: Query<(&crate::pickups::Pickup, &GlobalTransform)>,
+    mut actions: ResMut<crate::controls::ActionState>,
+    mut last: Local<Option<(u64, &'static str)>>,
+) {
+    if std::env::var("FC3_STORY_AUTOPILOT").is_err() { return }
+    let Some(mut host) = host else { return };
+    if time.is_paused() || !ui.boxes.is_empty() || cinema.view.is_some() || qtes.active() || busy.busy() { return }
+    let Ok((mut at, mut player, health, inventory)) = players.single_mut() else { return };
+    if health.dead || player.spawning || player.driving || player.noclip { return }
+    if host.reload_at.is_some() { return }
+    let wanted = host.story.watched_loot_filters();
+    if wanted.is_empty() { *last = None; return }
+    let wants = |kind| catalog.item(kind).is_some_and(|i| wanted.contains(&i.name_id));
+    let regions = host.story.watched_exit_regions();
+    let inside = |at: Vec3| regions.iter().all(|r| r.contains(to_dunia(at)));
+    // Take existing carcasses before shooting another animal. Script-driven
+    // animals remain under their action/scene's ownership.
+    let target = animals.iter().filter(|(_, at, animal, h, carcass, actor)| {
+        wants(crate::progression::LootKind::Skin(animal.animal())) && scripted.animal_looting
+            && inside(at.translation)
+            && actor.is_none_or(|a| !a.script_driven())
+            && (!h.dead || carcass.is_some_and(|c| c.can_skin()))
+    }).min_by(|a, b| b.3.dead.cmp(&a.3.dead)
+        .then(a.1.translation.distance(at.translation).total_cmp(&b.1.translation.distance(at.translation))))
+        .map(|(e, t, _, h, _, actor)| (actor.map_or(e.to_bits(), |a| a.id), t.translation,
+            if h.dead { "skin" } else { "hunt" }, if h.dead { 1.3 } else { 6.0 }));
+    let target = target.or_else(|| plants.iter().filter_map(|(pickup, t)| {
+        let crate::pickups::PickupKind::Plant(plant) = pickup.kind else { return None };
+        (scripted.plant_looting && inside(t.translation()) && wants(crate::progression::LootKind::Plant(plant)))
+            .then_some((pickup.id, t.translation() + Vec3::Y * crate::player::HALF_HEIGHT, "gather", 1.0))
+    }).min_by(|a, b| a.1.distance(at.translation).total_cmp(&b.1.distance(at.translation))));
+    let Some((id, target, kind, distance)) = target else { return };
+    if *last != Some((id, kind)) {
+        info!("story autopilot: {kind} {id}");
+        *last = Some((id, kind));
+    }
+    let delta = target - at.translation;
+    let range = Vec2::new(delta.x, delta.z).length();
+    if range > if kind == "hunt" { 12.0 } else { 1.8 } || delta.y.abs() > 2.0 {
+        let away = Vec3::new(-delta.x, 0.0, -delta.z).normalize_or(Vec3::Z);
+        let mut feet = target + away * distance;
+        feet.y = heights.height_at(feet).unwrap_or(target.y - crate::player::HALF_HEIGHT);
+        if !inside(feet) { return }
+        teleport(&mut at, &mut player, to_dunia(feet), 0.0);
+        host.quiet = 0.0;
+        return;
+    }
+    let eye = at.translation + Vec3::Y * (crate::player::EYE_HEIGHT - crate::player::HALF_HEIGHT);
+    let aim = target - eye;
+    player.yaw = (-aim.x).atan2(-aim.z);
+    player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length());
+    use crate::controls::Action;
+    if kind == "hunt" {
+        if scripted.ignored.contains("updateshooting") { return }
+        if inventory.slot().mag == 0 { actions.press(Action::Reload); }
+        else { actions.hold(Action::Aim); actions.press(Action::Fire); }
+    } else if !scripted.ignored.contains("use") {
+        actions.press(Action::Interact);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::controls::{Action, ActionState, Binding};
     use crate::settings::Settings;
+
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
+    fn installed_loot_listener_receives_the_authored_three_argument_event() {
+        use crate::progression::{ItemLooted, LootCatalog, LootKind, Progress, Animal};
+        let cache = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let pack = fc3_formats::scripts::ScriptPack::from_bytes(&std::fs::read(cache.join(fc3_formats::scripts::DOMINO_PACK_REL)).unwrap()).unwrap();
+        let story = Story::new(pack, fc3_story::data::StoryData::default()).unwrap();
+        let listener = story.domino().create("Domino/System/LootItemListener.lua").unwrap();
+        let lua = story.domino().lua();
+        for output in ["Enabled", "Disabled"] {
+            listener.set(output, lua.globals().get::<mlua::Function>("DummyFunction").unwrap()).unwrap();
+        }
+        let filter = lua.create_table().unwrap();
+        filter.set("section", "Name").unwrap();
+        filter.set("id", "126007").unwrap();
+        listener.set("filterItemID", filter).unwrap();
+        listener.set("ItemLooted", lua.load(r#"return function(self)
+            assert(self.lootedItemID.id == "126007")
+            assert(CAPI_Pawn.GetLootQuantity("1", "126007") == 2)
+            self.received = (self.received or 0) + 1
+        end"#).eval::<mlua::Function>().unwrap()).unwrap();
+        story.domino().call(&listener, "Enable").unwrap();
+        let metadata = fc3_formats::progression::Crafting::from_text(&std::fs::read_to_string(cache.join("progression/recipes.txt")).unwrap()).unwrap();
+        let catalog = LootCatalog::from_metadata(&metadata);
+        let mut host = StoryHost::new(story, None);
+        let mut progress = Progress::default();
+        progress.skins.insert(Animal::Boar, 2);
+        let mut view = View::default();
+        view.player_state.loot = catalog.quantities(&progress);
+        host.story.update(0.0, view);
+        let mut pending = StoryLoot(vec![ItemLooted(LootKind::Skin(Animal::Boar))]);
+        host.forward_loot(&mut pending, &catalog);
+        assert_eq!(listener.get::<u32>("received").unwrap(), 1);
+        host.forward_loot(&mut pending, &catalog);
+        assert_eq!(listener.get::<u32>("received").unwrap(), 1);
+        host.story.domino().call(&listener, "Disable").unwrap();
+        assert!(host.story.watched_loot_filters().is_empty());
+        assert_eq!(host.story.errors(), 0);
+    }
 
     #[test]
     fn gathered_loot_survives_paused_frames_and_callbacks_read_the_updated_inventory_once() {
@@ -1782,7 +1912,8 @@ mod tests {
         let story = Story::new(pack, fc3_story::data::StoryData::default()).unwrap();
         story.domino().lua().load(r#"
             loot = { count = 0, quantities = {} }
-            loot._type = { Got = function(self, field, id)
+            loot._type = { Got = function(self, item, field, id)
+                assert(item ~= nil and item ~= "Name")
                 assert(field == "Name")
                 self.count = self.count + 1
                 self.quantities[tonumber(id)] = CAPI_Pawn.GetLootQuantity("1", id)

@@ -564,6 +564,10 @@ pub struct WildAnimal {
 }
 
 impl WildAnimal {
+    pub(crate) fn animal(&self) -> Animal {
+        SPECIES[self.species].animal
+    }
+
     /// Predators: soldiers shoot these on sight when they come close.
     pub fn dangerous(&self) -> bool {
         SPECIES[self.species].behaviour == Behaviour::Predator
@@ -581,11 +585,15 @@ pub const CAGE_DOOR_HEALTH: f32 = 40.0;
 
 /// A dead animal that can be skinned.
 #[derive(Component)]
-struct Carcass {
+pub(crate) struct Carcass {
     species: usize,
     age: f32,
     /// Already skinned (the body stays until it rots).
     skinned: bool,
+}
+
+impl Carcass {
+    pub(crate) fn can_skin(&self) -> bool { !self.skinned }
 }
 
 fn random_ground(rng: &mut Rng, around: Vec3, heights: &Heightfield, outposts: &crate::outposts::Outposts, habitat: Habitat) -> Option<Vec3> {

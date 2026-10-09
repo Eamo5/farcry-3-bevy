@@ -162,7 +162,7 @@ is the story's own:
   the reward notification lists every supported weapon freed by that tower.
   Free stock still has to be collected from a shop; it is not granted on unlock.
 * **Ingredient loot**: skinning and plant gathering raise `CPawnLootItemEvent`
-  (`Name`, localized item id) after the live inventory snapshot updates.
+  (item key, `Name`, localized item id) after the live inventory snapshot updates.
   Events survive paused tutorial/menu frames and are delivered once. The
   converted `progression/recipes.txt` table joins authored loot groups to
   shopping items and source prototypes; shared-model pigs/rare animals are
@@ -172,6 +172,8 @@ is the story's own:
   Scripts' plant/animal looting permissions gate interactions, which consume
   their input press so another interaction cannot reuse it that frame.
   This does not yet replace the sandbox crafting recipes or automatic medkits.
+  The host also shows each authored dynamic checklist row, formatting its
+  localized collection counter and independently updating or hiding it.
 * **Story wildlife**: supported normal animals retain their authored graphic
   kit and mission id while using the wildlife species' clips, behavior, health
   and death/skinning path. Their feet retain the story host's placement offset.
@@ -238,11 +240,15 @@ is the story's own:
   into the triggers scripts wait on, looks at look-at triggers, gives the
   inputs they listen for, makes a noise by a guard whose action a script
   waits to see broken off, accepts boxes, buys the tutorial shop's selected
-  weapon using the actual priced inventory transaction, wins QTEs, ends other
+  weapon using the actual priced inventory transaction, hunts with finite
+  ammunition through ordinary shooting/damage, skins real carcasses and gathers
+  real plant pickups for active ingredient listeners, wins QTEs, ends other
   specific gameplays, and is
   unseen by enemies. When nothing happens for 20 s it logs what the scripts
   wait on and why the watched triggers don't see the player; after 25 s it
   steps into triggers it already used again.
+  Loot targets and test repositioning stay inside enabled player-only regions
+  with exit listeners; legitimate mission-boundary failures are not bypassed.
   `FC3_STORY_SKIP_SCENES=1` skips cinematics; `FC3_STORY_LOOK=<id>` faces
   a character.
 * `FC3_STORY_CHECKPOINTS=<dir>` keeps every checkpoint as a file;
@@ -250,6 +256,10 @@ is the story's own:
   `story-run` takes it too; `FC3_STORY_WAITING=1` makes it list what the
   scripts wait on when it stalls).
 * `fc3tool moves [name part]`: the move database's moves, states and clips.
+* `FC3_TEST_CACHE=<cache>` with
+  `cargo test --locked --release -p fc3_game installed_loot_listener -- --ignored`
+  runs the host's loot-event regression against the installed game's original
+  `LootItemListener.lua`, without copying proprietary scripts into the repository.
 
 ## Current validation gaps
 
@@ -281,8 +291,14 @@ skinnable wildlife. They now bind to the wildlife path; a subsequent live run
 confirmed all four authored mission boars were bound, without a crash or
 failure/reload loop. A regression exercises a bound story boar's death and
 skinning on its original root, including cinematic movement ownership.
-The autopilot still does not hunt or gather, so `JAS_080_B20` remains uncompleted
-in live validation. The autopilot
+The autopilot now hunts and gathers using actual weapon damage and pickup
+transactions. Its initial hunting run exposed two problems: choosing targets
+outside the authored hunting boundary caused legitimate failures, and the host
+sent a two-argument loot event while the original listener expects three
+(`item`, `section`, `id`). The driver now respects active exit regions and the
+host sends the full event; the installed-script regression exercises that
+listener rather than a simplified stand-in. `JAS_080_B20` still requires a
+successful post-fix live run before its completion can be claimed. The autopilot
 stands in for the tower panel, zipline use and world-map input; these aren't
 manual traversal/UI validation. These runs skipped scenes and automatically ended the
 unimplemented Grant-death gameplay; they do not establish cinematic or
