@@ -27,10 +27,13 @@ use crate::story_actors::StoryActor;
 
 pub struct CinemaPlugin;
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct CinemaSet;
+
 impl Plugin for CinemaPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Cinema>()
-            .add_systems(Update, (start_scenes, play_scenes).chain().after(crate::story::StorySet).run_if(in_state(crate::menu::GameState::Playing)))
+            .add_systems(Update, (start_scenes, play_scenes).chain().in_set(CinemaSet).after(crate::story::StorySet).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(PostUpdate, scene_view.before(TransformSystems::Propagate));
     }
 }
@@ -147,6 +150,8 @@ struct Playing {
     origin: Transform,
     /// Track group uid -> world entity id.
     bindings: HashMap<u64, u64>,
+    /// The scene's exposed entity anchor (characters can animate in its frame).
+    anchor: Option<u64>,
     clips: HashMap<String, Handle<Fc3Clip>>,
     /// Seconds spent waiting for clips to load.
     waited: f32,
@@ -177,6 +182,17 @@ fn bindings(data: &fc3_story::data::StoryData, scene: u64, archive: &str) -> Has
     out
 }
 
+fn anchor_of(data: &fc3_story::data::StoryData, scene: u64, archive: &str) -> Option<u64> {
+    let c = data.entities.get(&scene)?.component("CCinematicSceneComponent")?;
+    let mut anchor = None;
+    c.walk(&mut |entry, _| {
+        if entry.str_h(0xB1C2_6EBB).is_some_and(|p| p.eq_ignore_ascii_case(archive)) {
+            anchor = entry.child("EntityAnchors").and_then(|a| a.children.iter().find_map(|a| a.u64("ID")));
+        }
+    });
+    anchor
+}
+
 fn origin_of(data: &fc3_story::data::StoryData, scene: u64) -> Transform {
     data.entities
         .get(&scene)
@@ -195,7 +211,7 @@ fn start_scenes(host: Option<NonSendMut<StoryHost>>, mut cinema: ResMut<Cinema>,
     for b in std::mem::take(&mut cinema.built) {
         let clips = clip_handles(&b.seq, &server);
         debug!("cinema: built {} ({:.1} s)", b.name, b.seq.duration);
-        cinema.playing.push(Playing { scene: 0, meta: None, file: b.name, bindings: b.bindings, origin: b.origin, seq: b.seq, t: 0.0, paused: false, clips, waited: 0.0 });
+        cinema.playing.push(Playing { scene: 0, meta: None, file: b.name, bindings: b.bindings, anchor: None, origin: b.origin, seq: b.seq, t: 0.0, paused: false, clips, waited: 0.0 });
     }
     for r in requests {
         debug!("cinema request: {} {} {} {:?}", r.mode, r.scene, r.file, r.sync);
@@ -269,6 +285,7 @@ fn start_scenes(host: Option<NonSendMut<StoryHost>>, mut cinema: ResMut<Cinema>,
                     meta: r.meta,
                     file: r.file.clone(),
                     bindings: bindings(&data, r.scene, &archive),
+                    anchor: anchor_of(&data, r.scene, &archive),
                     origin: origin_of(&data, r.scene),
                     seq,
                     t,
@@ -344,6 +361,42 @@ fn clip_root(clip: &fc3_formats::anim::Clip, t: f32) -> Transform {
     }
 }
 
+/// Recorded poses hold their first/last key. The movement track often ends
+/// before its scene's dialogue/exit animation, and must not release the car.
+fn vehicle_pose(keys: &[cinema::VehicleKey], t: f32) -> Option<(Transform, f32, f32)> {
+    let pose = |k: &cinema::VehicleKey| Transform { translation: to_bevy(k.pos),
+        rotation: Quat::from_array(fc3_formats::world::angles_to_bevy_quat(k.angles)), scale: Vec3::ONE };
+    let first = keys.first()?;
+    if t <= first.time { return Some((pose(first), first.gas, first.steering)); }
+    let last = keys.last()?;
+    if t >= last.time { return Some((pose(last), last.gas, last.steering)); }
+    let i = keys.partition_point(|k| k.time < t);
+    let Some(b) = keys.get(i) else {
+        let last = keys.last()?;
+        return Some((pose(last), last.gas, last.steering));
+    };
+    let a = &keys[i - 1];
+    let w = ((t - a.time) / (b.time - a.time).max(1e-6)).clamp(0.0, 1.0);
+    let (a_pose, b_pose) = (pose(a), pose(b));
+    Some((Transform { translation: a_pose.translation.lerp(b_pose.translation, w),
+        rotation: a_pose.rotation.slerp(b_pose.rotation, w), scale: Vec3::ONE },
+        a.gas + (b.gas - a.gas) * w, a.steering + (b.steering - a.steering) * w))
+}
+
+fn recorded_pose(g: &cinema::Group, t: f32) -> Option<(Transform, f32, f32)> {
+    g.clips.iter().find_map(|c| match &c.kind {
+        ClipKind::VehicleMovement { keys } => vehicle_pose(keys, t - c.start),
+        _ => None,
+    })
+}
+
+fn anchored_at(clips: &[cinema::Clip], t: f32) -> bool {
+    clips.iter().rev().find_map(|c| match c.kind {
+        ClipKind::Animation { anchored, .. } if t >= c.start && t <= c.start + c.duration.max(0.05) => Some(anchored),
+        _ => None,
+    }).unwrap_or(false)
+}
+
 /// The world transform of a skeleton bone posed by a clip.
 fn bone_world(skel: &fc3_formats::anim::Skeleton, clip: &fc3_formats::anim::Clip, t: f32, bone: &str) -> Option<Mat4> {
     let idx = skel.find(bone)?;
@@ -384,7 +437,7 @@ fn play_scenes(
     keys: Res<ButtonInput<KeyCode>>,
     mut hold: ResMut<crate::fp::Cinematic>,
     (mut faces, mut library): (Query<&mut crate::faces::Face>, Option<ResMut<crate::faces::FaceLibrary>>),
-    mut props: Query<(&crate::objects::PlacedId, &mut Transform), Without<StoryActor>>,
+    mut props: Query<(&crate::objects::PlacedId, &mut Transform, Option<&mut crate::vehicles::Vehicle>), Without<StoryActor>>,
 ) {
     let Some(mut host) = host else { return };
     // A cutscene holds the player still.
@@ -465,7 +518,33 @@ fn play_scenes(
                 }
             }
         }
-        // Characters on their clips, at the scene's place.
+        // Whole-track vehicle displacement is independent of its looping
+        // simple animation. Applying that loop's reference rotation to the
+        // whole truck used to flip it over and bury it below the terrain.
+        for g in &p.seq.groups {
+            let Some((local, gas, steering)) = recorded_pose(g, p.t) else { continue };
+            let Some(&id) = p.bindings.get(&g.uid) else { continue };
+            let Some((_, mut at, vehicle)) = props.iter_mut().find(|(pid, _, _)| pid.0 == id) else { continue };
+            *at = p.origin * local;
+            if std::env::var("FC3_VEHICLE_DEBUG").is_ok() && (p.t / 5.0) as u32 != (prev / 5.0) as u32 {
+                info!("cinema {}: recorded vehicle {id} at t={:.1} world {:.2?}", p.seq.name, p.t, at.translation);
+            }
+            if (p.t / 15.0) as u32 != (prev / 15.0) as u32 {
+                if let Ok(stem) = std::env::var("FC3_CINEMA_SHOTS") {
+                    crate::camera::capture(&mut commands, format!("{stem}_{}_{}.png", p.scene, (p.t / 15.0) as u32));
+                }
+            }
+            if let Some(mut vehicle) = vehicle {
+                let speed = recorded_pose(g, (p.t - 0.05).max(0.0)).map_or(0.0, |(prev, _, _)| {
+                    (local.translation - prev.translation).dot(local.rotation * Vec3::NEG_Z) / 0.05
+                });
+                vehicle.recorded_controls(gas, steering, if p.paused { 0.0 } else { speed });
+            }
+        }
+        // Anchored clips are authored in the exposed entity's model frame,
+        // not at the static scene placement (Dennis's root is the driver seat).
+        let anchor = p.anchor.and_then(|id| props.iter().find(|(pid, _, _)| pid.0 == id).map(|(_, at, _)| *at));
+        // Characters on their clips, at the scene or moving anchor's place.
         for g in &p.seq.groups {
             if !matches!(g.kind, GroupKind::Character | GroupKind::Generic) {
                 continue;
@@ -476,7 +555,8 @@ fn play_scenes(
             let Some((source, ct)) = clip_at(&g.clips, p.t, |s| p.clips.get(s).and_then(|h| clips.get(h)).map(|c| c.0.duration)) else { continue };
             let Some(handle) = p.clips.get(source) else { continue };
             let root = clips.get(handle).map(|c| clip_root(&c.0, ct)).unwrap_or_default();
-            let world = p.origin * root;
+            let origin = if anchored_at(&g.clips, p.t) { anchor.unwrap_or(p.origin) } else { p.origin };
+            let world = origin * root;
             *at = Transform { translation: world.translation + world.rotation * Vec3::Y * HALF_HEIGHT, rotation: world.rotation, scale: Vec3::ONE };
             if let Some(rig) = actor.rig {
                 let skeleton = if source.contains("narrative") { narrative.clone() } else { master.clone() };
@@ -497,10 +577,11 @@ fn play_scenes(
             if g.kind != GroupKind::Generic {
                 continue;
             }
+            if recorded_pose(g, p.t).is_some() { continue; }
             let Some(&id) = p.bindings.get(&g.uid) else { continue };
             let Some((source, ct)) = clip_at(&g.clips, p.t, |s| p.clips.get(s).and_then(|h| clips.get(h)).map(|c| c.0.duration)) else { continue };
             let Some(clip) = p.clips.get(source).and_then(|h| clips.get(h)) else { continue };
-            let Some((_, mut at)) = props.iter_mut().find(|(pid, _)| pid.0 == id) else { continue };
+            let Some((_, mut at, _)) = props.iter_mut().find(|(pid, _, _)| pid.0 == id) else { continue };
             let node = clip.0.tracks.iter().min_by_key(|t| t.bone).map(|t| Transform {
                 translation: t.sample_translation(ct).map(Vec3::from_array).unwrap_or_default(),
                 rotation: t.sample_rotation(ct).map(Quat::from_array).unwrap_or_default(),
@@ -673,11 +754,91 @@ mod tests {
     use super::*;
 
     #[test]
+    fn recorded_vehicle_pose_interpolates_rotations_and_holds_its_endpoint() {
+        let key = |time, x, yaw| cinema::VehicleKey { time, pos: [x, 2.0, 3.0], angles: [0.0, 0.0, yaw], gas: time, steering: -time };
+        let keys = [key(0.0, 1.0, 179.0), key(1.0, 11.0, -179.0)];
+        let (mid, gas, steering) = vehicle_pose(&keys, 0.5).unwrap();
+        assert!(mid.translation.abs_diff_eq(Vec3::new(6.0, 3.0, -2.0), 1e-5));
+        assert!(mid.forward().as_vec3().abs_diff_eq(Vec3::Z, 1e-4), "yaw must cross 180, not spin through zero");
+        assert_eq!((gas, steering), (0.5, -0.5));
+        assert_eq!(vehicle_pose(&keys, -1.0), vehicle_pose(&keys, 0.0));
+        assert_eq!(vehicle_pose(&keys, 10.0), vehicle_pose(&keys, 1.0));
+        assert!(vehicle_pose(&[], 0.0).is_none());
+    }
+
+    #[test]
+    fn movement_track_is_not_overwritten_by_the_simple_loop_and_actor_rides_its_anchor() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
+            .init_asset::<Fc3Clip>().init_asset::<Fc3Skeleton>()
+            .init_resource::<Cinema>().init_resource::<crate::story::StoryUi>()
+            .init_resource::<ButtonInput<KeyCode>>().init_resource::<crate::fp::Cinematic>()
+            .add_message::<crate::sound::PlaySfx>().add_systems(Update, play_scenes);
+        let pack = fc3_formats::scripts::ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap();
+        let story = fc3_story::Story::new(pack, fc3_story::data::StoryData::default()).unwrap();
+        app.insert_non_send(StoryHost::new(story, None));
+        let mut clip = fc3_formats::anim::Clip { duration: 1.0, ..default() };
+        clip.root_motion = Some(fc3_formats::anim::RootMotion { start_translation: [-0.4, 0.8, -0.2],
+            start_rotation: Quat::IDENTITY.to_array(), ..default() });
+        let handle = app.world_mut().resource_mut::<Assets<Fc3Clip>>().add(Fc3Clip(std::sync::Arc::new(clip)));
+        let vehicle = app.world_mut().spawn((crate::objects::PlacedId(100), Transform::IDENTITY)).id();
+        let actor = app.world_mut().spawn((StoryActor::new(200, None, false), Transform::IDENTITY)).id();
+        let movement = cinema::Clip { start: 0.0, duration: 1.0, kind: ClipKind::VehicleMovement { keys: vec![
+            cinema::VehicleKey { time: 0.0, pos: [10.0, 20.0, 30.0], angles: [0.0, 0.0, -90.0], gas: 0.0, steering: 0.0 },
+            cinema::VehicleKey { time: 1.0, pos: [20.0, 20.0, 30.0], angles: [0.0, 0.0, -90.0], gas: 1.0, steering: 0.0 }] } };
+        let simple = cinema::Clip { start: 0.0, duration: 1.0, kind: ClipKind::SimpleAnimation { source: "loop".into(), from: 0, to: 30 } };
+        let animation = cinema::Clip { start: 0.0, duration: 1.0, kind: ClipKind::Animation { source: "loop".into(), from: 0, to: 30,
+            blend: 0.0, anchored: true } };
+        app.world_mut().resource_mut::<Cinema>().playing.push(Playing { scene: 1, meta: None, file: "ride".into(), t: 0.5, paused: true,
+            origin: Transform::from_xyz(100.0, 0.0, 0.0), anchor: Some(100), bindings: HashMap::from([(1, 100), (2, 200)]),
+            clips: HashMap::from([("loop".into(), handle)]), waited: 3.0,
+            seq: Sequence { duration: 1.0, groups: vec![
+                cinema::Group { uid: 1, kind: GroupKind::Generic, name: "truck".into(), archetype: 0, clips: vec![movement, simple] },
+                cinema::Group { uid: 2, kind: GroupKind::Character, name: "driver".into(), archetype: 0, clips: vec![animation] }], ..default() } });
+        app.update();
+        let vt = *app.world().get::<Transform>(vehicle).unwrap();
+        assert!(vt.translation.abs_diff_eq(Vec3::new(115.0, 30.0, -20.0), 1e-5));
+        let expected = vt.transform_point(Vec3::new(-0.4, 0.8 + HALF_HEIGHT, -0.2));
+        assert!(app.world().get::<Transform>(actor).unwrap().translation.abs_diff_eq(expected, 1e-4));
+        assert!(app.world().get::<StoryActor>(actor).unwrap().in_scene);
+        // The driver retains his passenger-relative pose through the final hold.
+        app.world_mut().resource_mut::<Cinema>().playing[0].t = 1.5;
+        app.world_mut().resource_mut::<Cinema>().playing[0].seq.pause_at_end = true;
+        app.update();
+        assert!(app.world().get::<Transform>(vehicle).unwrap().translation.abs_diff_eq(Vec3::new(120.0, 30.0, -20.0), 1e-5));
+    }
+
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE with refreshed installed-game sequences"]
+    fn installed_briefing_has_a_670_metre_recorded_ride_and_vehicle_relative_dennis() {
+        let root = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let data = fc3_story::data::StoryData::load(&root).unwrap();
+        let archive = cinema::archive_path("Sequences/fc3_main/jas_100_brief/JAS_100_BRIEF_B10_CarRide.seq");
+        let seq = Sequence::from_text(&std::fs::read_to_string(root.join(cinema::sequence_rel(&archive))).unwrap()).unwrap();
+        let bindings = bindings(&data, 2078101851032527610, &archive);
+        assert_eq!(anchor_of(&data, 2078101851032527610, &archive), Some(2076001291963743153));
+        let car = seq.groups.iter().find(|g| bindings.get(&g.uid) == Some(&2076001291963743153)).unwrap();
+        let (first, _, _) = recorded_pose(car, 0.0).expect("missing converted vehicle track");
+        let (last, _, _) = recorded_pose(car, seq.duration).unwrap();
+        let origin = origin_of(&data, 2078101851032527610);
+        let placed = to_bevy(data.entities[&2076001291963743153].pos);
+        assert!((origin * first).translation.distance(placed) < 0.02);
+        assert!(first.translation.distance(last.translation) > 660.0);
+        let finish = origin * last;
+        assert!(finish.translation.abs_diff_eq(to_bevy([-198.094, 2266.8264, 137.5769]), 0.02));
+        let dennis = seq.groups.iter().find(|g| bindings.get(&g.uid) == Some(&2074715771025504507)).unwrap();
+        assert!(anchored_at(&dennis.clips, 30.0));
+        let source = clip_at(&dennis.clips, 30.0, |_| None).unwrap().0;
+        let clip = fc3_formats::anim::parse_clip(&std::fs::read(root.join(fc3_formats::cache::anim_rel(source))).unwrap()).unwrap();
+        assert!(clip_root(&clip, 0.0).translation.distance(Vec3::new(-0.4388, 0.8163, -0.2025)) < 0.001);
+    }
+
+    #[test]
     fn meta_stop_releases_loops_without_stopping_other_scenes_or_qtes() {
         let playing = |scene, meta, name: &str| Playing {
             scene, meta, file: name.into(), seq: Sequence { looping: true, ..Default::default() },
             t: 0.0, paused: false, origin: Transform::default(),
-            bindings: HashMap::new(), clips: HashMap::new(), waited: 0.0,
+                bindings: HashMap::new(), anchor: None, clips: HashMap::new(), waited: 0.0,
         };
         let mut cinema = Cinema::default();
         cinema.playing = vec![playing(1, Some(10), "grant_loop"), playing(2, Some(20), "other"),

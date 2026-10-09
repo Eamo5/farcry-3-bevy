@@ -25,7 +25,7 @@ impl Plugin for VehiclesPlugin {
         app.init_resource::<Driving>()
             .init_resource::<Repairing>()
             .init_resource::<StorySeatRequests>()
-            .add_systems(PreUpdate, story_board_test.after(crate::controls::update_actions).after(crate::story::story_interactions)
+            .add_systems(PreUpdate, (story_board_test, story_exit_test).chain().after(crate::controls::update_actions).after(crate::story::story_interactions)
                 .run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(OnExit(crate::menu::GameState::Loading), load_vehicles)
             .add_systems(
@@ -36,7 +36,7 @@ impl Plugin for VehiclesPlugin {
                     (despawn_mission_vehicles, story_seats).chain().after(crate::story::StorySet).before(crate::story_actors::ActorSet),
                     (repair_test, enter_exit, repair_vehicles).chain().before(crate::hud::HudSet).after(crate::turrets::man_turrets),
                     run_over,
-                    vehicle_sounds,
+                    vehicle_sounds.after(crate::cinema::CinemaSet),
                     vehicle_hud.before(crate::hud::HudSet),
                     drive_test,
                 )
@@ -44,7 +44,7 @@ impl Plugin for VehiclesPlugin {
             )
             .add_systems(FixedUpdate, drive)
             .add_message::<StrayHit>()
-            .add_systems(Update, (turn_wheels, wreck_rocket, stray_hits, vehicle_damage, wreck_test).chain().run_if(in_state(crate::menu::GameState::Playing)))
+            .add_systems(Update, (turn_wheels, wreck_rocket, stray_hits, vehicle_damage, wreck_test).chain().after(crate::cinema::CinemaSet).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(PostUpdate, (sync_vehicle_motion, seat_player, seat_story_actors).chain().before(TransformSystems::Propagate));
     }
 }
@@ -276,6 +276,8 @@ pub struct Vehicle {
     seats: Vec<SeatSlot>,
     vehicle_type: i32,
     authored_seats: bool,
+    /// Wheel/engine presentation for a recorded scene (physics velocity is zero).
+    recorded_speed: Option<f32>,
 }
 
 #[derive(Clone)]
@@ -329,6 +331,12 @@ impl Vehicle {
         self.throttle = throttle.clamp(-1.0, 1.0);
         self.steer = steer.clamp(-1.0, 1.0);
         self.brake = brake;
+    }
+
+    pub(crate) fn recorded_controls(&mut self, gas: f32, steering: f32, speed: f32) {
+        self.throttle = gas.clamp(-1.0, 1.0);
+        self.steer = steering.clamp(-1.0, 1.0);
+        self.recorded_speed = Some(speed);
     }
 
     fn wheels(&self) -> [Vec3; 4] {
@@ -489,14 +497,15 @@ fn story_seats(
 fn sync_vehicle_motion(
     host: Option<NonSend<crate::story::StoryHost>>,
     cinema: Res<crate::cinema::Cinema>,
-    mut vehicles: Query<(Entity, &Vehicle, &RigidBody, &mut LinearVelocity, &mut AngularVelocity)>,
+    mut vehicles: Query<(Entity, &mut Vehicle, &RigidBody, &mut LinearVelocity, &mut AngularVelocity)>,
     mut commands: Commands,
 ) {
-    for (entity, v, body, mut linear, mut angular) in &mut vehicles {
+    for (entity, mut v, body, mut linear, mut angular) in &mut vehicles {
         let animated = cinema.owns_entity(v.spawn_id) || host.as_ref().is_some_and(|h| h.story.vehicle_rules(v.spawn_id).animated);
         let desired = if animated { RigidBody::Kinematic } else { RigidBody::Dynamic };
         if *body != desired { commands.entity(entity).insert(desired); }
         if animated { linear.0 = Vec3::ZERO; angular.0 = Vec3::ZERO; }
+        else if v.recorded_speed.take().is_some() { v.throttle = 0.0; v.steer = 0.0; }
     }
 }
 
@@ -520,6 +529,25 @@ fn story_board_test(
     pt.translation = vt.transform_point(Vec3::new(v.max.x + 0.8, 0.8, 0.0));
     p.yaw = vt.rotation.to_euler(EulerRot::YXZ).0 + std::f32::consts::FRAC_PI_2;
     p.velocity = Vec3::ZERO;
+    actions.press(Action::Interact);
+}
+
+/// Explicit test-only dismount: wait for the authored leave listener and
+/// enabled exit, then press normal Interact. Never inject a stand-up callback.
+fn story_exit_test(
+    host: Option<NonSend<crate::story::StoryHost>>,
+    cinema: Res<crate::cinema::Cinema>,
+    driving: Res<Driving>,
+    vehicles: Query<&Vehicle>,
+    mut actions: ResMut<ActionState>,
+    mut requested: Local<bool>,
+) {
+    let Some(id) = std::env::var("FC3_STORY_EXIT").ok().and_then(|s| s.parse::<u64>().ok()) else { return };
+    let Some(host) = host else { return };
+    if *requested || cinema.owns_entity(id) || !host.story.awaits_vehicle_exit(fc3_story::PLAYER) || host.story.vehicle_rules(id).exit_disabled { return; }
+    let Some(v) = driving.vehicle.and_then(|e| vehicles.get(e).ok()).filter(|v| v.spawn_id == id) else { return };
+    if v.seats.get(driving.seat).is_none_or(|s| s.pawn != Some(fc3_story::PLAYER)) { return; }
+    *requested = true;
     actions.press(Action::Interact);
 }
 
@@ -646,7 +674,7 @@ fn build_vehicle_inner(commands: &mut Commands, def: usize, model: &Fc3Model, at
     commands.entity(root).insert((
         Vehicle { def, spawn_id, throttle: 0.0, steer: 0.0, brake: false, min, max, occupied: false, parked: true, body,
             seats: vec![SeatSlot { kind: 1, index: 0, pose: Transform::IDENTITY, pawn: None }],
-            vehicle_type: match d.kind { Kind::Car => 0, Kind::Boat => 1, Kind::Glider => 2 }, authored_seats: false },
+            vehicle_type: match d.kind { Kind::Car => 0, Kind::Boat => 1, Kind::Glider => 2 }, authored_seats: false, recorded_speed: None },
         Health::new(d.armour),
         Wear::default(),
         crate::combat::DamageScale { bullet: 0.45, explosion: 1.8 },
@@ -732,7 +760,7 @@ mod story_vehicle_tests {
 
     fn vehicle() -> Vehicle {
         Vehicle { def: 1, spawn_id: 100, throttle: 0.0, steer: 0.0, brake: false, min: Vec3::splat(-1.0), max: Vec3::ONE,
-            occupied: false, parked: true, body: Entity::PLACEHOLDER, vehicle_type: 0, authored_seats: true,
+            occupied: false, parked: true, body: Entity::PLACEHOLDER, vehicle_type: 0, authored_seats: true, recorded_speed: None,
             seats: vec![SeatSlot { kind: 1, index: 0, pose: Transform::from_xyz(-0.6, 0.8, 0.0), pawn: None },
                 SeatSlot { kind: 3, index: 0, pose: Transform::from_xyz(0.6, 0.8, 0.0), pawn: None }] }
     }
@@ -828,6 +856,7 @@ mod story_vehicle_tests {
         assert!(!app.world().get::<Player>(player).unwrap().driving);
         assert!(app.world().get::<ColliderDisabled>(player).is_none());
         assert_eq!(app.world().get::<Vehicle>(ve).unwrap().seats[1].pawn, None);
+        assert!(app.world().get::<Transform>(player).unwrap().translation.x > 1.0, "passenger exits on the right");
         app.world_mut().resource_mut::<crate::hud::HudState>().prompt = None;
         app.world_mut().get_mut::<Transform>(player).unwrap().translation = Vec3::ZERO;
         app.world_mut().resource_mut::<ActionState>().press(Action::Interact);
@@ -888,10 +917,15 @@ mod story_vehicle_tests {
         assert_eq!(*app.world().get::<RigidBody>(ve).unwrap(), RigidBody::Kinematic);
         assert_eq!(app.world().get::<LinearVelocity>(ve).unwrap().0, Vec3::ZERO);
         assert_eq!(app.world().get::<AngularVelocity>(ve).unwrap().0, Vec3::ZERO);
+        app.world_mut().get_mut::<Vehicle>(ve).unwrap().recorded_controls(0.7, -0.3, 11.0);
+        app.update();
+        assert_eq!(app.world().get::<Vehicle>(ve).unwrap().recorded_speed, Some(11.0));
         app.world().non_send::<crate::story::StoryHost>().story.domino().lua()
             .load(r#"SendRegisteredEventToEntity("100", "CVehicle_SetAsNotAnimated", {})"#).exec().unwrap();
         app.update();
         assert_eq!(*app.world().get::<RigidBody>(ve).unwrap(), RigidBody::Dynamic);
+        let v = app.world().get::<Vehicle>(ve).unwrap();
+        assert_eq!((v.recorded_speed, v.throttle, v.steer), (None, 0.0, 0.0));
         app.world_mut().get_mut::<LinearVelocity>(ve).unwrap().0 = Vec3::ONE;
         app.update();
         assert_eq!(app.world().get::<LinearVelocity>(ve).unwrap().0, Vec3::ONE);
@@ -1025,7 +1059,7 @@ fn turn_wheels(
 ) {
     let dt = time.delta_secs();
     for (t, v, vel, children) in &vehicles {
-        let speed = vel.0.dot(t.rotation * Vec3::NEG_Z);
+        let speed = v.recorded_speed.unwrap_or_else(|| vel.0.dot(t.rotation * Vec3::NEG_Z));
         let steer = v.steer;
         for child in children.iter() {
             let Ok((mut pt, mut part)) = parts.get_mut(child) else { continue };
@@ -1119,8 +1153,12 @@ fn enter_exit(
             if let Some(s) = v.seats.get_mut(driving.seat) { s.pawn = None; }
             v.occupied = v.seats.iter().any(|s| s.pawn.is_some());
             if driver { v.parked = true; v.throttle = 0.0; v.steer = 0.0; }
-            // Step out on the driver's side (or above the water for boats).
-            let side = vt.rotation * Vec3::new(v.min.x - 1.2, 0.0, 0.0);
+            // Authored passengers leave on their own side, not through the
+            // driver. Ordinary bounds-based seats keep the existing left exit.
+            let seat = v.seats.get(driving.seat);
+            let right = v.authored_seats && seat.is_some_and(|s| s.pose.translation.x > (v.min.x + v.max.x) * 0.5);
+            let side = vt.rotation * Vec3::new(if right { v.max.x + 1.2 } else { v.min.x - 1.2 }, 0.0,
+                if v.authored_seats { seat.map_or(0.0, |s| s.pose.translation.z) } else { 0.0 });
             let mut at = vt.translation + Vec3::new(side.x, 0.0, side.z);
             let ground = heights.height_at(at).unwrap_or(at.y).max(crate::water::surface_at(at, &heights) - 1.0);
             at.y = ground + HALF_HEIGHT + 0.3;
@@ -1605,7 +1643,7 @@ fn vehicle_sounds(
             continue;
         }
         let boat = def.kind == Kind::Boat;
-        let speed = lv.0.length();
+        let speed = v.recorded_speed.map(f32::abs).unwrap_or_else(|| lv.0.length());
         let share = (speed / def.top_speed).clamp(0.0, 1.2);
         let st = state.entry(e).or_insert_with(|| EngineState { rpm: IDLE_RPM, last_vel: lv.0, ..default() });
         let target = target_rpm(share, v.throttle, boat);

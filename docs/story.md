@@ -550,3 +550,86 @@ again producing paired checkpoints. Its inspected 20-second screenshot still
 shows incorrect cinematic placement below the world, and the process returned
 exit 1. It confirms the boarding milestone, not a working ride, cinematic
 reproduction or full visual/gameplay/UX parity.
+
+### Recorded briefing vehicle movement and exposed anchors
+
+The installed `JAS_100_BRIEF_B10_CarRide.cseq` has a
+`CVehicleMovementTrack` on the Technical's generic group, separate from its
+4.5-second simple-animation loops. The old sequence converter discarded this
+track. Its eight Bezier channels (`X`, `Y`, `Z`, `Pitch`, `Roll`, `Yaw`, `Gas`,
+`Steering`) record the actual ride over 64.718 seconds. At time zero, the scene
+placement plus the recorded local position reproduces the vehicle's authored
+placement within two centimetres. Its final position is approximately Dunia
+`[-198.094, 2266.8264, 137.5769]`, more than 660 metres from its starting point.
+`StartVehicleFollowPath` instead controls the separate rebel car
+`2078018927633442802`; implementing it alone could not move Jason's truck.
+
+The converter now evaluates the recorded curves with their time/value Bezier
+tangents, samples them at 30 Hz, and preserves them in the sequence cache.
+It also retains animation clips' `bEnableAnchor` flag. A new conversion stamp
+refreshes older sequences during full incremental conversion; `--sectors`
+intentionally does not run that global cinematic stage.
+
+Playback applies the recording to the bound vehicle in the static scene's
+frame and holds its last pose while the remaining dialogue/exit clips finish.
+The simple loop cannot overwrite that displacement. Previously, applying its
+reference transform to the whole truck inverted the vehicle instead of posing
+its parts. The scene's authored `EntityAnchors` exposes the truck as the frame
+for Dennis's anchored clips: his local root `[-0.4388, 0.8163, -0.2025]` is near
+the model's driver sit point, not near the static cinematic scene origin.
+Physics still yields to cinematic ownership with zero velocity; recorded
+speed and controls separately drive wheel/engine presentation and are cleared
+when ownership ends. `FC3_CINEMA_SHOTS=<stem>` captures the recorded scene at
+15-second intervals without changing gameplay input or progression.
+
+Regressions cover Bezier time-channel inversion, disabled tracks, cache
+round-tripping and old animation-cache compatibility, quaternion interpolation
+across 180 degrees, endpoint holding, movement/simple-animation ownership,
+vehicle-relative actor placement, and recorded-control release. The installed
+ride regression verifies the real scene bindings, exposed anchor, start/end
+positions, travel distance and Dennis's clip root. These checks do not establish
+manual campaign continuity, exact seated-camera or simple-part-animation
+parity, visual fidelity, or the separate native follow-path implementation.
+
+The first `fc3-recorded-ride.err.log` run used the explicit partial-crafting
+fixture, autopilot, boarding helper and skipped earlier cutscenes. The two
+briefing ride sequences are not cutscenes and played their full timelines.
+Five-second position samples confirm the truck reached its recorded endpoint
+at t=65; the warrior jeep also followed its own recorded timeline. The process
+exited **0**, but B10 remained running because no player exit input was supplied.
+Its inspected `fc3-recorded-ride-final.png` is **not** a visual/UX pass: the old
+truck objective is still displayed, first-person hands remain visible, and the
+released truck has drifted into vegetation. This run proves recorded movement,
+not successful dismount, parked-vehicle stability, original presentation or
+uninterrupted campaign progression.
+
+`FC3_STORY_EXIT=<vehicle id>` is a separate explicit test helper. It presses
+normal Interact once, only when the player physically occupies that vehicle,
+the original player leave listener is armed, the vehicle has been released by
+the scene, and exit is enabled. It does not inject occupancy, stand-up or
+completion events. Authored player passengers now step out on their own side;
+the existing interaction regression checks the right-side passenger exit.
+
+The `fc3-recorded-ride-exit.err.log` verification uses the same explicit
+fixture and helpers plus the exit helper. The unskipped 65.818-second truck
+timeline reached the recorded endpoint; normal Interact dismounted Jason,
+the physical leave callback completed `JAS_100_BRIEF_B10` and `JAS_100_BRIEF`,
+and the original scripts started `JAS_100_MAIN`/`JAS_100_B10` with “Eliminate
+all pirates in the outpost.” Seven paired checkpoints were retained. The last
+checkpoint places the player beside the arrival truck with health 100, two
+medkits, completed crafting progress, $90 and the unchanged 1911 at 5/41.
+The process exited **0**, with no reported death, mission failure or panic.
+
+The four truck captures at 15/30/45/60 seconds were inspected: the camera is
+above ground in the passenger seat, Dennis remains beside Jason, and the
+warrior jeep is visible ahead in the later samples. They also expose remaining
+failures: Jason plays a driver-style hands clip as a passenger, cockpit/actor
+alignment and materials are not at original fidelity, and subtitle sizing
+changes as a long line scales down. One captured frame reports 12 fps during
+streaming. The inspected final image shows the actual outpost objective and
+world, not the former below-terrain truck. This is automated fixture evidence,
+not manual, uninterrupted opening-to-outpost or visual/cinematic/UX parity.
+
+Final checks passed `cargo test --locked --release --workspace` (215 unit/doc
+tests; 11 installed-only checks ignored), all 11 installed checks with
+`FC3_TEST_CACHE`, release game/tool/converter builds and `git diff --check`.

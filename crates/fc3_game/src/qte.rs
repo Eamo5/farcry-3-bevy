@@ -115,7 +115,7 @@ fn play(cinema: &mut Cinema, q: &mut Qte, clips: &Assets<Fc3Clip>, state: &'stat
         return;
     };
     let d = q.handles.get(&mine).and_then(|h| clips.get(h)).map_or(2.0, |c| c.0.duration).max(0.1);
-    let anim = |source: String| Clip { start: 0.0, duration: d, kind: ClipKind::Animation { source, from: 0, to: (d * 30.0) as u32, blend: 0.15 } };
+    let anim = |source: String| Clip { start: 0.0, duration: d, kind: ClipKind::Animation { source, from: 0, to: (d * 30.0) as u32, blend: 0.15, anchored: false } };
     let mut groups = vec![Group { uid: 1, kind: GroupKind::Player, name: "player".into(), archetype: 0, clips: vec![anim(mine)] }];
     let mut bindings = HashMap::new();
     if let (Some(theirs), Some(npc)) = (theirs, q.opponent) {

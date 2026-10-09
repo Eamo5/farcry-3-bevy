@@ -87,6 +87,17 @@ pub struct CameraKey {
     pub fov: f32,
 }
 
+/// A recorded vehicle pose in the scene's frame, Dunia space, plus the
+/// controls used by its wheel/engine presentation. Angles are degrees.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VehicleKey {
+    pub time: f32,
+    pub pos: [f32; 3],
+    pub angles: [f32; 3],
+    pub gas: f32,
+    pub steering: f32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClipKind {
     /// A skeletal animation played from frame `from` (30 fps) on.
@@ -95,12 +106,18 @@ pub enum ClipKind {
         from: u32,
         to: u32,
         blend: f32,
+        anchored: bool,
     },
     /// A prop's animation.
     SimpleAnimation {
         source: String,
         from: u32,
         to: u32,
+    },
+    /// A whole-track recording, not an animation clip. It owns the
+    /// vehicle's world displacement while simple animation poses its parts.
+    VehicleMovement {
+        keys: Vec<VehicleKey>,
     },
     /// A spoken line (voice from the speaker).
     Dialog {
@@ -227,7 +244,71 @@ fn sample_keys(keys: &[(f32, f32)], t: f32) -> Option<f32> {
     keys.last().map(|k| k.1)
 }
 
+#[derive(Clone, Copy)]
+struct BezierKey {
+    time: f32,
+    value: f32,
+    incoming: [f32; 2],
+    outgoing: [f32; 2],
+}
+
+fn vehicle_keys(e: &Element) -> Vec<VehicleKey> {
+    let names = ["X", "Y", "Z", "Pitch", "Roll", "Yaw", "Gas", "Steering"];
+    let tracks: Vec<Vec<BezierKey>> = names.iter().map(|name| {
+        let mut keys = Vec::new();
+        e.walk(&mut |track| {
+            if track.name != "Track" || track.attr("Name") != Some(*name) { return; }
+            for k in track.child("Keys").into_iter().flat_map(|k| &k.children) {
+                let (Some(time), Some(value)) = (k.f32("Time"), k.f32("Value")) else { continue };
+                if !time.is_finite() || !value.is_finite() { continue; }
+                let tangent = |name| k.child(name).and_then(|t| Some([t.f32("Time")?, t.f32("Value")?]))
+                    .filter(|v| v.iter().all(|x| x.is_finite())).unwrap_or([time, value]);
+                keys.push(BezierKey { time, value, incoming: tangent("TangentIn"), outgoing: tangent("TangentOut") });
+            }
+        });
+        keys.sort_by(|a, b| a.time.total_cmp(&b.time));
+        keys.dedup_by(|a, b| a.time == b.time);
+        keys
+    }).collect();
+    // An absent position channel isn't a usable recorded path.
+    if tracks[..3].iter().any(Vec::is_empty) { return Vec::new(); }
+    let end = tracks.iter().filter_map(|k| k.last().map(|k| k.time)).fold(0.0f32, f32::max);
+    let steps = ((end / FOV_STEP).ceil() as usize).min(200_000);
+    (0..=steps).map(|i| {
+        let time = (i as f32 * FOV_STEP).min(end);
+        let values: Vec<f32> = tracks.iter().map(|k| sample_bezier(k, time).unwrap_or(0.0)).collect();
+        VehicleKey { time, pos: [values[0], values[1], values[2]], angles: [values[3], values[4], values[5]],
+            gas: values[6], steering: values[7] }
+    }).collect()
+}
+
+/// Tangents contain both time and value. Solve the cubic time channel
+/// before evaluating its value; linear interpolation loses authored easing.
+fn sample_bezier(keys: &[BezierKey], t: f32) -> Option<f32> {
+    let first = keys.first()?;
+    if t <= first.time { return Some(first.value); }
+    let i = keys.partition_point(|k| k.time < t);
+    let Some(b) = keys.get(i) else { return keys.last().map(|k| k.value) };
+    let a = keys[i - 1];
+    let cubic = |p: [f32; 4], u: f32| {
+        let v = 1.0 - u;
+        v * v * v * p[0] + 3.0 * v * v * u * p[1] + 3.0 * v * u * u * p[2] + u * u * u * p[3]
+    };
+    let tx = [a.time, a.outgoing[0].clamp(a.time, b.time), b.incoming[0].clamp(a.time, b.time), b.time];
+    let (mut lo, mut hi) = (0.0, 1.0);
+    for _ in 0..24 {
+        let u = (lo + hi) * 0.5;
+        if cubic(tx, u) < t { lo = u; } else { hi = u; }
+    }
+    Some(cubic([a.value, a.outgoing[1], b.incoming[1], b.value], (lo + hi) * 0.5))
+}
+
 fn clip_of(e: &Element) -> Option<Clip> {
+    if e.name == "CVehicleMovementTrack" {
+        let keys = vehicle_keys(e);
+        let duration = keys.last()?.time;
+        return Some(Clip { start: 0.0, duration, kind: ClipKind::VehicleMovement { keys } });
+    }
     let start = e.f32("timeStartTime")?;
     let duration = e.f32("timeDuration").unwrap_or(0.0).max(0.0);
     let kind = match e.name.as_str() {
@@ -236,6 +317,7 @@ fn clip_of(e: &Element) -> Option<Clip> {
             from: e.u32("nAnimStartFrame").unwrap_or(0),
             to: e.u32("nAnimStopFrame").unwrap_or(0),
             blend: e.f32("fBlendTime").unwrap_or(0.0),
+            anchored: e.bool("bEnableAnchor").unwrap_or(false),
         },
         "CSimpleAnimationClip" => ClipKind::SimpleAnimation {
             source: e.attr("sAnimationSource")?.to_ascii_lowercase(),
@@ -440,8 +522,11 @@ impl Sequence {
             out += &format!("group\t{}\t{}\t{}\t{}\n", g.uid, g.kind.code(), g.archetype, g.name);
             for c in &g.clips {
                 let body = match &c.kind {
-                    ClipKind::Animation { source, from, to, blend } => format!("anim\t{from}\t{to}\t{blend}\t{source}"),
+                    ClipKind::Animation { source, from, to, blend, anchored } => format!("anim\t{from}\t{to}\t{blend}\t{source}\t{}", b(*anchored)),
                     ClipKind::SimpleAnimation { source, from, to } => format!("simple\t{from}\t{to}\t{source}"),
+                    ClipKind::VehicleMovement { keys } => format!("vehicle\t{}", keys.iter().map(|k|
+                        format!("{},{},{},{},{},{},{},{},{}", k.time, k.pos[0], k.pos[1], k.pos[2], k.angles[0], k.angles[1], k.angles[2], k.gas, k.steering)
+                    ).collect::<Vec<_>>().join(";")),
                     ClipKind::Dialog { sound } => format!("dialog\t{sound}"),
                     ClipKind::Facial { source, from, to, blend } => format!("face\t{from}\t{to}\t{blend}\t{source}"),
                     ClipKind::Sound { sound, kind } => format!("sound\t{sound}\t{kind}"),
@@ -496,8 +581,13 @@ impl Sequence {
                     let gn = |i: usize| g(i).parse::<f32>().unwrap_or(0.0);
                     let gu = |i: usize| g(i).parse::<u32>().unwrap_or(0);
                     let kind = match f.get(3).copied().unwrap_or_default() {
-                        "anim" => ClipKind::Animation { from: gu(1), to: gu(2), blend: gn(3), source: g(4).to_string() },
+                        "anim" => ClipKind::Animation { from: gu(1), to: gu(2), blend: gn(3), source: g(4).to_string(), anchored: g(5) == "1" },
                         "simple" => ClipKind::SimpleAnimation { from: gu(1), to: gu(2), source: g(3).to_string() },
+                        "vehicle" => ClipKind::VehicleMovement { keys: g(1).split(';').filter_map(|k| {
+                            let v: Vec<f32> = k.split(',').filter_map(|x| x.parse().ok()).collect();
+                            (v.len() == 9 && v.iter().all(|x| x.is_finite())).then(|| VehicleKey { time: v[0], pos: [v[1], v[2], v[3]],
+                                angles: [v[4], v[5], v[6]], gas: v[7], steering: v[8] })
+                        }).collect() },
                         "dialog" => ClipKind::Dialog { sound: gu(1) },
                         "face" => ClipKind::Facial { from: gu(1), to: gu(2), blend: gn(3), source: g(4).to_string() },
                         "sound" => ClipKind::Sound { sound: gu(1), kind: gu(2) },
@@ -562,5 +652,51 @@ mod tests {
     #[test]
     fn domino_paths() {
         assert_eq!(archive_path("Sequences/fc3_main/JAS_020_BRIEF/JAS_020_BRIEF_Escape.seq"), r"sequences\fc3_main\jas_020_brief\jas_020_brief_escape.cseq");
+    }
+
+    #[test]
+    fn vehicle_tracks_keep_curves_controls_anchors_and_the_last_pose() {
+        let track = |name: &str, a: f32, b: f32| format!(r#"<Track><Track Name="{name}"><Keys>
+            <Key Time="0" Value="{a}"><TangentOut Time="0.25" Value="{a}"/></Key>
+            <Key Time="1" Value="{b}"><TangentIn Time="0.75" Value="{b}"/></Key>
+            </Keys></Track></Track>"#);
+        let curves = [track("X", 1.0, 11.0), track("Y", 2.0, 4.0), track("Z", 3.0, 8.0),
+            track("Yaw", -90.0, -80.0), track("Gas", 0.0, 1.0), track("Steering", 0.0, -0.5)].join("");
+        let xml = format!(r#"<CCinematicSequence><CSequenceTrackGroup><CGenericTrackGroup hidUniqueId="9">
+            <CVehicleMovementTrack><Curves>{curves}</Curves></CVehicleMovementTrack>
+            <CVehicleMovementTrack bEnabled="0"><Curves>{curves}</Curves></CVehicleMovementTrack>
+            </CGenericTrackGroup><CCharacterTrackGroup hidUniqueId="10">
+            <CAnimationClip timeStartTime="0" timeDuration="2" sAnimationSource="x.mab" bEnableAnchor="1"/>
+            </CCharacterTrackGroup></CSequenceTrackGroup></CCinematicSequence>"#);
+        let seq = parse(&xml).unwrap();
+        assert_eq!(seq.duration, 2.0);
+        assert_eq!(seq.groups[0].clips.len(), 1);
+        let ClipKind::VehicleMovement { keys } = &seq.groups[0].clips[0].kind else { panic!("dropped vehicle movement") };
+        assert_eq!(keys.first().unwrap().pos, [1.0, 2.0, 3.0]);
+        assert_eq!(keys.last().unwrap().time, 1.0);
+        assert_eq!(keys.last().unwrap().pos, [11.0, 4.0, 8.0]);
+        let mid = keys.iter().find(|k| (k.time - 0.5).abs() < 1e-5).unwrap();
+        assert!((mid.pos[0] - 6.0).abs() < 1e-4);
+        assert!((mid.gas - 0.5).abs() < 1e-4);
+        assert!((mid.steering + 0.25).abs() < 1e-4);
+        assert!(matches!(seq.groups[1].clips[0].kind, ClipKind::Animation { anchored: true, .. }));
+        assert_eq!(Sequence::from_text(&seq.to_text()).unwrap(), seq);
+    }
+
+    #[test]
+    fn bezier_time_channel_is_solved_and_edges_are_held() {
+        let keys = [BezierKey { time: 0.0, value: 0.0, incoming: [0.0, 0.0], outgoing: [0.0, 0.0] },
+            BezierKey { time: 1.0, value: 1.0, incoming: [0.0, 1.0], outgoing: [1.0, 1.0] }];
+        // x(u)=u^3; y(u)=3u^2-2u^3. x=.125 therefore u=.5, y=.5.
+        assert!((sample_bezier(&keys, 0.125).unwrap() - 0.5).abs() < 1e-5);
+        assert_eq!(sample_bezier(&keys, -1.0), Some(0.0));
+        assert_eq!(sample_bezier(&keys, 2.0), Some(1.0));
+        assert_eq!(sample_bezier(&[], 0.0), None);
+    }
+
+    #[test]
+    fn old_animation_cache_defaults_to_no_anchor() {
+        let seq = Sequence::from_text("seq\t1\t0\t0\t1\told\ngroup\t1\tcharacter\t0\tactor\nclip\t0\t1\tanim\t0\t30\t0.3\tx.mab\n").unwrap();
+        assert!(matches!(seq.groups[0].clips[0].kind, ClipKind::Animation { anchored: false, .. }));
     }
 }

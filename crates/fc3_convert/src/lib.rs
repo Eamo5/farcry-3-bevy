@@ -1648,7 +1648,7 @@ fn convert_cinema(job: &Job) -> Result<()> {
         }
     }
     let paths: Vec<String> = paths.into_iter().collect();
-    // Sequences written before they kept facial clips are written again.
+    // Refresh older sequences that dropped vehicle movement and clip anchors.
     let refresh = !exists(job.root(), CINEMA_STAMP);
     job.run(Stage::Story, &paths, |path| {
         let rel = cinema::sequence_rel(path);
@@ -1681,11 +1681,11 @@ fn convert_cinema(job: &Job) -> Result<()> {
         }
         Some(())
     })?;
-    write_atomic(job.root(), CINEMA_STAMP, b"facial clips\n", job.ctx)
+    write_atomic(job.root(), CINEMA_STAMP, b"vehicle movement and clip anchors\n", job.ctx)
 }
 
-/// Marks the sequences as written with their facial clips.
-const CINEMA_STAMP: &str = "cinema/stamp-facial.txt";
+/// Marks the current sequence conversion schema.
+const CINEMA_STAMP: &str = "cinema/stamp-vehicle-anchors.txt";
 
 /// Packs every Domino script the file lists name, and the ones they refer to
 /// that the lists don't.

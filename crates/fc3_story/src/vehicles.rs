@@ -120,6 +120,9 @@ mod tests {
             listener.set(output, lua.load(format!("return function(self) self.{field} = (self.{field} or 0) + 1 end")).eval::<mlua::Function>().unwrap()).unwrap();
         }
         story.domino().call(&listener, "Enable").unwrap();
+        assert!(story.awaits_vehicle_entry(200));
+        assert!(story.awaits_vehicle_exit(200));
+        assert!(!story.awaits_vehicle_exit(PLAYER));
         let mut view = View::default();
         view.player_state.vehicle = Some(100); // wrong pawn must not fire
         story.update(0.0, view.clone());
@@ -147,6 +150,9 @@ mod tests {
         story.domino().call(&info, "In").unwrap();
         assert_eq!(info.get::<String>("seatType").unwrap(), "NoSeat");
         assert_eq!(info.get::<String>("vehicleType").unwrap(), "NoVehicle");
+        story.domino().call(&listener, "Disable").unwrap();
+        assert!(!story.awaits_vehicle_entry(200));
+        assert!(!story.awaits_vehicle_exit(200));
         assert_eq!(story.errors(), 0);
     }
 }
@@ -202,6 +208,10 @@ pub(crate) fn occupants(view: &View) -> HashMap<u64, Occupant> {
 impl Story {
     pub fn awaits_vehicle_entry(&self, pawn: u64) -> bool {
         self.core.borrow().listeners.values().any(|l| matches!(&l.on, Listen::Entity(p, event) if *p == pawn && event == "IsInVehicle"))
+    }
+
+    pub fn awaits_vehicle_exit(&self, pawn: u64) -> bool {
+        self.core.borrow().listeners.values().any(|l| matches!(&l.on, Listen::Entity(p, event) if *p == pawn && event == "IsOutVehicle"))
     }
 
     pub fn vehicle_rules(&self, id: u64) -> Rules {
