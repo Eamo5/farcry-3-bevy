@@ -821,6 +821,22 @@ paired-checkpoint/autopilot evidence; full B15 and uninterrupted campaign
 completion are not established. Separately, `fc3-modal-controls-final.png`
 confirms the tutorial now shows `[Enter] Continue` below its authored caption.
 
+The longer `fc3-b15-onward` repeat again passed the first physical distraction,
+then stalled at the second (confirmed in its final image). The second rock hit
+the TV-room building rather than attracting the intended field guard. The test
+had picked an unrelated trigger solely by distance. Its next iteration only
+targets trigger listeners explicitly selecting that guard, otherwise aiming
+near the guard on the player's side. `Story::trigger_selects` shares the live
+listener/group lookup used by contact filtering; the regression checks trigger
+identity, pawn identity and listener removal. All 27 story tests and the release
+build pass. The `fc3-target-filter` run exited 0; the second physical throw hit
+`[-2471.145,191.031,-3741.842]`, alerted both field guards, and restored the
+"Follow Grant" objective. Its inspected final image confirms that objective.
+The run subsequently stalled near the sewer/tunnel sequence, still in B15.
+Grant's last logged order was `StealthIdle_Grant_AfterThrowRock` (four waypoints)
+without a corresponding arrival. Both distractions are now exercised through
+physical projectiles, but companion pathing and full B15 completion remain open.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

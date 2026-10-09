@@ -1173,13 +1173,13 @@ fn run_story(
             .find(|(a, _, _)| host.story.current_action(a.id).is_some_and(|ca| host.story.awaited_interrupts().contains(&ca)))
             .map(|(a, t, _)| (a.id, t.translation))
         {
-            // Aim at the nearest enabled trigger, then use the normal rock
+            // Aim at a trigger selecting this guard, then use the normal rock
             // input and projectile. A nearby arbitrary noise cannot prove the
             // guard physically reached the mission's distraction zone.
-            let target = watched.iter().filter(|w| w.3 && w.1 == "Enter")
+            let target = watched.iter().filter(|w| w.3 && w.1 == "Enter" && host.story.trigger_selects(w.0, id))
                 .min_by(|a, b| to_bevy(a.2).distance_squared(at).total_cmp(&to_bevy(b.2).distance_squared(at)))
                 .map(|w| host.story.trigger_ground_point(w.0, |x, y| heights.height_at(to_bevy([x, y, 0.0]))).unwrap_or(w.2))
-                .map(to_bevy).unwrap_or(at + Vec3::new(3.0, 0.0, 0.0));
+                .map(to_bevy).unwrap_or(at + (t.translation - at).with_y(0.0).normalize_or_zero() * 3.0);
             info!("story autopilot: aim a rock to distract {} at {target:?}", data.name_of(id).unwrap_or("?"));
             host.used.insert((id, "distract".into()));
             if let Some(test) = rock_test.as_mut() { test.0 = Some(target); }

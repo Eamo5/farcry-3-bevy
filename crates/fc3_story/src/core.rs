@@ -435,6 +435,13 @@ impl Core {
         self.trigger_enabled.get(&id).copied().unwrap_or_else(|| self.data.entities.get(&id).is_some_and(crate::triggers::starts_enabled))
     }
 
+    /// Pawns explicitly selected by live proximity listeners.
+    pub fn selected_trigger_pawns(&self, trigger: u64) -> Vec<u64> {
+        self.listeners.values().filter(|l| matches!(&l.on, Listen::Entity(id, event) if *id == trigger && matches!(event.as_str(), "Enter" | "Leave" | "Use")))
+            .filter_map(|l| l.callback.target.get::<crate::values::Text>("colliderFilterId").ok())
+            .flat_map(|group| self.groups(&group)).collect()
+    }
+
     /// Who is inside a trigger now: what the host reports, and the player
     /// when inside its volume.
     pub fn contacts(&self, trigger: u64) -> Vec<u64> {
@@ -448,9 +455,7 @@ impl Core {
         // reach the listener's own filter, without admitting unrelated NPCs
         // or relaxing PlayerOnly mission-boundary regions.
         let selected: Vec<u64> = if entry.is_some_and(|e| e.component("CProximityTriggerComponent").is_some() && e.component("CTrigger2DComponent").is_none()) {
-            self.listeners.values().filter(|l| matches!(&l.on, Listen::Entity(id, event) if *id == trigger && matches!(event.as_str(), "Enter" | "Leave" | "Use")))
-                .filter_map(|l| l.callback.target.get::<crate::values::Text>("colliderFilterId").ok())
-                .flat_map(|group| self.groups(&group)).collect()
+            self.selected_trigger_pawns(trigger)
         } else { Vec::new() };
         let allows = |id: u64| selected.contains(&id) || entry.is_none_or(|e| crate::triggers::allows_entity(e, id));
         let mut out: Vec<u64> = self.view.contacts.get(&trigger).into_iter().flatten().copied().filter(|id| allows(*id)).collect();

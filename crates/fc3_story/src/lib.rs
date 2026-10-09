@@ -747,6 +747,11 @@ impl Story {
             .collect()
     }
 
+    /// Whether a live proximity listener explicitly selects this pawn.
+    pub fn trigger_selects(&self, trigger: u64, pawn: u64) -> bool {
+        self.core.borrow().selected_trigger_pawns(trigger).contains(&pawn)
+    }
+
     /// The triggers scripts wait on now: (trigger, event, a point inside,
     /// enabled), for tools that drive the story without a world.
     pub fn watched_triggers(&self) -> Vec<(u64, String, [f32; 3], bool)> {
@@ -1435,6 +1440,9 @@ mod tests {
         });
         // Named mission pawns still require a physical overlap. The listener
         // does not permit unrelated NPCs or affect other trigger volumes.
+        assert!(story.trigger_selects(100, 20));
+        assert!(!story.trigger_selects(100, 30));
+        assert!(!story.trigger_selects(200, 20));
         view.contacts.clear();
         view.spawned.insert(30, Live { pos: [0.0; 3], alive: true, ..Default::default() });
         story.core.borrow_mut().view = view.clone();
@@ -1445,6 +1453,7 @@ mod tests {
         view.spawned.get_mut(&20).unwrap().pos = [0.0; 3];
         story.core.borrow_mut().view = view;
         story.core.borrow_mut().listeners.remove(&999);
+        assert!(!story.trigger_selects(100, 20));
         assert!(story.core.borrow().contacts(100).is_empty());
     }
 }
