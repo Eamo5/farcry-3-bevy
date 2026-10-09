@@ -297,8 +297,17 @@ outside the authored hunting boundary caused legitimate failures, and the host
 sent a two-argument loot event while the original listener expects three
 (`item`, `section`, `id`). The driver now respects active exit regions and the
 host sends the full event; the installed-script regression exercises that
-listener rather than a simplified stand-in. `JAS_080_B20` still requires a
-successful post-fix live run before its completion can be claimed. The autopilot
+listener rather than a simplified stand-in. A 95-second post-fix live run
+(`fc3-hunting-fixed.log`/`.png` in the test temp directory) killed and skinned two
+authored boars: the original mission's checklist reached `Boar skins: 2/2`.
+It collected two green leaves, with zero mission failures or player deaths,
+but did not complete `JAS_080_B20`. Arrowroot's sandbox automatic medkit rule
+consumed the two leaves, leaving its checklist at `Green leaf: 0/2`; no blue or
+crimson leaf was collected. The next work is to remove that sandbox conversion
+and support all authored plant source families (currently eight of eighteen
+are represented; unknown names incorrectly default to arrowroot), then validate
+the complete plant objective. The original-loot-listener regression, workspace
+release tests, release builds and whitespace checks passed. The autopilot
 stands in for the tower panel, zipline use and world-map input; these aren't
 manual traversal/UI validation. These runs skipped scenes and automatically ended the
 unimplemented Grant-death gameplay; they do not establish cinematic or
