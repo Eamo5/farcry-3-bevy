@@ -205,7 +205,7 @@ pub fn classify(name: &str) -> Option<Classified> {
     } else if n.starts_with("pickups/loot/") {
         PickupKind::Loot
     } else if n.starts_with("pickups/plants/") {
-        PickupKind::Plant(crate::syringes::Plant::from_name(&n))
+        PickupKind::Plant(crate::syringes::Plant::from_name(&n)?)
     } else if n.starts_with("pickups/collectibles/") {
         let c = &n["pickups/collectibles/".len()..];
         if c.starts_with("relic") {
@@ -216,7 +216,7 @@ pub fn classify(name: &str) -> Option<Classified> {
             PickupKind::MemoryCard
         } else {
             // Medicinal plants.
-            PickupKind::Plant(crate::syringes::Plant::from_name(&n))
+            PickupKind::Plant(crate::syringes::Plant::from_name(&n)?)
         }
     } else {
         return None;
@@ -345,6 +345,7 @@ fn interact(
     mut players: Query<(&Transform, &Player, &mut Inventory, &Health, &mut PlayerStats)>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     (busy, mut gestures, mut xp, mut looted, scripted): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>, MessageWriter<crate::progression::XpGain>, MessageWriter<crate::progression::ItemLooted>, Res<crate::story::ScriptedPlayer>),
+    crafting: Option<Res<crate::crafting::CraftCatalog>>,
 ) {
     let Ok((pt, player, mut inv, health, mut stats)) = players.single_mut() else { return };
     if health.dead || player.noclip || player.driving || busy.busy() {
@@ -371,6 +372,11 @@ fn interact(
     }
     let Some((_, e)) = best else { return };
     let Ok((_, p, _)) = pickups.get(e) else { return };
+    if matches!(p.kind, PickupKind::Plant(_)) && crate::crafting::loot_count(&progress) >= crafting.as_ref().map_or(16, |c| c.loot_capacity(&progress)) {
+        hud.prompt = Some("Rucksack full - use or sell ingredients".into());
+        if actions.just_pressed(crate::controls::Action::Interact) { actions.consume(crate::controls::Action::Interact); }
+        return;
+    }
     hud.prompt = Some(format!("{}  pick up {}", actions.label(crate::controls::Action::Interact, &settings), p.kind.label()));
     if !actions.just_pressed(crate::controls::Action::Interact) {
         return;
@@ -495,19 +501,10 @@ fn apply_reward(
             }
         }
         PickupKind::Plant(plant) => {
-            use crate::syringes::Plant;
             let _ = &world;
             progress.plants[plant.index()] += 1;
             let have = progress.plants[plant.index()];
-            if plant == Plant::Arrowroot && have >= 2 && stats.medkits < medkit_cap {
-                progress.plants[plant.index()] -= 2;
-                stats.medkits += 1;
-                "Arrowroot: made a medkit".into()
-            } else if plant == Plant::Arrowroot {
-                format!("Arrowroot ({have}/2 for a medkit)")
-            } else {
-                format!("{} ({have}) - mix syringes in the journal", plant.name())
-            }
+            format!("{} ({have}) - craft in the journal", plant.name())
         }
     }
 }
@@ -588,5 +585,15 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<Progress>().plants[Plant::ScrewPine.index()], 1);
         assert_eq!(cursor.read(app.world().resource::<Messages<ItemLooted>>()).count(), 0);
+        // Gather the tutorial's two green leaves even with room for medkits.
+        // Neither a reward nor its inventory snapshot may auto-consume them.
+        for id in [43, 44] {
+            app.world_mut().spawn((Pickup { kind: PickupKind::Plant(Plant::Arrowroot), id, visual: None }, GlobalTransform::from_xyz(0.0, 0.0, -1.0)));
+            app.world_mut().resource_mut::<ActionState>().press(Action::Interact);
+            app.update();
+        }
+        assert_eq!(app.world().resource::<Progress>().plants[Plant::Arrowroot.index()], 2);
+        assert_eq!(app.world().get::<PlayerStats>(player).unwrap().medkits, 0);
+        assert_eq!(cursor.read(app.world().resource::<Messages<ItemLooted>>()).count(), 2);
     }
 }

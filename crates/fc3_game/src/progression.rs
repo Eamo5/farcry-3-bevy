@@ -29,6 +29,8 @@ impl Plugin for ProgressionPlugin {
             .init_resource::<Shops>()
             .init_resource::<ShopCatalog>()
             .init_resource::<LootCatalog>()
+            .init_resource::<crate::crafting::CraftCatalog>()
+            .add_message::<crate::crafting::ItemCrafted>()
             .init_resource::<ShopOverride>()
             .add_systems(OnExit(GameState::Loading), (load_shop_catalog, load_loot_catalog))
             .add_systems(Update, find_shops)
@@ -251,6 +253,8 @@ pub struct Progress {
     pub money: u32,
     pub skins: HashMap<Animal, u32>,
     pub upgrades: HashMap<String, u8>,
+    /// Authored gear recipe identities; stored separately from legacy upgrades.
+    pub recipes: HashSet<String>,
     pub outposts: u32,
     /// Radio towers activated (indices into the world's tower list).
     pub towers: std::collections::BTreeSet<u32>,
@@ -259,7 +263,7 @@ pub struct Progress {
     pub letters: u32,
     pub cards: u32,
     /// Plants gathered and syringes mixed (see `syringes`).
-    pub plants: [u32; 8],
+    pub plants: [u32; crate::syringes::Plant::ALL.len()],
     pub syringes: [u32; 5],
 }
 
@@ -273,12 +277,13 @@ impl Default for Progress {
             money: 150,
             skins: HashMap::new(),
             upgrades: HashMap::new(),
+            recipes: HashSet::new(),
             outposts: 0,
             towers: Default::default(),
             relics: 0,
             letters: 0,
             cards: 0,
-            plants: [0; 8],
+            plants: [0; crate::syringes::Plant::ALL.len()],
             syringes: [0; 5],
         }
     }
@@ -317,6 +322,9 @@ impl Progress {
         for (k, v) in ups {
             s += &format!("upgrade {k} {v}\n");
         }
+        let mut recipes: Vec<&String> = self.recipes.iter().collect();
+        recipes.sort();
+        for recipe in recipes { s += &format!("recipe {recipe}\n"); }
         for a in Animal::ALL {
             if let Some(n) = self.skins.get(&a).filter(|n| **n > 0) {
                 s += &format!("skin {} {n}\n", a.id());
@@ -346,6 +354,7 @@ impl Progress {
             "skill" => {
                 self.skills.insert(rest.trim().to_string());
             }
+            "recipe" => { self.recipes.insert(rest.trim().to_string()); }
             "upgrade" => {
                 if let (Some(k), Some(v)) = (it.next(), it.next().and_then(|v| v.parse().ok())) {
                     self.upgrades.insert(k.to_string(), v);
@@ -369,6 +378,7 @@ impl Progress {
             }
             "plants" | "syringes" => {
                 let into: &mut [u32] = if key == "plants" { &mut self.plants } else { &mut self.syringes };
+                into.fill(0);
                 for (slot, v) in into.iter_mut().zip(it) {
                     *slot = v.parse().unwrap_or(0);
                 }
@@ -526,11 +536,12 @@ impl LootCatalog {
     }
 }
 
-fn load_loot_catalog(info: Res<crate::data::CacheInfo>, mut catalog: ResMut<LootCatalog>) {
+fn load_loot_catalog(info: Res<crate::data::CacheInfo>, mut catalog: ResMut<LootCatalog>, mut crafting: ResMut<crate::crafting::CraftCatalog>) {
     match std::fs::read_to_string(info.root.join(fc3_formats::progression::RECIPES_REL))
         .map_err(anyhow::Error::from).and_then(|text| fc3_formats::progression::Crafting::from_text(&text)) {
         Ok(metadata) => {
             *catalog = LootCatalog::from_metadata(&metadata);
+            *crafting = crate::crafting::CraftCatalog::from_metadata(&metadata);
             info!("loot: {} supported ingredient identities", catalog.0.len());
         }
         Err(e) => warn!("loot: cannot read ingredient catalog: {e:#}"),
@@ -611,6 +622,7 @@ struct JournalRoot;
 enum JournalButton {
     Skill(usize),
     Craft(usize),
+    Authored(usize),
     /// Mix a syringe, or inject one.
     Syringe(usize),
     Inject(usize),
@@ -626,6 +638,7 @@ enum JournalField {
     Skill(usize),
     SkillStatus(usize),
     Craft(usize),
+    Authored(usize),
     Skins,
     Syringe(usize),
     Plants,
@@ -710,6 +723,13 @@ fn setup_journal(mut commands: Commands) {
     // Crafting and skins.
     let craft = commands.spawn((Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(6.0), ..default() }, ChildOf(columns))).id();
     commands.spawn((Text::new("CRAFTING"), font(24.0), TextColor(ACCENT), ChildOf(craft)));
+    for i in 0..crate::crafting::TUTORIAL_RECIPES.len() {
+        let b = commands.spawn((Button,
+            Node { width: Val::Px(440.0), min_height: Val::Px(46.0), align_items: AlignItems::Center,
+                padding: UiRect::horizontal(Val::Px(10.0)), flex_shrink: 0.0, ..default() },
+            BackgroundColor(IDLE), JournalButton::Authored(i), ChildOf(craft))).id();
+        commands.spawn((Text::new(""), font(15.0), TextColor(TEXT), JournalText(JournalField::Authored(i)), ChildOf(b)));
+    }
     for (i, _) in UPGRADES.iter().enumerate() {
         let b = commands
             .spawn((
@@ -833,6 +853,11 @@ fn journal_buttons(
     mut hud: ResMut<HudState>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     mut boosts: ResMut<crate::syringes::Boosts>,
+    crafting: Res<crate::crafting::CraftCatalog>,
+    loot: Res<LootCatalog>,
+    perks: Res<Perks>,
+    mut players: Query<&mut PlayerStats, With<Player>>,
+    mut crafted: MessageWriter<crate::crafting::ItemCrafted>,
 ) {
     if *state.get() != GameState::Journal {
         return;
@@ -842,6 +867,15 @@ fn journal_buttons(
             Interaction::Pressed => {
                 sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 0.7 });
                 match *kind {
+                    JournalButton::Authored(i) => {
+                        if let Ok(mut stats) = players.single_mut() {
+                            let id = crate::crafting::TUTORIAL_RECIPES[i];
+                            if let Some(event) = crafting.craft(&mut progress, &mut stats, perks.medkit_cap, &loot, id) {
+                                if let Some(recipe) = crafting.recipe(id) { hud.notify(format!("Crafted {}", recipe.name)); }
+                                crafted.write(event);
+                            }
+                        }
+                    }
                     JournalButton::Skill(i) => {
                         let s = &SKILLS[i];
                         if can_learn(&progress, s) {
@@ -887,13 +921,27 @@ fn refresh_journal(
     progress: Res<Progress>,
     players: Query<&PlayerStats>,
     mut texts: Query<(&JournalText, &mut Text, &mut TextColor)>,
+    crafting: Res<crate::crafting::CraftCatalog>,
+    loot: Res<LootCatalog>,
+    perks: Res<Perks>,
 ) {
-    if *state.get() != GameState::Journal || !(progress.is_changed() || state.is_changed()) {
+    if *state.get() != GameState::Journal {
         return;
     }
     let kills = players.single().map(|s| s.kills).unwrap_or(0);
     for (field, mut t, mut c) in &mut texts {
         match field.0 {
+            JournalField::Authored(i) => {
+                let id = crate::crafting::TUTORIAL_RECIPES[i];
+                if let Some(recipe) = crafting.recipe(id) {
+                    let available = players.single().is_ok_and(|stats| crafting.can_craft(&progress, stats, perks.medkit_cap, &loot, id));
+                    let status = if progress.recipes.contains(id) { "crafted" } else if !crafting.available(&progress, recipe) { "locked" } else { "craft" };
+                    t.0 = format!("{} - {status}\nneeds {}", recipe.name, crafting.ingredient_text(recipe));
+                    c.0 = if available { TEXT } else { Color::srgba(0.8, 0.8, 0.8, 0.55) };
+                } else {
+                    t.0 = "Crafting data unavailable".into();
+                }
+            }
             JournalField::Header => {
                 let (lo, hi) = (xp_for_level(progress.level), xp_for_level(progress.level + 1));
                 t.0 = format!(
@@ -1547,6 +1595,45 @@ pub(crate) mod loot_tests {
             "source\tentity\tPickups/Plants/TorchGinger_01\tTorchGinger\t12:100\n",
             "source\tentity\tPickups/Plants/StarRhododendron_01\tStarRhododendron\t12:100\n",
         )).unwrap()
+    }
+
+    #[test]
+    fn plant_slots_preserve_old_save_counts_and_round_trip_added_species() {
+        let mut p = Progress::default();
+        p.plants.fill(99);
+        assert!(p.read_line("plants", "1 2 3 4 5 6 7 8"));
+        for (i, plant) in Plant::ALL.into_iter().take(8).enumerate() {
+            assert_eq!(p.plants[plant.index()], i as u32 + 1);
+        }
+        assert!(p.plants[8..].iter().all(|n| *n == 0));
+        p.plants[Plant::GoodLuckPlant.index()] = 3;
+        p.plants[Plant::SacredLotus.index()] = 2;
+        let mut loaded = Progress::default();
+        for line in p.to_lines().lines() {
+            let (key, rest) = line.split_once(' ').unwrap();
+            assert!(loaded.read_line(key, rest));
+        }
+        assert_eq!(loaded, p);
+    }
+
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
+    fn installed_plant_sources_map_all_eighteen_species_to_their_authored_leaves() {
+        let cache = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let metadata = fc3_formats::progression::Crafting::from_text(&std::fs::read_to_string(cache.join("progression/recipes.txt")).unwrap()).unwrap();
+        let catalog = LootCatalog::from_metadata(&metadata);
+        let mut p = Progress::default();
+        for (species, id) in [
+            (Plant::Arrowroot, 104580), (Plant::Aloe, 104580), (Plant::ScrewPine, 104580), (Plant::GoblinsGold, 104580),
+            (Plant::TorchGinger, 104581), (Plant::StarRhododendron, 104581), (Plant::GoldenBeehive, 104581), (Plant::GoodLuckPlant, 104581),
+            (Plant::StoutKelp, 142502), (Plant::BreezeWakame, 142502), (Plant::RedAlgae, 142502), (Plant::SacredLotus, 142502),
+            (Plant::YellowSage, 104579), (Plant::Heliconia, 104579), (Plant::Hibiscus, 104579), (Plant::Palani, 104579),
+            (Plant::GoatsFoot, 142503), (Plant::Tiare, 142503),
+        ] {
+            assert_eq!(catalog.item(LootKind::Plant(species)).unwrap().name_id, id, "{species:?}");
+            p.plants[species.index()] = 1;
+        }
+        assert_eq!(catalog.quantities(&p), HashMap::from([(104580, 4), (104581, 4), (142502, 4), (104579, 4), (142503, 2)]));
     }
 
     #[test]

@@ -9,6 +9,7 @@ mod cinema;
 mod clouds;
 mod combat;
 mod controls;
+mod crafting;
 mod data;
 mod dof;
 mod explosives;

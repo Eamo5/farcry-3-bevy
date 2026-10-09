@@ -1,7 +1,7 @@
 //! Plants and syringes, and holding your breath.
 //!
-//! Gathered plants go into the satchel (`Progress::plants`). Arrowroot turns
-//! into medkits by itself; the others are mixed into syringes in the journal
+//! Gathered plants stay in the satchel (`Progress::plants`) until explicitly
+//! consumed by crafting; syringes are mixed in the journal
 //! (or straight from the satchel): Torch Ginger for the hunter's syringe that
 //! marks nearby animals, Star Rhododendron for the fighter's that halves
 //! damage taken, Yellow Sage for the explorer's faster sprint, Stout Kelp for
@@ -39,10 +39,21 @@ pub enum Plant {
     ScrewPine,
     GoblinsGold,
     BreezeWakame,
+    Aloe,
+    GoatsFoot,
+    GoldenBeehive,
+    GoodLuckPlant,
+    Heliconia,
+    Hibiscus,
+    Palani,
+    RedAlgae,
+    SacredLotus,
+    Tiare,
 }
 
 impl Plant {
-    pub const ALL: [Plant; 8] = [
+    // Append new species: the first eight slots retain old save-file identities.
+    pub const ALL: [Plant; 18] = [
         Plant::Arrowroot,
         Plant::TorchGinger,
         Plant::StarRhododendron,
@@ -51,6 +62,16 @@ impl Plant {
         Plant::ScrewPine,
         Plant::GoblinsGold,
         Plant::BreezeWakame,
+        Plant::Aloe,
+        Plant::GoatsFoot,
+        Plant::GoldenBeehive,
+        Plant::GoodLuckPlant,
+        Plant::Heliconia,
+        Plant::Hibiscus,
+        Plant::Palani,
+        Plant::RedAlgae,
+        Plant::SacredLotus,
+        Plant::Tiare,
     ];
 
     pub fn name(self) -> &'static str {
@@ -63,14 +84,27 @@ impl Plant {
             Plant::ScrewPine => "Screw Pine",
             Plant::GoblinsGold => "Goblin's Gold",
             Plant::BreezeWakame => "Breeze Wakame",
+            Plant::Aloe => "Aloe",
+            Plant::GoatsFoot => "Goat's Foot",
+            Plant::GoldenBeehive => "Golden Beehive",
+            Plant::GoodLuckPlant => "Good Luck Plant",
+            Plant::Heliconia => "Heliconia",
+            Plant::Hibiscus => "Hibiscus",
+            Plant::Palani => "Palani",
+            Plant::RedAlgae => "Red Algae",
+            Plant::SacredLotus => "Sacred Lotus",
+            Plant::Tiare => "Tiare",
         }
     }
 
-    /// The plant a pickup's entity name stands for (anything unknown counts
-    /// as arrowroot, the common medicinal plant).
-    pub fn from_name(name: &str) -> Plant {
-        let n = name.to_ascii_lowercase();
-        Plant::ALL.into_iter().find(|p| n.contains(&p.name().to_ascii_lowercase().replace(['\'', ' '], ""))).unwrap_or(Plant::Arrowroot)
+    /// Placed source family, not a guessed leaf or a substring in a prop name.
+    /// Unknown pickups must not silently award green leaves.
+    pub fn from_name(name: &str) -> Option<Plant> {
+        let n = name.rsplit(['/', '\\']).next()?.to_ascii_lowercase();
+        Plant::ALL.into_iter().find(|p| {
+            let family = p.name().to_ascii_lowercase().replace(['\'', ' '], "");
+            n.strip_prefix(&family).is_some_and(|suffix| suffix.is_empty() || suffix.starts_with(['_', '.']))
+        })
     }
 
     pub fn index(self) -> usize {
@@ -334,10 +368,18 @@ mod tests {
 
     #[test]
     fn plants_from_pickup_names() {
-        assert_eq!(Plant::from_name("Pickups/Plants/TorchGinger_12"), Plant::TorchGinger);
-        assert_eq!(Plant::from_name("Pickups/Plants/GoblinsGold"), Plant::GoblinsGold);
-        assert_eq!(Plant::from_name("Pickups/Plants/StarRhododendron_3"), Plant::StarRhododendron);
-        assert_eq!(Plant::from_name("Pickups/Collectibles/GoodLuckPlant"), Plant::Arrowroot);
+        assert_eq!(Plant::from_name("Pickups/Plants/TorchGinger_12"), Some(Plant::TorchGinger));
+        assert_eq!(Plant::from_name("Pickups/Plants/GoblinsGold"), Some(Plant::GoblinsGold));
+        assert_eq!(Plant::from_name("Pickups/Plants/StarRhododendron_3"), Some(Plant::StarRhododendron));
+        assert_eq!(Plant::from_name("Pickups/Collectibles/GoodLuckPlant"), Some(Plant::GoodLuckPlant));
+        assert_eq!(Plant::from_name("Pickups/Plants/SacredLotus_01_JAS_080"), Some(Plant::SacredLotus));
+        for unknown in ["UnknownPlant_01", "FakeArrowroot_1", "ArrowrootDecoration", "TorchGingerPainting"] {
+            assert_eq!(Plant::from_name(unknown), None, "{unknown}");
+        }
+        for plant in Plant::ALL {
+            let name = format!("Pickups/Plants/{}_01", plant.name().replace(['\'', ' '], ""));
+            assert_eq!(Plant::from_name(&name), Some(plant));
+        }
     }
 
     #[test]

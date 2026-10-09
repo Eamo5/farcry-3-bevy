@@ -171,9 +171,21 @@ is the story's own:
   consumption and save loading change those queries without inventing events.
   Scripts' plant/animal looting permissions gate interactions, which consume
   their input press so another interaction cannot reuse it that frame.
-  This does not yet replace the sandbox crafting recipes or automatic medkits.
+   All eighteen authored plant families are recognized; unknown names no longer
+   become Arrowroot. Existing saves retain the first eight species' slot indices.
+   Leaves stay carried until explicitly consumed, rather than auto-making medkits.
+   Mission-layer collectibles now use the same interaction path as world pickups,
+   excluding colocated minimap markers and already-collected ids on restreaming.
   The host also shows each authored dynamic checklist row, formatting its
-  localized collection counter and independently updating or hiding it.
+   localized collection counter and independently updating or hiding it.
+* **Authored crafting**: the journal offers Medicine and Simple Rucksack using
+  the installed recipe's ingredients, completed-mission unlock and event identity.
+  Medicine consumes one green leaf from any matching species; the rucksack
+  consumes two boar hides and applies the authored +16 loot-capacity modifier.
+  Capacity and unlock checks happen before any ingredient changes. Crafted gear
+  persists in saves; crafting events survive journal frames and are delivered once
+  as `DominoEvent_CraftRecipe(kind, sName)`. Other gear and syringe recipes still
+  use legacy rules; the original forced crafting tutorial/menu flow remains pending.
 * **Story wildlife**: supported normal animals retain their authored graphic
   kit and mission id while using the wildlife species' clips, behavior, health
   and death/skinning path. Their feet retain the story host's placement offset.
@@ -303,11 +315,24 @@ authored boars: the original mission's checklist reached `Boar skins: 2/2`.
 It collected two green leaves, with zero mission failures or player deaths,
 but did not complete `JAS_080_B20`. Arrowroot's sandbox automatic medkit rule
 consumed the two leaves, leaving its checklist at `Green leaf: 0/2`; no blue or
-crimson leaf was collected. The next work is to remove that sandbox conversion
-and support all authored plant source families (currently eight of eighteen
-are represented; unknown names incorrectly default to arrowroot), then validate
-the complete plant objective. The original-loot-listener regression, workspace
-release tests, release builds and whitespace checks passed. The autopilot
+crimson leaf was collected. That sandbox conversion has now been removed, and
+all eighteen authored plant families preserve their ingredient identities.
+Follow-up runs exposed a separate host omission: mission-layer plants had visuals
+but no interactable pickup components. The layer streamer now creates those
+pickups, excludes their colocated minimap markers and respects collected ids.
+The post-fix `fc3-mission-plants.log` run collected two boar hides, two green
+leaves, one crimson leaf and one blue leaf through the ordinary transactions,
+and completed `JAS_080_B20` in about ten seconds. It reached the fast-travel-to-
+Amanaki objective, then suffered a melee death and reloaded that next checkpoint;
+this is not a death-free campaign run. Medicine and Simple Rucksack now have
+authored crafting transactions, with atomic ingredient/unlock/capacity checks,
+saved gear identities and the rucksack's authored 16-to-32 ingredient capacity.
+Workspace release tests, game/tool/converter release builds, whitespace checks
+and all five installed-data/script regressions passed (plant mapping, actual
+layer collectible/marker identities, tutorial recipe costs/capacity, original
+loot listener and original crafting listener). The forced crafting tutorial,
+menu page/exit events, baseline inventory and remaining legacy recipes still
+need integration and live validation. The autopilot
 stands in for the tower panel, zipline use and world-map input; these aren't
 manual traversal/UI validation. These runs skipped scenes and automatically ended the
 unimplemented Grant-death gameplay; they do not establish cinematic or
@@ -321,7 +346,9 @@ transactions, the shop button path, purchase delivery across paused frames,
 authored tower-freebie thresholds, player-only mission-boundary contacts,
 authored loot-source identities, combined leaf quantities, skinning/gathering
 permissions, exactly-once loot delivery after paused frames, normal story-animal
-family matching, and story-owned boar death/skinning/cinematic control.
+family matching, story-owned boar death/skinning/cinematic control, eighteen-
+species save compatibility, authored Medicine/Rucksack transactions and
+exactly-once crafting-event delivery after journal frames.
 Run `cargo test --locked --release --workspace`; the
 release test profile also avoids the Windows linker PDB-size limit encountered
 when this full Bevy dependency graph is linked with development debug symbols.

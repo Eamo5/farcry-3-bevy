@@ -442,6 +442,8 @@ mod tests {
                 p.skills.insert("tough_skin".into());
                 p.upgrades.insert("wallet".into(), 1);
                 p.skins.insert(crate::progression::Animal::Boar, 3);
+                p.recipes.insert(crate::crafting::RUCKSACK.into());
+                p.plants[crate::syringes::Plant::SacredLotus.index()] = 2;
                 p
             },
         };

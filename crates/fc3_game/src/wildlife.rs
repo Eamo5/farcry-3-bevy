@@ -1053,6 +1053,7 @@ fn skin_animals(
     mut hud: ResMut<crate::hud::HudState>,
     mut looted: MessageWriter<crate::progression::ItemLooted>,
     (busy, mut gestures, scripted): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>, Res<crate::story::ScriptedPlayer>),
+    crafting: Option<Res<crate::crafting::CraftCatalog>>,
 ) {
     let Ok((pt, h)) = players.single() else { return };
     if h.dead || hud.prompt.is_some() || busy.busy() || !scripted.animal_looting {
@@ -1066,6 +1067,11 @@ fn skin_animals(
         return;
     };
     let animal = SPECIES[c.species].animal;
+    if crate::crafting::loot_count(&progress) >= crafting.as_ref().map_or(16, |c| c.loot_capacity(&progress)) {
+        hud.prompt = Some("Rucksack full - use or sell ingredients".into());
+        if actions.just_pressed(crate::controls::Action::Interact) { actions.consume(crate::controls::Action::Interact); }
+        return;
+    }
     hud.prompt = Some(format!("{}  skin {}", actions.label(crate::controls::Action::Interact, &settings), animal.name().to_lowercase()));
     if actions.just_pressed(crate::controls::Action::Interact) {
         *progress.skins.entry(animal).or_insert(0) += 1;

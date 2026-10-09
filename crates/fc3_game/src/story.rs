@@ -35,6 +35,7 @@ impl Plugin for StoryPlugin {
             .init_resource::<EntityPlacements>()
             .init_resource::<StoryPurchases>()
             .init_resource::<StoryLoot>()
+            .init_resource::<StoryCrafts>()
             .add_systems(Update, hide_entities.after(StorySet))
             .add_systems(Update, apply_entity_poses.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, apply_entity_physics.after(StorySet).in_set(EntityPosesSet))
@@ -44,6 +45,7 @@ impl Plugin for StoryPlugin {
             .add_systems(PreUpdate, autopilot_loot.after(story_interactions).run_if(in_state(GameState::Playing)))
             .add_systems(PreUpdate, collect_shop_purchases)
             .add_systems(PreUpdate, collect_loot)
+            .add_systems(PreUpdate, collect_crafts)
             .add_systems(Startup, setup_story_ui)
             .add_systems(Update, fade_screen)
             .add_systems(Update, start_story.after(crate::save::continue_game).run_if(in_state(GameState::Playing)))
@@ -210,6 +212,15 @@ fn collect_loot(
 }
 
 /// The running story (its Lua state lives on the main thread).
+#[derive(Resource, Default)]
+struct StoryCrafts(Vec<crate::crafting::ItemCrafted>);
+
+fn collect_crafts(host: Option<NonSend<StoryHost>>, mut crafted: MessageReader<crate::crafting::ItemCrafted>, mut pending: ResMut<StoryCrafts>) {
+    if host.is_some() { pending.0.extend(crafted.read().cloned()); }
+    else { crafted.clear(); pending.0.clear(); }
+}
+
+/// The running story (its Lua state lives on the main thread).
 pub struct StoryHost {
     pub story: Story,
     /// Host work due later: (time, what).
@@ -239,6 +250,12 @@ pub struct StoryHost {
 }
 
 impl StoryHost {
+    fn forward_crafts(&mut self, crafts: &mut StoryCrafts) {
+        for crafted in crafts.0.drain(..) {
+            self.story.entity_event(fc3_story::PLAYER, "DominoEvent_CraftRecipe",
+                vec![Arg::Num(crafted.kind as f64), Arg::Str(crafted.label)]);
+        }
+    }
     /// Called after updating the story's view, so loot callbacks querying
     /// quantities see the items just collected, not the preceding frame.
     fn forward_loot(&mut self, loot: &mut StoryLoot, catalog: &crate::progression::LootCatalog) {
@@ -712,7 +729,7 @@ fn run_story(
         Res<crate::terrain::Heightfield>,
         ResMut<crate::faces::Voices>,
     ),
-    (info, slot, fov, mut bought, mut towers, ways, mut looted, loot_catalog): (
+    (info, slot, fov, mut bought, mut towers, ways, mut looted, loot_catalog, mut crafted, mut crafting): (
         Res<CacheInfo>,
         Res<crate::save::SaveSlot>,
         Res<crate::settings::Settings>,
@@ -721,6 +738,8 @@ fn run_story(
         Res<crate::traversal::Ways>,
         ResMut<StoryLoot>,
         Res<crate::progression::LootCatalog>,
+        ResMut<StoryCrafts>,
+        ResMut<crate::crafting::CraftCatalog>,
     ),
     (story_actors, mut commands_out, mut hidden, tagged): (
         Query<Entity, With<crate::story_actors::StoryActor>>, Commands, ResMut<HiddenEntities>,
@@ -909,6 +928,9 @@ fn run_story(
     host.forward_purchases(&mut bought);
     let mut commands = host.story.update(dt, view);
     host.forward_loot(&mut looted, &loot_catalog);
+    host.forward_crafts(&mut crafted);
+    crafting.completed_missions = host.story.missions().into_iter().filter(|m| m.1 == "Completed")
+        .map(|m| m.0.to_ascii_lowercase()).collect();
     commands.extend(host.story.take_commands());
     ui.timers = host.story.timers();
     let data = host.story.data();
@@ -1794,6 +1816,7 @@ fn autopilot_loot(
     busy: Res<crate::fp::HandsBusy>,
     scripted: Res<ScriptedPlayer>,
     catalog: Res<crate::progression::LootCatalog>,
+    progress: Res<crate::progression::Progress>,
     heights: Res<crate::terrain::Heightfield>,
     mut players: Query<(&mut Transform, &mut Player, &crate::combat::Health, &crate::weapons::Inventory)>,
     animals: Query<(Entity, &Transform, &crate::wildlife::WildAnimal, &crate::combat::Health, Option<&crate::wildlife::Carcass>, Option<&crate::story_actors::StoryActor>), Without<Player>>,
@@ -1809,9 +1832,24 @@ fn autopilot_loot(
     if host.reload_at.is_some() { return }
     let wanted = host.story.watched_loot_filters();
     if wanted.is_empty() { *last = None; return }
-    let wants = |kind| catalog.item(kind).is_some_and(|i| wanted.contains(&i.name_id));
     let regions = host.story.watched_exit_regions();
     let inside = |at: Vec3| regions.iter().all(|r| r.contains(to_dunia(at)));
+    // A persistent listener need not disable after its checklist is satisfied.
+    // Balance actual carried ingredients instead of hunting every boar before
+    // ever considering a leaf. This changes target choice, not mission state.
+    let available = animals.iter().filter(|(_, t, _, h, carcass, actor)| {
+        scripted.animal_looting && inside(t.translation) && actor.is_none_or(|a| !a.script_driven())
+            && (!h.dead || carcass.is_some_and(|c| c.can_skin()))
+    }).filter_map(|(_, _, a, _, _, _)| catalog.item(crate::progression::LootKind::Skin(a.animal())).map(|i| i.name_id))
+        .chain(plants.iter().filter_map(|(p, t)| {
+            let crate::pickups::PickupKind::Plant(plant) = p.kind else { return None };
+            if !scripted.plant_looting || !inside(t.translation()) { return None }
+            catalog.item(crate::progression::LootKind::Plant(plant)).map(|i| i.name_id)
+        }));
+    let quantities = catalog.quantities(&progress);
+    let chosen = available.filter(|id| wanted.contains(id))
+        .min_by_key(|id| (quantities.get(id).copied().unwrap_or(0), *id));
+    let wants = |kind| catalog.item(kind).is_some_and(|i| Some(i.name_id) == chosen);
     // Take existing carcasses before shooting another animal. Script-driven
     // animals remain under their action/scene's ownership.
     let target = animals.iter().filter(|(_, at, animal, h, carcass, actor)| {
@@ -1863,6 +1901,62 @@ mod tests {
     use super::*;
     use crate::controls::{Action, ActionState, Binding};
     use crate::settings::Settings;
+
+    #[test]
+    fn crafted_items_survive_journal_frames_and_reach_the_story_once() {
+        use crate::crafting::ItemCrafted;
+        let pack = fc3_formats::scripts::ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap();
+        let story = Story::new(pack, fc3_story::data::StoryData::default()).unwrap();
+        story.domino().lua().load(r#"
+            crafts = { count = 0 }
+            crafts._type = { Got = function(self, kind, name)
+                assert(kind == 3 and name == "Medkit small")
+                self.count = self.count + 1
+            end }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("1", crafts, "Got", "DominoEvent_CraftRecipe")
+        "#).exec().unwrap();
+        fn forward(mut host: NonSendMut<StoryHost>, mut pending: ResMut<StoryCrafts>) { host.forward_crafts(&mut pending); }
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).insert_resource(State::new(GameState::Journal))
+            .insert_non_send(StoryHost::new(story, None)).init_resource::<StoryCrafts>()
+            .add_message::<ItemCrafted>().add_systems(PreUpdate, collect_crafts)
+            .add_systems(Update, forward.run_if(in_state(GameState::Playing)));
+        app.world_mut().write_message(ItemCrafted { kind: 3, label: "Medkit small".into() });
+        for _ in 0..8 { app.update(); }
+        assert_eq!(app.world().resource::<StoryCrafts>().0.len(), 1);
+        let count = |app: &App| app.world().non_send::<StoryHost>().story.domino().lua().globals()
+            .get::<mlua::Table>("crafts").unwrap().get::<u32>("count").unwrap();
+        assert_eq!(count(&app), 0);
+        app.insert_resource(State::new(GameState::Playing));
+        for _ in 0..4 { app.update(); }
+        assert_eq!(count(&app), 1);
+        assert!(app.world().resource::<StoryCrafts>().0.is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
+    fn installed_crafting_listener_receives_authored_type_and_recipe_name() {
+        let cache = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let pack = fc3_formats::scripts::ScriptPack::from_bytes(&std::fs::read(cache.join(fc3_formats::scripts::DOMINO_PACK_REL)).unwrap()).unwrap();
+        let story = Story::new(pack, fc3_story::data::StoryData::default()).unwrap();
+        let listener = story.domino().create("Domino/System/Player/CraftingListener.lua").unwrap();
+        let lua = story.domino().lua();
+        for output in ["Enabled", "Disabled"] {
+            listener.set(output, lua.globals().get::<mlua::Function>("DummyFunction").unwrap()).unwrap();
+        }
+        listener.set("typeFilter", 3).unwrap();
+        listener.set("nameFilter", "Medkit small").unwrap();
+        listener.set("OnCrafted", lua.load("return function(self) self.received = (self.received or 0) + 1 end")
+            .eval::<mlua::Function>().unwrap()).unwrap();
+        story.domino().call(&listener, "Enable").unwrap();
+        let mut host = StoryHost::new(story, None);
+        let mut pending = StoryCrafts(vec![crate::crafting::ItemCrafted { kind: 3, label: "Medkit small".into() }]);
+        host.forward_crafts(&mut pending);
+        assert_eq!(listener.get::<u32>("received").unwrap(), 1);
+        host.forward_crafts(&mut pending);
+        assert_eq!(listener.get::<u32>("received").unwrap(), 1);
+        assert_eq!(host.story.errors(), 0);
+    }
 
     #[test]
     #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
