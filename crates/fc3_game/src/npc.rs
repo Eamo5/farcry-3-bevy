@@ -43,6 +43,7 @@ impl Plugin for NpcPlugin {
                     .chain(),
             )
             .add_systems(Update, (npc_test_spawn, npc_test_pose, npc_test_log, npc_test_stealth, kill_test, melee_test).after(sink_corpses))
+            .add_systems(PreUpdate, outpost_fire_test.after(crate::controls::update_actions).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(PostUpdate, track_heads.after(TransformSystems::Propagate));
     }
 }
@@ -2271,6 +2272,78 @@ fn npc_test_spawn(
 /// `FC3_KILL_TEST=head|body|hit` (tests, with `--npc-test idle`): two seconds
 /// after the enemy appears, shoots it from the player's position (`hit`:
 /// a wound, not a kill), taking `FC3_TD_SHOT` screenshots after.
+/// Opt-in combat smoke: aim and press ordinary weapon controls. No damage,
+/// ammunition, kills or mission events are injected.
+fn outpost_fire_test(
+    host: Option<NonSend<crate::story::StoryHost>>,
+    cinema: Res<crate::cinema::Cinema>,
+    time: Res<Time>,
+    spatial: SpatialQuery,
+    nav: Res<crate::nav::NavMesh>,
+    mut players: Query<(Entity, &Transform, &mut Player, &Health, &crate::weapons::Inventory), Without<Npc>>,
+    npcs: Query<(Entity, &Transform, &Npc, &Health), Without<Player>>,
+    mut actions: ResMut<crate::controls::ActionState>,
+    mut pulse: Local<f32>,
+    mut route: Local<(f32, Vec<Vec3>)>,
+) {
+    use crate::controls::Action;
+    if std::env::var("FC3_OUTPOST_FIRE_TEST").is_err() { return; }
+    let Some(host) = host else { return };
+    if !host.story.blocks().iter().any(|m| m.0 == "JAS_100_B10" && m.1 == "Running") || cinema.view.is_some() { return; }
+    let Ok((pe, at, mut player, health, inv)) = players.single_mut() else { return };
+    if health.dead || player.spawning || player.driving { return; }
+    let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
+    let filter = SpatialQueryFilter::from_excluded_entities([pe]);
+    let target = npcs.iter().filter(|(_, _, n, h)| n.faction.hostile_to_player() && !h.dead)
+        .filter_map(|(e, t, _, _)| {
+            let delta = t.translation + Vec3::Y * 0.6 - eye;
+            let distance = delta.length();
+            let dir = Dir3::new(delta).ok()?;
+            (distance < 30.0 && spatial.cast_ray(eye, dir, distance + 0.2, true, &filter).is_some_and(|h| h.entity == e))
+                .then_some((e, dir.as_vec3(), distance))
+        }).min_by(|a, b| a.2.total_cmp(&b.2));
+    let Some((target, direction, distance)) = target else {
+        route.0 -= time.delta_secs();
+        if route.0 <= 0.0 {
+            route.0 = 1.0;
+            let nearest = npcs.iter().filter(|(_, _, n, h)| n.faction.hostile_to_player() && !h.dead)
+                .min_by(|a, b| a.1.translation.distance_squared(at.translation).total_cmp(&b.1.translation.distance_squared(at.translation)));
+            route.1 = nearest.and_then(|(_, t, _, _)| nav.path(
+                at.translation - Vec3::Y * crate::player::HALF_HEIGHT,
+                t.translation - Vec3::Y * crate::player::HALF_HEIGHT)).unwrap_or_default();
+            if time.elapsed_secs() as u32 % 5 == 0 {
+                info!("outpost fire test: approach from {:.1?}, nearest {:?}, {} route nodes", at.translation,
+                    nearest.map(|(e, t, _, _)| (e, t.translation)), route.1.len());
+            }
+        }
+        while route.1.first().is_some_and(|p| (*p - at.translation).with_y(0.0).length() < 1.0) {
+            route.1.remove(0);
+        }
+        if let Some(next) = route.1.first() {
+            let direction = (*next - at.translation).with_y(0.0).normalize_or_zero();
+            player.yaw = (-direction.x).atan2(-direction.z);
+            player.pitch = 0.0;
+            actions.movement = Vec2::Y;
+        }
+        return;
+    };
+    let yaw = (-direction.x).atan2(-direction.z);
+    let pitch = direction.y.asin();
+    let aligned = (Quat::from_euler(EulerRot::YXZ, player.yaw, player.pitch, 0.0) * Vec3::NEG_Z).dot(direction) > 0.9999;
+    player.yaw = yaw;
+    player.pitch = pitch;
+    actions.press(Action::Aim);
+    *pulse -= time.delta_secs();
+    if !aligned || inv.aim_blend < 0.95 || *pulse > 0.0 || inv.reloading > 0.0 || inv.switching > 0.0 || inv.cooldown > 0.0 { return; }
+    *pulse = 0.3;
+    if inv.slot().mag == 0 {
+        if inv.slot().reserve > 0 { actions.press(Action::Reload); }
+    } else {
+        actions.press(Action::Fire);
+        info!("outpost fire test: ordinary fire at {target:?}, {distance:.1} m, ammo {}/{}", inv.slot().mag, inv.slot().reserve);
+    }
+}
+
 fn kill_test(
     args: Res<crate::Args>,
     time: Res<Time>,

@@ -979,6 +979,30 @@ Cinematics retained normal timing; following, tower traversal and zipline
 progress still used the existing automation substitutes, so this does not
 establish manual climbing or zipline parity.
 
+`fc3-dennis-hunt` advanced from JAS_060_B40 through map, hunting, fast travel
+and crafting to "Get in the truck". Its inspected image shows two medkits and
+$90. The separate `fc3-hunt-outpost` repeat enabled the existing normal-Interact
+boarding/dismount helpers, completed JAS_080 and the recorded ride/briefing,
+and reached "Eliminate all pirates in the outpost" without skipping scenes.
+An opt-in `FC3_OUTPOST_FIRE_TEST` now attempts visible-target aiming and normal
+Fire/Reload input rather than damage injection. Its first release build/run
+exited 0 but did not exercise shooting: with general autopilot disabled, the
+weapon-selection tutorial remained open (confirmed by the final screenshot).
+The combat input fixture needs to dismiss that modal and physically approach
+the outpost before this can count as shooting or mission-completion evidence.
+The fixture now accepts the tutorial, uses navigation plus ordinary movement,
+checks the running mission *block*, and shares the existing screenshot-input
+cursor exception. `fc3-outpost-input` records actual weapon ray hits on named
+JAS_100 pirates, magazine depletion and normal reload from 6/7 to 7/0. It later
+runs out of ammunition and dies; firing requests alone were not counted as
+hits. `fc3-outpost-close` waits for ADS and approaches within 30 m. It again
+fires through normal collision handling but dies to an ambient Tiger; retries
+leave that tiger close enough to kill the player again. Both runs exited 0,
+but neither completed the outpost. No ammunition or damage was injected.
+Release build, all 227 workspace tests and whitespace checks pass. Ambient
+population fidelity and retry rollback are now concrete combat-validation
+concerns, alongside the helper's limited tactics and ammunition management.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

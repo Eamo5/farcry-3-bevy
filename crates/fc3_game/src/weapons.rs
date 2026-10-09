@@ -1110,7 +1110,8 @@ fn fire(
     let scripted = script.t(&time, &args).is_some();
     // Automated screenshots deliberately don't capture the OS cursor. The
     // story driver supplies ordinary actions, not scripted infinite firing.
-    let story_input = args.automated() && std::env::var("FC3_STORY_AUTOPILOT").is_ok();
+    let story_input = args.automated() && (std::env::var("FC3_STORY_AUTOPILOT").is_ok()
+        || std::env::var("FC3_OUTPOST_FIRE_TEST").is_ok());
     let can_act =
         (captured.0 || scripted || story_input) && !health.dead && !player.noclip && !player.swimming && !player.driving && bino.blend < 0.3 && !busy.busy() && !wheel.open;
     // FC3_AIM (tests): hold aim down the sights.
@@ -1118,7 +1119,7 @@ fn fire(
     inv.aiming = (can_act || std::env::var("FC3_AIM").is_ok()) && aim_held && inv.reloading <= 0.0 && inv.def().class != WeaponClass::Melee;
     let target_aim = if inv.aiming { 1.0 } else { 0.0 };
     inv.aim_blend += (target_aim - inv.aim_blend) * (dt * 12.0).min(1.0);
-    if scripted && std::env::var("FC3_FIRE_DEBUG").is_ok() && (time.elapsed_secs() * 4.0) as u32 != ((time.elapsed_secs() - dt) * 4.0) as u32 {
+    if (scripted || story_input) && std::env::var("FC3_FIRE_DEBUG").is_ok() && (time.elapsed_secs() * 4.0) as u32 != ((time.elapsed_secs() - dt) * 4.0) as u32 {
         info!(
             "fire gate: can_act {can_act} dead {} swimming {} driving {} noclip {} captured {} bino {:.2} reloading {:.2} switching {:.2} cooldown {:.2} mag {}",
             health.dead,

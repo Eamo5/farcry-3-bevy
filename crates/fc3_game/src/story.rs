@@ -1738,7 +1738,8 @@ fn story_boxes(
     let accept = interact
         || keys.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space])
         || pad_pressed(GamepadButton::South)
-        || std::env::var("FC3_STORY_AUTOPILOT").is_ok();
+        || std::env::var("FC3_STORY_AUTOPILOT").is_ok()
+        || std::env::var("FC3_OUTPOST_FIRE_TEST").is_ok();
     let cancel = b.choice && (keys.any_just_pressed([KeyCode::Backspace, KeyCode::KeyQ]) || pad_pressed(GamepadButton::East));
     actions.clear();
     if !panels.iter().any(|(_, p)| p.0 == b.id) {
