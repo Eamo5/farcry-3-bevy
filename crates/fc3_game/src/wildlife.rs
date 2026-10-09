@@ -799,6 +799,7 @@ fn yaw_to(v: Vec3) -> f32 {
 #[allow(clippy::too_many_arguments)]
 fn animal_ai(
     time: Res<Time>,
+    cinema: Option<Res<crate::cinema::Cinema>>,
     heights: Res<Heightfield>,
     mut rng: ResMut<Rng>,
     mut noises: MessageReader<crate::npc::Noise>,
@@ -850,16 +851,18 @@ fn animal_ai(
         // The nearest person: the player counts as farther when crouched.
         let crouched = if player.crouching { 0.5 } else { 1.0 };
         let player_dist = Vec2::new(pt.translation.x - pos.x, pt.translation.z - pos.z).length();
-        let mut target = (pe, pt.translation, player_dist, if ph.dead || player.noclip { f32::MAX } else { player_dist / crouched });
+        let player_available = !ph.dead && !player.noclip && !player.spawning
+            && cinema.as_ref().is_none_or(|c| c.view.is_none());
+        let mut target = player_available.then_some((pe, pt.translation, player_dist, player_dist / crouched));
         if s.habitat != Habitat::Sea {
             for (ne, np) in &npcs {
                 let d = Vec2::new(np.x - pos.x, np.z - pos.z).length();
-                if d < target.3 {
-                    target = (*ne, *np, d, d);
+                if target.is_none_or(|t| d < t.3) {
+                    target = Some((*ne, *np, d, d));
                 }
             }
         }
-        let (target_e, target_pos, dist, _) = target;
+        let (target_e, target_pos, dist, _) = target.unwrap_or((pe, pos, f32::MAX, f32::MAX));
         let is_player = target_e == pe;
         let to_player = target_pos - pos;
         a.timer -= dt;
@@ -868,7 +871,7 @@ fn animal_ai(
         let crouched = if is_player { crouched } else { 1.0 };
         let hurt = h.current < h.max;
         // Sharks only go for someone in the water.
-        let reachable = s.habitat != Habitat::Sea || player.swimming;
+        let reachable = target.is_some() && (s.habitat != Habitat::Sea || player.swimming);
         let ph_dead = is_player && ph.dead;
         let flee = |a: &mut WildAnimal, rng: &mut Rng| {
             a.mood = Mood::Flee;
@@ -944,12 +947,15 @@ fn animal_ai(
             Mood::Attack => {
                 anim = AnimKind::Attack;
                 a.yaw = yaw_to(Vec3::new(to_player.x, 0.0, to_player.z));
-                if a.attack_cooldown <= 0.0 && dist < 2.2 && !ph_dead {
+                if a.attack_cooldown <= 0.0 && dist < 2.2 && !ph_dead && reachable {
                     a.attack_cooldown = 1.2;
                     let amount = s.damage;
                     damage.write(DamageEvent { target: target_e, amount, kind: DamageKind::Melee, source: Some(pos), instigator: Some(e), headshot: false });
                 }
-                if dist > 2.6 {
+                if !reachable || ph_dead {
+                    a.mood = Mood::Wander;
+                    a.timer = 4.0;
+                } else if dist > 2.6 {
                     a.mood = Mood::Hunt;
                 }
             }
@@ -1177,6 +1183,28 @@ mod tests {
         app.world_mut().get_mut::<StoryActor>(root).unwrap().in_scene = false;
         app.update();
         assert!(matches!(app.world().get::<WildAnimal>(root).unwrap().mood, Mood::Hunt | Mood::Attack));
+        app.init_resource::<crate::cinema::Cinema>();
+        for unavailable in 0..4 {
+            app.world_mut().get_mut::<Player>(player).unwrap().noclip = unavailable == 0;
+            app.world_mut().get_mut::<Player>(player).unwrap().spawning = unavailable == 1;
+            app.world_mut().get_mut::<Health>(player).unwrap().dead = unavailable == 2;
+            app.world_mut().resource_mut::<crate::cinema::Cinema>().view =
+                (unavailable == 3).then_some((Transform::IDENTITY, 60.0));
+            let mut animal = app.world_mut().get_mut::<WildAnimal>(root).unwrap();
+            animal.mood = Mood::Attack;
+            animal.attack_cooldown = 0.0;
+            app.world_mut().resource_mut::<Messages<DamageEvent>>().clear();
+            app.update();
+            assert!(app.world().resource::<Messages<DamageEvent>>().is_empty(), "unavailable player case {unavailable}");
+            assert!(matches!(app.world().get::<WildAnimal>(root).unwrap().mood, Mood::Wander));
+        }
+        // Leaving the cinematic restores ordinary combat, not invulnerability.
+        app.world_mut().resource_mut::<crate::cinema::Cinema>().view = None;
+        let mut animal = app.world_mut().get_mut::<WildAnimal>(root).unwrap();
+        animal.mood = Mood::Attack;
+        animal.attack_cooldown = 0.0;
+        app.update();
+        assert!(!app.world().resource::<Messages<DamageEvent>>().is_empty());
         app.world_mut().get_mut::<Health>(root).unwrap().dead = true;
         app.world_mut().write_message(Died { entity: root, killer: Some(player), kind: crate::combat::DamageKind::Bullet });
         app.update();

@@ -939,6 +939,46 @@ not evidence of physical vine climbing, uninterrupted escape play, or full
 animal AI fidelity. Wildlife currently uses largely horizontal detection and
 direct movement; installed tuning and traversability remain parity gaps.
 
+`fc3-amanaki-scenes` repeats the tattoo checkpoint for 480 seconds without scene
+skipping. The 124-second tattoo and 88-second Dennis introduction hand off to
+the 1911 store objective; the ordinary purchase transaction succeeds and the
+objective becomes "Follow Dennis out of the village". An ambient Boar then
+kills the stationary/repositioning helper. The log also records repeated melee
+hits during cinematics. Ambient population placement, cinematic targeting and
+world-state cleanup on retry need investigation; this is not proof of a manual
+village traversal failure. The shorter `fc3-tattoo-onward` run merely ended
+during the introduction and was not a confirmed stall.
+
+Visual investigation: Dennis's pale opaque lenses use authored `Dennis_glass`,
+`Blended`, material `8c0a6bfb1dca8719`. Its cached original pixel shader
+`5713b3badc48b179` outputs texture alpha multiplied by an interpolator, whereas
+our blended glue uses texture alpha alone. The authored dye is approximately
+`[0.3412;3]`; changing it by eye would not establish parity. Pair/interface and
+coverage handling need a targeted rendered comparison before changing them.
+
+Wildlife targeting had a concrete eligibility bug: an unavailable player's
+selection score was infinite, but its real horizontal distance still drove
+the attack decision when there was no competing NPC. It now excludes dead,
+spawning, noclip and cinematic-view-controlled players from selection. Existing
+attacks also stop when their target becomes unavailable. Eligible NPCs remain
+targets. The story-boar system regression covers all four exclusions and
+restored combat after the cinematic, and passes along with the release build
+and all 227 workspace unit/doc tests. `fc3-wildlife-target` is repeating the
+no-skip village sequence for live validation.
+
+Correction to the earlier interpretation: combat's "player hit" diagnostic is
+emitted when scripted invulnerability blocks the hit. Those cinematic logs
+show attack attempts, not health loss. Preventing the inappropriate target
+selection addresses the surrounding animal attacks, not a missing god-mode
+damage gate. Settlement population boundaries still need investigation.
+The completed `fc3-wildlife-target` run exited 0 with no recorded player hits
+or deaths. It completed JAS_060_B10C (village introduction), JAS_060_B20 (radio
+tower), and JAS_060_B30C, reaching JAS_060_B40 / "Talk to Dennis". The inspected
+final image shows Jason alive with the purchased pistol beside Dennis.
+Cinematics retained normal timing; following, tower traversal and zipline
+progress still used the existing automation substitutes, so this does not
+establish manual climbing or zipline parity.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected
