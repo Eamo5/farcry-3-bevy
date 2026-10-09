@@ -1003,6 +1003,21 @@ Release build, all 227 workspace tests and whitespace checks pass. Ambient
 population fidelity and retry rollback are now concrete combat-validation
 concerns, alongside the helper's limited tactics and ammunition management.
 
+Story checkpoint retries now discard transient wildlife alongside rebuilt
+mission actors. Previously an ambient predator retained its previous chase
+position beside the respawn and could immediately kill Jason again. The
+opt-in retry test records pre-death wildlife entity IDs; with
+`FC3_STORY_RETRY_WILDLIFE_TEST=1` it requires a nonempty sample and asserts every
+old entity is gone after ordinary checkpoint restoration. This tests lifecycle
+cleanup, not exact saved animal population reconstruction.
+
+`fc3-retry-wildlife` exited 0, cleared three pre-death ambient animals, rebuilt
+23 mission/wildlife actors, and passed the existing exact ammunition, supplies,
+progression and crafting assertions. The launcher required the nonempty
+cleanup marker, not merely process success. The fixture uses injected lethal
+fall damage; it is not uninterrupted combat evidence. Broader dynamic-world
+rollback, population fidelity and outpost completion remain open.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

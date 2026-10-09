@@ -78,12 +78,19 @@ fn retry_inventory_test(
     mut progress: ResMut<crate::progression::Progress>,
     menu: Res<crate::progression::PauseMenu>,
     mut damage: MessageWriter<crate::combat::DamageEvent>,
+    ambient: Query<Entity, (With<crate::wildlife::WildAnimal>, Without<crate::story_actors::StoryActor>)>,
+    mut previous_wildlife: Local<Vec<Entity>>,
 ) {
     let Some(host) = host else { return };
     let Some(save) = &host.checkpoint_game else { return };
     let Ok((entity, health, mut stats, mut inv)) = players.single_mut() else { return };
     let now = time.elapsed_secs();
     if stage.0 == 0 && now > 12.0 && !health.dead {
+        if std::env::var("FC3_STORY_RETRY_WILDLIFE_TEST").is_ok() && ambient.is_empty() {
+            assert!(now < 30.0, "retry test: no ambient wildlife spawned to validate cleanup");
+            return;
+        }
+        *previous_wildlife = ambient.iter().collect();
         for slot in &mut inv.slots { slot.mag = 0; slot.reserve = 0; }
         inv.grenades = 0;
         stats.medkits = 0;
@@ -110,8 +117,10 @@ fn retry_inventory_test(
         assert_eq!(inv.grenades, save.grenades, "retry test: grenades");
         assert_eq!(*progress, save.progress, "retry test: progression and ingredients");
         assert_eq!(menu.tutorial, save.craft_tutorial, "retry test: crafting tutorial");
+        assert!(previous_wildlife.iter().all(|e| !ambient.contains(*e)), "retry test: previous attempt's ambient wildlife survived");
         stage.0 = 3;
         info!("retry test: PASS exact ammunition, supplies, progression and crafting tutorial restored after combat death");
+        info!("retry test: cleared {} previous ambient wildlife entities", previous_wildlife.len());
     }
 }
 
@@ -874,8 +883,8 @@ fn run_story(
         ResMut<StoryCrafts>,
         ResMut<crate::crafting::CraftCatalog>,
     ),
-    (story_actors, mut commands_out, mut hidden, tagged): (
-        Query<Entity, With<crate::story_actors::StoryActor>>, Commands, ResMut<HiddenEntities>,
+    (checkpoint_actors, mut commands_out, mut hidden, tagged): (
+        Query<Entity, Or<(With<crate::story_actors::StoryActor>, With<crate::wildlife::WildAnimal>)>>, Commands, ResMut<HiddenEntities>,
         Query<&crate::story_actors::StoryActor, With<crate::stealth::Tagged>>,
     ),
     (mut xp_gain, mut progress, mut music, mut rock_test, mut videos, mut qtes): (
@@ -961,9 +970,14 @@ fn run_story(
             videos.reset();
             qtes.reset();
             ui.subtitle = None;
-            for e in &story_actors {
+            // Rebuild mission actors and discard transient wildlife together.
+            // Leaving an ambient predator at its post-death position makes
+            // retries inherit the previous attempt's chase and immediate hits.
+            let reset_count = checkpoint_actors.iter().count();
+            for e in &checkpoint_actors {
                 commands_out.entity(e).despawn();
             }
+            info!("story checkpoint: reset {reset_count} mission/wildlife actors");
             let data = host.story.data();
             if let Some(sp) = host.story.respawn_point().and_then(|r| data.spawn_points.get(&r)) {
                 teleport(&mut t, &mut p, sp.pos, sp.angles[2]);
@@ -1739,6 +1753,7 @@ fn story_boxes(
         || keys.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter, KeyCode::Space])
         || pad_pressed(GamepadButton::South)
         || std::env::var("FC3_STORY_AUTOPILOT").is_ok()
+        || std::env::var("FC3_STORY_RETRY_TEST").is_ok()
         || std::env::var("FC3_OUTPOST_FIRE_TEST").is_ok();
     let cancel = b.choice && (keys.any_just_pressed([KeyCode::Backspace, KeyCode::KeyQ]) || pad_pressed(GamepadButton::East));
     actions.clear();
