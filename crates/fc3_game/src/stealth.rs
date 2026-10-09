@@ -781,6 +781,7 @@ fn detection_markers(
     npcs: Query<(&GlobalTransform, &Npc, &Health, Has<Tagged>)>,
     markers: Query<Entity, With<DetectionMarker>>,
     mut commands: Commands,
+    scale: Res<UiScale>,
 ) {
     for e in &markers {
         commands.entity(e).despawn();
@@ -799,6 +800,7 @@ fn detection_markers(
             continue;
         }
         let Ok(px) = cam.world_to_viewport(cam_t, head) else { continue };
+        let px = crate::ui_nav::viewport_to_ui(px, scale.0);
         let colour = match npc.state {
             NpcState::Combat => Color::srgb(0.95, 0.15, 0.1),
             NpcState::Search => Color::srgb(1.0, 0.55, 0.12),

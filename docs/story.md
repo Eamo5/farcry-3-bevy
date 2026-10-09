@@ -714,3 +714,11 @@ passenger hands and wrapped subtitles. However, the final inspected image
 shows **YOU DIED** after dismount at the outpost, not successful outpost play.
 Death/checkpoint recovery and combat progression need investigation; this run
 does not establish campaign, visual or UX parity.
+
+The resolution-scaling follow-up converts camera-projected positions back
+into UI design pixels before placing objective diamonds, detection/tagging
+bars and Hunter-syringe animal marks. Without this conversion the newly
+scaled HUD would multiply screen anchors a second time at 4K. Objective-edge
+clamping also uses the design viewport. Two scaling/projection tests and the
+223-test release workspace run pass; numeric 720p/1080p/4K and DPI checks are
+not a substitute for live multi-resolution layout inspection.

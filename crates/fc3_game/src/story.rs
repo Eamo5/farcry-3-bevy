@@ -479,6 +479,7 @@ fn draw_markers(
     cameras: Query<(&Camera, &GlobalTransform), With<crate::player::PlayerCamera>>,
     icons: Query<Entity, With<MarkerIcon>>,
     mut commands: Commands,
+    scale: Res<UiScale>,
 ) {
     for e in &icons {
         commands.entity(e).despawn();
@@ -491,6 +492,7 @@ fn draw_markers(
     }
     let Ok((cam, cam_t)) = cameras.single() else { return };
     let Some(size) = cam.logical_viewport_size() else { return };
+    let size = crate::ui_nav::viewport_to_ui(size, scale.0);
     // Off screen markers sit on a frame inside the compass and the HUD.
     let (lo, hi) = (Vec2::new(40.0, 90.0), size - Vec2::new(40.0, 150.0));
     let mid = (lo + hi) * 0.5;
@@ -498,7 +500,8 @@ fn draw_markers(
     for &at in &markers.0 {
         let to = at - cam_t.translation();
         let local = view.transform_point3(at);
-        let seen = cam.world_to_viewport(cam_t, at).ok().filter(|p| local.z < 0.0 && p.cmpge(lo).all() && p.cmple(hi).all());
+        let seen = cam.world_to_viewport(cam_t, at).ok().map(|p| crate::ui_nav::viewport_to_ui(p, scale.0))
+            .filter(|p| local.z < 0.0 && p.cmpge(lo).all() && p.cmple(hi).all());
         let px = seen.unwrap_or_else(|| {
             // Toward it from the middle, out to the frame (behind: its side).
             let mut d = Vec2::new(local.x, -local.y);

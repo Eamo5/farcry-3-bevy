@@ -32,6 +32,12 @@ fn viewport_scale(height: f32) -> f32 {
     (height / 1080.0).clamp(0.5, 4.0)
 }
 
+/// Camera projection returns logical viewport pixels; absolute UI nodes use
+/// design pixels that Bevy scales again. Divide only by UiScale, not by DPI.
+pub(crate) fn viewport_to_ui(point: Vec2, scale: f32) -> Vec2 {
+    point / if scale.is_finite() && scale > 0.0 { scale } else { 1.0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,6 +60,19 @@ mod tests {
         app.world_mut().get_mut::<Window>(entity).unwrap().resolution.set_scale_factor_override(Some(1.0));
         app.update();
         assert_eq!(app.world().resource::<UiScale>().0, 2.0);
+    }
+
+    #[test]
+    fn projected_world_markers_keep_their_screen_anchor_at_4k_and_under_dpi() {
+        for (logical, scale) in [(Vec2::new(1920.0, 1080.0), 1.0), (Vec2::new(3840.0, 2160.0), 2.0),
+            (Vec2::new(1280.0, 720.0), 2.0 / 3.0)] {
+            let projected = logical * Vec2::new(0.25, 0.75);
+            let ui = viewport_to_ui(projected, scale);
+            assert!(ui.abs_diff_eq(Vec2::new(480.0, 810.0), 0.001));
+            assert!((ui * scale).abs_diff_eq(projected, 0.001));
+        }
+        assert_eq!(viewport_to_ui(Vec2::ONE, 0.0), Vec2::ONE);
+        assert_eq!(viewport_to_ui(Vec2::ONE, f32::NAN), Vec2::ONE);
     }
 }
 

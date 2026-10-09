@@ -331,6 +331,7 @@ fn hunter_marks(
     animals: Query<(&GlobalTransform, &Health), With<crate::wildlife::WildAnimal>>,
     marks: Query<Entity, With<HunterMark>>,
     mut commands: Commands,
+    scale: Res<UiScale>,
 ) {
     for e in &marks {
         commands.entity(e).despawn();
@@ -345,6 +346,7 @@ fn hunter_marks(
             continue;
         }
         let Ok(px) = cam.world_to_viewport(cam_t, at) else { continue };
+        let px = crate::ui_nav::viewport_to_ui(px, scale.0);
         commands.spawn((
             Node {
                 position_type: PositionType::Absolute,
