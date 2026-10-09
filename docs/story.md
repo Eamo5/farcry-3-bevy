@@ -916,6 +916,29 @@ image confirms the indoor platform. Both runs exited 0. Release build and all
 227 workspace unit/doc tests pass. This verifies local-sector floor readiness;
 cross-sector structures and full world/checkpoint rollback still need coverage.
 
+`fc3-b30-onward` (paired B30 checkpoint, autopilot, no scene skipping) exited 0,
+completed B30, saved JAS_030_B10, and reached "Go through the jungle". It then
+repeatedly died. The focused `fc3-jungle-damage` run identifies lethal melee
+from authored bear `2078725718654599118`, around five seconds after the first
+jungle trigger, while autopilot waits before choosing its next action. The
+bear is `AsianBlackBear.Bear_Jas_020_3`, uses mission-specific
+`animalpersonality.asianblackbear.bear_jas_020` tuning and the `stp_bear_family`
+group, and does not start on script control. This does not yet distinguish
+missing authored animal behavior from an unsuitable stationary test policy.
+JAS_030 completion and normal continuous traversal remain unverified.
+The installed template dump shows `bear_jas_020` differs from `bear_normal`
+only in sound reaction ranges and QTE probability; this does not justify
+disabling its aggression. `FC3_STORY_AUTOPILOT_DELAY` now permits a shorter
+inspection pause (default remains 6 s, minimum 0.5 s), and the helper cannot
+reposition a dead player. With 0.5 s waits, `fc3-jungle-paced` exits 0 without
+the bear death loop, completes JAS_030_B10, JAS_030_B12 and JAS_020_MAIN, and
+starts JAS_060_B10C's 124-second tattoo scene. The inspected final screenshot
+shows Dennis in that scene. Release build and whitespace checks pass.
+This is faster trigger-repositioning automation with normal cinematic timing,
+not evidence of physical vine climbing, uninterrupted escape play, or full
+animal AI fidelity. Wildlife currently uses largely horizontal detection and
+direct movement; installed tuning and traversability remain parity gaps.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

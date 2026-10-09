@@ -1138,8 +1138,13 @@ fn run_story(
             info!("story autopilot: trigger {} {}: {}", w.0, w.1, host.story.trigger_debug(w.0));
         }
     }
-    if gameplay && !p.driving && cinema.view.is_none() && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
-        && host.quiet > 6.0 && host.story.watched_loot_filters().is_empty() {
+    // Slow inspection runs deliberately pause between actions. Chase/escape
+    // fixtures can request a shorter pause without changing gameplay AI.
+    let autopilot_delay = std::env::var("FC3_STORY_AUTOPILOT_DELAY").ok()
+        .and_then(|s| s.parse::<f32>().ok()).filter(|s| s.is_finite())
+        .unwrap_or(6.0).max(0.5);
+    if gameplay && health.as_ref().is_none_or(|h| !h.dead) && !p.driving && cinema.view.is_none() && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
+        && host.quiet > autopilot_delay && host.story.watched_loot_filters().is_empty() {
         let watched = host.story.watched_triggers();
         let awaiting_rock = host.story.watched_signals().iter().any(|s| s == "throw_rock");
         // Stuck: triggers stepped into before they were armed go again.
