@@ -722,3 +722,44 @@ scaled HUD would multiply screen anchors a second time at 4K. Objective-edge
 clamping also uses the design viewport. Two scaling/projection tests and the
 223-test release workspace run pass; numeric 720p/1080p/4K and DPI checks are
 not a substitute for live multi-resolution layout inspection.
+
+### Checkpoint inventory recovery
+
+In-session checkpoints now retain a live `SaveGame` in memory even when test
+checkpoint output is disabled. A mission retry restores carried weapons and
+ammo, explosives, medkits, progression and crafting tutorial state before the
+new graph receives its player view. Continue loads seed this snapshot as well.
+Weapon restoration replaces empty inventories with empty hands, clears stale
+weapon actions, and reapplies saved attachments from base definitions so
+repeated restores cannot compound upgrades. Vehicle path orders are cleared
+when restarting the mission. Full world rollback, gadget/seat lifecycle and
+live death/retry validation remain outstanding; this is not a claim of complete
+checkpoint parity.
+
+The save regression also covers an extended-magazine weapon with saved ammo
+above its base magazine capacity, repeated upgrade restoration, and removal of
+post-checkpoint paint. Startup now seeds the in-memory snapshot when the story
+host is created after Continue. `FC3_STORY_RETRY_TEST=1` opts into a live fault
+injection: spend ammo/ingredients/supplies, submit lethal combat damage, observe
+death, then assert exact inventory/progression/tutorial recovery after normal
+retry. This is explicitly injected test evidence, not a manual campaign run.
+The first `fc3-retry-inventory` autopilot run exited 0 and its inspected final
+image showed Jason alive with the outpost objective still active; it did not
+exercise a death/retry.
+Release workspace checks (223 unit/doc tests), all 13 installed-data regressions
+and the release game build pass with these changes. The first fault-injection
+attempt remained paused on the weapon-selection tutorial; its inspected image
+also exposes unresolved `[GadgetWheel]`, `[WeaponWheelSelect]` and
+`[SwitchWeapon]` prompts. A zero exit code alone is not retry evidence.
+The follow-up `fc3-retry-fault-auto.err.log` records lethal damage, combat
+respawn, normal story reload, restoration of one carried weapon/two medkits/$90,
+and `retry test: PASS` after exact ammo, supplies, progression and crafting-state
+assertions. Tutorial dismissal and positioning used the existing autopilot;
+lethal damage and supply consumption were injected by the opt-in test.
+
+The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
+at the opening rock objective. The guard became alerted and left its scripted
+action, yet the expected trigger progression did not follow. Its inspected
+final image still shows that objective. The older autopilot substitutes noise
+for rock impacts and some other interactions, so this evidence cannot establish
+uninterrupted real-input campaign progression.

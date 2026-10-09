@@ -317,10 +317,15 @@ impl SaveSources<'_, '_> {
 /// graph: otherwise a hunting checkpoint reloads with no ingredients and
 /// sandbox starting weapons/medkits. Ordinary saves remain disabled in tests.
 fn keep_story_checkpoint(world: &mut World) {
-    if world.get_non_send::<crate::story::StoryHost>().is_none_or(|h| h.checkpoint_game_paths.is_empty()) { return; }
+    if world.get_non_send::<crate::story::StoryHost>().is_none_or(|h| !h.checkpoint_game_pending && h.checkpoint_game_paths.is_empty()) { return; }
     let mut sources = bevy::ecs::system::SystemState::<SaveSources>::new(world);
     let Some(save) = sources.get(world).ok().and_then(|s| s.snapshot()) else { return; };
     let paths = std::mem::take(&mut world.non_send_mut::<crate::story::StoryHost>().checkpoint_game_paths);
+    {
+        let mut host = world.non_send_mut::<crate::story::StoryHost>();
+        host.checkpoint_game = Some(save.clone());
+        host.checkpoint_game_pending = false;
+    }
     let text = save.to_text();
     for path in paths {
         if let Err(e) = std::fs::write(&path, &text) {
@@ -381,11 +386,13 @@ pub fn continue_game(
     pickups: Query<(Entity, &Pickup)>,
     explosives: Query<(Entity, &Explosive)>,
     mut commands: Commands,
+    host: Option<NonSendMut<crate::story::StoryHost>>,
 ) {
     if requests.read().count() == 0 {
         return;
     }
     let Some(save) = &slot.existing else { return };
+    if let Some(mut host) = host { host.checkpoint_game = Some(save.clone()); }
     pause_menu.tutorial = save.craft_tutorial;
     pause_menu.tutorial_completed = save.craft_tutorial == Some(crate::progression::CraftTutorial::Done);
     continued.0 = true;
@@ -401,42 +408,7 @@ pub fn continue_game(
     stats.medkits = save.medkits;
     stats.kills = save.kills;
     stats.spawn_point = save.position;
-    let slots: Vec<WeaponSlot> = save
-        .weapons
-        .iter()
-        .filter_map(|(name, mag, reserve)| {
-            let def = inv.defs.iter().position(|d| d.name == name)?;
-            Some(WeaponSlot { def, mag: *mag, reserve: *reserve })
-        })
-        .collect();
-    if !slots.is_empty() {
-        inv.slots = slots;
-        inv.slots.sort_by_key(|s| s.def);
-        let current = inv.slots.iter().position(|s| inv.defs[s.def].name == save.current).unwrap_or(0);
-        inv.current = current;
-        inv.mounted_from = None;
-    }
-    inv.grenades = save.grenades;
-    inv.molotovs = save.molotovs;
-    inv.c4 = save.c4;
-    inv.special_arrows = save.arrows;
-    inv.mines = save.mines;
-    for (name, paint) in &save.paints {
-        let (Some(d), Some(p)) = (inv.defs.iter().position(|w| w.name == name), crate::weapons::PAINT_NAMES.iter().position(|n| n == paint)) else { continue };
-        if inv.paints.len() <= d {
-            inv.paints.resize(d + 1, None);
-        }
-        inv.paints[d] = Some(p as u8);
-    }
-    for (name, bits) in &save.attachments {
-        let Some(d) = inv.defs.iter().position(|w| w.name == name) else { continue };
-        for a in crate::weapons::Attachment::ALL {
-            if bits & a.bit() != 0 {
-                inv.attach(d, a);
-            }
-        }
-    }
-    inv.reloading = 0.0;
+    restore_inventory(&mut inv, save);
     world.herbs = save.herbs;
     world.removed = save.removed.iter().copied().collect();
     tod.hours = save.hours;
@@ -461,6 +433,60 @@ pub fn continue_game(
         }
     }
     info!("continued from save at {:?}", save.position);
+}
+
+/// Replace carried state, including upgrades and transient weapon actions.
+pub(crate) fn restore_inventory(inv: &mut Inventory, save: &SaveGame) {
+    let base = crate::weapons::weapon_defs();
+    for def in &mut inv.defs {
+        if let Some(original) = base.iter().find(|d| d.name == def.name) { *def = original.clone(); }
+    }
+    inv.attachments = vec![0; inv.defs.len()];
+    inv.paints = vec![None; inv.defs.len()];
+    let slots: Vec<WeaponSlot> = save
+        .weapons
+        .iter()
+        .filter_map(|(name, mag, reserve)| {
+            let def = inv.defs.iter().position(|d| d.name == name)?;
+            Some(WeaponSlot { def, mag: *mag, reserve: *reserve })
+        })
+        .collect();
+    // An empty checkpoint means empty hands, not permission to keep the
+    // sandbox loadout (or weapons acquired after the checkpoint).
+    inv.slots = slots;
+    inv.slots.sort_by_key(|s| s.def);
+    inv.current = inv.slots.iter().position(|s| inv.defs[s.def].name == save.current).unwrap_or(0);
+    inv.mounted_from = None;
+    crate::weapons::settle_unarmed(inv);
+    inv.grenades = save.grenades;
+    inv.molotovs = save.molotovs;
+    inv.c4 = save.c4;
+    inv.special_arrows = save.arrows;
+    inv.mines = save.mines;
+    for (name, paint) in &save.paints {
+        let (Some(d), Some(p)) = (inv.defs.iter().position(|w| w.name == name), crate::weapons::PAINT_NAMES.iter().position(|n| n == paint)) else { continue };
+        if inv.paints.len() <= d {
+            inv.paints.resize(d + 1, None);
+        }
+        inv.paints[d] = Some(p as u8);
+    }
+    for (name, bits) in &save.attachments {
+        let Some(d) = inv.defs.iter().position(|w| w.name == name) else { continue };
+        for a in crate::weapons::Attachment::ALL {
+            if bits & a.bit() != 0 {
+                inv.attach(d, a);
+            }
+        }
+    }
+    inv.reloading = 0.0;
+    inv.switching = 0.0;
+    inv.cooldown = 0.0;
+    inv.aiming = false;
+    inv.aim_blend = 0.0;
+    inv.auto_tail = 0;
+    inv.recoil_kick = 0.0;
+    inv.recoil_offset = 0.0;
+    inv.spread_bloom = 0.0;
 }
 
 #[cfg(test)]
@@ -511,6 +537,46 @@ mod tests {
         assert_eq!(kept.position, Vec3::new(1.0, 2.0, 3.0));
         assert!(world.non_send::<crate::story::StoryHost>().checkpoint_game_paths.is_empty());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), std::fs::read_to_string(&second).unwrap());
+        assert_eq!(world.non_send::<crate::story::StoryHost>().checkpoint_game.as_ref().unwrap().to_text(), kept.to_text());
+        // Ordinary play retains the same snapshot without requiring a test
+        // output directory. Consuming supplies cannot mutate that checkpoint.
+        world.non_send_mut::<crate::story::StoryHost>().checkpoint_game_pending = true;
+        keep_story_checkpoint(&mut world);
+        assert!(!world.non_send::<crate::story::StoryHost>().checkpoint_game_pending);
+        let mut query = world.query::<&mut Inventory>();
+        let mut inv = query.single_mut(&mut world).unwrap();
+        let pistol = inv.defs.iter().position(|d| d.name == "1911").unwrap();
+        inv.slots.push(WeaponSlot { def: pistol, mag: 1, reserve: 0 });
+        inv.mounted_from = Some(0);
+        inv.reloading = 2.0;
+        inv.grenades = 3;
+        restore_inventory(&mut inv, &kept);
+        assert_eq!(inv.def().name, crate::weapons::UNARMED);
+        assert_eq!(inv.slots.len(), 1);
+        assert_eq!((inv.grenades, inv.reloading, inv.mounted_from), (0, 0.0, None));
+        let armed = SaveGame { current: "1911".into(), weapons: vec![("1911".into(), 5, 41)], grenades: 2, ..kept.clone() };
+        restore_inventory(&mut inv, &armed);
+        assert_eq!((inv.def().name, inv.slot().mag, inv.slot().reserve, inv.grenades), ("1911", 5, 41, 2));
+        restore_inventory(&mut inv, &armed);
+        assert_eq!(inv.slots.len(), 1);
+        let rifle = inv.defs.iter().position(|d| d.name == "AK-74M Rifle").unwrap();
+        let original_mag = inv.defs[rifle].magazine;
+        let mut upgraded = armed.clone();
+        upgraded.current = "AK-74M Rifle".into();
+        upgraded.weapons = vec![("AK-74M Rifle".into(), original_mag + 1, 17)];
+        upgraded.attachments.push(("AK-74M Rifle".into(), crate::weapons::Attachment::ExtendedMag.bit()));
+        upgraded.paints.push(("AK-74M Rifle".into(), crate::weapons::PAINT_NAMES[0].into()));
+        restore_inventory(&mut inv, &upgraded);
+        let extended_mag = inv.defs[rifle].magazine;
+        assert!(extended_mag > original_mag);
+        restore_inventory(&mut inv, &upgraded);
+        assert_eq!(inv.defs[rifle].magazine, extended_mag);
+        assert_eq!((inv.slot().mag, inv.slot().reserve), (original_mag + 1, 17));
+        assert_eq!(inv.paints[rifle], Some(0));
+        restore_inventory(&mut inv, &armed);
+        assert_eq!(inv.defs[rifle].magazine, original_mag);
+        assert_eq!(inv.paints[rifle], None);
+        assert!(!inv.has_attachment(rifle, crate::weapons::Attachment::ExtendedMag));
         std::fs::remove_file(path).unwrap();
         std::fs::remove_file(second).unwrap();
     }

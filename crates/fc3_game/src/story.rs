@@ -55,6 +55,9 @@ impl Plugin for StoryPlugin {
                 matches!(state.get(), GameState::Playing | GameState::Paused | GameState::Map | GameState::Journal | GameState::Shop)
             }))
             .add_systems(Update, show_story_ui);
+        if std::env::var_os("FC3_STORY_RETRY_TEST").is_some() {
+            app.add_systems(Update, retry_inventory_test.after(StorySet).run_if(in_state(GameState::Playing)));
+        }
     }
 }
 
@@ -64,6 +67,53 @@ pub struct StorySet;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EntityPosesSet;
+
+/// Opt-in fault injection: exercise combat death and the ordinary mission
+/// retry, without pretending this is uninterrupted player-input evidence.
+fn retry_inventory_test(
+    time: Res<Time>,
+    host: Option<NonSend<StoryHost>>,
+    mut stage: Local<(u8, f32)>,
+    mut players: Query<(Entity, &crate::combat::Health, &mut crate::combat::PlayerStats, &mut crate::weapons::Inventory), With<Player>>,
+    mut progress: ResMut<crate::progression::Progress>,
+    menu: Res<crate::progression::PauseMenu>,
+    mut damage: MessageWriter<crate::combat::DamageEvent>,
+) {
+    let Some(host) = host else { return };
+    let Some(save) = &host.checkpoint_game else { return };
+    let Ok((entity, health, mut stats, mut inv)) = players.single_mut() else { return };
+    let now = time.elapsed_secs();
+    if stage.0 == 0 && now > 12.0 && !health.dead {
+        for slot in &mut inv.slots { slot.mag = 0; slot.reserve = 0; }
+        inv.grenades = 0;
+        stats.medkits = 0;
+        progress.money = 0;
+        progress.plants.fill(0);
+        damage.write(crate::combat::DamageEvent {
+            target: entity, amount: 100000.0, kind: crate::combat::DamageKind::Fall,
+            source: None, instigator: None, headshot: false,
+        });
+        *stage = (1, now);
+        info!("retry test: spent carried supplies and requested lethal combat damage");
+    } else if stage.0 == 1 || stage.0 == 2 {
+        assert!(now - stage.1 < 30.0, "retry test: normal checkpoint reload did not complete");
+        if health.dead { stage.0 = 2; }
+        if stage.0 == 1 { return; }
+        if now - stage.1 < 8.0 || health.dead || host.was_dead || host.reload_at.is_some() { return; }
+        let mut actual: Vec<_> = inv.slots.iter().filter(|s| inv.defs[s.def].name != crate::weapons::UNARMED)
+            .map(|s| (inv.defs[s.def].name.to_string(), s.mag, s.reserve)).collect();
+        let mut expected = save.weapons.clone();
+        expected.retain(|s| s.0 != crate::weapons::UNARMED);
+        actual.sort(); expected.sort();
+        assert_eq!(actual, expected, "retry test: carried ammunition");
+        assert_eq!(stats.medkits, save.medkits, "retry test: medkits");
+        assert_eq!(inv.grenades, save.grenades, "retry test: grenades");
+        assert_eq!(*progress, save.progress, "retry test: progression and ingredients");
+        assert_eq!(menu.tutorial, save.craft_tutorial, "retry test: crafting tutorial");
+        stage.0 = 3;
+        info!("retry test: PASS exact ammunition, supplies, progression and crafting tutorial restored after combat death");
+    }
+}
 
 /// Scripted placements survive streaming, so a character teleported before
 /// its models load spawns at the destination rather than its editor position.
@@ -282,6 +332,8 @@ pub struct StoryHost {
     /// A smoke checkpoint's matching live inventory/world snapshot, captured
     /// after host commands have settled. Never written to a real save slot.
     pub(crate) checkpoint_game_paths: Vec<std::path::PathBuf>,
+    pub(crate) checkpoint_game: Option<crate::save::SaveGame>,
+    pub(crate) checkpoint_game_pending: bool,
     /// The shop's weapons as scripts know them: model path -> (archetype,
     /// shop name id).
     shop_items: HashMap<String, (String, u32)>,
@@ -336,6 +388,8 @@ impl StoryHost {
             to_respawn: false,
             kept: 0,
             checkpoint_game_paths: Vec::new(),
+            checkpoint_game: None,
+            checkpoint_game_pending: false,
             shop_items: HashMap::new(),
             last_ordered: None,
             hidden_synced: false,
@@ -748,6 +802,11 @@ fn start_story(world: &mut World, mut tried: Local<bool>) {
     }
     info!("story started in {:.1}s{}", started.elapsed().as_secs_f32(), if saved.is_some() { " from its save" } else { "" });
     let mut host = StoryHost::new(story, saved);
+    // Continue runs before this host exists during startup. Retain its paired
+    // inventory here too, so death before the next checkpoint can roll back.
+    if continued {
+        host.checkpoint_game = world.get_resource::<crate::save::SaveSlot>().and_then(|s| s.existing.clone());
+    }
     host.to_respawn = to_respawn;
     host.shop_items = std::fs::read_to_string(root.join(fc3_formats::story::SHOP_ITEMS_REL))
         .unwrap_or_default()
@@ -859,6 +918,20 @@ fn run_story(
         if let Some(story) = open_story(&info.root, checkpoint.as_ref()) {
             info!("story: back to the last checkpoint");
             host.story = story;
+            if let Some(save) = &host.checkpoint_game {
+                if let Ok(mut inv) = inventory.single_mut() { crate::save::restore_inventory(&mut inv, save); }
+                if let Ok(mut stats) = stats.single_mut() {
+                    stats.medkits = save.medkits;
+                    stats.kills = save.kills;
+                    stats.burning = 0.0;
+                    stats.hurt_dir = None;
+                    stats.respawn_timer = 0.0;
+                }
+                *progress = save.progress.clone();
+                if let Some(h) = health.as_mut() { **h = crate::combat::Health::new(h.max); }
+                info!("story checkpoint: restored {} carried weapons, {} medkits, ${}", save.weapons.len(), save.medkits, save.progress.money);
+            }
+            *vehicle_paths = Default::default();
             placements.reset(&host.story.data());
             host.hidden_synced = false;
             host.due.clear();
@@ -868,6 +941,10 @@ fn run_story(
             *scripted = ScriptedPlayer::default();
             shop_override.0 = None;
             *pause_menu = crate::progression::PauseMenu::from_story(&host.story);
+            if let Some(save) = &host.checkpoint_game {
+                pause_menu.tutorial = save.craft_tutorial;
+                pause_menu.tutorial_completed = save.craft_tutorial == Some(crate::progression::CraftTutorial::Done);
+            }
             bought.0.clear();
             looted.0.clear();
             crafted.0.clear();
@@ -1221,6 +1298,7 @@ fn run_story(
                     host.checkpoint_game_paths.push(path.with_extension("game.txt"));
                 }
                 host.checkpoint = Some(save);
+                host.checkpoint_game_pending = true;
             }
             Command::MissionState { name, state, block } => {
                 info!("story: {name} {state}");
