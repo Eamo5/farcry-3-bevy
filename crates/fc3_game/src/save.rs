@@ -41,7 +41,7 @@ impl Plugin for SavePlugin {
 /// Everything restored by CONTINUE.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SaveGame {
-    /// Bevy-space feet position (re-grounded on load).
+    /// Bevy-space capsule centre (re-grounded near its saved height on load).
     pub position: Vec3,
     pub yaw: f32,
     pub health: f32,
@@ -397,12 +397,14 @@ pub fn continue_game(
     pause_menu.tutorial_completed = save.craft_tutorial == Some(crate::progression::CraftTutorial::Done);
     continued.0 = true;
     let Ok((mut t, mut p, mut h, mut stats, mut inv)) = players.single_mut() else { return };
-    t.translation = save.position + Vec3::Y * 0.5;
+    t.translation = save.position;
     t.rotation = Quat::from_rotation_y(save.yaw);
     p.yaw = save.yaw;
     p.pitch = 0.0;
     p.velocity = Vec3::ZERO;
     p.spawning = true;
+    p.keep_height = true;
+    p.noclip = false;
     h.current = save.health.clamp(1.0, h.max);
     h.dead = false;
     stats.medkits = save.medkits;
@@ -577,6 +579,20 @@ mod tests {
         assert_eq!(inv.defs[rifle].magazine, original_mag);
         assert_eq!(inv.paints[rifle], None);
         assert!(!inv.has_attachment(rifle, crate::weapons::Attachment::ExtendedMag));
+        // Exercise the menu's Continue transaction as well as carried-state
+        // restoration. Saving a capsule centre must not lift it on each load
+        // or send an indoor save through the highest-roof spawn search.
+        world.insert_resource(SaveSlot { existing: Some(kept.clone()), ..Default::default() });
+        world.init_resource::<SaveContinued>();
+        world.init_resource::<Messages<ContinueGame>>();
+        world.resource_mut::<Messages<ContinueGame>>().write(ContinueGame);
+        use bevy::ecs::system::RunSystemOnce;
+        world.run_system_once(continue_game).unwrap();
+        let mut restored = world.query::<(&Transform, &Player)>();
+        let (at, player) = restored.single(&world).unwrap();
+        assert_eq!(at.translation, kept.position);
+        assert!(player.spawning && player.keep_height && !player.noclip);
+        assert!(world.resource::<SaveContinued>().0);
         std::fs::remove_file(path).unwrap();
         std::fs::remove_file(second).unwrap();
     }

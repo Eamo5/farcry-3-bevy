@@ -545,6 +545,15 @@ fn play_scenes(
         // not at the static scene placement (Dennis's root is the driver seat).
         let anchor = p.anchor.and_then(|id| props.iter().find(|(pid, _, _)| pid.0 == id).map(|(_, at, _)| *at));
         // Characters on their clips, at the scene or moving anchor's place.
+        if (p.t / 2.0) as u32 != (prev / 2.0) as u32 {
+            if let Some(id) = std::env::var("FC3_STORY_ACTOR_DEBUG").ok().and_then(|s| s.parse::<u64>().ok()) {
+                if p.bindings.values().any(|&bound| bound == id) {
+                    let groups: Vec<_> = p.seq.groups.iter().filter(|g| p.bindings.get(&g.uid) == Some(&id))
+                        .map(|g| (g.name.as_str(), &g.kind, g.clips.len())).collect();
+                    info!("cinema actor diagnostic {id}: {} t {:.2}, groups {:?}, looping {}, end hold {}", p.seq.name, p.t, groups, p.seq.looping, p.seq.pause_at_end);
+                }
+            }
+        }
         for g in &p.seq.groups {
             if !matches!(g.kind, GroupKind::Character | GroupKind::Generic) {
                 continue;

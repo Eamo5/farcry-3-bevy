@@ -1095,6 +1095,11 @@ fn run_story(
     // Purchases, as the shop's buy event on the player (the game's item,
     // its name's section and string id).
     let mut commands = host.story.update(dt, view);
+    if time.elapsed_secs() as u32 != (time.elapsed_secs() - dt) as u32 {
+        if let Some(id) = std::env::var("FC3_STORY_TRIGGER_DEBUG").ok().and_then(|s| s.parse::<u64>().ok()) {
+            info!("story trigger diagnostic {id}: {}", host.story.trigger_debug(id));
+        }
+    }
     host.forward_purchases(&mut bought);
     host.forward_loot(&mut looted, &loot_catalog);
     host.forward_crafts(&mut crafted);

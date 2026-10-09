@@ -359,8 +359,11 @@ fn place_on_ground(
     // Kept to its height: the surface just below the point given.
     if p.keep_height {
         let filter = SpatialQueryFilter::from_excluded_entities([entity]);
-        if let Some(h) = spatial.cast_ray(t.translation + Vec3::Y * 1.5, Dir3::NEG_Y, 10.0, true, &filter) {
-            t.translation.y += 1.5 - h.distance + HALF_HEIGHT + 0.05;
+        // Probe near the requested feet, not above the head: an overhead
+        // doorway/roof is not the floor of an indoor checkpoint.
+        let origin = saved_height_probe(t.translation);
+        if let Some(h) = spatial.cast_ray(origin, Dir3::NEG_Y, 10.0, true, &filter) {
+            t.translation.y = origin.y - h.distance + HALF_HEIGHT + 0.05;
             p.velocity = Vec3::ZERO;
             p.spawning = false;
             p.keep_height = false;
@@ -384,6 +387,34 @@ fn place_on_ground(
     p.spawning = false;
     p.spawned_at = time.elapsed_secs();
     info!("player placed on ground at {:?}", t.translation);
+}
+
+fn saved_height_probe(centre: Vec3) -> Vec3 {
+    centre - Vec3::Y * (HALF_HEIGHT - 0.2)
+}
+
+#[cfg(test)]
+mod placement_tests {
+    use super::*;
+
+    #[test]
+    fn indoor_floor_probe_does_not_select_the_roof() {
+        // Two real collision slabs reproduce the indoor/roof ambiguity seen
+        // at the opening mission's locked-house doorway.
+        let slab = Collider::cuboid(8.0, 0.2, 8.0);
+        let floor = Vec3::new(0.0, 192.5, 0.0);
+        let roof = Vec3::new(0.0, 195.7, 0.0);
+        for centre_y in [193.4, 194.735] {
+            let origin = saved_height_probe(Vec3::new(0.0, centre_y, 0.0));
+            assert!(slab.cast_ray(roof, Quat::IDENTITY, origin, Vec3::NEG_Y, 10.0, true).is_none());
+            let (distance, _) = slab.cast_ray(floor, Quat::IDENTITY, origin, Vec3::NEG_Y, 10.0, true).unwrap();
+            assert!((origin.y - distance - 192.6).abs() < 0.001);
+        }
+        // A save actually made on the roof must still land on that roof.
+        let origin = saved_height_probe(Vec3::new(0.0, 195.8 + HALF_HEIGHT, 0.0));
+        let (distance, _) = slab.cast_ray(roof, Quat::IDENTITY, origin, Vec3::NEG_Y, 10.0, true).unwrap();
+        assert!((origin.y - distance - 195.8).abs() < 0.001);
+    }
 }
 
 /// `FC3_CLIMB_TEST=boxes` (with --walk): a crate to climb, a fence to vault

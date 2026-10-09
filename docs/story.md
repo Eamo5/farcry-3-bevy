@@ -837,6 +837,69 @@ Grant's last logged order was `StealthIdle_Grant_AfterThrowRock` (four waypoints
 without a corresponding arrival. Both distractions are now exercised through
 physical projectiles, but companion pathing and full B15 completion remain open.
 
+The focused `fc3-grant-path` trace subsequently showed Grant progressing along
+those waypoints normally, then yielding to `jas_020_grant_openwindow_04`, its
+holding loop, and the enter-window/climb-crates sequences. Absence of a task
+arrival alone was therefore not evidence of a pathfinding failure. That run
+still enabled synthetic scene skipping. `fc3-b15-scenes` is now repeating the
+paired checkpoint with autopilot but with scene skipping disabled, to validate
+the actual cinematic handoffs before changing movement logic.
+That no-skip run exited 0 and passed both rock objectives but still stalled in
+B15 with the follow objective. Targeted diagnostics (`FC3_STORY_ACTOR_DEBUG`
+set to an authored pawn ID) now log that pawn's task/scene/seated state and
+sequence bindings. `fc3-grant-owner` is collecting these for Grant without
+scene skipping; identifying the active owner is still pending.
+The completed ownership trace instead shows Grant at
+`[-2453.97,193.38,-3738.59]`, released from cinema, alive and unseated, with no
+task or pending order. Both Follow_4 and Follow_5 still await player entry into
+the narrow locked-house trigger `2075879318428393788`; Follow_5's Enter callback
+starts his next move. Thus a retained cinematic owner is not the cause.
+`FC3_STORY_TRIGGER_DEBUG` now samples a selected trigger's actual contact state;
+`fc3-door-contact` is testing the doorway approach without scene skipping.
+That completed run confirms the test player was placed on the roof:
+after the locked-house approach, height was `196.668`, with no trigger contacts
+(the trigger centre is `193.735`, vertical half-extent `1.5`). Height-preserving
+spawn placement was probing from 1.5 m above the capsule centre, catching the
+overhead roof. It now probes 0.2 m above the requested feet. The preceding
+release workspace tests passed; the changed placement is being validated in
+`fc3-door-floor`, with actual collision queries and scene skipping disabled.
+The ordinary Continue transaction also stored a capsule centre but added 0.5 m
+on load and selected the highest surface above terrain. It now restores that
+centre directly, requests height-preserving grounding, and clears noclip.
+The paired-checkpoint regression additionally runs the actual Continue system
+and checks the restored position and grounding mode; its result is pending.
+That Continue-system regression passes. The doorway change also passed all
+225 release workspace unit/doc tests, and all 13 installed-data regressions
+pass with the Continue change included. A separate temporary indoor save
+(`fc3-indoor-continue-fixture.txt`) is prepared to test real collision grounding
+via `--continue`, without replacing the user's save.
+The running `fc3-door-floor` trace now records actual player contact `[1]` in
+the locked-house trigger at height `193.463` (formerly `196.668`, no contact).
+Grant receives `StealthIdle_Grant_CannabisFieldStart`, physically arrives, then
+receives and reaches `StealthIdle_Grant_CannabisFieldEnd`. The authored handoff
+therefore advances with scene skipping disabled; full B15 completion is still
+pending the remainder of the run.
+The completed run exited 0 and saved paired B20C and B30 checkpoints after B15.
+Its log reaches "Run into the jungle"; the inspected final image shows the
+jungle sequence rather than the earlier doorway stall. Both rock distractions,
+doorway contact, and the B15 cinematic handoffs now advance with scene skipping
+disabled, still under repositioning autopilot rather than uninterrupted manual
+play. The real-collider regression also passes for both indoor floor selection
+and a save actually on the roof. `fc3-indoor-continue` is validating ordinary
+Continue grounding with the rebuilt executable.
+The rebuilt Continue smoke exited 0. It restored the authored test position
+`[-2453.96,193.4,-3739.11]`, grounded at height `191.900`, and saved a settled
+position `[-2453.163,192.068,-3739.982]`. The inspected image shows the lower
+doorway/platform, not the roof. This proves roof avoidance, not exact indoor
+pose preservation: the artificial initial position moved during grounding and
+collision resolution. A second Continue uses that game-written settled save
+to check repeat-load stability.
+The repeat also exited 0 and avoided the roof, but settled at
+`[-2453.648,193.461,-3738.195]`, so exact position stability is not established.
+Initial grounding can precede nearby object-collision readiness; this remains
+a hypothesis to investigate rather than a claimed fix. Current evidence covers
+roof avoidance and B15 progression, not complete indoor save/retry fidelity.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

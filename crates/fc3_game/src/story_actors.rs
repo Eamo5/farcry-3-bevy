@@ -350,11 +350,18 @@ fn actor_tasks(
     mut anims: Query<&mut AnimRequest>,
     mut commands: Commands,
     (mut rigs, moves, server, clips): (Query<&mut crate::characters::CharacterRig>, Res<CaMoves>, Res<AssetServer>, Res<Assets<crate::cache_assets::Fc3Clip>>),
+    mut debug_actor: Local<Option<Option<u64>>>,
 ) {
     let Some(mut host) = host else { return };
     let dt = time.delta_secs();
     let data = host.story.data();
+    let debug_id = *debug_actor.get_or_insert_with(|| std::env::var("FC3_STORY_ACTOR_DEBUG").ok().and_then(|s| s.parse().ok()));
     for (entity, mut a, mut t, npc, scripted) in &mut actors {
+        if debug_id == Some(a.id) && time.elapsed_secs() as u32 != (time.elapsed_secs() - dt) as u32 {
+            info!("story actor diagnostic {}: at {:.2?}, scene {}, seated {}, dead {}, task {:?}, pending {:?}, next {:?}",
+                a.id, t.translation, a.in_scene, a.seated, a.dead,
+                a.task.as_ref().map(|t| (t.action, t.arrived)), orders.0.get(&a.id), a.path.first());
+        }
         if a.dead || a.seated {
             continue;
         }
