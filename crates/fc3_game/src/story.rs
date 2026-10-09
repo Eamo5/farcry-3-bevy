@@ -878,11 +878,11 @@ fn run_story(
         Query<Entity, With<crate::story_actors::StoryActor>>, Commands, ResMut<HiddenEntities>,
         Query<&crate::story_actors::StoryActor, With<crate::stealth::Tagged>>,
     ),
-    (mut xp_gain, mut progress, mut music, mut noise, mut videos, mut qtes): (
+    (mut xp_gain, mut progress, mut music, mut rock_test, mut videos, mut qtes): (
         MessageWriter<crate::progression::XpGain>,
         ResMut<crate::progression::Progress>,
         ResMut<crate::music::Music>,
-        MessageWriter<crate::npc::Noise>,
+        Option<ResMut<crate::stealth::RockAimTest>>,
         ResMut<crate::video::Videos>,
         ResMut<crate::qte::Qtes>,
     ),
@@ -934,6 +934,7 @@ fn run_story(
                 info!("story checkpoint: restored {} carried weapons, {} medkits, ${}", save.weapons.len(), save.medkits, save.progress.money);
             }
             *vehicle_paths = Default::default();
+            if let Some(test) = rock_test.as_mut() { test.0 = None; }
             placements.reset(&host.story.data());
             host.hidden_synced = false;
             host.due.clear();
@@ -1135,11 +1136,12 @@ fn run_story(
     if gameplay && !p.driving && cinema.view.is_none() && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
         && host.quiet > 6.0 && host.story.watched_loot_filters().is_empty() {
         let watched = host.story.watched_triggers();
+        let awaiting_rock = host.story.watched_signals().iter().any(|s| s == "throw_rock");
         // Stuck: triggers stepped into before they were armed go again.
         if host.quiet > 25.0 {
             host.used.retain(|u| !watched.iter().any(|w| w.0 == u.0 && w.1 == u.1));
         }
-        if let Some((id, event, point, _)) = watched.iter().find(|w| w.3 && !host.used.contains(&(w.0, w.1.clone()))) {
+        if let Some((id, event, point, _)) = watched.iter().find(|w| !awaiting_rock && w.3 && !host.used.contains(&(w.0, w.1.clone()))) {
             info!("story autopilot: {event} {}", data.name_of(*id).unwrap_or("?"));
             host.used.insert((*id, event.clone()));
             // A region: somewhere its heights reach the ground.
@@ -1171,10 +1173,16 @@ fn run_story(
             .find(|(a, _, _)| host.story.current_action(a.id).is_some_and(|ca| host.story.awaited_interrupts().contains(&ca)))
             .map(|(a, t, _)| (a.id, t.translation))
         {
-            // A script waits for a guard to be drawn off: a rock lands by him.
-            info!("story autopilot: distract {}", data.name_of(id).unwrap_or("?"));
+            // Aim at the nearest enabled trigger, then use the normal rock
+            // input and projectile. A nearby arbitrary noise cannot prove the
+            // guard physically reached the mission's distraction zone.
+            let target = watched.iter().filter(|w| w.3 && w.1 == "Enter")
+                .min_by(|a, b| to_bevy(a.2).distance_squared(at).total_cmp(&to_bevy(b.2).distance_squared(at)))
+                .map(|w| host.story.trigger_ground_point(w.0, |x, y| heights.height_at(to_bevy([x, y, 0.0]))).unwrap_or(w.2))
+                .map(to_bevy).unwrap_or(at + Vec3::new(3.0, 0.0, 0.0));
+            info!("story autopilot: aim a rock to distract {} at {target:?}", data.name_of(id).unwrap_or("?"));
             host.used.insert((id, "distract".into()));
-            noise.write(crate::npc::Noise { at: at + Vec3::new(3.0, 0.0, 0.0), radius: 6.0 });
+            if let Some(test) = rock_test.as_mut() { test.0 = Some(target); }
             host.quiet = 0.0;
         } else if !host.used.contains(&(0, "buy".into())) && host.story.waiting_on().iter().any(|w| w.contains("CPawnBuyItemEvent")) {
             if shop_override.0.is_some() {
@@ -1228,16 +1236,10 @@ fn run_story(
             }
             tower_taken(&mut host.story, at);
             host.quiet = 0.0;
-        } else if let Some(signal) = host.story.watched_signals().into_iter().find(|s| !host.used.contains(&(0, s.clone()))) {
+        } else if let Some(signal) = host.story.watched_signals().into_iter().find(|s| s != "throw_rock" && !host.used.contains(&(0, s.clone()))) {
             // No trigger left: give an input a script waits for.
             info!("story autopilot: input {signal}");
             host.used.insert((0, signal.clone()));
-            // A rock "lands" where a trigger waits for someone lured there.
-            if signal == "throw_rock" {
-                if let Some(w) = host.story.watched_triggers().first() {
-                    noise.write(crate::npc::Noise { at: to_bevy(w.2), radius: 12.0 });
-                }
-            }
             host.story.input_signal(&signal);
             host.quiet = 0.0;
         }
@@ -1736,7 +1738,11 @@ fn story_boxes(
             (false, false) => "[Enter]  Continue",
             (false, true) => "A  Continue",
         };
-        let prompt = b.prompt.as_ref().map(|p| prompt_text(p, &actions, &settings)).unwrap_or_else(|| fallback.to_string());
+        // Authored tutorial captions (e.g. "New Tutorial") are not dismissal
+        // instructions. Always expose the controls that this modal accepts.
+        let prompt = b.prompt.as_ref().map(|p| prompt_text(p, &actions, &settings))
+            .filter(|p| !p.trim().is_empty() && p != fallback)
+            .map(|p| format!("{p}\n{fallback}")).unwrap_or_else(|| fallback.to_string());
         commands.spawn((
             Node {
                 position_type: PositionType::Absolute,

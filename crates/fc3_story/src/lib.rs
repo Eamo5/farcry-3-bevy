@@ -1424,8 +1424,27 @@ mod tests {
         assert_eq!(story.core.borrow().contacts(100), vec![PLAYER]);
         assert_eq!(story.core.borrow().contacts(200), vec![PLAYER, 20]);
         view.player = [50.0, 0.0, 0.0];
-        story.update(0.1, view);
+        story.update(0.1, view.clone());
         assert!(story.core.borrow().contacts(100).is_empty());
         assert_eq!(story.core.borrow().contacts(200), vec![20]);
+        let target = story.domino().lua().create_table().unwrap();
+        target.set("colliderFilterId", "20").unwrap();
+        story.core.borrow_mut().listeners.insert(999, crate::core::Listener {
+            on: crate::core::Listen::Entity(100, "Enter".into()),
+            callback: crate::core::Callback { target, method: "Enter".into() },
+        });
+        // Named mission pawns still require a physical overlap. The listener
+        // does not permit unrelated NPCs or affect other trigger volumes.
+        view.contacts.clear();
+        view.spawned.insert(30, Live { pos: [0.0; 3], alive: true, ..Default::default() });
+        story.core.borrow_mut().view = view.clone();
+        assert_eq!(story.core.borrow().contacts(100), vec![20]);
+        view.spawned.get_mut(&20).unwrap().pos = [50.0, 0.0, 0.0];
+        story.core.borrow_mut().view = view.clone();
+        assert!(story.core.borrow().contacts(100).is_empty());
+        view.spawned.get_mut(&20).unwrap().pos = [0.0; 3];
+        story.core.borrow_mut().view = view;
+        story.core.borrow_mut().listeners.remove(&999);
+        assert!(story.core.borrow().contacts(100).is_empty());
     }
 }

@@ -442,7 +442,17 @@ impl Core {
             return Vec::new();
         }
         let entry = self.data.entities.get(&trigger);
-        let allows = |id: u64| entry.is_none_or(|e| crate::triggers::allows_entity(e, id));
+        // Some authored mission proximity volumes disable generic NPC
+        // activation, yet their live Lua listener explicitly selects a pawn
+        // (e.g. the opening rock-distraction guard). Let those named pawns
+        // reach the listener's own filter, without admitting unrelated NPCs
+        // or relaxing PlayerOnly mission-boundary regions.
+        let selected: Vec<u64> = if entry.is_some_and(|e| e.component("CProximityTriggerComponent").is_some() && e.component("CTrigger2DComponent").is_none()) {
+            self.listeners.values().filter(|l| matches!(&l.on, Listen::Entity(id, event) if *id == trigger && matches!(event.as_str(), "Enter" | "Leave" | "Use")))
+                .filter_map(|l| l.callback.target.get::<crate::values::Text>("colliderFilterId").ok())
+                .flat_map(|group| self.groups(&group)).collect()
+        } else { Vec::new() };
+        let allows = |id: u64| selected.contains(&id) || entry.is_none_or(|e| crate::triggers::allows_entity(e, id));
         let mut out: Vec<u64> = self.view.contacts.get(&trigger).into_iter().flatten().copied().filter(|id| allows(*id)).collect();
         let Some(shape) = entry.and_then(crate::triggers::shape_of) else { return out };
         // Bodies, not points; the player's since last frame (thin triggers

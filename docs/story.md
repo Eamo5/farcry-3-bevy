@@ -772,6 +772,55 @@ capture run exited successfully. Inspection of `fc3-weapon-prompts-final.png`
 confirms `[X]` for hold/quick-swap and `[Mouse]` for selection. Gamepad/rebound
 labels and reordered/removed previous weapons are covered by regressions.
 
+### Physical opening-rock investigation (in progress)
+
+The opening autopilot now requests an aim toward the nearest enabled authored
+trigger and presses the ordinary Throw Rock action.
+Launch offsets, projectile gravity/collisions and impact noise remain in the
+normal stealth path. The previous direct-noise and direct `throw_rock` signal
+substitutes are removed. Other autopilot repositioning/substitutions remain,
+so this is still an instrumented investigation rather than manual campaign
+evidence. All 85 game tests passed before the added aiming regression; that
+regression now also passes, numerically advancing gravity toward near, far and
+raised targets and rejecting an unreachable target. The B15 paired-checkpoint
+run exited 0 but still stalled (confirmed in its final image). Its log records
+a real throw from `[-2452.463,192.389,-3751.499]`, impact at
+`[-2447.661,192.058,-3750.139]`, and the guard's alert/action interruption.
+During review, the trigger tuple's boolean was confirmed to mean enabled;
+target selection was corrected accordingly. Autopilot trigger repositioning
+now waits while the rock input listener is active, retaining the approach
+position rather than standing inside the intended landing zone. The corrected
+`fc3-rock-aim` run is pending. Release workspace tests pass (225 unit/doc tests).
+That run subsequently exited 0 but still stalled: its physical rock passed
+through the elevated trigger centre and hit the sloping ground beyond it at
+`[-2454.307,190.829,-3747.397]`. The next test resolves the collision floor
+under the target before calculating aim (`fc3-rock-ground`, pending). All three
+stealth regressions pass after this correction.
+
+Screenshot review also exposed a modal UX defect: the authored "New Tutorial"
+caption replaced the Continue control hint. The panel now retains the caption
+and appends its actual keyboard/gamepad accept/cancel instructions; verification
+of this follow-up is pending. The 11 non-installed tutorial tests pass.
+
+The ground-adjusted run landed at `[-2452.362,190.806,-3751.623]`, inside the
+intended area, but its inspected image still showed the rock objective. The
+installed entity dump revealed `bAllowTriggerByNonPlayers=0`, while the original
+Lua proximity listener explicitly selects guard `2077285554545765337` through
+`colliderFilterId`. Contact filtering now admits explicitly selected pawns for
+proximity listeners, still requiring physical overlap and preserving generic
+NPC filtering and PlayerOnly regions. Removing the listener revokes that
+exception. The regression covers selection, unrelated NPC exclusion, physical
+departure and listener removal.
+
+With that correction, `fc3-rock-filter.err.log` records an ordinary physical
+throw/impact, followed by the objective changing from the first rock task to
+"Follow Grant" and then "Lure the guards away from the exit." Its inspected
+final screenshot confirms the second distraction objective. All 225 workspace
+unit/doc checks, 13 installed-data checks and the release build pass. This is
+paired-checkpoint/autopilot evidence; full B15 and uninterrupted campaign
+completion are not established. Separately, `fc3-modal-controls-final.png`
+confirms the tutorial now shows `[Enter] Continue` below its authored caption.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

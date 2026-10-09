@@ -27,7 +27,9 @@ pub struct StealthPlugin;
 impl Plugin for StealthPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Binoculars>()
+            .init_resource::<RockAimTest>()
             .init_resource::<Takedown>()
+            .add_systems(PreUpdate, aim_test_rock.after(crate::controls::update_actions).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(PreUpdate, (takedown_test, below_test, takedown).chain().after(crate::controls::update_actions))
             .add_systems(Startup, load_rock)
             .add_systems(
@@ -125,6 +127,61 @@ fn load_rock(mut commands: Commands, server: Res<AssetServer>) {
     commands.insert_resource(RockModel(server.load(crate::cache_assets::cache_path(&fc3_formats::cache::model_rel(ROCK_MODEL)))));
 }
 
+/// Autopilot requests a landing target; the normal input/throw/physics path
+/// must produce the impact. No noise or mission event is fabricated here.
+#[derive(Resource, Default)]
+pub(crate) struct RockAimTest(pub Option<Vec3>);
+
+fn rock_aim(from: Vec3, target: Vec3) -> Option<Vec3> {
+    let horizontal = (target - from).with_y(0.0);
+    let distance = horizontal.length();
+    if distance < 0.6 { return None; }
+    let heading = horizontal / distance;
+    let mut best = None;
+    let mut error = f32::MAX;
+    // Include the actual hand offset and upward launch bias. Prefer the low
+    // arc, which avoids roofs; physical collisions still decide the impact.
+    for i in 0..=1300 {
+        let angle = -1.2 + i as f32 * 0.002;
+        let f = heading * angle.cos() + Vec3::Y * angle.sin();
+        let velocity = (f + Vec3::Y * 0.12).normalize() * 17.0;
+        let flight = (distance - angle.cos() * 0.5) / velocity.with_y(0.0).length();
+        let y = from.y + f.y * 0.5 - 0.1 + velocity.y * flight - 4.905 * flight * flight;
+        let miss = (y - target.y).abs();
+        if miss < error { error = miss; best = Some(f); }
+        if miss < 0.025 { return Some(f); }
+    }
+    best.filter(|_| error < 0.15)
+}
+
+fn aim_test_rock(
+    mut target: ResMut<RockAimTest>,
+    mut players: Query<(Entity, &mut Player)>,
+    cameras: Query<&GlobalTransform, With<PlayerCamera>>,
+    mut actions: ResMut<ActionState>,
+    spatial: SpatialQuery,
+) {
+    let Some(mut at) = target.0 else { return };
+    let (Ok((entity, mut p)), Ok(cam)) = (players.single_mut(), cameras.single()) else { return };
+    if p.spawning || p.velocity.length() > 0.2 { return; }
+    // Trigger centres are often above a sloped floor. Aim at the actual
+    // collision surface, otherwise the rock sails through the centre and
+    // lands outside the volume the investigating guard must enter.
+    let origin = at + Vec3::Y * 2.0;
+    if let Some(hit) = spatial.cast_ray(origin, Dir3::NEG_Y, 8.0, true, &SpatialQueryFilter::from_excluded_entities([entity])) {
+        at.y = origin.y - hit.distance + 0.02;
+    }
+    let Some(f) = rock_aim(cam.translation(), at) else {
+        warn!("story rock test: target {at:?} is out of throwing range from {:?}", cam.translation());
+        target.0 = None;
+        return;
+    };
+    p.yaw = (-f.x).atan2(-f.z);
+    p.pitch = f.y.asin();
+    actions.look = Vec2::ZERO;
+    if cam.forward().dot(f) > 0.9999 { actions.press(Action::ThrowRock); }
+}
+
 /// Throws a rock along the view (unlimited, a short pause between throws).
 fn throw_rock(
     time: Res<Time>,
@@ -136,6 +193,7 @@ fn throw_rock(
     mut fp: ResMut<crate::fp::FpState>,
     busy: Res<crate::fp::HandsBusy>,
     scripted: Res<crate::story::ScriptedPlayer>,
+    test_target: Option<ResMut<RockAimTest>>,
 ) {
     *cooldown -= time.delta_secs();
     let Ok((p, h)) = players.single() else { return };
@@ -156,6 +214,9 @@ fn throw_rock(
     *cooldown = 0.7;
     fp.gesture = Some("rock");
     let f = cam.forward().as_vec3();
+    if let Some(mut target) = test_target {
+        if let Some(at) = target.0.take() { info!("story rock test: physical throw from {:?} toward {at:?}", cam.translation()); }
+    }
     commands.spawn((
         Rock { velocity: (f + Vec3::Y * 0.12).normalize() * 17.0 + p.velocity * 0.5, landed: false, age: 0.0 },
         Transform::from_translation(cam.translation() + f * 0.5 - Vec3::Y * 0.1),
@@ -204,6 +265,7 @@ fn fly_rocks(
                 rock.landed = true;
                 rock.age = 0.0;
                 noise.write(crate::npc::Noise { at: t.translation, radius: ROCK_HEARD });
+                debug!("rock impact at {:?}", t.translation);
                 let event = crate::sound::switched(crate::sound::ev::ROCK_IMPACT, probe.at(h.entity, t.translation, h.normal), 0);
                 sfx.write(crate::sound::PlaySfx { event, at: Some(t.translation), volume: 0.45 });
             }
@@ -285,6 +347,26 @@ fn binoculars(
 mod tests {
     use super::*;
     use crate::story::ScriptedPlayer;
+
+    #[test]
+    fn aimed_rock_reaches_near_far_and_raised_targets_under_projectile_gravity() {
+        let from = Vec3::new(0.0, 2.0, 0.0);
+        for target in [Vec3::new(4.0, 0.0, 0.0), Vec3::new(0.0, 0.0, -18.0), Vec3::new(9.0, 4.0, -9.0)] {
+            let direction = rock_aim(from, target).expect("reachable target");
+            let mut at = from + direction * 0.5 - Vec3::Y * 0.1;
+            let mut velocity = (direction + Vec3::Y * 0.12).normalize() * 17.0;
+            let heading = (target - from).with_y(0.0).normalize();
+            let mut nearest = f32::MAX;
+            for _ in 0..3000 {
+                velocity.y -= 9.81 * 0.001;
+                at += velocity * 0.001;
+                nearest = nearest.min(at.distance(target));
+                if (at - target).dot(heading) >= 0.0 { break; }
+            }
+            assert!(nearest < 0.08, "missed {target:?} by {nearest}");
+        }
+        assert!(rock_aim(from, Vec3::new(100.0, 0.0, 0.0)).is_none());
+    }
 
     fn player() -> Player {
         Player {
