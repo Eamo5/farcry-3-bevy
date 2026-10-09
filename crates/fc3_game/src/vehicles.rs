@@ -25,6 +25,7 @@ impl Plugin for VehiclesPlugin {
         app.init_resource::<Driving>()
             .init_resource::<Repairing>()
             .init_resource::<StorySeatRequests>()
+            .init_resource::<crate::vehicle_paths::StoryVehiclePaths>()
             .add_systems(PreUpdate, (story_board_test, story_exit_test).chain().after(crate::controls::update_actions).after(crate::story::story_interactions)
                 .run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(OnExit(crate::menu::GameState::Loading), load_vehicles)
@@ -39,10 +40,11 @@ impl Plugin for VehiclesPlugin {
                     vehicle_sounds.after(crate::cinema::CinemaSet),
                     vehicle_hud.before(crate::hud::HudSet),
                     drive_test,
+                    crate::vehicle_paths::story_paths.after(crate::story::StorySet).before(crate::cinema::CinemaSet),
                 )
                     .run_if(in_state(crate::menu::GameState::Playing)),
             )
-            .add_systems(FixedUpdate, drive)
+            .add_systems(FixedUpdate, (crate::vehicle_paths::drive_paths, drive).chain())
             .add_message::<StrayHit>()
             .add_systems(Update, (turn_wheels, wreck_rocket, stray_hits, vehicle_damage, wreck_test).chain().after(crate::cinema::CinemaSet).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(PostUpdate, (sync_vehicle_motion, seat_player, seat_story_actors).chain().before(TransformSystems::Propagate));
@@ -357,6 +359,10 @@ impl Vehicle {
     }
 
     pub fn story_id(&self) -> u64 { self.spawn_id }
+
+    pub(crate) fn driver(&self) -> Option<u64> {
+        self.seats.iter().find(|s| s.kind == 1).and_then(|s| s.pawn)
+    }
 
     /// Never play a driver pose for a passenger, gunner or unsupported seat.
     pub(crate) fn first_person_clip(&self, seat: usize) -> Option<&'static str> {
@@ -1057,6 +1063,57 @@ mod story_vehicle_tests {
     }
 
     #[test]
+    fn scripted_path_waits_for_a_physical_driver_and_motion_then_reports_arrival_once() {
+        use crate::vehicle_paths::{StoryVehiclePaths, drive_paths, story_paths};
+        use fc3_story::data::{Entry, Origin, StoryData};
+        let mut data = StoryData::default();
+        for id in [100, 200] {
+            let fields = if id == 200 { fc3_formats::fcb::Object { fields: vec![(fc3_formats::patrols::SHAPE_POINTS,
+                2u32.to_le_bytes().into_iter().chain([0.0f32, 0.0, 0.0, 0.0, 10.0, 0.0].into_iter().flat_map(f32::to_le_bytes)).collect())], ..default() } }
+                else { fc3_formats::fcb::Object::default() };
+            data.entities.insert(id, Entry { id, name: format!("fixture{id}"), class: "CBasicShapeEntity".into(), pos: [0.0; 3], angles: [0.0; 3],
+                layer: fc3_formats::world::DEFAULT_MISSION_LAYER, origin: Origin::Global,
+                components: std::sync::Arc::new(fc3_formats::fcb::Object::default()), fields: std::sync::Arc::new(fields) });
+        }
+        let mut paths = StoryVehiclePaths::default();
+        paths.native("CAPI_Vehicle.StartVehicleFollowPath", &["100".into(), "200".into(), "11".into()], &data);
+        let pack = fc3_formats::scripts::ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap();
+        let story = fc3_story::Story::new(pack, data).unwrap();
+        story.domino().lua().load(r#"
+            arrivals = { n = 0, _type = { Finished = function(self) self.n = self.n + 1 end } }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("100", arrivals, "Finished", "FollowScriptedPathFinished")
+        "#).exec().unwrap();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).insert_resource(paths).init_resource::<crate::cinema::Cinema>()
+            .init_resource::<avian3d::collider_tree::ColliderTrees>().insert_non_send(crate::story::StoryHost::new(story, None))
+            .add_systems(Update, (drive_paths, story_paths).chain());
+        let ve = app.world_mut().spawn((vehicle(), Transform::IDENTITY, LinearVelocity::ZERO, RigidBody::Dynamic)).id();
+        let arrivals = |app: &App| app.world().non_send::<crate::story::StoryHost>().story.domino().lua().globals()
+            .get::<mlua::Table>("arrivals").unwrap().get::<u32>("n").unwrap();
+        app.update();
+        assert_eq!(arrivals(&app), 0);
+        assert_eq!(app.world().get::<Vehicle>(ve).unwrap().throttle, 0.0);
+        app.world_mut().get_mut::<Vehicle>(ve).unwrap().seats[0].pawn = Some(300);
+        app.world_mut().entity_mut(ve).insert(RigidBody::Kinematic);
+        app.update(); assert_eq!(arrivals(&app), 0);
+        app.world_mut().entity_mut(ve).insert(RigidBody::Dynamic);
+        app.update();
+        assert!(app.world().get::<Vehicle>(ve).unwrap().throttle > 0.0);
+        for _ in 0..10 { app.update(); }
+        assert_eq!(arrivals(&app), 0, "elapsed time cannot substitute for movement");
+        app.world_mut().get_mut::<Transform>(ve).unwrap().translation.z = -9.0;
+        app.update(); assert_eq!(arrivals(&app), 1);
+        for _ in 0..10 { app.update(); }
+        assert_eq!(arrivals(&app), 1);
+        assert!(app.world().get::<Vehicle>(ve).unwrap().brake);
+        app.world().non_send::<crate::story::StoryHost>().story.domino().lua().load(r#"CAPI_Entity.RemoveEntity("100")"#).exec().unwrap();
+        app.update();
+        assert!(!app.world().resource::<StoryVehiclePaths>().owns_controls(100));
+        assert!(app.world().get::<Vehicle>(ve).unwrap().brake);
+        assert_eq!(arrivals(&app), 1);
+    }
+
+    #[test]
     fn mission_vehicle_outlives_source_sector_and_distance_cleanup_but_not_its_layer() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins).init_resource::<crate::mission_layers::MissionLayers>()
@@ -1372,6 +1429,7 @@ fn seat_player(
     mut players: Query<(&mut Transform, &mut Player), Without<Vehicle>>,
     mut vehicles: Query<(&Transform, &mut Vehicle), Without<Player>>,
     cameras: Option<Res<SeatCameras>>,
+    paths: Option<Res<crate::vehicle_paths::StoryVehiclePaths>>,
 ) {
     if cinema.view.is_some() { return; }
     let Some(ve) = driving.vehicle else { return };
@@ -1406,7 +1464,7 @@ fn seat_player(
     pt.translation = eye - pt.rotation * Vec3::Y * (p.eye - HALF_HEIGHT);
     p.velocity = Vec3::ZERO;
     // Controls: throttle and steering (the camera looks freely).
-    if v.seats.get(driving.seat).is_some_and(|s| s.kind == 1) {
+    if v.seats.get(driving.seat).is_some_and(|s| s.kind == 1) && paths.as_ref().is_none_or(|p| !p.owns_controls(v.spawn_id)) {
         v.throttle = actions.movement.y;
         v.steer = -actions.movement.x;
         v.brake = actions.pressed(Action::Jump);

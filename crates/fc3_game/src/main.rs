@@ -68,6 +68,7 @@ mod turrets;
 mod ui_nav;
 mod upload_budget;
 mod vegetation;
+mod vehicle_paths;
 mod vehicles;
 mod video;
 mod villagers;

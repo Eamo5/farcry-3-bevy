@@ -673,3 +673,44 @@ moving convoy; the final inspected image shows the outpost objective and HUD.
 All these images are 2000x1125 despite the requested 1920x1080 startup size.
 Cockpit material/geometry, actor alignment, original UI fidelity and
 uninterrupted manual campaign evidence remain outstanding.
+
+### Physical scripted vehicle paths
+
+`CAPI_Vehicle.StartVehicleFollowPath`, `StopVehicleFollowPath` and
+`SetVehicleSpeed` now dispatch to `fc3_game::vehicle_paths`. The path's kept
+`hidShapePoints` are world-space Dunia positions converted to Bevy; every
+node is visited in authored order using the existing physical suspension,
+engine, steering and brakes. No positions, velocities, arrival callbacks or
+mission completion are injected. Missing streamed entities retain orders;
+missing physical drivers, dead cars and cinematic-owned cars cannot advance
+the route. Layer/removal changes cancel it. Stops do not report completion.
+The single `FollowScriptedPathFinished` callback is queued only when the live
+vehicle reaches the final node; elapsed time alone never finishes a route.
+
+The controller supports loop, requested speed updates, zero-speed braking,
+player-driver interruption when allowed, and stop/continue-on-arrival. Final
+approach slows before the endpoint. Avoidance currently brakes conservatively
+for a forward obstacle and does not find detours; `VehicleReturn=true` remains
+unsupported and logs a warning instead of guessing its semantics. These
+limitations, tuning and wider vehicle/path-family testing remain parity gaps.
+
+Verification passed 222 release workspace unit/doc tests and all 13
+installed-data regressions. The controller tests cover ordered physical
+arrival, turns, stopping, loops, speed changes and malformed orders. The ECS/
+Lua regression waits through driverless/kinematic/static frames, moves its
+explicit fixture to the endpoint, checks exactly one real listener callback
+and verifies cancellation on entity removal. Such constructed positions are
+regression evidence, not live route travel evidence.
+
+Live travel is separately recorded in `fc3-physical-path.err.log`: the original
+briefing graph requested rebel vehicle `2078018927633442802` to follow shape
+`2078018932205234166` at speed 11. Its live physical positions advanced through
+nodes 0–12 in order over approximately 15.5 seconds, then emitted exactly one
+`FollowScriptedPathFinished`. The run also finished the recorded player ride,
+normal-Interact dismount and briefing, and saved seven paired checkpoints.
+The game release build, whitespace check and process exit **0** passed.
+The inspected 30-second truck frame remains above ground with resting
+passenger hands and wrapped subtitles. However, the final inspected image
+shows **YOU DIED** after dismount at the outpost, not successful outpost play.
+Death/checkpoint recovery and combat progression need investigation; this run
+does not establish campaign, visual or UX parity.

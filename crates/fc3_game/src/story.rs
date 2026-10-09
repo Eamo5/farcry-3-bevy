@@ -788,7 +788,7 @@ fn run_story(
         ResMut<crate::progression::PauseMenu>, ResMut<NextState<GameState>>, ResMut<StoryMenuEvents>,
     ),
     (mut area, mut cinema, mut placements): (ResMut<MissionArea>, ResMut<crate::cinema::Cinema>, ResMut<EntityPlacements>),
-    (actions, mut markers, heights, mut voices, driving, vehicle_views, mut seat_requests): (
+    (actions, mut markers, heights, mut voices, driving, vehicle_views, mut seat_requests, mut vehicle_paths): (
         Res<crate::controls::ActionState>,
         ResMut<ObjectiveMarkers>,
         Res<crate::terrain::Heightfield>,
@@ -796,6 +796,7 @@ fn run_story(
         Res<crate::vehicles::Driving>,
         Query<(Entity, &crate::vehicles::Vehicle, &Transform, Option<&crate::combat::Health>), Without<Player>>,
         ResMut<crate::vehicles::StorySeatRequests>,
+        ResMut<crate::vehicle_paths::StoryVehiclePaths>,
     ),
     (info, slot, fov, mut bought, mut towers, ways, mut looted, loot_catalog, mut crafted, mut crafting): (
         Res<CacheInfo>,
@@ -1438,6 +1439,9 @@ fn run_story(
                     }
                     "CAPI_Vehicle.VehicleUseTakeSeat" | "CAPI_Vehicle.VehicleUseExit" => seat_requests.native(&name, &args),
                     "CAPI_Player.ForceSetPlayerInVehicle" => seat_requests.force_player(&args),
+                    "CAPI_Vehicle.StartVehicleFollowPath" | "CAPI_Vehicle.StopVehicleFollowPath" | "CAPI_Vehicle.SetVehicleSpeed" => {
+                        vehicle_paths.native(&name, &args, &host.story.data());
+                    }
                     "CAPI_Player.GiveMedpacksToPlayer" | "CAPI_Player.RemoveMedpacksToPlayer" => {
                         if let Ok(mut stats) = stats.single_mut() {
                             apply_medpack_command(&mut stats.medkits, perks.medkit_cap, &name, &args);
