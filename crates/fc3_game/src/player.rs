@@ -328,12 +328,16 @@ fn place_on_ground(
     spatial: SpatialQuery,
     chunks: Query<(&crate::terrain::TerrainChunk, &Children)>,
     colliders: Query<(), With<crate::physics::TerrainCollider>>,
-    objects: Query<&crate::objects::WorldObject>,
+    objects: Query<(&crate::objects::WorldObject, &ChildOf, Has<crate::physics::ObjectCollisionReady>)>,
+    object_roots: Query<&crate::objects::SectorObjects>,
+    streamer: Res<crate::objects::ObjectStreamer>,
+    mut collision_ready: Local<bool>,
     server: Res<AssetServer>,
     args: Res<Args>,
 ) {
     let Ok((entity, mut p, mut t)) = player.single_mut() else { return };
     if !p.spawning {
+        *collision_ready = false;
         return;
     }
     // --underground: the floor just below the requested height (a cave), once
@@ -358,6 +362,20 @@ fn place_on_ground(
     }
     // Kept to its height: the surface just below the point given.
     if p.keep_height {
+        // Terrain commonly arrives before the building containing the save.
+        // Grounding at that point puts the player underneath a late floor.
+        let ready = streamer.centre() == Some((here, true))
+            && objects.iter().all(|(_, parent, ready)| ready
+                || object_roots.get(parent.parent()).map_or(true, |root| root.coord != here));
+        if !ready {
+            *collision_ready = false;
+            return;
+        }
+        // Let the physics spatial index observe newly inserted colliders.
+        if !*collision_ready {
+            *collision_ready = true;
+            return;
+        }
         let filter = SpatialQueryFilter::from_excluded_entities([entity]);
         // Probe near the requested feet, not above the head: an overhead
         // doorway/roof is not the floor of an indoor checkpoint.
@@ -378,7 +396,7 @@ fn place_on_ground(
     // Exclude the player's own capsule from the probe.
     let hit = spatial.cast_ray(top, Dir3::NEG_Y, 200.0, true, &SpatialQueryFilter::from_excluded_entities([entity]));
     if let Some(h) = &hit {
-        let what = objects.get(h.entity).ok().and_then(|o| server.get_path(&o.model)).map(|p| p.to_string()).unwrap_or_else(|| "terrain".into());
+        let what = objects.get(h.entity).ok().and_then(|(o, _, _)| server.get_path(&o.model)).map(|p| p.to_string()).unwrap_or_else(|| "terrain".into());
         info!("spawn ray hit {what} at y={:.2} (terrain {ground:.2})", top.y - h.distance);
     }
     let surface = hit.map(|h| top.y - h.distance).unwrap_or(ground).max(ground);

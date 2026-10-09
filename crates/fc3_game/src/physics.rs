@@ -41,6 +41,11 @@ impl Plugin for WorldPhysicsPlugin {
 #[derive(Component)]
 pub struct TerrainCollider;
 
+/// The placed object's collision has been considered, including models that
+/// intentionally have no blocking geometry.
+#[derive(Component)]
+pub struct ObjectCollisionReady;
+
 /// Builds the collider for one sector's ground: a heightfield, or a triangle
 /// mesh with the cave mouths left open when the sector has any. The collider
 /// entity must be placed at the sector centre, i.e. local `(32, 0, -32)` from
@@ -175,10 +180,14 @@ fn object_colliders(
     for _ in 0..COLLIDERS_PER_FRAME {
         let Some(entity) = cache.waiting.pop_front() else { break };
         let Ok((obj, _)) = objects.get(entity) else { continue };
-        let Some(model) = models.get(&obj.model) else { continue };
+        let Some(model) = models.get(&obj.model) else {
+            cache.waiting.push_back(entity);
+            continue;
+        };
         if let Some(collider) = cache.get(obj.model.id(), model) {
             commands.entity(entity).try_insert((RigidBody::Static, collider));
         }
+        commands.entity(entity).try_insert(ObjectCollisionReady);
     }
 }
 
@@ -186,6 +195,33 @@ fn object_colliders(
 mod tests {
     use super::*;
     use fc3_formats::terrain::SectorCoord;
+
+    #[test]
+    fn object_collision_readiness_waits_for_assets_and_accepts_nonblocking_models() {
+        let mut app = App::new();
+        app.init_resource::<ModelColliders>()
+            .init_resource::<Assets<Fc3Model>>()
+            .add_systems(Update, object_colliders);
+        let handle = app.world().resource::<Assets<Fc3Model>>().reserve_handle();
+        let entity = app.world_mut().spawn((WorldObject { model: handle.clone(), entity_index: 0 }, Transform::IDENTITY)).id();
+        app.update();
+        assert!(app.world().get::<ObjectCollisionReady>(entity).is_none());
+        assert!(app.world().resource::<ModelColliders>().waiting.contains(&entity));
+        let model = |collision| Fc3Model {
+            lods: Vec::new(), aabb_min: Vec3::splat(-2.0), aabb_max: Vec3::splat(2.0), collision,
+            bones: Vec::new(), is_vegetation: false, inverse_bindposes: None,
+        };
+        app.world_mut().resource_mut::<Assets<Fc3Model>>().insert(handle.id(), model(Some(std::sync::Arc::new(crate::cache_assets::CollisionMesh {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Z], triangles: vec![[0, 2, 1]], from_havok: true,
+        })))).unwrap();
+        let empty = app.world_mut().resource_mut::<Assets<Fc3Model>>().add(model(None));
+        let nonblocking = app.world_mut().spawn((WorldObject { model: empty, entity_index: 1 }, Transform::IDENTITY)).id();
+        app.update();
+        assert!(app.world().get::<ObjectCollisionReady>(entity).is_some());
+        assert!(app.world().get::<Collider>(entity).is_some());
+        assert!(app.world().get::<ObjectCollisionReady>(nonblocking).is_some());
+        assert!(app.world().get::<Collider>(nonblocking).is_none());
+    }
 
     #[test]
     fn heightfield_matches_terrain_samples() {

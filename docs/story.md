@@ -900,6 +900,22 @@ Initial grounding can precede nearby object-collision readiness; this remains
 a hypothesis to investigate rather than a claimed fix. Current evidence covers
 roof avoidance and B15 progression, not complete indoor save/retry fidelity.
 
+The `fc3-continue-stream` trace confirmed the next cause: grounding at
+`191.888` finished before sector 22121's object root existed. Height-preserving
+placement now waits for the current sector's objects and their collision
+processing, including intentionally nonblocking models, then allows a frame
+for spatial indexing. Delayed model assets remain queued rather than losing
+their collision request. The new regression exercises both delayed blocking
+geometry and nonblocking readiness.
+
+`fc3-ground-ready` restored the same previously unstable save and settled at
+`[-2453.6516,193.46118,-3738.1907]`, about 6 mm from the saved point instead of
+falling 1.6 m. A second ordinary Continue settled at
+`[-2453.6545,193.46118,-3738.1875]` (about 4 mm additional movement); its inspected
+image confirms the indoor platform. Both runs exited 0. Release build and all
+227 workspace unit/doc tests pass. This verifies local-sector floor readiness;
+cross-sector structures and full world/checkpoint rollback still need coverage.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected
