@@ -371,6 +371,12 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
             "CProximityTriggerComponent_SetNotCheckLookAt" => c.use_rules.entry(e).or_default().look_at = Some(false),
             "CProximityTriggerComponent_SetCheckAngle" => c.use_rules.entry(e).or_default().angle = Some(true),
             "CProximityTriggerComponent_SetNotCheckAngle" => c.use_rules.entry(e).or_default().angle = Some(false),
+            "CVehicle_SetAsUsable" => c.vehicle_rules.entry(e).or_default().unusable = false,
+            "CVehicle_SetAsUnusable" => c.vehicle_rules.entry(e).or_default().unusable = true,
+            "CVehicle_SetExitDisabled" => c.vehicle_rules.entry(e).or_default().exit_disabled = true,
+            "CVehicle_SetExitEnabled" => c.vehicle_rules.entry(e).or_default().exit_disabled = false,
+            "CVehicle_SetAsAnimated" => c.vehicle_rules.entry(e).or_default().animated = true,
+            "CVehicle_SetAsNotAnimated" => c.vehicle_rules.entry(e).or_default().animated = false,
             _ => {}
         }
         c.emit(Command::EntityEvent { entity: e, event: event.0 });

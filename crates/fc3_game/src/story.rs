@@ -788,11 +788,14 @@ fn run_story(
         ResMut<crate::progression::PauseMenu>, ResMut<NextState<GameState>>, ResMut<StoryMenuEvents>,
     ),
     (mut area, mut cinema, mut placements): (ResMut<MissionArea>, ResMut<crate::cinema::Cinema>, ResMut<EntityPlacements>),
-    (actions, mut markers, heights, mut voices): (
+    (actions, mut markers, heights, mut voices, driving, vehicle_views, mut seat_requests): (
         Res<crate::controls::ActionState>,
         ResMut<ObjectiveMarkers>,
         Res<crate::terrain::Heightfield>,
         ResMut<crate::faces::Voices>,
+        Res<crate::vehicles::Driving>,
+        Query<(Entity, &crate::vehicles::Vehicle, &Transform, Option<&crate::combat::Health>), Without<Player>>,
+        ResMut<crate::vehicles::StorySeatRequests>,
     ),
     (info, slot, fov, mut bought, mut towers, ways, mut looted, loot_catalog, mut crafted, mut crafting): (
         Res<CacheInfo>,
@@ -916,6 +919,19 @@ fn run_story(
     view.player_state.skills = progress.skills.iter().map(|s| s.to_ascii_lowercase()).collect();
     view.player_state.on_zipline = matches!(*mount, crate::traversal::Mount::Zip { .. });
     view.player_state.look_angles = [p.pitch.to_degrees(), 0.0, -p.yaw.to_degrees()];
+    for (entity, vehicle, at, health) in &vehicle_views {
+        view.spawned.insert(vehicle.story_id(), fc3_story::Live { pos: to_dunia(at.translation), alive: health.is_none_or(|h| !h.dead),
+            health: health.map_or(1.0, |h| h.current), ai_state: 0 });
+        view.pawn_vehicles.extend(vehicle.npc_occupants());
+        if p.driving && driving.vehicle == Some(entity) {
+            if let Some(occupant) = vehicle.occupant(driving.seat) {
+                view.player_state.vehicle = Some(occupant.vehicle);
+                view.player_state.seat = occupant.kind;
+                view.player_state.seat_index = occupant.index;
+                view.player_state.vehicle_type = occupant.vehicle_type;
+            }
+        }
+    }
     if let Ok(inv) = inventory.single() {
         (view.player_state.weapons, view.player_state.in_hands) = story_weapons(&inv.defs, &inv.slots, inv.current, &host.shop_items);
         for (name, count) in [("Grenade", inv.grenades), ("Molotov", inv.molotovs), ("C4", inv.c4), ("Mine", inv.mines)] {
@@ -1033,7 +1049,8 @@ fn run_story(
             info!("story autopilot: trigger {} {}: {}", w.0, w.1, host.story.trigger_debug(w.0));
         }
     }
-    if gameplay && std::env::var("FC3_STORY_AUTOPILOT").is_ok() && host.quiet > 6.0 && host.story.watched_loot_filters().is_empty() {
+    if gameplay && !p.driving && cinema.view.is_none() && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
+        && host.quiet > 6.0 && host.story.watched_loot_filters().is_empty() {
         let watched = host.story.watched_triggers();
         // Stuck: triggers stepped into before they were armed go again.
         if host.quiet > 25.0 {
@@ -1419,6 +1436,8 @@ fn run_story(
                     "CAPI_Player.EnablePlantLooting" if a(0) == fc3_story::PLAYER.to_string() => {
                         scripted.plant_looting = a(1) != "false" && a(1) != "0";
                     }
+                    "CAPI_Vehicle.VehicleUseTakeSeat" | "CAPI_Vehicle.VehicleUseExit" => seat_requests.native(&name, &args),
+                    "CAPI_Player.ForceSetPlayerInVehicle" => seat_requests.force_player(&args),
                     "CAPI_Player.GiveMedpacksToPlayer" | "CAPI_Player.RemoveMedpacksToPlayer" => {
                         if let Ok(mut stats) = stats.single_mut() {
                             apply_medpack_command(&mut stats.medkits, perks.medkit_cap, &name, &args);
@@ -1474,7 +1493,7 @@ struct BoxPanel(u64);
 const USE_HOLD_SECONDS: f32 = 0.5;
 
 #[derive(Default)]
-struct StoryInteraction {
+pub(crate) struct StoryInteraction {
     target: Option<u64>,
     held: f32,
     latched: bool,
@@ -1522,7 +1541,7 @@ impl StoryInteraction {
 /// Mission use triggers are driven by the player's real interact control,
 /// before ordinary pickups, reloads and vehicles can claim the same press.
 #[allow(clippy::too_many_arguments)]
-fn story_interactions(
+pub(crate) fn story_interactions(
     host: Option<NonSendMut<StoryHost>>,
     state: Res<State<GameState>>,
     time: Res<Time>,

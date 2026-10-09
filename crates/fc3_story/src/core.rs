@@ -169,6 +169,8 @@ pub struct Core {
     pub poses: HashMap<u64, crate::Pose>,
     /// Runtime overrides of proximity-trigger use restrictions.
     pub use_rules: HashMap<u64, crate::triggers::UseRules>,
+    pub vehicle_rules: HashMap<u64, crate::vehicles::Rules>,
+    pub vehicle_departures: HashMap<u64, crate::vehicles::Occupant>,
 }
 
 impl Core {
@@ -218,6 +220,8 @@ impl Core {
             binds: HashMap::new(),
             poses: HashMap::new(),
             use_rules: HashMap::new(),
+            vehicle_rules: HashMap::new(),
+            vehicle_departures: HashMap::new(),
         }
     }
 

@@ -38,9 +38,25 @@ impl Core {
         }
         self.removed.contains(&id) || self.dead.contains(&id) || self.view.spawned.get(&id).is_some_and(|l| !l.alive)
     }
+
+    fn vehicle_occupant(&self, pawn: u64) -> Option<crate::vehicles::Occupant> {
+        self.vehicle_departures.get(&pawn).copied().or_else(|| {
+            if pawn == PLAYER {
+                self.view.player_state.vehicle.map(|vehicle| crate::vehicles::Occupant { vehicle, kind: self.view.player_state.seat,
+                    index: self.view.player_state.seat_index, vehicle_type: self.view.player_state.vehicle_type })
+            } else { self.view.pawn_vehicles.get(&pawn).copied() }
+        })
+    }
 }
 
 pub(super) fn register(r: &Reg) -> mlua::Result<()> {
+    // Original Lua registration: wheeled=0; seat types are 1/2/3. Vehicle
+    // animation kits (Technical=10) are a different enum, not query types.
+    for (name, value) in [("VEHICLE_TYPE_WHEELED", 0), ("VEHICLE_TYPE_FLOATING", 1), ("VEHICLE_TYPE_PARAGLIDER", 2),
+        ("VEHICLE_TYPE_MOTORCYCLE", 3), ("VEHICLE_TYPE_HELICOPTER", 4), ("VEHICLE_TYPE_PLANE", 5), ("VEHICLE_TYPE_WINGSUIT", 6),
+        ("VEHICLE_TYPE_NONE", 7), ("VEHICLE_SEAT_NO_SEAT", 0), ("VEHICLE_SEAT_DRIVER", 1), ("VEHICLE_SEAT_GUNNER", 2), ("VEHICLE_SEAT_PASSENGER", 3)] {
+        r.d.lua().globals().set(name, value)?;
+    }
     let eq = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
 
     // ---- inventory
@@ -138,12 +154,10 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
 
     // ---- pawn state
     r.f("CAPI_Pawn.IsPawnDead", |c, pawn: Text| pawn.id().is_some_and(|p| c.is_dead(p)))?;
-    r.f("CAPI_Pawn.GetPawnVehicle", |c, pawn: Text| match pawn.id() {
-        Some(PLAYER) => c.view.player_state.vehicle.map(|v| v.to_string()).unwrap_or_else(|| fc3_domino::INVALID_ID.to_string()),
-        _ => fc3_domino::INVALID_ID.to_string(),
-    })?;
-    r.f("CAPI_Pawn.GetPawnVehicleSeat", |c, _p: Text| c.view.player_state.seat as f64)?;
-    r.f("CAPI_Pawn.GetPawnVehicleType", |c, _a: mlua::Variadic<Value>| c.view.player_state.vehicle_type as f64)?;
+    r.f("CAPI_Pawn.GetPawnVehicle", |c, pawn: Text| pawn.id().and_then(|id| c.vehicle_occupant(id))
+        .map(|o| o.vehicle.to_string()).unwrap_or_else(|| fc3_domino::INVALID_ID.to_string()))?;
+    r.f("CAPI_Pawn.GetPawnVehicleSeat", |c, pawn: Text| pawn.id().and_then(|id| c.vehicle_occupant(id)).map_or(0.0, |o| o.kind as f64))?;
+    r.f("CAPI_Pawn.GetPawnVehicleType", |c, pawn: Text| pawn.id().and_then(|id| c.vehicle_occupant(id)).map_or(7.0, |o| o.vehicle_type as f64))?;
     r.f("CAPI_Pawn.GetPawnStance", |c, _p: Text| c.view.player_state.stance as f64)?;
     r.f("CAPI_Pawn.IsPawnOnZipline", |c, _a: mlua::Variadic<Value>| c.view.player_state.on_zipline)?;
     r.constant("CAPI_Pawn.GetCurrentMoveName", "")?;
@@ -159,6 +173,13 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.f("CAPI_Vehicle.IsVehicleDisabled", |c, v: Text| v.id().is_some_and(|i| c.is_dead(i)))?;
     r.constant("CAPI_Vehicle.IsVehicleFlipped", false)?;
     r.constant("CAPI_Vehicle.IsVehicleUnderwater", false)?;
-    r.f("CAPI_Vehicle.IsVehicleUsable", |c, v: Text| v.id().is_some_and(|i| !c.is_dead(i)))?;
+    r.f("CAPI_Vehicle.IsVehicleUsable", |c, v: Text| v.id().is_some_and(|i| c.is_loaded(i) && !c.is_dead(i)
+        && !c.vehicle_rules.get(&i).is_some_and(|r| r.unusable)))?;
+    r.f("CAPI_Vehicle.SetIsSeatLocked", |c, (vehicle, kind, index, locked): (Text, Num, Num, Flag)| {
+        let Some(id) = vehicle.id() else { return };
+        let key = (kind.or(1.0) as i32, index.or(0.0) as i32);
+        let rules = c.vehicle_rules.entry(id).or_default();
+        if locked.0 { rules.locked.insert(key); } else { rules.locked.remove(&key); }
+    })?;
     Ok(())
 }

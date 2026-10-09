@@ -45,8 +45,10 @@ fn stream_layers(
     dressed: Res<crate::story_actors::DressedEntities>,
     world: Res<crate::pickups::WorldState>,
     host: Option<NonSend<crate::story::StoryHost>>,
+    vehicles: Query<&crate::vehicles::Vehicle>,
 ) {
     let data = host.as_ref().map(|h| h.story.data());
+    let mut live_vehicles: HashSet<u64> = vehicles.iter().map(|v| v.story_id()).collect();
     let mut budget = 2;
     for (root, so, spawned) in &mut roots {
         let Some(sector) = sectors.get(&so.sector) else { continue };
@@ -93,6 +95,7 @@ fn stream_layers(
             for (p, handle) in content.placements.iter().zip(&handles) {
                 // Characters are spawned as characters (`story_actors`).
                 let entity = content.entities.get(p.entity as usize);
+                if entity.is_some_and(|e| live_vehicles.contains(&e.id)) { continue; }
                 if entity.is_some_and(|e| world.removed.contains(&e.id)) { continue; }
                 if entity.is_some_and(|e| crate::objects::is_character(&e.class) || dressed.0.contains(&e.id)) {
                     continue;
@@ -101,7 +104,16 @@ fn stream_layers(
                 if model.lods.is_empty() {
                     continue;
                 }
-                let obj = spawn_placement(&mut commands, lroot, sector, p, handle, model);
+                let obj = if let Some((e, layout)) = entity.and_then(|e| data.as_ref()?.entities.get(&e.id)
+                    .and_then(fc3_story::vehicles::Layout::from_entry).map(|layout| (e, layout))) {
+                    if let Some(vehicle) = crate::vehicles::build_placed_vehicle(&mut commands, sector, p, model, e.id, &layout) {
+                        live_vehicles.insert(e.id);
+                        commands.entity(vehicle).insert(crate::vehicles::MissionVehicle(*layer));
+                        vehicle
+                    } else {
+                        spawn_placement(&mut commands, lroot, sector, p, handle, model)
+                    }
+                } else { spawn_placement(&mut commands, lroot, sector, p, handle, model) };
                 placed.insert(p.entity, obj);
                 if let Some(e) = entity {
                     commands.entity(obj).insert(crate::objects::PlacedId(e.id));

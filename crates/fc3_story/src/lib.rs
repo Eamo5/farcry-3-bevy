@@ -18,6 +18,7 @@ mod natives;
 pub mod save;
 pub mod triggers;
 pub mod travel;
+pub mod vehicles;
 pub mod values;
 
 use std::cell::RefCell;
@@ -73,6 +74,7 @@ pub struct PlayerView {
     pub stance: u8,
     pub vehicle: Option<u64>,
     pub seat: i32,
+    pub seat_index: i32,
     pub vehicle_type: i32,
     /// Degrees (pitch, roll, yaw).
     pub look_angles: [f32; 3],
@@ -110,6 +112,8 @@ pub struct View {
     pub player_in_vehicle: bool,
     /// Story entities the host has spawned (NPCs, props), by id.
     pub spawned: HashMap<u64, Live>,
+    /// Physical NPC occupants; script seat requests alone do not populate this.
+    pub pawn_vehicles: HashMap<u64, vehicles::Occupant>,
     /// Hours (0..24).
     pub time_of_day: f32,
 }
@@ -416,6 +420,7 @@ impl Story {
     /// Advances the story by `dt` seconds with the world as `view` shows it;
     /// returns what the world should do.
     pub fn update(&mut self, dt: f32, view: View) -> Vec<Command> {
+        let previous_occupants = vehicles::occupants(&self.core.borrow().view);
         {
             let mut c = self.core.borrow_mut();
             // Inventory entities have no world placement. Their availability
@@ -468,6 +473,7 @@ impl Story {
             natives::world::update_triggers(&mut c);
         }
         self.pump();
+        self.vehicle_changes(previous_occupants);
         self.take_commands()
     }
 

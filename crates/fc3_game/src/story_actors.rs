@@ -98,17 +98,19 @@ pub struct StoryActor {
     path: Vec<Vec3>,
     /// A scene (`cinema`) is playing it.
     pub in_scene: bool,
+    /// A physical vehicle seat owns movement (cinematics may still pose it).
+    pub seated: bool,
 }
 
 impl StoryActor {
     pub(crate) fn new(id: u64, rig: Option<Entity>, armed: bool) -> Self {
         Self { id, rig, dead: false, armed, base_clips: None, ca_then: None,
-            task: None, path: Vec::new(), in_scene: false }
+            task: None, path: Vec::new(), in_scene: false, seated: false }
     }
 
     /// Authored actions and cinematics own this actor until released.
     pub(crate) fn script_driven(&self) -> bool {
-        self.in_scene || self.task.is_some()
+        self.in_scene || self.seated || self.task.is_some()
     }
 
     /// A teleport invalidates the route from the old position. Keep the
@@ -353,7 +355,7 @@ fn actor_tasks(
     let dt = time.delta_secs();
     let data = host.story.data();
     for (entity, mut a, mut t, npc, scripted) in &mut actors {
-        if a.dead {
+        if a.dead || a.seated {
             continue;
         }
         let id = a.id;
@@ -514,7 +516,7 @@ fn actor_alerts(
     }
     let Some(mut host) = host else { return };
     for (entity, mut a, t, mut npc) in &mut actors {
-        if a.dead || a.in_scene || npc.awareness <= 0.35 || npc.last_known.is_none() {
+        if a.dead || a.in_scene || a.seated || npc.awareness <= 0.35 || npc.last_known.is_none() {
             continue;
         }
         debug!(
@@ -554,7 +556,7 @@ fn actor_idle(
         let Some(rig) = a.rig else { continue };
         // Moving characters animate as they go (`actor_tasks`); scenes pose
         // theirs.
-        if a.in_scene || a.task.as_ref().is_some_and(|t| !t.arrived) {
+        if a.in_scene || a.seated || a.task.as_ref().is_some_and(|t| !t.arrived) {
             continue;
         }
         if log {

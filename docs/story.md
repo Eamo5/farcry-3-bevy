@@ -434,7 +434,7 @@ end-to-end tutorial success. Its captured snapshots confirm zero campaign
 starter medkits. Missing sidecars for multiple checkpoints in one frame were
 found during that test; snapshot requests are now queued rather than overwritten.
 
-Remaining gaps include the mission truck's vehicle use/seat callbacks, the
+At that point, remaining gaps included the mission truck's vehicle use/seat callbacks, the
 opening distraction's repeatability, in-session death inventory restoration,
 authored medical/skill attributes, the original crafting-page layout, other
 safehouse/mission interactions and uninterrupted cinematics. Earlier hunting
@@ -455,7 +455,9 @@ runtime error was present in the follow-up logs. Automated runs still skip
 cinematics and substitute traversal/unimplemented gameplay: full visual,
 gameplay and UX parity has not been established.
 
-The next vehicle investigation identifies `Globals.JAS_080_MAIN.eJeep` as
+### Authored vehicle seats and cinematic ownership
+
+The vehicle investigation identifies `Globals.JAS_080_MAIN.eJeep` as
 `2076001291963743153`, named `JAS_060_080_100_Car`, on layer
 `0x607dc6a3facbcc` at `[-867.777, 2257.51, 123.526]`. Despite the "truck"
 objective it uses the authored Technical model, not the host's cargo-truck
@@ -464,3 +466,87 @@ definition. Its `CFCXVehicle.SeatsInfo` includes `DRIVER_SITPOINT`,
 `VehicleListener_v2.lua` waits on pawn `IsInVehicle`/`IsOutVehicle` events and
 filters them through `GetPawnVehicle`, so fabricated sit events without a real
 vehicle/seat transaction will not be used to advance this objective.
+
+Mission vehicle placements now bind supported vehicle models to the host's
+normal dynamic vehicle path instead of spawning a static duplicate. Selection
+matches the actual cached model, not the mission entity's display name. The
+binding preserves the placement pose, uniform scale, material overrides,
+`PlacedId` and owning mission layer. Dynamic mission vehicles are not parented
+to their source streamed sector; layer teardown owns their lifetime, generic
+distance cleanup excludes them, and source-sector restreaming must not create
+a second vehicle with the same authored id.
+
+`CFCXVehicle.SeatsInfo` supplies seat type, per-type index and bone hash. Bind
+hierarchies resolve the authored sit points, with missing or cyclic bones
+rejected. `SetIsSeatLocked` and `CVehicle` usable/exit/animated controls survive
+streaming in the story runtime. Normal Interact selects an unlocked, unoccupied
+seat; a passenger cannot steer. Script `VehicleUse` requests wait for both
+physical entities, seat NPCs without overwriting another pawn, and release old
+seats on transfer or exit. NPC movement yields to seats; cinematics can still
+own their poses. Destroyed/despawned actors no longer occupy stale seats.
+Driver departure also clears residual throttle/steering; a passenger alone
+does not release the parking brake. A vanished vehicle releases the player
+and re-enables their collider. The original `ForceSetPlayerInVehicle` argument
+order is supported as a physical seat request, including authored forced
+placement through player interaction locks, but never replacing another pawn.
+
+Live snapshots publish the real vehicle id and each pawn's seat. Changes raise
+`IsInVehicle`, `ChangeSeat` and `IsOutVehicle` once; leave callbacks temporarily
+query the vehicle being left, as required by the installed listener's filter,
+before normal queries return the new occupancy. Seat requests alone do not
+change these queries or produce successful sit events. The Lua vehicle enums
+were checked against the installed engine's registrations: Technical animation
+type 10 differs from the queried wheeled type 0; seats are driver 1, gunner 2,
+passenger 3, and no vehicle is type 7.
+
+Scene-owned and explicitly animated vehicles become kinematic after that
+frame's scene changes, with linear/angular velocity cleared. Vehicle forces
+skip non-dynamic bodies. The normal seat camera yields while a cinematic
+camera owns the view, and traversal autopilot no longer repositions a seated
+player or a player under a cinematic camera. These ownership regressions do
+not establish the correct original ride path, camera or animated prop poses.
+
+Regressions exercise real Interact passenger entry and exit locking, slot
+selection and collisions, delayed NPC arrival, physical driver binding,
+transfers/exit and stale-seat cleanup, authored Technical seat metadata, and
+the installed `VehicleListener_v2` and `GetPawnVehicleInfo` scripts (including
+wrong-pawn/wrong-vehicle rejection and filtered leave). `FC3_STORY_BOARD=<id>`
+is an explicit smoke-test helper that repositions beside that vehicle and
+presses normal Interact only while a player-entry listener is armed; it does
+not inject seat occupancy or mission completion. This is not manual boarding
+evidence. Entry/exit animations, animated seated poses and precise first-person
+head placement, gunner interaction, other vehicle families and original vehicle
+tuning/damage attributes remain parity gaps. The next briefing uses
+`StartVehicleFollowPath`, which still has no host driving implementation;
+completing the boarding objective must not be confused with reproducing that
+ride or finishing `JAS_100_BRIEF_B10`.
+
+The 95-second `fc3-vehicle-cinematic-fixed.log` run loaded the explicit partial
+crafting fixture, crafted only its remaining Medicine and Simple Rucksack,
+then boarded the authored Technical through the normal Interact path. The log
+records Dennis (`2074715771025504507`) in driver `(1, 0)` and Jason in passenger
+`(3, 0)`, followed by `JAS_080_B40` and `JAS_080_MAIN` completion and
+`JAS_100_BRIEF_B10` starting. Paired checkpoints retain two medkits, completed
+crafting progress, $90 and finite 1911 ammunition. No death, mission failure,
+panic or runtime error was logged. This is an automated, fixture-based boarding
+check, not uninterrupted campaign or manual-play evidence.
+
+The inspected screenshot is **failed ride/visual evidence**: the Technical is
+below terrain, the previous truck objective remains visible, and the briefing
+does not finish. The native follow-path command is still unimplemented, and
+scene prop anchoring/physics release plus seated camera/animation alignment need
+further work. The filename does not imply that the ride's cinematic is fixed.
+The screenshot process again returned exit 1 despite saving the image. Mission
+vehicle lifetime was subsequently separated from source-sector streaming,
+with a regression for distance cleanup and mission-layer removal; this does
+not fix or bypass the authored ride.
+
+Final validation passed release workspace tests (210 unit/doc tests, with the
+10 installed-only tests ignored in the ordinary run), all 10 installed-data/
+script regressions, game/tool/converter release builds, and staged whitespace
+checks. The final `fc3-vehicle-layer-owned.log` run repeated the real driver/
+passenger transactions and B40/main completion after the lifetime change,
+again producing paired checkpoints. Its inspected 20-second screenshot still
+shows incorrect cinematic placement below the world, and the process returned
+exit 1. It confirms the boarding milestone, not a working ride, cinematic
+reproduction or full visual/gameplay/UX parity.

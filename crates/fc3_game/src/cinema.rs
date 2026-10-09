@@ -129,6 +129,11 @@ impl Cinema {
     pub fn cutscene(&self) -> bool {
         self.playing.iter().any(|p| p.seq.cutscene)
     }
+
+    /// Scene-owned props must not simultaneously fall or be driven by physics.
+    pub fn owns_entity(&self, id: u64) -> bool {
+        self.playing.iter().any(|p| p.bindings.values().any(|&entity| entity == id))
+    }
 }
 
 struct Playing {
@@ -677,7 +682,11 @@ mod tests {
         let mut cinema = Cinema::default();
         cinema.playing = vec![playing(1, Some(10), "grant_loop"), playing(2, Some(20), "other"),
             playing(3, Some(10), "prop_loop"), playing(0, None, "qte")];
+        cinema.playing[2].bindings.insert(1, 100);
+        assert!(cinema.owns_entity(100));
+        assert!(!cinema.owns_entity(101));
         assert_eq!(cinema.stop_meta(10), vec![(1, "grant_loop".into()), (3, "prop_loop".into())]);
+        assert!(!cinema.owns_entity(100));
         assert_eq!(cinema.released.len(), 2);
         assert_eq!(cinema.playing.iter().map(|p| p.file.as_str()).collect::<Vec<_>>(), vec!["other", "qte"]);
         assert!(cinema.stop_meta(10).is_empty());
