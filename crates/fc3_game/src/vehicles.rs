@@ -203,11 +203,60 @@ pub struct VehicleAssets {
     pub boat_ring: Handle<Fc3Model>,
 }
 
-fn load_vehicles(mut commands: Commands, server: Res<AssetServer>) {
+/// Model-space eyes from the actual seated first-person pose, read once at
+/// loading. Missing clips retain the existing sit-point fallback.
+#[derive(Resource, Default)]
+struct SeatCameras(std::collections::HashMap<&'static str, Vec3>);
+
+fn seated_clip(def: usize, kind: i32, index: i32) -> Option<&'static str> {
+    let d = DEFS.get(def)?;
+    match (d.name, kind, index) {
+        ("Technical", 1, 0) => Some(r"vehicles\4x4_technical\1stge_fulb_driving_nodir_nowep_4x4tech.mab"),
+        ("Technical", 3, 0) => Some(r"vehicles\4x4_technical\1stge_fulb_passenger_nodir_nowep_4x4tech.mab"),
+        ("4x4", 1, 0) => Some(r"vehicles\4x4\1stge_fulb_driving_nodir_nowep_4x4.mab"),
+        ("4x4", 3, 0) => Some(r"vehicles\4x4\1stge_fulb_passenger_nodir_nowep_4x4.mab"),
+        ("4x4", 3, 1 | 2) => Some(r"vehicles\4x4\1stge_fulb_backseat_nodir_nowep_4x4.mab"),
+        ("Sedan" | "Hatchback", 1, 0) => Some(r"vehicles\car\1stge_fulb_driving_nodir_nowep_civiliancar.mab"),
+        ("Sedan" | "Hatchback", 3, 0) => Some(r"vehicles\car\1stge_fulb_passenger_nodir_nowep_civiliancar.mab"),
+        ("Buggy", 1, 0) => Some(r"vehicles\buggy\1stge_fulb_driving_nodir_nowep_dune.mab"),
+        ("Buggy", 3, 0) => Some(r"vehicles\buggy\1stge_fulb_passenger_nodir_nowep_dune.mab"),
+        ("Truck", 1, 0) => Some(r"vehicles\truck\big_truck\1stge_fulb_driving_nodir_nowep_truck.mab"),
+        ("Truck", 3, 0) => Some(r"vehicles\truck\big_truck\1stge_fulb_passenger_nodir_nowep_truck.mab"),
+        ("Quad bike", 1, 0) => Some(r"vehicles\atv\1stge_fulb_driving_nodir_nowep_atv.mab"),
+        ("Jet ski", 1, 0) => Some(r"vehicles\boat\jetski\1stge_fulb_drivingfps_nodir_nowep_jetski.mab"),
+        ("Boat", 1, 0) => Some(r"vehicles\boat\zodiac\1stge_fulb_driving_zodiac.mab"),
+        ("Patrol boat", 1, 0) => Some(r"vehicles\boat\rigidhullboat\1stge_fulb_driving_rigidhull_boat.mab"),
+        ("Hang glider", 1, 0) => Some(r"vehicles\other\glider\1stge_fulb_idle_+000fw_nowep_vo_glider.mab"),
+        _ => None,
+    }
+}
+
+fn clip_eye(skel: &fc3_formats::anim::Skeleton, clip: &fc3_formats::anim::Clip) -> Option<Vec3> {
+    let camera = crate::cinema::bone_world(skel, clip, 0.0, "Camera")?;
+    let eye = (crate::cinema::clip_root(clip, 0.0).to_matrix() * camera).transform_point3(Vec3::ZERO);
+    eye.is_finite().then_some(eye)
+}
+
+fn load_vehicles(mut commands: Commands, server: Res<AssetServer>, info: Res<crate::data::CacheInfo>) {
     let models = DEFS.iter().map(|d| server.load(cache_path(&cache::model_rel(&format!("{VEHICLES}{}", d.model))))).collect();
     let turret_base = server.load(cache_path(&cache::model_rel(&format!("{VEHICLES}{TURRET_BASE}"))));
     let boat_ring = server.load(cache_path(&cache::model_rel(&format!("{VEHICLES}{BOAT_RING}"))));
     commands.insert_resource(VehicleAssets { models, turret_base, boat_ring });
+    let mut cameras = SeatCameras::default();
+    let skeleton = std::fs::read(info.root.join(cache::skeleton_rel(r"graphics\actors_\_skeleton_master\hips_ref.skeleton")))
+        .ok().and_then(|b| fc3_formats::anim::parse_skeleton(&b).ok());
+    if let Some(skeleton) = skeleton {
+        for def in 0..DEFS.len() {
+            for (kind, index) in [(1, 0), (3, 0)] {
+                let Some(path) = seated_clip(def, kind, index) else { continue };
+                if cameras.0.contains_key(path) { continue; }
+                let clip = std::fs::read(info.root.join(cache::anim_rel(&format!(r"graphics\characters\_common\animations\{path}"))))
+                    .ok().and_then(|b| fc3_formats::anim::parse_clip(&b).ok());
+                if let Some(eye) = clip.and_then(|c| clip_eye(&skeleton, &c)) { cameras.0.insert(path, eye); }
+            }
+        }
+    }
+    commands.insert_resource(cameras);
 }
 
 const TURRET_BASE: &str = r"land\4x4technical\4x4techturretbase.xbg";
@@ -308,6 +357,12 @@ impl Vehicle {
     }
 
     pub fn story_id(&self) -> u64 { self.spawn_id }
+
+    /// Never play a driver pose for a passenger, gunner or unsupported seat.
+    pub(crate) fn first_person_clip(&self, seat: usize) -> Option<&'static str> {
+        let s = self.seats.get(seat)?;
+        seated_clip(self.def, s.kind, s.index)
+    }
 
     pub fn occupant(&self, seat: usize) -> Option<fc3_story::vehicles::Occupant> {
         let s = self.seats.get(seat)?;
@@ -905,6 +960,76 @@ mod story_vehicle_tests {
     }
 
     #[test]
+    fn seated_clips_are_specific_to_the_model_and_seat_not_just_vehicle_kind() {
+        let mut v = vehicle();
+        v.def = def_named("Technical").unwrap();
+        assert!(v.first_person_clip(0).unwrap().contains("driving_nodir_nowep_4x4tech"));
+        assert!(v.first_person_clip(1).unwrap().contains("passenger_nodir_nowep_4x4tech"));
+        v.seats[1].kind = 2;
+        assert!(v.first_person_clip(1).is_none());
+        v.seats[1].kind = 3;
+        v.seats[1].index = 4;
+        assert!(v.first_person_clip(1).is_none(), "do not substitute the cab pose for the bed");
+        assert!(v.first_person_clip(10).is_none());
+        assert!(seated_clip(def_named("Jet ski").unwrap(), 1, 0).unwrap().contains("jetski"));
+        assert!(seated_clip(def_named("Quad bike").unwrap(), 1, 0).unwrap().contains("atv"));
+        assert!(seated_clip(def_named("4x4").unwrap(), 3, 2).unwrap().contains("backseat"));
+    }
+
+    #[test]
+    fn seated_camera_uses_the_clip_eye_and_keeps_vehicle_pitch_roll_and_free_look() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Driving>().init_resource::<crate::cinema::Cinema>()
+            .init_resource::<ActionState>().init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<avian3d::collider_tree::ColliderTrees>().add_systems(Update, seat_player);
+        let player = app.world_mut().spawn((player(), Transform::IDENTITY)).id();
+        let v = vehicle();
+        let clip = v.first_person_clip(1).unwrap();
+        let eye = Vec3::new(0.5, 1.45, -0.25);
+        app.insert_resource(SeatCameras(std::collections::HashMap::from([(clip, eye)])));
+        let vt = Transform::from_xyz(10.0, 20.0, 30.0).with_rotation(Quat::from_euler(EulerRot::YXZ, 0.0, 0.15, -0.1));
+        let ve = app.world_mut().spawn((v, vt)).id();
+        {
+            let mut driving = app.world_mut().resource_mut::<Driving>();
+            driving.vehicle = Some(ve); driving.seat = 1; driving.first_person = true;
+        }
+        app.world_mut().get_mut::<Player>(player).unwrap().yaw = 0.4;
+        app.update();
+        let pose = app.world().get::<Transform>(player).unwrap();
+        let world_eye = pose.transform_point(Vec3::Y * (crate::player::EYE_HEIGHT - HALF_HEIGHT));
+        assert!(world_eye.abs_diff_eq(vt.transform_point(eye), 1e-5));
+        assert!(pose.rotation.abs_diff_eq(vt.rotation * Quat::from_rotation_y(0.4), 1e-5));
+        let camera = vt.transform_point(eye);
+        app.world_mut().get_mut::<Player>(player).unwrap().yaw += 0.3;
+        app.update();
+        let pose = app.world().get::<Transform>(player).unwrap();
+        assert!(pose.transform_point(Vec3::Y * (crate::player::EYE_HEIGHT - HALF_HEIGHT)).abs_diff_eq(camera, 1e-5));
+    }
+
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
+    fn installed_seated_clips_have_authored_camera_bones_and_the_technical_passenger_matches_its_sitpoint() {
+        let root = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let skel = fc3_formats::anim::parse_skeleton(&std::fs::read(root.join(cache::skeleton_rel(
+            r"graphics\actors_\_skeleton_master\hips_ref.skeleton"))).unwrap()).unwrap();
+        for def in 0..DEFS.len() {
+            for (kind, index) in [(1, 0), (3, 0)] {
+                let Some(path) = seated_clip(def, kind, index) else { continue };
+                let clip = fc3_formats::anim::parse_clip(&std::fs::read(root.join(cache::anim_rel(
+                    &format!(r"graphics\characters\_common\animations\{path}")))).unwrap()).unwrap();
+                let eye = clip_eye(&skel, &clip).expect(path);
+                assert!(eye.is_finite());
+                assert!(eye.length() < 10.0, "{path}: {eye:?}");
+                if DEFS[def].name == "Technical" && kind == 3 {
+                    let start = Vec3::from_array(clip.root_motion.as_ref().unwrap().start_translation);
+                    assert!(start.abs_diff_eq(Vec3::new(0.46, 0.858, -0.233), 0.001));
+                    assert!(eye.y > start.y + 0.4 && eye.y < start.y + 1.0, "eye {eye:?}, sit {start:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn animated_vehicle_stops_physics_velocity_and_returns_to_dynamic_when_released() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins).init_resource::<crate::cinema::Cinema>().add_systems(Update, sync_vehicle_motion);
@@ -1246,6 +1371,7 @@ fn seat_player(
     spatial: SpatialQuery,
     mut players: Query<(&mut Transform, &mut Player), Without<Vehicle>>,
     mut vehicles: Query<(&Transform, &mut Vehicle), Without<Player>>,
+    cameras: Option<Res<SeatCameras>>,
 ) {
     if cinema.view.is_some() { return; }
     let Some(ve) = driving.vehicle else { return };
@@ -1259,7 +1385,8 @@ fn seat_player(
     p.yaw += turn;
     let eye = if driving.first_person {
         vt.transform_point(if !v.authored_seats { v.seat() } else {
-            v.seats.get(driving.seat).map_or(Vec3::ZERO, |s| s.pose.translation) + Vec3::Y * 0.72
+            v.first_person_clip(driving.seat).and_then(|clip| cameras.as_ref()?.0.get(clip).copied())
+                .unwrap_or_else(|| v.seats.get(driving.seat).map_or(Vec3::ZERO, |s| s.pose.translation) + Vec3::Y * 0.72)
         })
     } else {
         // Behind and above, following where the player looks.
@@ -1275,8 +1402,8 @@ fn seat_player(
             None => want,
         }
     };
-    pt.translation = eye - Vec3::Y * (crate::player::EYE_HEIGHT - HALF_HEIGHT);
-    pt.rotation = Quat::from_rotation_y(p.yaw);
+    pt.rotation = if driving.first_person { vt.rotation * Quat::from_rotation_y(p.yaw - yaw) } else { Quat::from_rotation_y(p.yaw) };
+    pt.translation = eye - pt.rotation * Vec3::Y * (p.eye - HALF_HEIGHT);
     p.velocity = Vec3::ZERO;
     // Controls: throttle and steering (the camera looks freely).
     if v.seats.get(driving.seat).is_some_and(|s| s.kind == 1) {

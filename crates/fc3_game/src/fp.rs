@@ -87,10 +87,8 @@ enum Context {
     SwimMove,
     Ladder,
     Zip,
-    /// At the wheel (first-person seat), by kind of vehicle.
-    Drive,
-    Boat,
-    Glide,
+    /// Model/seat-specific first-person vehicle clip.
+    Vehicle(&'static str),
     /// Flying the wingsuit, or under the parachute.
     Wingsuit,
     Chute,
@@ -113,9 +111,7 @@ impl Context {
             Context::SwimMove => r"locomotion\stand\swim\1stge_uppb_swim_+000fw_nowep.mab",
             Context::Ladder => r"locomotion\ladder\1stge_fulb_laddercycle_a_nowep.mab",
             Context::Zip => r"zipline\1stge_uppb_aimingcenter_+000fw_zip.mab",
-            Context::Drive => r"vehicles\4x4\1stge_fulb_driving_nodir_nowep_4x4.mab",
-            Context::Boat => r"vehicles\boat\zodiac\1stge_fulb_driving_zodiac.mab",
-            Context::Glide => r"vehicles\other\glider\1stge_fulb_idle_+000fw_nowep_vo_glider.mab",
+            Context::Vehicle(clip) => clip,
             Context::Wingsuit => r"vehicles\other\wingsuit\1stge_fulb_gliding_nodir_nowep_wingsuit.mab",
             Context::Chute => r"vehicles\other\wingsuit\1stge_fulb_chute_driving_nodir_nowep_wingsuit.mab",
             Context::Skydive => r"vehicles\other\wingsuit\1stge_fulb_skydivefalling_nodir_nowep_wingsuit.mab",
@@ -1577,11 +1573,7 @@ fn drive_arms(
     // instead, with the weapon put away.
     let speed = Vec2::new(p.velocity.x, p.velocity.z).length();
     let context = if p.driving && driving.first_person {
-        driving.vehicle.and_then(|v| vehicles.get(v).ok()).map(|v| match v.kind() {
-            crate::vehicles::Kind::Car => Context::Drive,
-            crate::vehicles::Kind::Boat => Context::Boat,
-            crate::vehicles::Kind::Glider => Context::Glide,
-        })
+        driving.vehicle.and_then(|v| vehicles.get(v).ok()).and_then(|v| v.first_person_clip(driving.seat)).map(Context::Vehicle)
     } else {
         match *holding {
             _ if p.air == crate::player::AirMode::Wingsuit => Some(Context::Wingsuit),

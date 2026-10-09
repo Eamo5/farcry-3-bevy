@@ -624,8 +624,10 @@ The four truck captures at 15/30/45/60 seconds were inspected: the camera is
 above ground in the passenger seat, Dennis remains beside Jason, and the
 warrior jeep is visible ahead in the later samples. They also expose remaining
 failures: Jason plays a driver-style hands clip as a passenger, cockpit/actor
-alignment and materials are not at original fidelity, and subtitle sizing
-changes as a long line scales down. One captured frame reports 12 fps during
+alignment and materials are not at original fidelity, and subtitles/HUD do not
+scale with window resolution. The first PNG is 2000x1125; the later ones are
+3840x2131, so their apparent text shrinkage is not evidence of content-dependent
+font scaling. One captured frame reports 12 fps during
 streaming. The inspected final image shows the actual outpost objective and
 world, not the former below-terrain truck. This is automated fixture evidence,
 not manual, uninterrupted opening-to-outpost or visual/cinematic/UX parity.
@@ -633,3 +635,41 @@ not manual, uninterrupted opening-to-outpost or visual/cinematic/UX parity.
 Final checks passed `cargo test --locked --release --workspace` (215 unit/doc
 tests; 11 installed-only checks ignored), all 11 installed checks with
 `FC3_TEST_CACHE`, release game/tool/converter builds and `git diff --check`.
+
+### Seat-specific first-person poses and scalable HUD
+
+The installed Technical passenger idle is
+`vehicles/4x4_technical/1stge_fulb_passenger_nodir_nowep_4x4tech.mab`.
+Its root starts at Bevy `[0.46, 0.858, -0.233]`, matching the model's passenger
+sit point. The former generic driving context incorrectly selected a 4x4
+driver clip for every car seat and a Zodiac driver clip for every boat.
+First-person vehicle contexts now select by supported model and seat type/index;
+the Technical driver and passenger use different authored clips. Gunner and
+unsupported seats do not borrow the driver's pose. Known rear 4x4 seats use the
+installed back-seat clip; other unsupported families/seats remain unfinished.
+
+Authored-seat camera positions are derived from the selected clip's root and
+posed `Camera` bone, read once at loading. Missing data falls back to the
+previous sit point plus eye offset. The seated view preserves vehicle pitch
+and roll, with independent free look and a fixed eye pivot, rather than
+discarding the vehicle's tilt. Entry/exit transitions, seated body/root
+orientation and animated camera effects still need original-game comparison.
+
+All existing HUD/menu pixel dimensions now scale from a 1080-high logical
+viewport through Bevy's `UiScale`; Windows DPI is not multiplied twice.
+Subtitles have a constrained 86-percent safe width, word wrapping and a dark
+text shadow instead of spanning the entire display. This improves readability
+but does not reproduce the original font/layout or establish UX parity.
+
+Verification passed 218 release workspace unit/doc tests and all 12
+installed-data regressions, including the available seated clips' authored
+camera bones, distinct driver/passenger/gunner selection, fixed-eye free look,
+vehicle tilt and resolution/DPI scaling. The game release build and whitespace
+check also passed. The `fc3-passenger-view.err.log` fixture rerun exited **0**,
+completed the briefing through normal Interact and again started the outpost
+mission. Inspected 15/45-second captures show Jason's resting passenger hands
+instead of his wheel-gripping driver pose, readable wrapped subtitles and the
+moving convoy; the final inspected image shows the outpost objective and HUD.
+All these images are 2000x1125 despite the requested 1920x1080 startup size.
+Cockpit material/geometry, actor alignment, original UI fidelity and
+uninterrupted manual campaign evidence remain outstanding.

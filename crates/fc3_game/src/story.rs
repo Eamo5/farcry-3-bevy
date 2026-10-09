@@ -1798,12 +1798,14 @@ fn setup_story_ui(mut commands: Commands) {
         Node {
             position_type: PositionType::Absolute,
             bottom: Val::Percent(12.0),
-            width: Val::Percent(100.0),
+            left: Val::Percent(7.0),
+            width: Val::Percent(86.0),
             justify_content: JustifyContent::Center,
             ..default()
         },
         GlobalZIndex(2),
-        children![(story_text(22.0), TextLayout::justify(Justify::Center), SubtitleText)],
+        children![(story_text(22.0), Node { width: Val::Percent(100.0), ..default() },
+            TextLayout::justify(Justify::Center), TextShadow { offset: Vec2::splat(1.5), color: Color::BLACK }, SubtitleText)],
     ));
     // Banner: centre.
     commands.spawn((

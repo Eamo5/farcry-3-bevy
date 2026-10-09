@@ -350,7 +350,7 @@ fn facial_at(clips: &[cinema::Clip], t: f32) -> Option<(&str, u32, f32)> {
     })
 }
 
-fn clip_root(clip: &fc3_formats::anim::Clip, t: f32) -> Transform {
+pub(crate) fn clip_root(clip: &fc3_formats::anim::Clip, t: f32) -> Transform {
     match &clip.root_motion {
         Some(rm) => {
             let (tr, q) = rm.sample(t.clamp(0.0, clip.duration));
@@ -398,7 +398,7 @@ fn anchored_at(clips: &[cinema::Clip], t: f32) -> bool {
 }
 
 /// The world transform of a skeleton bone posed by a clip.
-fn bone_world(skel: &fc3_formats::anim::Skeleton, clip: &fc3_formats::anim::Clip, t: f32, bone: &str) -> Option<Mat4> {
+pub(crate) fn bone_world(skel: &fc3_formats::anim::Skeleton, clip: &fc3_formats::anim::Clip, t: f32, bone: &str) -> Option<Mat4> {
     let idx = skel.find(bone)?;
     let nodes: Vec<fc3_formats::anim::Node> = skel
         .bones

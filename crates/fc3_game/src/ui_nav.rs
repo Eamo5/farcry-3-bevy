@@ -13,7 +13,47 @@ pub struct UiNavPlugin;
 
 impl Plugin for UiNavPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<NavFocus>().add_systems(PreUpdate, (nav_test, navigate).chain().after(bevy::ui::UiSystems::Focus));
+        app.init_resource::<NavFocus>().add_systems(PreUpdate, (nav_test, navigate).chain().after(bevy::ui::UiSystems::Focus))
+            .add_systems(PreUpdate, scale_ui);
+    }
+}
+
+/// Existing pixel-sized menus/HUD are authored for a 1080-high logical
+/// viewport. Resize their scale, not their text, so 4K stays readable and
+/// Windows DPI is accounted for only once by Bevy.
+fn scale_ui(windows: Query<&Window, With<bevy::window::PrimaryWindow>>, mut scale: ResMut<UiScale>) {
+    let Ok(window) = windows.single() else { return };
+    let next = viewport_scale(window.height());
+    if scale.0 != next { scale.0 = next; }
+}
+
+fn viewport_scale(height: f32) -> f32 {
+    if !height.is_finite() || height <= 0.0 { return 1.0; }
+    (height / 1080.0).clamp(0.5, 4.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ui_scale_follows_logical_resolution_and_keeps_minimized_windows_valid() {
+        assert_eq!(viewport_scale(1080.0), 1.0);
+        assert_eq!(viewport_scale(2160.0), 2.0);
+        assert_eq!(viewport_scale(720.0), 2.0 / 3.0);
+        assert_eq!(viewport_scale(0.0), 1.0);
+        assert_eq!(viewport_scale(f32::NAN), 1.0);
+        assert_eq!(viewport_scale(f32::INFINITY), 1.0);
+        let mut app = App::new();
+        app.init_resource::<UiScale>().add_systems(PreUpdate, scale_ui);
+        let mut window = Window { resolution: (3840, 2160).into(), ..default() };
+        window.resolution.set_scale_factor_override(Some(2.0));
+        let entity = app.world_mut().spawn((window, bevy::window::PrimaryWindow)).id();
+        app.update();
+        assert_eq!(app.world().resource::<UiScale>().0, 1.0, "do not apply Windows DPI twice");
+        app.world_mut().get_mut::<Window>(entity).unwrap().resolution.set_scale_factor_override(Some(1.0));
+        app.update();
+        assert_eq!(app.world().resource::<UiScale>().0, 2.0);
     }
 }
 
