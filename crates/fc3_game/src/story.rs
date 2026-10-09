@@ -703,6 +703,8 @@ fn prompt_text(text: &str, actions: &crate::controls::ActionState, settings: &cr
             out.push_str(&format!("[{}]", actions.label(action, settings)));
         } else if rest[1..close].eq_ignore_ascii_case("MapFastTravel") {
             out.push_str(if actions.gamepad_active { "[A]" } else { "[LMB]" });
+        } else if rest[1..close].eq_ignore_ascii_case("WeaponWheelSelect") {
+            out.push_str(if actions.gamepad_active { "[Right stick]" } else { "[Mouse]" });
         } else {
             out.push_str(&rest[..=close]);
         }
@@ -2438,9 +2440,12 @@ mod tests {
         let mut settings = Settings::default();
         settings.rebind(Action::Interact, Binding::Key(KeyCode::KeyV));
         let mut actions = ActionState::default();
+        settings.rebind(Action::NextWeapon, Binding::Key(KeyCode::KeyT));
+        assert_eq!(prompt_text("[GadgetWheel] / [WeaponWheelSelect] / [SwitchWeapon]", &actions, &settings), "[T] / [Mouse] / [T]");
         assert_eq!(prompt_text("[Interact] Use — [ThrowRock] Distract [unknown] [unfinished", &actions, &settings),
             "[V] Use — [MMB] Distract [unknown] [unfinished");
         actions.gamepad_active = true;
+        assert_eq!(prompt_text("[GadgetWheel] / [WeaponWheelSelect] / [SwitchWeapon]", &actions, &settings), "[Y] / [Right stick] / [Y]");
         assert_eq!(prompt_text("[Interact] Use / [Crouch] Hide", &actions, &settings), "[X] Use / [B] Hide");
         assert_eq!(prompt_text("[WorldMap] Map / [MapFastTravel] Travel", &actions, &settings), "[Select] Map / [A] Travel");
     }

@@ -756,6 +756,21 @@ respawn, normal story reload, restoration of one carried weapon/two medkits/$90,
 and `retry test: PASS` after exact ammo, supplies, progression and crafting-state
 assertions. Tutorial dismissal and positioning used the existing autopilot;
 lethal damage and supply consumption were injected by the opt-in test.
+The run exited 0 with its PASS marker required by the launcher. The inspected
+final image shows Jason alive, 5/41 pistol ammo, two medkits and $90; the outpost
+objective is still active.
+
+### Weapon-selection tutorial follow-up
+
+The authored wheel/quick-swap prompts now resolve to the rebound next-weapon
+control, and wheel selection names mouse movement or the right stick for the
+active device. A short tap returns to the previously selected carried weapon;
+scrolling still cycles. Previous-weapon identity survives slot reordering and
+falls back to another carried weapon if the old one was removed. All 85 game
+tests passed (11 installed-data tests excluded), and the release build and
+capture run exited successfully. Inspection of `fc3-weapon-prompts-final.png`
+confirms `[X]` for hold/quick-swap and `[Mouse]` for selection. Gamepad/rebound
+labels and reordered/removed previous weapons are covered by regressions.
 
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted

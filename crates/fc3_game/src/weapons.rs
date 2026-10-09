@@ -942,11 +942,13 @@ fn switch_weapon(
         }
     }
     let n = inv.slots.len();
+    if n == 0 { return; }
     if actions.cycle < 0 || actions.just_pressed(Action::PrevWeapon) {
         target = Some((inv.current + n - 1) % n);
-    } else if actions.cycle > 0 || tap {
-        // Next weapon on a tap's release (held, it opens the wheel).
+    } else if actions.cycle > 0 {
         target = Some((inv.current + 1) % n);
+    } else if tap {
+        target = wheel.quick_swap(&inv.slots, inv.current);
     }
     if let Some(p) = pick.filter(|&p| p < n) {
         target = Some(p);
@@ -963,6 +965,7 @@ fn switch_weapon(
     }
     if let Some(t) = target {
         if t != inv.current {
+            wheel.previous = Some(inv.slots[inv.current].def);
             inv.current = t;
             inv.reloading = 0.0;
             inv.switching = 0.35;

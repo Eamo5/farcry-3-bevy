@@ -1,7 +1,7 @@
 //! The weapon wheel: holding the next-weapon input (Y on a gamepad, X on the
 //! keyboard) opens a ring of the weapons carried, slows the world down, and
 //! the look input picks one; letting go takes it out. A short tap still just
-//! moves on to the next weapon (on release), as in the game.
+//! returns to the previous weapon (on release), as in the game.
 
 use bevy::prelude::*;
 
@@ -34,13 +34,42 @@ const CLOSE_SOUND: u32 = 0x001A_F335;
 pub struct WeaponWheel {
     /// Open: the view holds still and the trigger is off.
     pub open: bool,
-    /// A short tap (next weapon), or the slot picked on the wheel; taken by
+    /// A short tap (previous weapon), or the slot picked on the wheel; taken by
     /// the weapon switch.
     pub tap: bool,
     pub pick: Option<usize>,
+    /// Definition identity, not a slot index: carried slots may be reordered.
+    pub previous: Option<usize>,
     held: f32,
     cursor: Vec2,
     selected: Option<usize>,
+}
+
+impl WeaponWheel {
+    pub fn quick_swap(&self, slots: &[crate::weapons::WeaponSlot], current: usize) -> Option<usize> {
+        if slots.len() < 2 { return None; }
+        self.previous.and_then(|def| slots.iter().position(|s| s.def == def))
+            .filter(|&i| i != current)
+            .or_else(|| Some((current + 1) % slots.len()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quick_swap_returns_to_previous_identity_after_slot_reordering_or_removal() {
+        let mut slots: Vec<_> = [10, 20, 30].into_iter().map(|def| crate::weapons::WeaponSlot { def, mag: 1, reserve: 2 }).collect();
+        let wheel = WeaponWheel { previous: Some(10), ..default() };
+        assert_eq!(wheel.quick_swap(&slots, 1), Some(0));
+        slots.swap(0, 2);
+        assert_eq!(wheel.quick_swap(&slots, 1), Some(2));
+        slots.pop();
+        assert_eq!(wheel.quick_swap(&slots, 1), Some(0));
+        assert_eq!(wheel.quick_swap(&slots[..1], 0), None);
+        assert_eq!(wheel.quick_swap(&[], 0), None);
+    }
 }
 
 #[derive(Component)]

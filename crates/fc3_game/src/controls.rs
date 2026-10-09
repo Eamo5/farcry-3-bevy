@@ -148,7 +148,7 @@ impl Action {
             "throwmolotov" => Some(Action::Molotov),
             "heal" => Some(Action::Medkit),
             "takedown" => Some(Action::Melee),
-            "nextweapon" => Some(Action::NextWeapon),
+            "nextweapon" | "gadgetwheel" | "switchweapon" => Some(Action::NextWeapon),
             "previousweapon" => Some(Action::PrevWeapon),
             "showmap" | "worldmap" => Some(Action::Map),
             "binoculars" | "camera" => Some(Action::Tag),
