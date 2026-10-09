@@ -29,6 +29,35 @@ pub enum GameState {
 
 pub struct MenuPlugin;
 
+#[cfg(test)]
+mod tutorial_tests {
+    use super::*;
+    use crate::progression::{CraftTutorial, PauseMenu};
+
+    #[test]
+    fn escape_and_gamepad_back_cannot_skip_crafting_but_can_exit_when_done() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).insert_resource(State::new(GameState::Journal)).init_resource::<NextState<GameState>>()
+            .init_resource::<ButtonInput<KeyCode>>().init_resource::<crate::options::Rebinding>()
+            .init_resource::<crate::options::OptionsOpen>()
+            .insert_resource(PauseMenu { tutorial: Some(CraftTutorial::Medicine(0)), ..default() })
+            .add_systems(Update, pause_toggle);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.update();
+        assert!(matches!(app.world().resource::<NextState<GameState>>(), NextState::Unchanged));
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        let mut pad = Gamepad::default();
+        pad.digital_mut().press(bevy::input::gamepad::GamepadButton::East);
+        app.world_mut().spawn(pad);
+        app.update();
+        assert!(matches!(app.world().resource::<NextState<GameState>>(), NextState::Unchanged));
+        app.world_mut().resource_mut::<PauseMenu>().tutorial = Some(CraftTutorial::Done);
+        app.update();
+        assert!(matches!(app.world().resource::<NextState<GameState>>(), NextState::Pending(GameState::Playing)));
+        assert!(app.world().resource::<PauseMenu>().tutorial.is_none());
+    }
+}
+
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<GameState>()
@@ -187,6 +216,7 @@ fn pause_toggle(
     rebinding: Res<crate::options::Rebinding>,
     mut options: ResMut<crate::options::OptionsOpen>,
     mut next: ResMut<NextState<GameState>>,
+    mut journal: ResMut<crate::progression::PauseMenu>,
 ) {
     use bevy::input::gamepad::GamepadButton as B;
     let pad = |b: B| gamepads.iter().any(|g| g.just_pressed(b));
@@ -198,6 +228,13 @@ fn pause_toggle(
         return;
     }
     let s = *state.get();
+    if s == GameState::Journal && (esc || pad(B::Start) || pad(B::East)) {
+        if journal.can_exit() {
+            journal.tutorial = None;
+            next.set(GameState::Playing);
+        }
+        return;
+    }
     if esc || pad(B::Start) {
         match s {
             GameState::Playing => next.set(GameState::Paused),
@@ -236,6 +273,7 @@ fn menu_buttons(
     mut exit: MessageWriter<AppExit>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     mut continue_game: MessageWriter<crate::save::ContinueGame>,
+    journal: Res<crate::progression::PauseMenu>,
 ) {
     for (interaction, kind, mut bg) in &mut buttons {
         if *interaction == Interaction::Pressed {
@@ -250,12 +288,12 @@ fn menu_buttons(
                     }
                 }
                 MenuButton::Play => {
-                    if *state.get() != GameState::Playing {
+                    if *state.get() != GameState::Playing && journal.can_exit() {
                         next.set(GameState::Playing);
                     }
                 }
                 MenuButton::Journal => {
-                    if *state.get() == GameState::Paused {
+                    if *state.get() == GameState::Paused && journal.allows_page(journal.page) {
                         next.set(GameState::Journal);
                     }
                 }

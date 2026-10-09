@@ -126,6 +126,7 @@ fn apply_damage(
     mut targets: Query<(&mut Health, Option<&GlobalTransform>, Option<&mut PlayerStats>, Option<&Armour>, Option<&DamageScale>)>,
     mut stats: Query<&mut PlayerStats, Without<Health>>,
     scripted: Res<crate::story::ScriptedPlayer>,
+    instigators: Query<(Option<&crate::wildlife::WildAnimal>, Option<&crate::npc::Npc>, Option<&crate::story_actors::StoryActor>, Option<&Name>)>,
 ) {
     for ev in events.read() {
         let Ok((mut h, gt, ps, armour, scale)) = targets.get_mut(ev.target) else { continue };
@@ -177,7 +178,13 @@ fn apply_damage(
             h.current = 0.0;
             h.dead = true;
             if is_player {
-                info!("player died: {:?}", ev.kind);
+                let attacker = ev.instigator.and_then(|e| instigators.get(e).ok()).map(|(animal, npc, story, name)| {
+                    let kind = animal.map(|a| a.animal().name().to_string())
+                        .or_else(|| npc.map(|n| format!("{:?}", n.faction)))
+                        .or_else(|| name.map(|n| n.as_str().to_string())).unwrap_or_else(|| "unnamed entity".into());
+                    story.map_or(kind.clone(), |s| format!("{kind} (story {})", s.id))
+                }).unwrap_or_else(|| "environment/unknown".into());
+                info!("player died: {:?}, attacker {attacker}, source {:?}", ev.kind, ev.source);
             }
             died.write(Died { entity: ev.target, killer: ev.instigator, kind: ev.kind });
         }

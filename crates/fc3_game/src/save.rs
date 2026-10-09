@@ -33,6 +33,7 @@ impl Plugin for SavePlugin {
             .add_systems(OnEnter(GameState::Playing), (mark_played, continue_from_args))
             .add_systems(OnEnter(GameState::Paused), save_now)
             .add_systems(Update, (continue_game, autosave))
+            .add_systems(Update, keep_story_checkpoint.after(crate::story::StorySet))
             .add_systems(Last, save_on_exit);
     }
 }
@@ -45,6 +46,7 @@ pub struct SaveGame {
     pub yaw: f32,
     pub health: f32,
     pub medkits: u32,
+    pub craft_tutorial: Option<crate::progression::CraftTutorial>,
     pub kills: u32,
     pub herbs: u32,
     pub grenades: u32,
@@ -79,6 +81,14 @@ impl SaveGame {
         let p = self.position;
         let mut out = format!("{FORMAT}\nposition {} {} {}\nyaw {}\n", p.x, p.y, p.z, self.yaw);
         out += &format!("health {}\nmedkits {}\nkills {}\nherbs {}\n", self.health, self.medkits, self.kills, self.herbs);
+        use crate::progression::CraftTutorial;
+        if let Some(stage) = self.craft_tutorial {
+            out += &match stage {
+                CraftTutorial::Medicine(n) => format!("craft_tutorial medicine {n}\n"),
+                CraftTutorial::Rucksack => "craft_tutorial rucksack\n".into(),
+                CraftTutorial::Done => "craft_tutorial done\n".into(),
+            };
+        }
         out += &format!("grenades {}\nmolotovs {}\nhours {}\ncurrent {}\n", self.grenades, self.molotovs, self.hours, self.current);
         out += &format!("explosives {} {}\n", self.c4, self.mines);
         if self.arrows != [0; 2] {
@@ -127,6 +137,16 @@ impl SaveGame {
                 "yaw" => s.yaw = f(),
                 "health" => s.health = f(),
                 "medkits" => s.medkits = f() as u32,
+                "craft_tutorial" => {
+                    use crate::progression::CraftTutorial;
+                    let mut words = rest.split_whitespace();
+                    s.craft_tutorial = match words.next() {
+                        Some("medicine") => words.next().and_then(|n| n.parse::<u8>().ok()).filter(|&n| n < 2).map(CraftTutorial::Medicine),
+                        Some("rucksack") => Some(CraftTutorial::Rucksack),
+                        Some("done") => Some(CraftTutorial::Done),
+                        _ => None,
+                    };
+                }
                 "kills" => s.kills = f() as u32,
                 "herbs" => s.herbs = f() as u32,
                 "grenades" => s.grenades = f() as u32,
@@ -214,9 +234,20 @@ fn mark_played(mut slot: ResMut<SaveSlot>) {
 }
 
 /// `--continue`: load the save on first entering play.
-fn continue_from_args(args: Res<Args>, mut done: Local<bool>, mut requests: MessageWriter<ContinueGame>) {
-    if args.continue_save && !*done {
-        *done = true;
+fn continue_from_args(args: Res<Args>, mut done: Local<bool>, mut requests: MessageWriter<ContinueGame>, mut slot: ResMut<SaveSlot>) {
+    if *done { return; }
+    *done = true;
+    if let Some(path) = std::env::var_os("FC3_STORY_LOAD").map(PathBuf::from) {
+        let path = path.with_extension("game.txt");
+        if let Some(save) = std::fs::read_to_string(&path).ok().and_then(|s| SaveGame::from_text(&s)) {
+            info!("story checkpoint: restore matching inventory from {}", path.display());
+            slot.existing = Some(save);
+            requests.write(ContinueGame);
+            return;
+        }
+        warn!("story checkpoint has no matching inventory snapshot at {}; this is a story-only test load", path.display());
+    }
+    if args.continue_save {
         requests.write(ContinueGame);
     }
 }
@@ -230,6 +261,7 @@ struct SaveSources<'w, 's> {
     waypoint: Res<'w, crate::map::Waypoint>,
     outposts: Res<'w, crate::outposts::Outposts>,
     progress: Res<'w, crate::progression::Progress>,
+    pause_menu: Res<'w, crate::progression::PauseMenu>,
 }
 
 impl SaveSources<'_, '_> {
@@ -247,6 +279,7 @@ impl SaveSources<'_, '_> {
             yaw: p.yaw,
             health,
             medkits: stats.medkits,
+            craft_tutorial: self.pause_menu.tutorial.or_else(|| self.pause_menu.tutorial_completed.then_some(crate::progression::CraftTutorial::Done)),
             kills: stats.kills,
             herbs: self.world.herbs,
             grenades: inv.grenades,
@@ -256,7 +289,8 @@ impl SaveSources<'_, '_> {
             mines: inv.mines,
             hours: self.tod.hours,
             // A mounted gun isn't carried: the weapon held before it is.
-            current: inv.defs[inv.slots[inv.mounted_from.unwrap_or(inv.current).min(inv.slots.len() - 1)].def].name.to_string(),
+            current: inv.slots.get(inv.mounted_from.unwrap_or(inv.current)).and_then(|s| inv.defs.get(s.def))
+                .map(|d| d.name.to_string()).unwrap_or_default(),
             weapons: inv
                 .slots
                 .iter()
@@ -276,6 +310,22 @@ impl SaveSources<'_, '_> {
             liberated: self.outposts.liberated_ids(),
             progress: self.progress.clone(),
         })
+    }
+}
+
+/// Explicit automated checkpoints need the same inventory as their story
+/// graph: otherwise a hunting checkpoint reloads with no ingredients and
+/// sandbox starting weapons/medkits. Ordinary saves remain disabled in tests.
+fn keep_story_checkpoint(world: &mut World) {
+    if world.get_non_send::<crate::story::StoryHost>().is_none_or(|h| h.checkpoint_game_paths.is_empty()) { return; }
+    let mut sources = bevy::ecs::system::SystemState::<SaveSources>::new(world);
+    let Some(save) = sources.get(world).ok().and_then(|s| s.snapshot()) else { return; };
+    let paths = std::mem::take(&mut world.non_send_mut::<crate::story::StoryHost>().checkpoint_game_paths);
+    let text = save.to_text();
+    for path in paths {
+        if let Err(e) = std::fs::write(&path, &text) {
+            warn!("could not keep checkpoint inventory at {}: {e}", path.display());
+        }
     }
 }
 
@@ -327,6 +377,7 @@ pub fn continue_game(
     mut waypoint: ResMut<crate::map::Waypoint>,
     mut outposts: ResMut<crate::outposts::Outposts>,
     mut progress: ResMut<crate::progression::Progress>,
+    mut pause_menu: ResMut<crate::progression::PauseMenu>,
     pickups: Query<(Entity, &Pickup)>,
     explosives: Query<(Entity, &Explosive)>,
     mut commands: Commands,
@@ -335,6 +386,8 @@ pub fn continue_game(
         return;
     }
     let Some(save) = &slot.existing else { return };
+    pause_menu.tutorial = save.craft_tutorial;
+    pause_menu.tutorial_completed = save.craft_tutorial == Some(crate::progression::CraftTutorial::Done);
     continued.0 = true;
     let Ok((mut t, mut p, mut h, mut stats, mut inv)) = players.single_mut() else { return };
     t.translation = save.position + Vec3::Y * 0.5;
@@ -415,12 +468,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn paired_checkpoint_keeps_inventory_and_handles_an_empty_weapon_list() {
+        let mut world = World::new();
+        world.init_resource::<WorldState>();
+        world.insert_resource(TimeOfDay { hours: 13.0, speed: 0.0 });
+        world.init_resource::<crate::map::Explored>();
+        world.init_resource::<crate::map::Waypoint>();
+        world.init_resource::<crate::outposts::Outposts>();
+        world.init_resource::<crate::progression::PauseMenu>();
+        let mut progress = crate::progression::Progress::default();
+        progress.plants[crate::syringes::Plant::Arrowroot.index()] = 2;
+        progress.skins.insert(crate::progression::Animal::Boar, 2);
+        world.insert_resource(progress.clone());
+        world.spawn((Transform::from_xyz(1.0, 2.0, 3.0), Player {
+            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: true, crouching: false, swimming: false, noclip: false,
+            spawning: false, keep_height: false, last_landing_speed: 0.0, sprinting: false, spawned_at: 0.0,
+            driving: false, eye: 0.0, air: crate::player::AirMode::None, mantle: None, mounted: None, sliding: None, dragging: false,
+        }, Health::new(100.0), PlayerStats {
+            medkits: 0, kills: 0, deaths: 0, respawn_timer: 0.0, spawn_point: Vec3::ZERO,
+            hurt_dir: None, burning: 0.0, last_hurt: crate::combat::DamageKind::Bullet,
+        }, Inventory {
+            defs: crate::weapons::weapon_defs(), models: Vec::new(), slots: Vec::new(), current: 0,
+            grenades: 0, molotovs: 0, c4: 0, mines: 0, cooldown: 0.0, reloading: 0.0, switching: 0.0, aiming: false,
+            aim_blend: 0.0, recoil_kick: 0.0, spread_bloom: 0.0, shots_fired: 0, recoil_offset: 0.0, since_shot: 0.0,
+            reserve_scale: 1.0, attachments: Vec::new(), attachment_models: Vec::new(), mounted_from: None,
+            auto_tail: 0, arrow_kind: 0, special_arrows: [0; 2], paints: Vec::new(), paint_options: Vec::new(),
+        }));
+        let pack = fc3_formats::scripts::ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap();
+        let story = fc3_story::Story::new(pack, fc3_story::data::StoryData::default()).unwrap();
+        let mut host = crate::story::StoryHost::new(story, None);
+        let directory = std::env::temp_dir().join("opencode");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(format!("fc3-paired-checkpoint-test-{}.game.txt", std::process::id()));
+        let second = directory.join(format!("fc3-paired-checkpoint-test-{}-second.game.txt", std::process::id()));
+        host.checkpoint_game_paths = vec![path.clone(), second.clone()];
+        world.insert_non_send(host);
+        keep_story_checkpoint(&mut world);
+        let kept = SaveGame::from_text(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(kept.medkits, 0);
+        assert_eq!(kept.progress, progress);
+        assert!(kept.current.is_empty() && kept.weapons.is_empty());
+        assert_eq!(kept.position, Vec3::new(1.0, 2.0, 3.0));
+        assert!(world.non_send::<crate::story::StoryHost>().checkpoint_game_paths.is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), std::fs::read_to_string(&second).unwrap());
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(second).unwrap();
+    }
+
+    #[test]
     fn save_roundtrip() {
         let s = SaveGame {
             position: Vec3::new(1.5, 120.0, -3.25),
             yaw: 0.5,
             health: 75.0,
             medkits: 2,
+            craft_tutorial: Some(crate::progression::CraftTutorial::Done),
             kills: 9,
             herbs: 1,
             grenades: 3,
@@ -449,5 +551,18 @@ mod tests {
         };
         assert_eq!(SaveGame::from_text(&s.to_text()), Some(s));
         assert_eq!(SaveGame::from_text("not a save"), None);
+    }
+
+    #[test]
+    fn crafting_tutorial_stages_round_trip_and_old_saves_remain_compatible() {
+        use crate::progression::CraftTutorial;
+        for stage in [None, Some(CraftTutorial::Medicine(0)), Some(CraftTutorial::Medicine(1)), Some(CraftTutorial::Rucksack), Some(CraftTutorial::Done)] {
+            let save = SaveGame { craft_tutorial: stage, ..default() };
+            assert_eq!(SaveGame::from_text(&save.to_text()), Some(save));
+        }
+        assert_eq!(SaveGame::from_text("fc3save 1\nmedkits 1\n").unwrap().craft_tutorial, None);
+        for value in ["medicine 255", "medicine -1", "wrong"] {
+            assert_eq!(SaveGame::from_text(&format!("fc3save 1\ncraft_tutorial {value}\n")).unwrap().craft_tutorial, None);
+        }
     }
 }

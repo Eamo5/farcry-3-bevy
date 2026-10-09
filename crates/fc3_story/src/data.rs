@@ -119,6 +119,8 @@ pub struct StoryData {
     pub markers: HashMap<u64, Marker>,
     /// Lower-case main script name -> reward.
     pub rewards: HashMap<String, Reward>,
+    /// Story gates from the single-player PlayerParamsService template.
+    pub menu_unlocks: Option<(String, String)>,
     pub strings: Strings,
     /// Spoken line lengths by sound id (seconds).
     pub speech: HashMap<u32, f32>,
@@ -236,6 +238,13 @@ impl StoryData {
         }
         if let Ok(o) = read_fcb(root, "story/templates.fcb") {
             o.walk(&mut |obj, _| {
+                if obj.str("FullName").as_deref() == Some("playerparamsservice:players.playerparamsservice") {
+                    if let Some(unlocks) = obj.children.iter().find(|c| c.is("MissionUnlocks")) {
+                        if let (Some(crafting), Some(skills)) = (unlocks.str("sCraftingMenu"), unlocks.str("sSkillsMenu")) {
+                            d.menu_unlocks = Some((crafting.to_ascii_lowercase(), skills.to_ascii_lowercase()));
+                        }
+                    }
+                }
                 if obj.is("MissionRewards") {
                     for r in &obj.children {
                         if let Some(name) = r.str("sName") {

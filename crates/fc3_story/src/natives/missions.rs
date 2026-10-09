@@ -71,7 +71,13 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         let description = c.data.strings.named("Description", &format!("{}_DESC", m.name)).map(str::to_string);
         c.emit(Command::MissionTitle { title, description });
     })?;
-    r.f(&m("EnableFastTravel"), |c, (_owner, on): (Text, Flag)| c.missions.fast_travel = on.0)?;
+    r.f(&m("EnableFastTravel"), |c, (owner, on): (Text, Flag)| {
+        if let Some(id) = owner.id().and_then(|o| c.missions.by_owner.get(&o)).cloned() {
+            if let Some(mission) = c.missions.by_id.get_mut(&id) {
+                mission.fast_travel = on.0;
+            }
+        }
+    })?;
     r.f(&m("EnableMissionAbort"), |c, (_owner, on): (Text, Flag)| c.missions.abort_enabled = on.0)?;
     r.f(&m("LockMission"), |c, script: Text| {
         let id = fc3_domino::path_id(&script.0);
@@ -140,7 +146,7 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.constant("IsSafeHouseAlarmActivated", false)?;
     r.command("SafeHouseDeactivateMissionBlock")?;
     r.command("SafeHouseDeactivateMissionBlockOnUnlock")?;
-    r.command("SetFastTravelEnabled")?;
+    r.f("SetFastTravelEnabled", |c, on: Flag| c.missions.fast_travel_disabled = !on.0)?;
     r.command("SetEnableSaveGame")?;
     Ok(())
 }

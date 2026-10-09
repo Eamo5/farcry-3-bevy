@@ -150,7 +150,7 @@ impl Action {
             "takedown" => Some(Action::Melee),
             "nextweapon" => Some(Action::NextWeapon),
             "previousweapon" => Some(Action::PrevWeapon),
-            "showmap" => Some(Action::Map),
+            "showmap" | "worldmap" => Some(Action::Map),
             "binoculars" | "camera" => Some(Action::Tag),
             other => Action::from_id(other),
         }

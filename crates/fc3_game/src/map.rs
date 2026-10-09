@@ -38,6 +38,7 @@ impl Plugin for MapPlugin {
             .init_resource::<Waypoint>()
             .init_resource::<FullMapView>()
             .init_resource::<MapPad>()
+            .init_resource::<MapAutomation>()
             .init_resource::<Gps>()
             .add_systems(Startup, setup_fog)
             .add_systems(
@@ -398,7 +399,25 @@ fn toggle_map(
     players: Query<(&Transform, &Player)>,
     mut view: ResMut<FullMapView>,
     settings: Res<crate::settings::Settings>,
+    host: Option<NonSend<crate::story::StoryHost>>,
+    ui: Res<crate::story::StoryUi>,
+    mut automation: ResMut<MapAutomation>,
 ) {
+    if *state.get() == GameState::Playing && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
+        && ui.boxes.is_empty() && players.single().is_ok_and(|(_, p)| !p.spawning && !p.driving)
+    {
+        if let Some(host) = host.as_ref().filter(|h| h.story.fast_travel_tutorial() && h.story.fast_travel_enabled()) {
+            if let Some(destination) = host.story.travel_destinations().into_iter().find(|d| {
+                d.unlocked && host.story.data().markers.get(&d.marker).is_some_and(|m| m.name.eq_ignore_ascii_case("amanakitown_safehousemarker_01"))
+            }) {
+                automation.0 = Some(destination.marker);
+                view.center = map_uv(crate::data::to_bevy(destination.position));
+                next.set(GameState::Map);
+                info!("story autopilot: open map at {}", destination.name);
+                return;
+            }
+        }
+    }
     // --open-map (tests): open once the player has landed.
     let test_open = args.open_map && !*opened && players.single().is_ok_and(|(_, p)| !p.spawning);
     if test_open {
@@ -496,6 +515,11 @@ fn update_minimap(
 /// Gamepad use on the full map: the centre of the view acts as the cursor.
 #[derive(Resource, Default)]
 pub struct MapPad(pub bool);
+
+/// Automated runs select a real map icon through the same transaction as a
+/// click. This is UI automation, not evidence of manual-input parity.
+#[derive(Resource, Default)]
+struct MapAutomation(Option<u64>);
 
 #[allow(clippy::too_many_arguments)]
 fn update_full_map(
@@ -742,7 +766,8 @@ fn tower_icon(px: Vec2, scale: f32, taken: bool) -> impl Bundle {
     )
 }
 
-/// Outpost icons on the full map; clicking a liberated one fast-travels there.
+/// Outpost and authored safehouse icons; selecting an unlocked destination
+/// travels to its spawn point, respecting global and per-mission locks.
 #[allow(clippy::too_many_arguments)]
 fn full_map_icons(
     state: Res<State<GameState>>,
@@ -760,6 +785,7 @@ fn full_map_icons(
     mut commands: Commands,
     (map_pad, gamepads): (Res<MapPad>, Query<&Gamepad>),
     objectives: Res<crate::story::ObjectiveMarkers>,
+    (mut host, mut automation): (Option<NonSendMut<crate::story::StoryHost>>, ResMut<MapAutomation>),
 ) {
     for e in &icons {
         commands.entity(e).despawn();
@@ -769,14 +795,17 @@ fn full_map_icons(
     }
     let Ok((root, computed)) = full.single() else { return };
     let size = computed.size() * computed.inverse_scale_factor();
+    if size.x <= 0.0 || size.y <= 0.0 { return; }
     let aspect = size.x / size.y.max(1.0);
     let half = Vec2::new(view.zoom * aspect, view.zoom);
     let to_px = |uv: Vec2| ((uv - view.center) / half * 0.5 + Vec2::splat(0.5)) * size;
-    let cursor = if map_pad.0 { Some(size * 0.5) } else { windows.single().ok().and_then(|w| w.cursor_position()) };
+    let cursor = if map_pad.0 || automation.0.is_some() { Some(size * 0.5) } else { windows.single().ok().and_then(|w| w.cursor_position()) };
     if mouse.pressed(MouseButton::Left) {
         *drag += motion.delta.length();
     }
-    let clicked = (mouse.just_released(MouseButton::Left) && *drag < 6.0) || (map_pad.0 && gamepads.iter().any(|g| g.just_pressed(GamepadButton::South)));
+    let clicked = (mouse.just_released(MouseButton::Left) && *drag < 6.0) || (map_pad.0 && gamepads.iter().any(|g| g.just_pressed(GamepadButton::South))) || automation.0.is_some();
+    let travel_enabled = host.as_ref().is_none_or(|h| h.story.fast_travel_enabled());
+    let destinations = host.as_ref().map(|h| h.story.travel_destinations()).unwrap_or_default();
     if map_pad.0 {
         // The gamepad cursor.
         commands.spawn((
@@ -825,6 +854,11 @@ fn full_map_icons(
     }
     let mut hovered = None;
     for (i, o) in outposts.list.iter().enumerate() {
+        // Don't put a second, approximate travel icon over the safehouse's
+        // authored marker. Locked enemy outposts retain their red icon.
+        if o.liberated && destinations.iter().any(|d| o.contains(crate::data::to_bevy(d.position))) {
+            continue;
+        }
         let px = to_px(map_uv(o.centre));
         if px.x < -20.0 || px.y < -20.0 || px.x > size.x + 20.0 || px.y > size.y + 20.0 {
             continue;
@@ -853,9 +887,10 @@ fn full_map_icons(
     if let Some(i) = hovered {
         let o = &outposts.list[i];
         let px = to_px(map_uv(o.centre));
-        let label = match (o.liberated, map_pad.0) {
+        let label = match (o.liberated && travel_enabled, map_pad.0) {
             (true, false) => "Liberated outpost\nclick to fast travel",
             (true, true) => "Liberated outpost\nA  fast travel",
+            _ if o.liberated => "Liberated outpost\nFast travel unavailable during this mission",
             _ => "Enemy outpost",
         };
         commands.spawn((
@@ -871,12 +906,133 @@ fn full_map_icons(
             ChildOf(root),
             children![(Text::new(label), TextFont { font_size: bevy::text::FontSize::Px(16.0), ..default() }, TextColor(Color::srgb(0.95, 0.95, 0.9)))],
         ));
-        if clicked && o.liberated {
+        if clicked && o.liberated && travel_enabled && automation.0.is_none() {
             if let Ok((mut t, mut p)) = players.single_mut() {
                 if crate::outposts::fast_travel(&outposts, i, &mut t, &mut p) {
+                    if let Some(host) = host.as_mut() {
+                        host.story.report_outpost_travel(fc3_story::Pose {
+                            position: crate::data::to_dunia(t.translation), angles: [0.0, 0.0, -p.yaw.to_degrees()],
+                        });
+                    }
                     next.set(GameState::Playing);
                 }
             }
         }
+    }
+    for d in &destinations {
+        let px = to_px(map_uv(crate::data::to_bevy(d.position)));
+        if px.x < -20.0 || px.y < -20.0 || px.x > size.x + 20.0 || px.y > size.y + 20.0 { continue; }
+        let over = cursor.is_some_and(|c| c.distance(px) < 14.0);
+        commands.spawn((
+            Node { position_type: PositionType::Absolute, left: Val::Px(px.x - 10.0), top: Val::Px(px.y - 10.0),
+                width: Val::Px(20.0), height: Val::Px(20.0), border: UiRect::all(Val::Px(2.0)),
+                justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() },
+            BackgroundColor(if d.unlocked { Color::srgb(0.2, 0.5, 0.95) } else { Color::srgb(0.4, 0.4, 0.4) }),
+            BorderColor::all(Color::srgb(0.95, 0.95, 0.9)), FullMapIcon, ChildOf(root),
+            children![(Text::new("⌂"), TextFont { font_size: bevy::text::FontSize::Px(17.0), ..default() }, TextColor(Color::WHITE))],
+        ));
+        if !over { continue; }
+        let action = if !d.unlocked { "Safehouse locked" } else if !travel_enabled { "Fast travel unavailable during this mission" }
+            else if map_pad.0 { "A  fast travel" } else { "Click to fast travel" };
+        commands.spawn((
+            Node { position_type: PositionType::Absolute, left: Val::Px(px.x + 16.0), top: Val::Px(px.y - 12.0),
+                padding: UiRect::all(Val::Px(6.0)), ..default() },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)), FullMapIcon, ChildOf(root),
+            children![(Text::new(format!("{}\n{action}", crate::story::plain(&d.name))), TextFont { font_size: bevy::text::FontSize::Px(16.0), ..default() },
+                TextColor(Color::srgb(0.95, 0.95, 0.9)))],
+        ));
+        if clicked && automation.0.is_none_or(|target| target == d.marker) {
+            if let (Some(host), Ok((mut t, mut p))) = (host.as_mut(), players.single_mut()) {
+                if let Some(pose) = host.story.fast_travel(d.marker) {
+                    crate::story::teleport(&mut t, &mut p, pose.position, pose.angles[2]);
+                    automation.0 = None;
+                    next.set(GameState::Playing);
+                    info!("map: fast travel to {} via marker {}", d.name, d.marker);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod travel_tests {
+    use super::*;
+    use std::sync::Arc;
+    use fc3_formats::fcb::Object;
+    use fc3_formats::hash::name_hash;
+    use fc3_story::data::{Entry, Marker, Origin, SpawnPoint, StoryData};
+
+    fn app() -> (App, Entity) {
+        let mut data = StoryData::default();
+        let safehouse = Arc::new(Object { name_hash: name_hash("CSafeHouseComponent"), fields: vec![
+            (name_hash("bLocked"), vec![0]), (name_hash("entMarkerEntity"), 20_u64.to_le_bytes().to_vec()),
+        ], ..default() });
+        data.entities.insert(10, Entry { id: 10, name: "Safehouse".into(), class: String::new(), pos: [0.0; 3], angles: [0.0; 3],
+            layer: fc3_formats::world::DEFAULT_MISSION_LAYER, origin: Origin::Global,
+            components: Arc::new(Object { children: vec![safehouse], ..default() }), fields: Arc::new(Object::default()) });
+        data.markers.insert(20, Marker { id: 20, name: "Safehouse marker".into(), layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
+            pos: [0.0; 3], kind: 0, sub_kind: 0, enabled: true, tooltip: 0, spawn_point: Some(30), area: None });
+        data.spawn_points.insert(30, SpawnPoint { id: 30, name: "Arrival".into(), layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
+            pos: [2.0, 3.0, 4.0], angles: [0.0, 0.0, 54.0] });
+        let pack = fc3_formats::scripts::ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap();
+        let story = fc3_story::Story::new(pack, data).unwrap();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).insert_resource(State::new(GameState::Map)).init_resource::<NextState<GameState>>()
+            .insert_resource(FullMapView { center: map_uv(Vec3::ZERO), zoom: 0.1 })
+            .init_resource::<ButtonInput<MouseButton>>().init_resource::<AccumulatedMouseMotion>()
+            .init_resource::<crate::outposts::Outposts>().init_resource::<crate::traversal::Ways>()
+            .init_resource::<crate::progression::Progress>().init_resource::<MapPad>().init_resource::<MapAutomation>()
+            .init_resource::<crate::story::ObjectiveMarkers>().insert_non_send(crate::story::StoryHost::new(story, None))
+            .add_systems(Update, full_map_icons);
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(400.0, 300.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.world_mut().spawn((FullMap, ComputedNode { size: Vec2::new(800.0, 600.0), inverse_scale_factor: 1.0, ..default() }));
+        let player = app.world_mut().spawn((Transform::default(), Player {
+            velocity: Vec3::X, yaw: 0.0, pitch: 0.0, grounded: false, crouching: false, swimming: false, noclip: false,
+            spawning: false, keep_height: false, last_landing_speed: 0.0, sprinting: false, spawned_at: 0.0,
+            driving: false, eye: 0.0, air: crate::player::AirMode::None, mantle: None, mounted: None, sliding: None, dragging: false,
+        })).id();
+        (app, player)
+    }
+
+    fn release(app: &mut App) {
+        let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        mouse.clear();
+        mouse.press(MouseButton::Left);
+        mouse.clear();
+        mouse.release(MouseButton::Left);
+        app.update();
+    }
+
+    #[test]
+    fn safehouse_click_uses_authored_pose_and_obeys_travel_locks() {
+        let (mut app, player) = app();
+        app.world().non_send::<crate::story::StoryHost>().story.domino().lua().load("SetFastTravelEnabled(false)").exec().unwrap();
+        release(&mut app);
+        assert_eq!(app.world().get::<Transform>(player).unwrap().translation, Vec3::ZERO);
+        assert!(app.world().non_send::<crate::story::StoryHost>().story.respawn_point().is_none());
+        app.world().non_send::<crate::story::StoryHost>().story.domino().lua().load("SetFastTravelEnabled(true)").exec().unwrap();
+        release(&mut app);
+        assert_eq!(app.world().get::<Transform>(player).unwrap().translation, Vec3::new(2.0, 5.0, -3.0));
+        let p = app.world().get::<Player>(player).unwrap();
+        assert_eq!(p.velocity, Vec3::ZERO);
+        assert!((p.yaw + 54.0_f32.to_radians()).abs() < 0.0001);
+        assert!(p.spawning && p.keep_height);
+        assert_eq!(app.world().non_send::<crate::story::StoryHost>().story.respawn_point(), Some(30));
+        assert!(matches!(app.world().resource::<NextState<GameState>>(), NextState::Pending(GameState::Playing)));
+    }
+
+    #[test]
+    fn map_drag_is_not_a_fast_travel_click() {
+        let (mut app, player) = app();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::new(10.0, 0.0);
+        app.update();
+        app.world_mut().resource_mut::<AccumulatedMouseMotion>().delta = Vec2::ZERO;
+        release(&mut app);
+        assert_eq!(app.world().get::<Transform>(player).unwrap().translation, Vec3::ZERO);
+        assert!(app.world().non_send::<crate::story::StoryHost>().story.respawn_point().is_none());
     }
 }

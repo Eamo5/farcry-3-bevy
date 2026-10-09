@@ -173,6 +173,9 @@ pub struct Core {
 
 impl Core {
     pub fn new(data: Rc<StoryData>) -> Core {
+        let safehouses_unlocked = data.entities.values().filter(|e| {
+            e.component("CSafeHouseComponent").is_some_and(|c| !c.bool("bLocked").unwrap_or(true))
+        }).map(|e| e.id).collect();
         Core {
             data,
             view: View::default(),
@@ -187,7 +190,7 @@ impl Core {
             blocks: HashMap::new(),
             running: HashSet::new(),
             session: HashMap::new(),
-            safehouses_unlocked: HashSet::new(),
+            safehouses_unlocked,
             radio_towers_unlocked: HashSet::new(),
             unlocked_tags: HashSet::new(),
             removed: HashSet::new(),

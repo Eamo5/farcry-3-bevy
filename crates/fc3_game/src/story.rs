@@ -36,6 +36,7 @@ impl Plugin for StoryPlugin {
             .init_resource::<StoryPurchases>()
             .init_resource::<StoryLoot>()
             .init_resource::<StoryCrafts>()
+            .init_resource::<StoryMenuEvents>()
             .add_systems(Update, hide_entities.after(StorySet))
             .add_systems(Update, apply_entity_poses.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, apply_entity_physics.after(StorySet).in_set(EntityPosesSet))
@@ -46,10 +47,13 @@ impl Plugin for StoryPlugin {
             .add_systems(PreUpdate, collect_shop_purchases)
             .add_systems(PreUpdate, collect_loot)
             .add_systems(PreUpdate, collect_crafts)
+            .add_systems(PreUpdate, collect_menu_events)
             .add_systems(Startup, setup_story_ui)
             .add_systems(Update, fade_screen)
             .add_systems(Update, start_story.after(crate::save::continue_game).run_if(in_state(GameState::Playing)))
-            .add_systems(Update, run_story.in_set(StorySet).run_if(in_state(GameState::Playing)))
+            .add_systems(Update, run_story.in_set(StorySet).run_if(|state: Res<State<GameState>>| {
+                matches!(state.get(), GameState::Playing | GameState::Paused | GameState::Map | GameState::Journal | GameState::Shop)
+            }))
             .add_systems(Update, show_story_ui);
     }
 }
@@ -220,6 +224,41 @@ fn collect_crafts(host: Option<NonSend<StoryHost>>, mut crafted: MessageReader<c
     else { crafted.clear(); pending.0.clear(); }
 }
 
+/// Menu callbacks outlive message expiry and are delivered after the live
+/// inventory snapshot and any committed crafting callbacks, even while paused.
+#[derive(Resource, Default)]
+struct StoryMenuEvents(Vec<&'static str>);
+
+fn collect_menu_events(
+    host: Option<NonSend<StoryHost>>, state: Res<State<GameState>>, menu: Res<crate::progression::PauseMenu>,
+    mut previous: Local<Option<(GameState, crate::progression::JournalPage)>>, mut events: ResMut<StoryMenuEvents>,
+) {
+    use crate::progression::JournalPage;
+    let current = (*state.get(), menu.page);
+    let old = previous.replace(current);
+    if host.is_none() { events.0.clear(); return; }
+    let Some((old_state, old_page)) = old else { return; };
+    if current == (old_state, old_page) { return; }
+    if old_state != current.0 {
+        match current.0 {
+            GameState::Map => events.0.push("CDominoWorldMapOpenedEvent"),
+            GameState::Paused | GameState::Journal if !matches!(old_state, GameState::Paused | GameState::Journal) => {
+                events.0.push("CDominoOpenPauseMenuEvent");
+            }
+            GameState::Playing if matches!(old_state, GameState::Paused | GameState::Journal) && menu.can_exit() => {
+                events.0.push("CDominoExitPauseMenuEvent");
+            }
+            _ => {}
+        }
+    }
+    if current.0 == GameState::Journal && (old_state != GameState::Journal || old_page != current.1) {
+        events.0.push(match current.1 {
+            JournalPage::Crafting => "CDominoCraftingPageOpenedEvent",
+            JournalPage::Skills => "CDominoSkillPageOpenedEvent",
+        });
+    }
+}
+
 /// The running story (its Lua state lives on the main thread).
 pub struct StoryHost {
     pub story: Story,
@@ -240,6 +279,9 @@ pub struct StoryHost {
     to_respawn: bool,
     /// Checkpoints kept for tests.
     kept: u32,
+    /// A smoke checkpoint's matching live inventory/world snapshot, captured
+    /// after host commands have settled. Never written to a real save slot.
+    pub(crate) checkpoint_game_paths: Vec<std::path::PathBuf>,
     /// The shop's weapons as scripts know them: model path -> (archetype,
     /// shop name id).
     shop_items: HashMap<String, (String, u32)>,
@@ -250,6 +292,10 @@ pub struct StoryHost {
 }
 
 impl StoryHost {
+    fn forward_menu_events(&mut self, events: &mut StoryMenuEvents) {
+        for event in events.0.drain(..) { self.story.generic_event(event, vec![]); }
+    }
+
     fn forward_crafts(&mut self, crafts: &mut StoryCrafts) {
         for crafted in crafts.0.drain(..) {
             self.story.entity_event(fc3_story::PLAYER, "DominoEvent_CraftRecipe",
@@ -277,7 +323,7 @@ impl StoryHost {
         }
     }
 
-    fn new(story: Story, checkpoint: Option<fc3_story::save::StorySave>) -> StoryHost {
+    pub(crate) fn new(story: Story, checkpoint: Option<fc3_story::save::StorySave>) -> StoryHost {
         StoryHost {
             story,
             due: Vec::new(),
@@ -289,6 +335,7 @@ impl StoryHost {
             was_dead: false,
             to_respawn: false,
             kept: 0,
+            checkpoint_game_paths: Vec::new(),
             shop_items: HashMap::new(),
             last_ordered: None,
             hidden_synced: false,
@@ -597,6 +644,8 @@ fn prompt_text(text: &str, actions: &crate::controls::ActionState, settings: &cr
         let Some(close) = rest.find(']') else { break };
         if let Some(action) = crate::controls::Action::from_prompt(&rest[1..close]) {
             out.push_str(&format!("[{}]", actions.label(action, settings)));
+        } else if rest[1..close].eq_ignore_ascii_case("MapFastTravel") {
+            out.push_str(if actions.gamepad_active { "[A]" } else { "[LMB]" });
         } else {
             out.push_str(&rest[..=close]);
         }
@@ -680,6 +729,20 @@ fn start_story(world: &mut World, mut tried: Local<bool>) {
     }
     let started = std::time::Instant::now();
     let Some(story) = open_story(&root, saved.as_ref()) else { return };
+    if let Some(mut menu) = world.get_resource_mut::<crate::progression::PauseMenu>() {
+        let previous = std::mem::replace(&mut *menu, crate::progression::PauseMenu::from_story(&story));
+        if continued {
+            menu.tutorial = previous.tutorial;
+            menu.tutorial_completed = previous.tutorial_completed;
+        }
+    }
+    if saved.is_none() && !continued {
+        // The campaign begins empty-handed; the free-roam starter medical
+        // supplies are not a story reward. Continued inventories are untouched.
+        for mut stats in world.query_filtered::<&mut crate::combat::PlayerStats, With<Player>>().iter_mut(world) {
+            stats.medkits = 0;
+        }
+    }
     info!("story started in {:.1}s{}", started.elapsed().as_secs_f32(), if saved.is_some() { " from its save" } else { "" });
     let mut host = StoryHost::new(story, saved);
     host.to_respawn = to_respawn;
@@ -708,19 +771,21 @@ fn run_story(
     mut ui: ResMut<StoryUi>,
     mut layers: ResMut<MissionLayers>,
     mut hud: ResMut<crate::hud::HudState>,
-    (mut players, stats, perks, mount): (
+    (mut players, mut stats, perks, mount, state): (
         Query<(&mut Transform, &mut Player, Option<&mut crate::combat::Health>)>,
-        Query<&crate::combat::PlayerStats, With<Player>>,
+        Query<&mut crate::combat::PlayerStats, With<Player>>,
         Res<crate::progression::Perks>,
         Res<crate::traversal::Mount>,
+        Res<State<GameState>>,
     ),
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     actors: Query<(&crate::story_actors::StoryActor, &Transform, Option<&crate::npc::Npc>), Without<Player>>,
     mut orders: ResMut<crate::story_actors::ActorOrders>,
     mut scripted: ResMut<ScriptedPlayer>,
-    (mut inventory, mut clock, catalog, mut shop_override): (
+    (mut inventory, mut clock, catalog, mut shop_override, mut pause_menu, mut next, mut menu_events): (
         Query<&mut crate::weapons::Inventory, With<Player>>, ResMut<crate::sky::TimeOfDay>,
         Res<crate::progression::ShopCatalog>, ResMut<crate::progression::ShopOverride>,
+        ResMut<crate::progression::PauseMenu>, ResMut<NextState<GameState>>, ResMut<StoryMenuEvents>,
     ),
     (mut area, mut cinema, mut placements): (ResMut<MissionArea>, ResMut<crate::cinema::Cinema>, ResMut<EntityPlacements>),
     (actions, mut markers, heights, mut voices): (
@@ -757,7 +822,8 @@ fn run_story(
     // (Not a run condition: those may run off the main thread.)
     let Some(mut host) = host else { return };
     let now = time.elapsed_secs();
-    let dt = time.delta_secs().min(0.1);
+    let gameplay = *state.get() == GameState::Playing;
+    let dt = if gameplay { time.delta_secs().min(0.1) } else { 0.0 };
     let host = &mut *host;
     // Host work that came due.
     host.due.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -794,8 +860,11 @@ fn run_story(
             cinema.reset();
             *scripted = ScriptedPlayer::default();
             shop_override.0 = None;
+            *pause_menu = crate::progression::PauseMenu::from_story(&host.story);
             bought.0.clear();
             looted.0.clear();
+            crafted.0.clear();
+            menu_events.0.clear();
             ui.objective = None;
             ui.hints.clear();
             ui.boxes.clear();
@@ -894,7 +963,7 @@ fn run_story(
         0
     };
     // The player's inputs, as the signals scripts listen for.
-    {
+    if gameplay {
         use crate::controls::Action;
         const SIGNALS: [(Action, &str); 11] = [
             (Action::Jump, "jump"),
@@ -925,12 +994,14 @@ fn run_story(
     }
     // Purchases, as the shop's buy event on the player (the game's item,
     // its name's section and string id).
-    host.forward_purchases(&mut bought);
     let mut commands = host.story.update(dt, view);
+    host.forward_purchases(&mut bought);
     host.forward_loot(&mut looted, &loot_catalog);
     host.forward_crafts(&mut crafted);
+    host.forward_menu_events(&mut menu_events);
     crafting.completed_missions = host.story.missions().into_iter().filter(|m| m.1 == "Completed")
         .map(|m| m.0.to_ascii_lowercase()).collect();
+    pause_menu.update_unlocks(&crafting.completed_missions);
     commands.extend(host.story.take_commands());
     ui.timers = host.story.timers();
     let data = host.story.data();
@@ -953,7 +1024,7 @@ fn run_story(
     if commands.iter().any(|c| !matches!(c, Command::Layer { .. } | Command::Print(_) | Command::Dialog { .. })) {
         host.quiet = 0.0;
     }
-    if std::env::var("FC3_STORY_AUTOPILOT").is_ok() && host.quiet > 20.0 && host.quiet - dt <= 20.0 {
+    if gameplay && std::env::var("FC3_STORY_AUTOPILOT").is_ok() && host.quiet > 20.0 && host.quiet - dt <= 20.0 {
         info!("story autopilot: stalled; triggers {:?}, signals {:?}", host.story.watched_triggers(), host.story.watched_signals());
         for w in host.story.waiting_on() {
             info!("story autopilot: waiting on {w}");
@@ -962,7 +1033,7 @@ fn run_story(
             info!("story autopilot: trigger {} {}: {}", w.0, w.1, host.story.trigger_debug(w.0));
         }
     }
-    if std::env::var("FC3_STORY_AUTOPILOT").is_ok() && host.quiet > 6.0 && host.story.watched_loot_filters().is_empty() {
+    if gameplay && std::env::var("FC3_STORY_AUTOPILOT").is_ok() && host.quiet > 6.0 && host.story.watched_loot_filters().is_empty() {
         let watched = host.story.watched_triggers();
         // Stuck: triggers stepped into before they were armed go again.
         if host.quiet > 25.0 {
@@ -1126,6 +1197,7 @@ fn run_story(
                     host.kept += 1;
                     let path = std::path::Path::new(&dir).join(format!("{:03}_{}.txt", host.kept, running.join("+")));
                     let _ = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, save.to_text()));
+                    host.checkpoint_game_paths.push(path.with_extension("game.txt"));
                 }
                 host.checkpoint = Some(save);
             }
@@ -1180,6 +1252,14 @@ fn run_story(
             Command::Native { name, args } => {
                 let a = |i: usize| args.get(i).cloned().unwrap_or_default();
                 match name.as_str() {
+                    "OverridePauseMenu" | "OverridePauseMenuTutorial" => {
+                        pause_menu.override_page(a(1) == "true", a(2) == "true", name == "OverridePauseMenuTutorial");
+                        if a(0) == "true" { next.set(GameState::Journal); }
+                    }
+                    "LockPauseMenuOption" => {
+                        if a(1) == "true" { pause_menu.crafting_locked = a(0) == "true"; }
+                        if a(2) == "true" { pause_menu.skills_locked = a(0) == "true"; }
+                    }
                     // No cinematic player yet: a scene starts and ends at once.
                     // Scenes play in `cinema`.
                     "Sequence" => {
@@ -1339,6 +1419,11 @@ fn run_story(
                     "CAPI_Player.EnablePlantLooting" if a(0) == fc3_story::PLAYER.to_string() => {
                         scripted.plant_looting = a(1) != "false" && a(1) != "0";
                     }
+                    "CAPI_Player.GiveMedpacksToPlayer" | "CAPI_Player.RemoveMedpacksToPlayer" => {
+                        if let Ok(mut stats) = stats.single_mut() {
+                            apply_medpack_command(&mut stats.medkits, perks.medkit_cap, &name, &args);
+                        }
+                    }
                     "CAPI_Player.RemoveGadget" if a(0) == fc3_story::PLAYER.to_string() => {
                         let name = host.story.item_name(&a(1));
                         scripted.gadgets.retain(|g| !g.eq_ignore_ascii_case(&name));
@@ -1393,6 +1478,19 @@ struct StoryInteraction {
     target: Option<u64>,
     held: f32,
     latched: bool,
+}
+
+/// Script inventory adjustments aren't crafting or looting: they change the
+/// carried count without generating a recipe callback or consuming leaves.
+fn apply_medpack_command(count: &mut u32, capacity: u32, name: &str, args: &[String]) -> bool {
+    if args.first().and_then(|a| a.parse::<u64>().ok()) != Some(fc3_story::PLAYER) { return false; }
+    let Some(amount) = args.get(1).and_then(|a| a.parse::<u32>().ok()) else { return false; };
+    match name {
+        "CAPI_Player.GiveMedpacksToPlayer" => *count = count.saturating_add(amount).min(capacity),
+        "CAPI_Player.RemoveMedpacksToPlayer" => *count = count.saturating_sub(amount),
+        _ => return false,
+    }
+    true
 }
 
 impl StoryInteraction {
@@ -1601,7 +1699,7 @@ fn tower_taken(story: &mut Story, at: Vec3) {
     }
 }
 
-fn teleport(t: &mut Transform, p: &mut Player, pos: [f32; 3], yaw_deg: f32) {
+pub(crate) fn teleport(t: &mut Transform, p: &mut Player, pos: [f32; 3], yaw_deg: f32) {
     t.translation = to_bevy(pos) + Vec3::Y * 1.0;
     p.yaw = -yaw_deg.to_radians();
     p.pitch = 0.0;
@@ -1903,6 +2001,133 @@ mod tests {
     use crate::settings::Settings;
 
     #[test]
+    fn script_medpack_adjustments_obey_capacity_underflow_and_player_identity() {
+        let player = fc3_story::PLAYER.to_string();
+        let mut count = 0;
+        let give = "CAPI_Player.GiveMedpacksToPlayer";
+        let remove = "CAPI_Player.RemoveMedpacksToPlayer";
+        assert!(apply_medpack_command(&mut count, 3, give, &[player.clone(), "2".into()]));
+        assert_eq!(count, 2);
+        assert!(apply_medpack_command(&mut count, 3, give, &[player.clone(), u32::MAX.to_string()]));
+        assert_eq!(count, 3);
+        assert!(apply_medpack_command(&mut count, 3, remove, &[player.clone(), "1".into()]));
+        assert_eq!(count, 2);
+        assert!(apply_medpack_command(&mut count, 3, remove, &[player.clone(), "5".into()]));
+        assert_eq!(count, 0);
+        for args in [vec!["123".into(), "2".into()], vec![player.clone(), "-1".into()], vec![player.clone(), "NaN".into()], vec![player]] {
+            assert!(!apply_medpack_command(&mut count, 3, give, &args));
+            assert_eq!(count, 0);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
+    fn installed_medpack_controller_changes_inventory_without_recipe_events() {
+        let cache = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let pack = fc3_formats::scripts::ScriptPack::from_bytes(&std::fs::read(cache.join(fc3_formats::scripts::DOMINO_PACK_REL)).unwrap()).unwrap();
+        let mut story = Story::new(pack, fc3_story::data::StoryData::default()).unwrap();
+        let controller = story.domino().create("Domino/System/Player/ManageInventory_v4.lua").unwrap();
+        controller.set("Finished", story.domino().lua().globals().get::<mlua::Function>("DummyFunction").unwrap()).unwrap();
+        let mut count = 0;
+        for (method, amount, expected) in [("AddMedPack", Some(2), 2), ("AddMedPack", None, 3), ("RemoveMedPack", Some(1), 2), ("RemoveMedPack", None, 0)] {
+            controller.set("ammoCount", amount).unwrap();
+            story.domino().call(&controller, method).unwrap();
+            let commands = story.take_commands();
+            assert_eq!(commands.len(), 1);
+            let Command::Native { name, args } = &commands[0] else { panic!("expected a medical inventory command") };
+            assert!(apply_medpack_command(&mut count, 3, name, args));
+            assert_eq!(count, expected);
+            let mut view = View::default();
+            view.player_state.medpacks = count;
+            story.update(0.0, view);
+            assert_eq!(story.domino().lua().load(r#"return CAPI_Player.GetPlayerMedPackCount("1")"#).eval::<u32>().unwrap(), expected);
+            assert!(story.take_commands().is_empty());
+        }
+        assert_eq!(story.errors(), 0);
+    }
+
+    #[test]
+    fn paused_menu_events_are_retained_and_exit_callbacks_see_committed_crafts_once() {
+        use crate::progression::{JournalPage, PauseMenu};
+        let pack = fc3_formats::scripts::ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap();
+        let story = Story::new(pack, fc3_story::data::StoryData::default()).unwrap();
+        story.domino().lua().load(r#"
+            menus = { exit = 0, opened = 0, crafting = 0, skills = 0, crafts = 0 }
+            menus._type = {
+                Exit = function(self) assert(self.crafts == 3); self.exit = self.exit + 1 end,
+                Open = function(self) self.opened = self.opened + 1 end,
+                Crafting = function(self) self.crafting = self.crafting + 1 end,
+                Skills = function(self) self.skills = self.skills + 1 end,
+                Crafted = function(self) self.crafts = self.crafts + 1 end
+            }
+            local c = CScriptCallbackSystem_GetInstance()
+            c:RegisterGenericCallback(menus, "Exit", "CDominoExitPauseMenuEvent")
+            c:RegisterGenericCallback(menus, "Open", "CDominoOpenPauseMenuEvent")
+            c:RegisterGenericCallback(menus, "Crafting", "CDominoCraftingPageOpenedEvent")
+            c:RegisterGenericCallback(menus, "Skills", "CDominoSkillPageOpenedEvent")
+            c:RegisterEventCallback("1", menus, "Crafted", "DominoEvent_CraftRecipe")
+        "#).exec().unwrap();
+        fn resume(mut host: NonSendMut<StoryHost>, mut menu: ResMut<StoryMenuEvents>, mut crafts: ResMut<StoryCrafts>) {
+            host.forward_crafts(&mut crafts);
+            host.forward_menu_events(&mut menu);
+        }
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).insert_resource(State::new(GameState::Playing)).init_resource::<PauseMenu>()
+            .init_resource::<StoryMenuEvents>().init_resource::<StoryCrafts>().add_message::<crate::crafting::ItemCrafted>()
+            .insert_non_send(StoryHost::new(story, None)).add_systems(PreUpdate, (collect_menu_events, collect_crafts))
+            .add_systems(Update, resume.run_if(in_state(GameState::Playing)));
+        app.update();
+        app.insert_resource(State::new(GameState::Journal));
+        app.update();
+        for _ in 0..4 { app.update(); }
+        assert_eq!(app.world().resource::<StoryMenuEvents>().0, ["CDominoOpenPauseMenuEvent", "CDominoCraftingPageOpenedEvent"]);
+        app.world_mut().resource_mut::<PauseMenu>().page = JournalPage::Skills;
+        app.update();
+        for label in ["Medkit small", "Medkit small", "Loot pouch small"] {
+            app.world_mut().write_message(crate::crafting::ItemCrafted { kind: if label == "Medkit small" { 3 } else { 2 }, label: label.into() });
+            app.update();
+        }
+        for _ in 0..5 { app.update(); }
+        app.insert_resource(State::new(GameState::Playing));
+        app.update();
+        let menus = app.world().non_send::<StoryHost>().story.domino().lua().globals().get::<mlua::Table>("menus").unwrap();
+        assert_eq!(menus.get::<u32>("opened").unwrap(), 1);
+        assert_eq!(menus.get::<u32>("crafting").unwrap(), 1);
+        assert_eq!(menus.get::<u32>("skills").unwrap(), 1);
+        assert_eq!(menus.get::<u32>("exit").unwrap(), 1);
+        for _ in 0..4 { app.update(); }
+        assert_eq!(menus.get::<u32>("exit").unwrap(), 1);
+        assert!(app.world().resource::<StoryMenuEvents>().0.is_empty());
+        assert_eq!(app.world().non_send::<StoryHost>().story.errors(), 0);
+    }
+
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
+    fn installed_ui_listener_receives_menu_page_and_exit_events_once() {
+        let cache = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let pack = fc3_formats::scripts::ScriptPack::from_bytes(&std::fs::read(cache.join(fc3_formats::scripts::DOMINO_PACK_REL)).unwrap()).unwrap();
+        let story = Story::new(pack, fc3_story::data::StoryData::default()).unwrap();
+        let listener = story.domino().create("Domino/System/UI/UIListener.lua").unwrap();
+        let lua = story.domino().lua();
+        for output in ["Enabled", "Disabled", "OpenPhotoMap"] {
+            listener.set(output, lua.globals().get::<mlua::Function>("DummyFunction").unwrap()).unwrap();
+        }
+        for (output, field) in [("OpenWorldMap", "map"), ("OpenPauseMenu", "open"), ("OpenCraftingPage", "crafting"), ("OpenSkillPage", "skills"), ("ExitPauseMenu", "exit")] {
+            listener.set(output, lua.load(format!("return function(self) self.{field} = (self.{field} or 0) + 1 end")).eval::<mlua::Function>().unwrap()).unwrap();
+        }
+        story.domino().call(&listener, "Enable").unwrap();
+        let mut host = StoryHost::new(story, None);
+        let mut events = StoryMenuEvents(vec!["CDominoWorldMapOpenedEvent", "CDominoOpenPauseMenuEvent", "CDominoCraftingPageOpenedEvent",
+            "CDominoSkillPageOpenedEvent", "CDominoExitPauseMenuEvent"]);
+        host.forward_menu_events(&mut events);
+        host.forward_menu_events(&mut events);
+        for field in ["map", "open", "crafting", "skills", "exit"] { assert_eq!(listener.get::<u32>(field).unwrap(), 1); }
+        host.story.generic_event("CDominoExitPauseMenuEvent", vec![]);
+        assert_eq!(listener.get::<u32>("exit").unwrap(), 1, "authored auto-disable must unregister the exit callback");
+        assert_eq!(host.story.errors(), 0);
+    }
+
+    #[test]
     fn crafted_items_survive_journal_frames_and_reach_the_story_once() {
         use crate::crafting::ItemCrafted;
         let pack = fc3_formats::scripts::ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap();
@@ -2111,6 +2336,7 @@ mod tests {
             "[V] Use — [MMB] Distract [unknown] [unfinished");
         actions.gamepad_active = true;
         assert_eq!(prompt_text("[Interact] Use / [Crouch] Hide", &actions, &settings), "[X] Use / [B] Hide");
+        assert_eq!(prompt_text("[WorldMap] Map / [MapFastTravel] Travel", &actions, &settings), "[Select] Map / [A] Travel");
     }
 
     #[test]

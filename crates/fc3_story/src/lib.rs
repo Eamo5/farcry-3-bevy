@@ -17,6 +17,7 @@ pub mod missions;
 mod natives;
 pub mod save;
 pub mod triggers;
+pub mod travel;
 pub mod values;
 
 use std::cell::RefCell;
@@ -1134,6 +1135,47 @@ mod tests {
         assert_eq!(story.timers()[0].seconds, 63.5);
         story.domino().lua().load(format!("UnregisterNamedTimer({id})")).exec().unwrap();
         assert!(story.timers().is_empty());
+    }
+
+    #[test]
+    fn menu_callbacks_see_refreshed_inventory_without_advancing_paused_timers() {
+        let mut story = empty_story();
+        story.domino().lua().load(r#"
+            RegisterNamedTimerLocalized("Escape", 65, false, true, "", "", true)
+            menu = { crafting = 0, exit = 0 }
+            menu._type = {
+                Crafting = function(self)
+                    assert(CAPI_Player.GetPlayerMedPackCount("1") == 1)
+                    assert(CAPI_Pawn.GetLootQuantity("1", 104580) == 1)
+                    self.crafting = self.crafting + 1
+                end,
+                Exit = function(self)
+                    assert(CAPI_Player.GetPlayerMedPackCount("1") == 2)
+                    assert(CAPI_Pawn.GetLootQuantity("1", 104580) == 0)
+                    self.exit = self.exit + 1
+                end
+            }
+            local callbacks = CScriptCallbackSystem_GetInstance()
+            callbacks:RegisterGenericCallback(menu, "Crafting", "CDominoCraftingPageOpenedEvent")
+            callbacks:RegisterGenericCallback(menu, "Exit", "CDominoExitPauseMenuEvent")
+        "#).exec().unwrap();
+        story.update(1.5, View::default());
+        let mut view = View::default();
+        view.player_state.medpacks = 1;
+        view.player_state.loot.insert(104580, 1);
+        story.update(0.0, view.clone());
+        story.generic_event("CDominoCraftingPageOpenedEvent", vec![]);
+        for _ in 0..10 { story.update(0.0, view.clone()); }
+        assert_eq!(story.timers()[0].seconds, 63.5);
+        view.player_state.medpacks = 2;
+        view.player_state.loot.clear();
+        story.update(0.0, view);
+        story.generic_event("CDominoExitPauseMenuEvent", vec![]);
+        let menu = story.domino().lua().globals().get::<Table>("menu").unwrap();
+        assert_eq!(menu.get::<u32>("crafting").unwrap(), 1);
+        assert_eq!(menu.get::<u32>("exit").unwrap(), 1);
+        assert_eq!(story.timers()[0].seconds, 63.5);
+        assert_eq!(story.errors(), 0);
     }
 
     #[test]

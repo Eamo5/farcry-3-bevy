@@ -32,6 +32,7 @@ impl Plugin for ProgressionPlugin {
             .init_resource::<crate::crafting::CraftCatalog>()
             .add_message::<crate::crafting::ItemCrafted>()
             .init_resource::<ShopOverride>()
+            .init_resource::<PauseMenu>()
             .add_systems(OnExit(GameState::Loading), (load_shop_catalog, load_loot_catalog))
             .add_systems(Update, find_shops)
             .add_systems(Startup, (setup_journal, setup_shop, setup_popups))
@@ -44,7 +45,9 @@ impl Plugin for ProgressionPlugin {
                     update_perks,
                     apply_perks,
                     toggle_journal,
+                    journal_automation,
                     journal_buttons,
+                    journal_layout,
                     refresh_journal,
                     shop_prompt.before(crate::hud::HudSet).after(crate::turrets::man_turrets),
                     shop_buttons,
@@ -615,11 +618,111 @@ fn apply_perks(perks: Res<Perks>, mut players: Query<(&mut Health, &mut PlayerSt
 
 // --------------------------------------------------------------- journal ---
 
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub enum JournalPage {
+    #[default]
+    Crafting,
+    Skills,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CraftTutorial {
+    Medicine(u8),
+    Rucksack,
+    Done,
+}
+
+/// Script-owned pause-menu page overrides. Tutorial progress records actual
+/// committed crafts, never button presses or pre-existing inventory counts.
+#[derive(Resource, Default)]
+pub struct PauseMenu {
+    pub page: JournalPage,
+    pub tutorial: Option<CraftTutorial>,
+    /// Keep completion across closing/quitting so re-entering B40's checkpoint
+    /// cannot demand another pair of leaves after they were already consumed.
+    pub tutorial_completed: bool,
+    pub crafting_locked: bool,
+    pub skills_locked: bool,
+    pub unlock_gates: [Option<String>; 2],
+}
+
+impl PauseMenu {
+    pub fn from_story(story: &fc3_story::Story) -> Self {
+        let mut menu = Self::default();
+        if let Some((crafting, skills)) = &story.data().menu_unlocks {
+            menu.crafting_locked = true;
+            menu.skills_locked = true;
+            menu.unlock_gates = [Some(crafting.clone()), Some(skills.clone())];
+            menu.update_unlocks(&story.missions().into_iter().filter(|m| m.1 == "Completed").map(|m| m.0.to_ascii_lowercase()).collect());
+        }
+        menu
+    }
+
+    pub fn update_unlocks(&mut self, completed: &HashSet<String>) {
+        for (gate, locked) in self.unlock_gates.iter_mut().zip([&mut self.crafting_locked, &mut self.skills_locked]) {
+            if gate.as_ref().is_some_and(|mission| completed.contains(mission)) {
+                *gate = None;
+                *locked = false;
+            }
+        }
+    }
+
+    pub fn can_exit(&self) -> bool {
+        matches!(self.tutorial, None | Some(CraftTutorial::Done))
+    }
+
+    pub fn allows_page(&self, page: JournalPage) -> bool {
+        match page {
+            JournalPage::Crafting => !self.crafting_locked,
+            JournalPage::Skills => !self.skills_locked && self.can_exit(),
+        }
+    }
+
+    pub fn allows_recipe(&self, id: &str) -> bool {
+        !self.crafting_locked && match self.tutorial {
+            Some(CraftTutorial::Medicine(_)) => id == crate::crafting::MEDICINE,
+            Some(CraftTutorial::Rucksack) => id == crate::crafting::RUCKSACK,
+            Some(CraftTutorial::Done) => false,
+            None => true,
+        }
+    }
+
+    pub fn record_craft(&mut self, id: &str) {
+        self.tutorial = match (self.tutorial, id) {
+            (Some(CraftTutorial::Medicine(n)), crate::crafting::MEDICINE) if n < 1 => Some(CraftTutorial::Medicine(n + 1)),
+            (Some(CraftTutorial::Medicine(_)), crate::crafting::MEDICINE) => Some(CraftTutorial::Rucksack),
+            (Some(CraftTutorial::Rucksack), crate::crafting::RUCKSACK) => Some(CraftTutorial::Done),
+            (stage, _) => stage,
+        };
+        if self.tutorial == Some(CraftTutorial::Done) { self.tutorial_completed = true; }
+    }
+
+    pub fn override_page(&mut self, crafting: bool, skills: bool, tutorial: bool) {
+        if skills && !crafting {
+            self.page = JournalPage::Skills;
+            self.skills_locked = false;
+        } else {
+            self.page = JournalPage::Crafting;
+            self.crafting_locked = false;
+            if tutorial && self.tutorial.is_none() {
+                self.tutorial = Some(if self.tutorial_completed { CraftTutorial::Done } else { CraftTutorial::Medicine(0) });
+            }
+        }
+    }
+}
+
 #[derive(Component)]
 struct JournalRoot;
 
+#[derive(Component)]
+struct JournalContent(JournalPage);
+
+#[derive(Component)]
+struct JournalOrdinaryCrafting;
+
 #[derive(Component, Clone, Copy)]
 enum JournalButton {
+    Page(JournalPage),
     Skill(usize),
     Craft(usize),
     Authored(usize),
@@ -635,6 +738,8 @@ struct JournalText(JournalField);
 #[derive(Clone, Copy, PartialEq)]
 enum JournalField {
     Header,
+    Tutorial,
+    Close,
     Skill(usize),
     SkillStatus(usize),
     Craft(usize),
@@ -673,9 +778,16 @@ fn setup_journal(mut commands: Commands) {
         ))
         .id();
     commands.spawn((Text::new(""), font(22.0), TextColor(TEXT), JournalText(JournalField::Header), ChildOf(root)));
+    let tabs = commands.spawn((Node { column_gap: Val::Px(12.0), ..default() }, ChildOf(root))).id();
+    for (page, label) in [(JournalPage::Crafting, "CRAFTING"), (JournalPage::Skills, "SKILLS")] {
+        commands.spawn((Button, Node { width: Val::Px(220.0), height: Val::Px(40.0), align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center, ..default() }, BackgroundColor(IDLE), JournalButton::Page(page), ChildOf(tabs),
+            children![(Text::new(label), font(20.0), TextColor(TEXT))]));
+    }
+    commands.spawn((Text::new(""), font(22.0), TextColor(ACCENT), JournalText(JournalField::Tutorial), ChildOf(root)));
     let columns = commands.spawn((Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(50.0), ..default() }, ChildOf(root))).id();
     // Skills, by branch.
-    let skills = commands.spawn((Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(4.0), ..default() }, ChildOf(columns))).id();
+    let skills = commands.spawn((Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(4.0), ..default() }, JournalContent(JournalPage::Skills), ChildOf(columns))).id();
     commands.spawn((Text::new("SKILLS"), font(24.0), TextColor(ACCENT), ChildOf(skills)));
     for branch in [Branch::Heron, Branch::Shark, Branch::Spider] {
         commands.spawn((
@@ -721,7 +833,7 @@ fn setup_journal(mut commands: Commands) {
         }
     }
     // Crafting and skins.
-    let craft = commands.spawn((Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(6.0), ..default() }, ChildOf(columns))).id();
+    let craft = commands.spawn((Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(6.0), ..default() }, JournalContent(JournalPage::Crafting), ChildOf(columns))).id();
     commands.spawn((Text::new("CRAFTING"), font(24.0), TextColor(ACCENT), ChildOf(craft)));
     for i in 0..crate::crafting::TUTORIAL_RECIPES.len() {
         let b = commands.spawn((Button,
@@ -730,6 +842,7 @@ fn setup_journal(mut commands: Commands) {
             BackgroundColor(IDLE), JournalButton::Authored(i), ChildOf(craft))).id();
         commands.spawn((Text::new(""), font(15.0), TextColor(TEXT), JournalText(JournalField::Authored(i)), ChildOf(b)));
     }
+    let ordinary = commands.spawn((Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(6.0), ..default() }, JournalOrdinaryCrafting, ChildOf(craft))).id();
     for (i, _) in UPGRADES.iter().enumerate() {
         let b = commands
             .spawn((
@@ -744,17 +857,17 @@ fn setup_journal(mut commands: Commands) {
                 },
                 BackgroundColor(IDLE),
                 JournalButton::Craft(i),
-                ChildOf(craft),
+                ChildOf(ordinary),
             ))
             .id();
         commands.spawn((Text::new(""), font(15.0), TextColor(TEXT), JournalText(JournalField::Craft(i)), ChildOf(b)));
     }
-    commands.spawn((Text::new("SKINS"), font(20.0), TextColor(ACCENT), Node { margin: UiRect::top(Val::Px(12.0)), ..default() }, ChildOf(craft)));
-    commands.spawn((Text::new(""), font(15.0), TextColor(TEXT), Node { width: Val::Px(440.0), ..default() }, JournalText(JournalField::Skins), ChildOf(craft)));
+    commands.spawn((Text::new("SKINS"), font(20.0), TextColor(ACCENT), Node { margin: UiRect::top(Val::Px(12.0)), ..default() }, ChildOf(ordinary)));
+    commands.spawn((Text::new(""), font(15.0), TextColor(TEXT), Node { width: Val::Px(440.0), ..default() }, JournalText(JournalField::Skins), ChildOf(ordinary)));
     // Syringes from plants: mix, or inject one on hand.
-    commands.spawn((Text::new("SYRINGES"), font(20.0), TextColor(ACCENT), Node { margin: UiRect::top(Val::Px(12.0)), ..default() }, ChildOf(craft)));
+    commands.spawn((Text::new("SYRINGES"), font(20.0), TextColor(ACCENT), Node { margin: UiRect::top(Val::Px(12.0)), ..default() }, ChildOf(ordinary)));
     for i in 0..crate::syringes::Syringe::ALL.len() {
-        let row = commands.spawn((Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(6.0), ..default() }, ChildOf(craft))).id();
+        let row = commands.spawn((Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(6.0), ..default() }, ChildOf(ordinary))).id();
         let mix = commands
             .spawn((
                 Button,
@@ -796,7 +909,7 @@ fn setup_journal(mut commands: Commands) {
         TextColor(Color::srgba(0.9, 0.9, 0.88, 0.85)),
         Node { width: Val::Px(440.0), ..default() },
         JournalText(JournalField::Plants),
-        ChildOf(craft),
+        ChildOf(ordinary),
     ));
     let close = commands
         .spawn((
@@ -807,7 +920,7 @@ fn setup_journal(mut commands: Commands) {
             ChildOf(root),
         ))
         .id();
-    commands.spawn((Text::new("CLOSE  (Tab)"), font(17.0), TextColor(TEXT), ChildOf(close)));
+    commands.spawn((Text::new("CLOSE  (Tab)"), font(17.0), TextColor(TEXT), JournalText(JournalField::Close), ChildOf(close)));
 }
 
 fn toggle_journal(
@@ -817,6 +930,7 @@ fn toggle_journal(
     state: Res<State<GameState>>,
     mut next: ResMut<NextState<GameState>>,
     mut root: Query<&mut Visibility, With<JournalRoot>>,
+    mut menu: ResMut<PauseMenu>,
 ) {
     // --journal (tests): open once in play.
     let test = args.open_journal && !*opened && *state.get() == GameState::Playing;
@@ -825,8 +939,11 @@ fn toggle_journal(
     }
     if keys.just_pressed(KeyCode::Tab) || test {
         match state.get() {
-            GameState::Playing => next.set(GameState::Journal),
-            GameState::Journal => next.set(GameState::Playing),
+            GameState::Playing if menu.allows_page(menu.page) => next.set(GameState::Journal),
+            GameState::Journal if menu.can_exit() => {
+                menu.tutorial = None;
+                next.set(GameState::Playing);
+            }
             _ => {}
         }
     }
@@ -858,6 +975,7 @@ fn journal_buttons(
     perks: Res<Perks>,
     mut players: Query<&mut PlayerStats, With<Player>>,
     mut crafted: MessageWriter<crate::crafting::ItemCrafted>,
+    mut menu: ResMut<PauseMenu>,
 ) {
     if *state.get() != GameState::Journal {
         return;
@@ -867,16 +985,22 @@ fn journal_buttons(
             Interaction::Pressed => {
                 sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 0.7 });
                 match *kind {
+                    JournalButton::Page(page) => {
+                        if menu.allows_page(page) { menu.page = page; }
+                    }
                     JournalButton::Authored(i) => {
+                        let id = crate::crafting::TUTORIAL_RECIPES[i];
+                        if menu.page != JournalPage::Crafting || !menu.allows_recipe(id) { continue; }
                         if let Ok(mut stats) = players.single_mut() {
-                            let id = crate::crafting::TUTORIAL_RECIPES[i];
                             if let Some(event) = crafting.craft(&mut progress, &mut stats, perks.medkit_cap, &loot, id) {
+                                menu.record_craft(id);
                                 if let Some(recipe) = crafting.recipe(id) { hud.notify(format!("Crafted {}", recipe.name)); }
                                 crafted.write(event);
                             }
                         }
                     }
                     JournalButton::Skill(i) => {
+                        if menu.page != JournalPage::Skills || !menu.allows_page(JournalPage::Skills) { continue; }
                         let s = &SKILLS[i];
                         if can_learn(&progress, s) {
                             progress.skill_points -= s.cost;
@@ -885,6 +1009,7 @@ fn journal_buttons(
                         }
                     }
                     JournalButton::Craft(i) => {
+                        if menu.page != JournalPage::Crafting || menu.tutorial.is_some() || menu.crafting_locked { continue; }
                         let u = &UPGRADES[i];
                         if can_craft(&progress, u) {
                             let level = progress.upgrade(u.id) as usize;
@@ -896,23 +1021,70 @@ fn journal_buttons(
                         }
                     }
                     JournalButton::Syringe(i) => {
+                        if menu.page != JournalPage::Crafting || menu.tutorial.is_some() || menu.crafting_locked { continue; }
                         let s = crate::syringes::Syringe::ALL[i];
                         if crate::syringes::craft(&mut progress, s) {
                             hud.notify(format!("Mixed a {} syringe", s.name()));
                         }
                     }
                     JournalButton::Inject(i) => {
+                        if menu.page != JournalPage::Crafting || menu.tutorial.is_some() || menu.crafting_locked { continue; }
                         let s = crate::syringes::Syringe::ALL[i];
                         if crate::syringes::inject(&mut progress, &mut boosts, s) {
                             hud.notify(format!("{} syringe: {}", s.name(), s.effect()));
                         }
                     }
-                    JournalButton::Close => next.set(GameState::Playing),
+                    JournalButton::Close => {
+                        if menu.can_exit() { menu.tutorial = None; next.set(GameState::Playing); }
+                    }
                 }
             }
             Interaction::Hovered => bg.0 = HOVER,
             Interaction::None => bg.0 = IDLE,
         }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn journal_layout(
+    menu: Res<PauseMenu>,
+    mut nodes: Query<(&mut Node, Option<&JournalContent>, Option<&JournalOrdinaryCrafting>, Option<&JournalButton>)>,
+) {
+    for (mut node, content, ordinary, button) in &mut nodes {
+        let shown = if let Some(content) = content { content.0 == menu.page }
+            else if ordinary.is_some() { menu.tutorial.is_none() }
+            else if let Some(JournalButton::Authored(i)) = button { menu.allows_recipe(crate::crafting::TUTORIAL_RECIPES[*i]) }
+            else if let Some(JournalButton::Page(page)) = button { menu.allows_page(*page) }
+            else { continue };
+        node.display = if shown { Display::Flex } else { Display::None };
+    }
+}
+
+/// Smoke runs press the same recipe buttons as a user, at real-time intervals
+/// even while game time is paused. Failed crafts do not advance the tutorial.
+fn journal_automation(
+    state: Res<State<GameState>>, menu: Res<PauseMenu>, time: Res<Time<Real>>,
+    mut due: Local<f32>, mut pressed: Local<Option<Entity>>, mut buttons: Query<(Entity, &JournalButton, &mut Interaction)>,
+) {
+    if std::env::var("FC3_STORY_AUTOPILOT").is_err() { return; }
+    if let Some(last) = pressed.take() {
+        if let Ok((_, _, mut interaction)) = buttons.get_mut(last) { *interaction = Interaction::None; }
+    }
+    if *state.get() != GameState::Journal || menu.tutorial.is_none() || time.elapsed_secs() < *due { return; }
+    *due = time.elapsed_secs() + 1.0;
+    let target = match menu.tutorial {
+        Some(CraftTutorial::Medicine(_)) => JournalButton::Authored(0),
+        Some(CraftTutorial::Rucksack) => JournalButton::Authored(1),
+        Some(CraftTutorial::Done) => JournalButton::Close,
+        None => return,
+    };
+    for (e, kind, mut interaction) in &mut buttons {
+        let matches = match (*kind, target) {
+            (JournalButton::Authored(a), JournalButton::Authored(b)) => a == b,
+            (JournalButton::Close, JournalButton::Close) => true,
+            _ => false,
+        };
+        if matches { *interaction = Interaction::Pressed; *pressed = Some(e); break; }
     }
 }
 
@@ -924,6 +1096,8 @@ fn refresh_journal(
     crafting: Res<crate::crafting::CraftCatalog>,
     loot: Res<LootCatalog>,
     perks: Res<Perks>,
+    menu: Res<PauseMenu>,
+    host: Option<NonSend<crate::story::StoryHost>>,
 ) {
     if *state.get() != GameState::Journal {
         return;
@@ -931,12 +1105,33 @@ fn refresh_journal(
     let kills = players.single().map(|s| s.kills).unwrap_or(0);
     for (field, mut t, mut c) in &mut texts {
         match field.0 {
+            JournalField::Tutorial => {
+                let localized = |id, fallback: &str| host.as_ref().and_then(|h| h.story.data().strings.get(id).map(str::to_string))
+                    .unwrap_or_else(|| fallback.to_string());
+                t.0 = match menu.tutorial {
+                    Some(CraftTutorial::Medicine(n)) => format!("{}  {n}/2", localized(125975, "Craft Medicine")),
+                    Some(CraftTutorial::Rucksack) => localized(167714, "Craft a Simple Loot Rucksack"),
+                    Some(CraftTutorial::Done) => "Crafting complete. Close the menu to continue.".into(),
+                    None => String::new(),
+                };
+            }
+            JournalField::Close => {
+                t.0 = if menu.can_exit() { "CLOSE  (Tab / Esc)" } else { "Finish crafting to continue" }.into();
+                c.0 = if menu.can_exit() { TEXT } else { Color::srgba(0.8, 0.8, 0.8, 0.55) };
+            }
             JournalField::Authored(i) => {
                 let id = crate::crafting::TUTORIAL_RECIPES[i];
                 if let Some(recipe) = crafting.recipe(id) {
                     let available = players.single().is_ok_and(|stats| crafting.can_craft(&progress, stats, perks.medkit_cap, &loot, id));
                     let status = if progress.recipes.contains(id) { "crafted" } else if !crafting.available(&progress, recipe) { "locked" } else { "craft" };
-                    t.0 = format!("{} - {status}\nneeds {}", recipe.name, crafting.ingredient_text(recipe));
+                    let status = if id == crate::crafting::MEDICINE && players.single().is_ok_and(|s| s.medkits >= perks.medkit_cap) { "syringe pouch full" } else { status };
+                    let have = loot.quantities(&progress);
+                    let amounts = recipe.ingredients.iter().map(|(id, need)| {
+                        let item = crafting.items.iter().find(|i| i.id == *id);
+                        let count = item.and_then(|i| have.get(&i.name_id)).copied().unwrap_or(0);
+                        format!("{}/{} {}", count, need, item.map_or("Unknown ingredient", |i| i.name.as_str()))
+                    }).collect::<Vec<_>>().join(", ");
+                    t.0 = format!("{} - {status}\n{amounts}", recipe.name);
                     c.0 = if available { TEXT } else { Color::srgba(0.8, 0.8, 0.8, 0.55) };
                 } else {
                     t.0 = "Crafting data unavailable".into();
@@ -1571,6 +1766,135 @@ fn refresh_shop(
         let price = item.price(inv, progress.towers.len(), &catalog);
         t.0 = if owned { format!("{:<38} owned", item.label(inv)) } else { format!("{:<38} ${price}", item.label(inv)) };
         c.0 = if owned || progress.money < price { Color::srgba(0.8, 0.8, 0.8, 0.5) } else { TEXT };
+    }
+}
+
+#[cfg(test)]
+mod journal_tests {
+    use super::*;
+    use crate::crafting::{CraftCatalog, ItemCrafted, MEDICINE, RUCKSACK};
+    use crate::syringes::Plant;
+    use fc3_formats::progression::Recipe;
+
+    fn app() -> (App, Entity, [Entity; 3]) {
+        let mut metadata = super::loot_tests::metadata();
+        metadata.recipes = vec![
+            Recipe { id: MEDICINE.into(), kind: 3, label: "Medkit small".into(), ingredients: vec![(11, 1)], ..default() },
+            Recipe { id: RUCKSACK.into(), kind: 2, label: "Loot pouch small".into(), ingredients: vec![(10, 2)], ..default() },
+        ];
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).insert_resource(State::new(GameState::Journal)).init_resource::<NextState<GameState>>()
+            .init_resource::<Progress>().init_resource::<HudState>().init_resource::<crate::syringes::Boosts>()
+            .insert_resource(CraftCatalog::from_metadata(&metadata)).insert_resource(LootCatalog::from_metadata(&metadata))
+            .init_resource::<Perks>().insert_resource(PauseMenu { tutorial: Some(CraftTutorial::Medicine(0)), ..default() })
+            .add_message::<crate::sound::PlaySfx>().add_message::<ItemCrafted>().add_systems(Update, journal_buttons);
+        let player = app.world_mut().spawn((Player {
+            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: true, crouching: false, swimming: false, noclip: false,
+            spawning: false, keep_height: false, last_landing_speed: 0.0, sprinting: false, spawned_at: 0.0,
+            driving: false, eye: 0.0, air: crate::player::AirMode::None, mantle: None, mounted: None, sliding: None, dragging: false,
+        }, PlayerStats {
+            medkits: 0, kills: 0, deaths: 0, respawn_timer: 0.0, spawn_point: Vec3::ZERO,
+            hurt_dir: None, burning: 0.0, last_hurt: DamageKind::Bullet,
+        })).id();
+        let buttons = [JournalButton::Authored(0), JournalButton::Authored(1), JournalButton::Close]
+            .map(|b| app.world_mut().spawn((b, Interaction::None, BackgroundColor(IDLE))).id());
+        (app, player, buttons)
+    }
+
+    fn press(app: &mut App, button: Entity) {
+        *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::None;
+        app.update();
+        *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::Pressed;
+        app.update();
+    }
+
+    #[test]
+    fn tutorial_buttons_require_two_real_medicine_crafts_then_a_rucksack_before_close() {
+        let (mut app, player, [medicine, rucksack, close]) = app();
+        {
+            let mut progress = app.world_mut().resource_mut::<Progress>();
+            progress.plants[Plant::Arrowroot.index()] = 2;
+            progress.skins.insert(Animal::Boar, 2);
+        }
+        press(&mut app, close);
+        assert!(matches!(app.world().resource::<NextState<GameState>>(), NextState::Unchanged));
+        press(&mut app, rucksack);
+        assert!(!app.world().resource::<Progress>().recipes.contains(RUCKSACK));
+        press(&mut app, medicine);
+        assert_eq!(app.world().resource::<PauseMenu>().tutorial, Some(CraftTutorial::Medicine(1)));
+        assert_eq!(app.world().get::<PlayerStats>(player).unwrap().medkits, 1);
+        press(&mut app, close);
+        assert!(!app.world().resource::<PauseMenu>().can_exit());
+        press(&mut app, medicine);
+        assert_eq!(app.world().resource::<PauseMenu>().tutorial, Some(CraftTutorial::Rucksack));
+        assert_eq!(app.world().get::<PlayerStats>(player).unwrap().medkits, 2);
+        press(&mut app, medicine);
+        assert_eq!(app.world().get::<PlayerStats>(player).unwrap().medkits, 2);
+        press(&mut app, rucksack);
+        assert_eq!(app.world().resource::<PauseMenu>().tutorial, Some(CraftTutorial::Done));
+        assert_eq!(crate::crafting::loot_count(app.world().resource::<Progress>()), 0);
+        assert!(app.world().resource::<Progress>().recipes.contains(RUCKSACK));
+        press(&mut app, close);
+        assert!(matches!(app.world().resource::<NextState<GameState>>(), NextState::Pending(GameState::Playing)));
+        assert_eq!(app.world().resource::<PauseMenu>().tutorial, None);
+        let mut menu = app.world_mut().resource_mut::<PauseMenu>();
+        assert!(menu.tutorial_completed);
+        menu.override_page(false, false, true);
+        assert_eq!(menu.tutorial, Some(CraftTutorial::Done));
+        assert!(!menu.allows_recipe(MEDICINE));
+        assert!(menu.can_exit());
+    }
+
+    #[test]
+    fn missing_ingredients_full_capacity_and_held_button_never_advance_the_tutorial() {
+        let (mut app, player, [medicine, _, _]) = app();
+        press(&mut app, medicine);
+        assert_eq!(app.world().resource::<PauseMenu>().tutorial, Some(CraftTutorial::Medicine(0)));
+        app.world_mut().resource_mut::<Progress>().plants[Plant::Arrowroot.index()] = 2;
+        app.world_mut().get_mut::<PlayerStats>(player).unwrap().medkits = app.world().resource::<Perks>().medkit_cap;
+        press(&mut app, medicine);
+        assert_eq!(app.world().resource::<PauseMenu>().tutorial, Some(CraftTutorial::Medicine(0)));
+        assert_eq!(app.world().resource::<Progress>().plants[Plant::Arrowroot.index()], 2);
+        app.world_mut().get_mut::<PlayerStats>(player).unwrap().medkits = 0;
+        press(&mut app, medicine);
+        for _ in 0..5 { app.update(); }
+        assert_eq!(app.world().resource::<PauseMenu>().tutorial, Some(CraftTutorial::Medicine(1)));
+        assert_eq!(app.world().get::<PlayerStats>(player).unwrap().medkits, 1);
+    }
+
+    #[test]
+    fn override_unlocks_only_its_page_and_tutorial_rejects_skills_and_other_recipes() {
+        let mut menu = PauseMenu { crafting_locked: true, skills_locked: true, ..default() };
+        menu.override_page(true, false, true);
+        assert_eq!(menu.page, JournalPage::Crafting);
+        assert!(menu.allows_page(JournalPage::Crafting));
+        assert!(!menu.allows_page(JournalPage::Skills));
+        assert!(menu.skills_locked);
+        assert!(!menu.allows_recipe(RUCKSACK));
+        menu.record_craft("Wrong recipe");
+        assert_eq!(menu.tutorial, Some(CraftTutorial::Medicine(0)));
+        menu.record_craft(MEDICINE);
+        menu.record_craft(MEDICINE);
+        menu.record_craft(RUCKSACK);
+        assert!(menu.can_exit());
+    }
+
+    #[test]
+    fn mission_menu_gates_unlock_once_and_do_not_undo_later_explicit_locks() {
+        let mut menu = PauseMenu { crafting_locked: true, skills_locked: true,
+            unlock_gates: [Some("jas_080_main".into()), Some("jas_080_main".into())], ..default() };
+        menu.update_unlocks(&HashSet::new());
+        assert!(!menu.allows_page(JournalPage::Crafting));
+        menu.override_page(true, false, true);
+        assert!(menu.allows_page(JournalPage::Crafting));
+        assert!(!menu.allows_page(JournalPage::Skills));
+        menu.tutorial = None;
+        let completed = HashSet::from(["jas_080_main".into()]);
+        menu.update_unlocks(&completed);
+        assert!(menu.allows_page(JournalPage::Skills));
+        menu.skills_locked = true;
+        menu.update_unlocks(&completed);
+        assert!(!menu.allows_page(JournalPage::Skills));
     }
 }
 

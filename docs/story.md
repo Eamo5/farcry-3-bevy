@@ -101,6 +101,13 @@ is the story's own:
   Holding the close control does not dismiss the next queued tutorial.
 * **Teleports**: a teleported player is followed by `DominoGameReady`, which
   boxes behind a loading screen wait for.
+* **Safehouse travel**: full-map destinations join `CSafeHouseComponent` to
+  `entMarkerEntity` and the marker's `entSpawnPointEntity`. Arrival uses that
+  spawn point's position and heading, not the outpost centre. Authored initial
+  locks, saved unlocks, loaded layers, the global travel modifier and active
+  mission/block permissions gate the transaction. An active block overrides
+  its main mission's default; unrelated missions keep their own locks. Amanaki's
+  tutorial selection reports `jas_080_fast_travel` only after travel succeeds.
 * **Trigger contacts**: authored player-only regions and the proximity
   trigger's non-player flag filter both host overlaps and live character
   positions. NPCs moving or streaming out cannot fail a player-only mission
@@ -184,8 +191,20 @@ is the story's own:
   consumes two boar hides and applies the authored +16 loot-capacity modifier.
   Capacity and unlock checks happen before any ingredient changes. Crafted gear
   persists in saves; crafting events survive journal frames and are delivered once
-  as `DominoEvent_CraftRecipe(kind, sName)`. Other gear and syringe recipes still
-  use legacy rules; the original forced crafting tutorial/menu flow remains pending.
+  as `DominoEvent_CraftRecipe(kind, sName)`. The script-owned crafting tutorial
+  requires two committed Medicine crafts followed by the Simple Rucksack, and
+  rejects early exit, other recipes and the skills page. Its two localized stage
+  titles come from the original UI. Saves retain partial tutorial progress and
+  completion so reopening B40 cannot require ingredients already consumed.
+  Other gear and syringe recipes still use
+  legacy rules; this is not the original menu's visual/layout reproduction.
+* **Pause-menu callbacks**: opening the menu, world map, crafting and skills
+  pages, and exiting the pause menu raise their authored generic events once.
+  Retained purchase/loot/craft events follow refreshed inventory queries. Menus
+  pump the story at zero elapsed time: UI callbacks work without running mission
+  timers, gameplay input or autopilot repositioning. The PlayerParamsService
+  template's `JAS_080_main` gates lock crafting/skills until the tutorial overrides
+  them or the mission completes. Explicit later menu locks remain independent.
 * **Story wildlife**: supported normal animals retain their authored graphic
   kit and mission id while using the wildlife species' clips, behavior, health
   and death/skinning path. Their feet retain the story host's placement offset.
@@ -205,6 +224,10 @@ is the story's own:
   Mission inventory backups restore those gadgets, carried ammunition and
   explosives, and the previously selected weapon, once.
   The camera accepts both the tablet and the binoculars granted by Dennis.
+  New campaigns do not inherit free-roam starter medkits. Scripted medpack
+  giving/removal respects the live pouch capacity and saturates at zero; these
+  adjustments are not crafting events. The remaining sandbox medical/skill
+  baseline still needs replacement by authored attributes.
 * **Scene lifetime**: sequences retain their meta-sequence owner; stopping
   that owner releases its looping scenes and character overrides, without
   stopping unrelated scenes or the host's QTE phases.
@@ -263,10 +286,14 @@ is the story's own:
   with exit listeners; legitimate mission-boundary failures are not bypassed.
   `FC3_STORY_SKIP_SCENES=1` skips cinematics; `FC3_STORY_LOOK=<id>` faces
   a character.
-* `FC3_STORY_CHECKPOINTS=<dir>` keeps every checkpoint as a file;
+* `FC3_STORY_CHECKPOINTS=<dir>` keeps every checkpoint as a file and a matching
+  `.game.txt` live inventory/world snapshot (including multiple checkpoints in
+  one frame). These explicit test snapshots do not overwrite ordinary saves.
   `FC3_STORY_LOAD=<file>` starts from one at its respawn point (the headless
   `story-run` takes it too; `FC3_STORY_WAITING=1` makes it list what the
-  scripts wait on when it stalls).
+  scripts wait on when it stalls). The game restores the matching inventory
+  snapshot when present; older story-only files log that their inventory is
+  incomplete rather than silently presenting them as full checkpoints.
 * `fc3tool moves [name part]`: the move database's moves, states and clips.
 * `FC3_TEST_CACHE=<cache>` with
   `cargo test --locked --release -p fc3_game installed_loot_listener -- --ignored`
@@ -330,9 +357,9 @@ saved gear identities and the rucksack's authored 16-to-32 ingredient capacity.
 Workspace release tests, game/tool/converter release builds, whitespace checks
 and all five installed-data/script regressions passed (plant mapping, actual
 layer collectible/marker identities, tutorial recipe costs/capacity, original
-loot listener and original crafting listener). The forced crafting tutorial,
-menu page/exit events, baseline inventory and remaining legacy recipes still
-need integration and live validation. The autopilot
+loot listener and original crafting listener). Subsequent travel/crafting
+validation is recorded below; remaining legacy recipes and uninterrupted
+campaign runs still need integration and live validation. The autopilot
 stands in for the tower panel, zipline use and world-map input; these aren't
 manual traversal/UI validation. These runs skipped scenes and automatically ended the
 unimplemented Grant-death gameplay; they do not establish cinematic or
@@ -347,8 +374,14 @@ authored tower-freebie thresholds, player-only mission-boundary contacts,
 authored loot-source identities, combined leaf quantities, skinning/gathering
 permissions, exactly-once loot delivery after paused frames, normal story-animal
 family matching, story-owned boar death/skinning/cinematic control, eighteen-
-species save compatibility, authored Medicine/Rucksack transactions and
-exactly-once crafting-event delivery after journal frames.
+species save compatibility, authored Medicine/Rucksack transactions,
+exactly-once crafting/menu delivery, tutorial recipe order and rejected early
+exit via buttons/Escape/gamepad, mission page gates, paused inventory queries
+without advancing timers, medpack bounds, saved tutorial stages, and paired
+checkpoint snapshots.
+Map regressions also exercise mouse-release selection, drag rejection,
+locked/global/per-mission travel denial, active-block overrides, authored
+arrival poses and the installed original `JAS_080_B30` graph's completion.
 Run `cargo test --locked --release --workspace`; the
 release test profile also avoids the Windows linker PDB-size limit encountered
 when this full Bevy dependency graph is linked with development debug symbols.
@@ -356,3 +389,78 @@ when this full Bevy dependency graph is linked with development debug symbols.
 Full campaign and side-activity completion, the original progression/crafting
 rules, remaining minigames and host commands, and matched original-game visual
 and UX comparisons are still required before declaring parity.
+
+### Amanaki travel and the crafting UI investigation
+
+Amanaki's safehouse is `0x1ccb5e07b7802dc4`, its marker is
+`0x1ccb5e25f660443c`, and its arrival spawn is `0x1cc538df7fc0b47f`.
+The installed marker library names it "Amanaki Town" (localized id `155422`)
+and the spawn places Jason at `[-857.93, 2299.19, 119.478]`, facing 54 degrees.
+The original engine, rather than a Domino sender graph, produces the tutorial
+message: the local `FC3.dll` map handler calls travel at `0x1106e81e`, then
+broadcasts CRC32 `0x860fdf42` (`jas_080_fast_travel`) at `0x1106e82d`.
+No original executable or UI assets are distributed with these changes.
+
+The initial live smoke exposed `JAS_080_MAIN`'s default travel prohibition
+overriding B30's explicit permission. Permission ownership now follows the
+active block, with regressions against independent simultaneous missions too.
+The map automation opens Amanaki's real icon and selects it through the same
+validated transaction as a click; it does not inject the completion message.
+This is still UI automation, not a manual-play or visual-parity claim.
+`[WorldMap]` and `[MapFastTravel]` prompts now resolve to the actual input labels.
+
+The installed `m_crafting.feu` supplies the tutorial sequence now implemented
+in the host: `InitTutorial` shows localized `125975` ("Craft Medicine");
+`CraftCurrentSelection` counts two Medicine crafts before
+`OnMedecineCafted`/`InitSecondPartTutorial`; the second part shows `167714`
+("Craft a Simple Loot Rucksack") and reports `OnLootBagCrafted`.
+`OverridePauseMenuTutorial(true, false, false)` in B40 now forces that menu,
+and `CDominoExitPauseMenuEvent` advances the original graph after crafting.
+
+The live `fc3-amanaki-travel-fixed.log` run completed B30 through the map's
+actual destination selection and reached B40's crafting objective. The later
+`fc3-hunting-tutorial-flow.log`/`.png` run completed B20 hunting/gathering,
+selected Amanaki, completed B30, performed exactly two Medicine transactions
+and one Simple Rucksack transaction, closed the menu and reached "Get in the
+truck." There were no player deaths or mission failures in that isolated run.
+It loaded an explicitly constructed historical B20 fixture: 1911, 8/48 ammo,
+$90, zero medkits and no ingredients. Hunting earned all ingredients in the
+run; the starting load is not evidence of uninterrupted earlier progression.
+The screenshot confirms two carried medkits and finite 1911 ammunition.
+
+A separate new-game `fc3-tutorial-paired.log` run stalled in the opening rock
+distraction at B15, despite earlier checkpoint runs clearing it; it is not an
+end-to-end tutorial success. Its captured snapshots confirm zero campaign
+starter medkits. Missing sidecars for multiple checkpoints in one frame were
+found during that test; snapshot requests are now queued rather than overwritten.
+
+Remaining gaps include the mission truck's vehicle use/seat callbacks, the
+opening distraction's repeatability, in-session death inventory restoration,
+authored medical/skill attributes, the original crafting-page layout, other
+safehouse/mission interactions and uninterrupted cinematics. Earlier hunting
+melee deaths remain under investigation; new death logs include attacker identity
+and source position without weakening ordinary wildlife damage. Release workspace
+tests (including saved tutorial stages), all eight installed-data/script
+regressions and game/tool/converter builds passed. The follow-up
+`fc3-crafting-paused.log` run repeated the two-Medicine/Rucksack flow with
+zero-time menu pumping and reached the truck objective. The
+`fc3-crafting-resume.log` run loaded an explicit one-Medicine-completed fixture
+with one remaining green leaf: it crafted only the remaining Medicine and the
+rucksack, then reached the truck objective with two medkits, without consuming
+an extra leaf or restarting tutorial progress. The paired snapshot preserved
+`craft_tutorial medicine 1`. These are isolated fixture tests, not a real
+uninterrupted quit/continue campaign. Screenshot commands returned exit 1
+despite logging saved images; image files were inspected, and no panic or
+runtime error was present in the follow-up logs. Automated runs still skip
+cinematics and substitute traversal/unimplemented gameplay: full visual,
+gameplay and UX parity has not been established.
+
+The next vehicle investigation identifies `Globals.JAS_080_MAIN.eJeep` as
+`2076001291963743153`, named `JAS_060_080_100_Car`, on layer
+`0x607dc6a3facbcc` at `[-867.777, 2257.51, 123.526]`. Despite the "truck"
+objective it uses the authored Technical model, not the host's cargo-truck
+definition. Its `CFCXVehicle.SeatsInfo` includes `DRIVER_SITPOINT`,
+`PASSENGER_SITPOINT`, `GUNNER_POSITION` and four bed seats. The original
+`VehicleListener_v2.lua` waits on pawn `IsInVehicle`/`IsOutVehicle` events and
+filters them through `GetPawnVehicle`, so fabricated sit events without a real
+vehicle/seat transaction will not be used to advance this objective.

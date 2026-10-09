@@ -83,6 +83,8 @@ pub struct Mission {
     pub block: Option<BlockInfo>,
     /// The mission's current objective text.
     pub current_objective: Option<u32>,
+    /// Travel permission owned by this graph, not by whichever graph ran last.
+    pub fast_travel: bool,
 }
 
 /// Saved mission progress, by mission name (or block id).
@@ -100,7 +102,7 @@ pub struct Missions {
     pub chapter: i32,
     pub givers: HashMap<String, String>,
     pub saved: Saved,
-    pub fast_travel: bool,
+    pub fast_travel_disabled: bool,
     pub abort_enabled: bool,
 }
 
@@ -117,6 +119,16 @@ pub fn script_name(path: &str) -> String {
 }
 
 impl Missions {
+    pub fn fast_travel_enabled(&self) -> bool {
+        !self.fast_travel_disabled && self.by_id.values().filter(|m| m.state == State::Running).all(|m| {
+            // An active block's MissionMiscInfos overrides its main graph's
+            // default (JAS_080_MAIN forbids travel, B30 permits it). Other
+            // concurrently running missions keep their own restrictions.
+            m.fast_travel || self.by_id.values().any(|b| b.state == State::Running
+                && b.block.as_ref().and_then(|b| b.parent.as_deref()) == Some(&m.id))
+        })
+    }
+
     pub fn get(&self, id: &str) -> Option<&Mission> {
         self.by_id.get(id)
     }
@@ -196,6 +208,7 @@ impl Core {
                 owner,
                 block: None,
                 current_objective: None,
+                fast_travel: true,
             },
         );
         if state == State::Running {
@@ -237,6 +250,7 @@ impl Core {
                 owner: block_owner,
                 block: Some(BlockInfo { block, parent, spawn, end_spawn }),
                 current_objective: None,
+                fast_travel: true,
             },
         );
         // A block a save left running plays again (the mission's graph may
