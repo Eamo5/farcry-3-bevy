@@ -1901,6 +1901,55 @@ or room entry. The standard `-Interior` replay passes again with health 100
 (`doc020-dialog-priority-fixed/`) and its script now also requires the
 subsequent `OpenDoor` cue in order. No dialogue completion was injected.
 
+### Crouch collision and physical greenhouse exit
+
+The second-door probe found that crouching changed only camera height and
+speed: the player retained a standing-height collision capsule. The capsule
+now shortens at its upper endpoint, keeping its original lower endpoint and
+feet/reference position. Its crouched top is 0.1 m above the existing 1 m
+crouch eye height; exact original capsule dimensions remain uncalibrated.
+Standing is refused while the full standing capsule (with a 1 cm contact
+skin) overlaps world geometry. Movement immediately uses the new shape and
+the entity collider is updated through deferred commands, avoiding a mutable
+Collider query conflict with Avian's spatial queries. An initial live check
+caught that conflict; the corrected run exits successfully.
+
+A real-physics regression checks a 1.3 m passage: standing is blocked,
+crouching passes, standing under the roof is refused, clear-space standing
+is allowed, and both shapes retain the same feet height. Workspace tests and
+release build pass (`Temp/opencode/fc3-crouch-{workspace-tests,build}.log`).
+
+The traversal probe supports `FC3_TRAVERSAL_WALK_RADIUS` (0.05..0.6 m),
+`FC3_TRAVERSAL_WALK_RADIUS_FROM` and `FC3_TRAVERSAL_WALK_CROUCH_FROM`
+(one-based waypoint indices). Crouching uses ordinary held input and
+suppresses the probe's jumps. The 0.15 m precision starts at waypoint 12;
+applying it to earlier outdoor/entrance targets can stall on those targets'
+colliders, so the verified route retains their original 0.6 m tolerance.
+
+`docs/validation/doc020-greenhouse.ps1 -SecondDoor` extends the entrance
+route with `-1897.8,-2380.1;-1896.9,-2380.05;-1894.5,-2379.45;-1893.44,-2378.9`.
+It verifies all five existing cues, physical route completion, actual
+occupancy/PLAYER contact for trigger 2073364939755519788 and health 100.
+Both `fc3-door2-crouch-fixed.err.log` and the repeatable
+`doc020-crouch-verified/` run pass, ending near (-1893.52,99.39,-2378.95).
+The screenshot was inspected: the player is outside the greenhouse among
+cave rocks, with intrusive light-shaft rendering still present.
+
+Investigation also ruled out a duplicate second-door instance or stale
+physics pose in the observed run: its render and physics positions agree.
+However, scene-relative movement places its hinge at (-1901.38,98.50,-2386.66),
+whereas applying its first key in the greenhouse frame matches the authored
+door placement near (-1895.85,98.46,-2379.84). Native movement-track frame
+semantics remain under investigation; no speculative frame correction was
+applied. After the dialogue fix, the blocking collider at the narrow exit
+was the greenhouse structure (2073485233983864237), not the animated door.
+
+Another pending issue is event ordering when the player already occupies
+the exit trigger as `OpenDoor` enables it: the diagnostic run queues `play`
+then `pause` in the same frame and remains at the cue. The physical exit is
+verified, but this does not establish the subsequent CloseDoor/dark-room
+transition or full mission completion.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

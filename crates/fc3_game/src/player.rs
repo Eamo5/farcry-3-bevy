@@ -18,6 +18,53 @@ pub const CAPSULE_LENGTH: f32 = 1.1;
 pub const HALF_HEIGHT: f32 = CAPSULE_RADIUS + CAPSULE_LENGTH * 0.5;
 pub const EYE_HEIGHT: f32 = 1.62;
 pub const CROUCH_EYE_HEIGHT: f32 = 1.0;
+/// Keep the same feet/reference origin for animation, stairs and save poses;
+/// shorten only the top of the capsule when crouched.
+fn stance_collider(crouched: bool) -> Collider {
+    let bottom = -CAPSULE_LENGTH * 0.5;
+    let top = if crouched { CROUCH_EYE_HEIGHT + 0.1 - HALF_HEIGHT - CAPSULE_RADIUS } else { CAPSULE_LENGTH * 0.5 };
+    Collider::capsule_endpoints(CAPSULE_RADIUS, Vec3::Y * bottom, Vec3::Y * top)
+}
+
+fn standing_clearance(spatial: &SpatialQuery, centre: Vec3, filter: &SpatialQueryFilter) -> bool {
+    // A small skin excludes the floor contact, while testing the full volume
+    // that standing would occupy, including overhanging edges.
+    let standing = Collider::capsule(CAPSULE_RADIUS - 0.01, CAPSULE_LENGTH);
+    spatial.shape_intersections(&standing, centre, Quat::IDENTITY, filter).is_empty()
+}
+
+#[cfg(test)]
+mod stance_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn crouched_capsule_passes_low_roof_and_cannot_stand_inside_it() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default(), bevy::mesh::MeshPlugin,
+            bevy::transform::TransformPlugin, PhysicsPlugins::default()))
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(20)));
+        app.world_mut().spawn((RigidBody::Static, Collider::cuboid(20.0, 0.2, 20.0), Transform::from_xyz(0.0, -0.1, 0.0)));
+        app.world_mut().spawn((RigidBody::Static, Collider::cuboid(2.0, 0.2, 3.0), Transform::from_xyz(2.5, 1.4, 0.0)));
+        app.finish();
+        app.cleanup();
+        for _ in 0..3 { app.update(); }
+        app.world_mut().run_system_once(|spatial: SpatialQuery| {
+            let filter = SpatialQueryFilter::default();
+            let start = Vec3::new(0.0, HALF_HEIGHT + 0.02, 0.0);
+            let config = ShapeCastConfig::from_max_distance(5.0);
+            assert!(spatial.cast_shape(&stance_collider(false), start, Quat::IDENTITY, Dir3::X, &config, &filter).is_some());
+            assert!(spatial.cast_shape(&stance_collider(true), start, Quat::IDENTITY, Dir3::X, &config, &filter).is_none());
+            assert!(standing_clearance(&spatial, start, &filter));
+            assert!(!standing_clearance(&spatial, start + Vec3::X * 2.5, &filter));
+            for crouched in [false, true] {
+                let floor = spatial.cast_shape(&stance_collider(crouched), start, Quat::IDENTITY, Dir3::NEG_Y,
+                    &ShapeCastConfig::from_max_distance(0.1), &filter).unwrap();
+                assert!((floor.distance - 0.02).abs() < 0.002, "stance changed feet height: {}", floor.distance);
+            }
+        }).unwrap();
+    }
+}
 /// The slide: eye height, the sprint speed it needs, the push it gives,
 /// how fast it slows (per second) and its longest run.
 const SLIDE_EYE_HEIGHT: f32 = 0.75;
@@ -541,13 +588,15 @@ fn player_move(
     progress: Res<crate::progression::Progress>,
     mut actions_out: MessageWriter<crate::fp::FpAction>,
     sway: Res<crate::weapons::ScopeSway>,
-    (scripted, collision_ids, mut next_collision_log): (
+    (scripted, collision_ids, mut next_collision_log, mut commands): (
         Res<crate::story::ScriptedPlayer>,
         Query<(Option<&crate::objects::PlacedId>, Option<&Name>, Option<&ChildOf>)>,
         Local<f32>,
+        Commands,
     ),
 ) {
     let Ok((entity, mut p, mut t, collider)) = player.single_mut() else { return };
+    let mut collider = collider.clone();
     let dt = time.delta_secs().min(0.05);
     if dt <= 0.0 || p.spawning || p.driving || p.mounted.is_some() {
         return;
@@ -639,7 +688,14 @@ fn player_move(
         let over = s > SLIDE_TIME || speed_now < 2.0 || !p.grounded || (input_ok && actions.just_pressed(Action::Jump)) || p.swimming;
         p.sliding = (!over).then_some(s);
     }
-    p.crouching = (key(Action::Crouch) || p.sliding.is_some()) && !p.swimming && !p.dragging;
+    let requested_crouch = (key(Action::Crouch) || p.sliding.is_some()) && !p.swimming && !p.dragging;
+    let crouching = requested_crouch || (p.crouching && !standing_clearance(
+        &move_and_slide.spatial_query, t.translation, &SpatialQueryFilter::from_excluded_entities([entity])));
+    if p.crouching != crouching {
+        collider = stance_collider(crouching);
+        commands.entity(entity).insert(collider.clone());
+        p.crouching = crouching;
+    }
     // Through a scope the sprint key holds the breath instead.
     p.sprinting = key(Action::Sprint) && !p.crouching && !p.swimming && !p.dragging && !sway.scoped && wish.dot(forward) > 0.5;
     let target_eye = if p.sliding.is_some() {
@@ -744,7 +800,7 @@ fn player_move(
     let start = t.translation;
     let trace = std::env::var_os("FC3_COLLISION_DEBUG").is_some() && time.elapsed_secs() >= *next_collision_log;
     let mut contacts = Vec::new();
-    let out = move_and_slide.move_and_slide(collider, start, Quat::IDENTITY, p.velocity, std::time::Duration::from_secs_f32(dt), &config, &filter, |hit| {
+    let out = move_and_slide.move_and_slide(&collider, start, Quat::IDENTITY, p.velocity, std::time::Duration::from_secs_f32(dt), &config, &filter, |hit| {
         if trace { contacts.push((hit.entity, hit.point, *hit.normal, hit.distance)); }
         if hit.normal.y > MIN_GROUND_NORMAL_Y {
             ground_hit = true;
@@ -771,14 +827,14 @@ fn player_move(
         let up = Vec3::Y * STEP_HEIGHT;
         let raised = start + up;
         let clear =
-            move_and_slide.spatial_query.cast_shape(collider, start, Quat::IDENTITY, Dir3::Y, &ShapeCastConfig::from_max_distance(STEP_HEIGHT), &filter);
+            move_and_slide.spatial_query.cast_shape(&collider, start, Quat::IDENTITY, Dir3::Y, &ShapeCastConfig::from_max_distance(STEP_HEIGHT), &filter);
         if trace {
             info!("player collision: step clearance {:?}", clear.as_ref().map(|h| (h.entity,
                 collision_ids.get(h.entity).ok().and_then(|v| v.0).map(|v| v.0), h.distance, h.normal1)));
         }
         if clear.is_none() {
             let step_out = move_and_slide.move_and_slide(
-                collider,
+                &collider,
                 raised,
                 Quat::IDENTITY,
                 Vec3::new(p.velocity.x, 0.0, p.velocity.z),
@@ -792,7 +848,7 @@ fn player_move(
             if step_advances(wanted, achieved, moved) {
                 // Settle back down onto the step.
                 let down = move_and_slide.spatial_query.cast_shape(
-                    collider,
+                    &collider,
                     step_out.position,
                     Quat::IDENTITY,
                     Dir3::NEG_Y,
@@ -810,7 +866,7 @@ fn player_move(
 
     // Ground probe keeps us glued to slopes when walking downhill.
     let probe = move_and_slide.spatial_query.cast_shape(
-        collider,
+        &collider,
         new_pos,
         Quat::IDENTITY,
         Dir3::NEG_Y,

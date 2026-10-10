@@ -644,8 +644,18 @@ fn traversal_test(
             if let Ok(target) = std::env::var("FC3_TRAVERSAL_WALK_TO") {
                 if let Some(route) = walk_route(&target) {
                     let Some(target) = route.get(*walk_waypoint) else { *stage = 4; return };
+                    // Narrow doorways need a tighter approach than the default
+                    // outdoor probe. Both options still use ordinary inputs.
+                    let precise_from = std::env::var("FC3_TRAVERSAL_WALK_RADIUS_FROM").ok()
+                        .and_then(|s| s.parse::<usize>().ok()).unwrap_or(1).max(1);
+                    let radius = std::env::var("FC3_TRAVERSAL_WALK_RADIUS").ok()
+                        .and_then(|s| s.parse::<f32>().ok()).filter(|r| r.is_finite() && (0.05..=0.6).contains(r)).unwrap_or(0.6);
+                    let radius = if *walk_waypoint + 1 >= precise_from { radius } else { 0.6 };
+                    let crouch = std::env::var("FC3_TRAVERSAL_WALK_CROUCH_FROM").ok()
+                        .and_then(|s| s.parse::<usize>().ok()).is_some_and(|from| from > 0 && *walk_waypoint + 1 >= from);
+                    if crouch { actions.hold(Action::Crouch); }
                     let delta = Vec3::new(target.x - here.x, 0.0, target.y - here.z);
-                    if delta.length() < 0.6 {
+                    if delta.length() < radius {
                         *walk_waypoint += 1;
                         if *walk_waypoint == route.len() {
                             info!("traversal test: post-dismount walk reached {here:?}");
@@ -660,7 +670,7 @@ fn traversal_test(
                         if turn.abs() < 0.2 {
                             actions.movement.y = 1.0;
                             if std::env::var("FC3_TRAVERSAL_WALK_JUMP").as_deref() == Ok("1")
-                                && p.grounded && now >= *next_walk_jump
+                                && !crouch && p.grounded && now >= *next_walk_jump
                                 && Vec2::new(p.velocity.x, p.velocity.z).length() < 0.5 {
                                 actions.press(Action::Jump);
                                 *next_walk_jump = now + 1.0;
