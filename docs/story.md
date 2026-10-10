@@ -1649,6 +1649,30 @@ Next investigate the passage's authored rock-event triggers and collision
 ownership before changing collision geometry; `GH_POS2`/`GH_POS3` remain
 unreached by physical gameplay.
 
+`FC3_COLLISION_DEBUG=1` now traces blocked player movement at most once per
+second, including collider entity/placed ID, contact point/normal, requested
+and achieved movement, and step-clearance/raised-motion results. A physical
+replay identifies the cave obstruction as placed IDs 2073386815636648150
+(`Rock_Jungle_BigMedium_02_9`) and 2073386274426728591
+(`Rock_Jungle_FlatMedium_01_229`), sector 18930, layer 0x607db75c41b0c1.
+These differ from the animated rock-door props. The rock-door trigger
+2073373966090643317 is loaded/enabled at Dunia (-1878.31,2517.42,95.3507),
+behind this obstruction (`fc3-cave-collision.err.log`).
+
+Step tracing exposed a general controller defect: raised movement required
+an absolute extra centimetre per frame, making the acceptance test fail at
+high frame rates even for an otherwise successful step. Acceptance now
+compares forward progress relative to requested movement, rejecting sideways
+or backward movement. Settling a step also requires a walkable contact normal,
+matching the ground-probe slope limit rather than marking steep surfaces as
+ground. Regression coverage exercises 30/60/144/360/1000 FPS, insufficient
+progress, lateral/backward movement and invalid requests. Release build and
+game tests pass (`fc3-relative-step-{build,tests}.log`).
+The live 50-second replay preserves health 100 but still stops at the same
+rock (`fc3-relative-step.err.log`); this controller correction is not evidence
+of a completed greenhouse approach. No authored rock collider was removed or
+altered. The remaining passage route/collision question is still open.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

@@ -541,7 +541,11 @@ fn player_move(
     progress: Res<crate::progression::Progress>,
     mut actions_out: MessageWriter<crate::fp::FpAction>,
     sway: Res<crate::weapons::ScopeSway>,
-    scripted: Res<crate::story::ScriptedPlayer>,
+    (scripted, collision_ids, mut next_collision_log): (
+        Res<crate::story::ScriptedPlayer>,
+        Query<(Option<&crate::objects::PlacedId>, Option<&Name>, Option<&ChildOf>)>,
+        Local<f32>,
+    ),
 ) {
     let Ok((entity, mut p, mut t, collider)) = player.single_mut() else { return };
     let dt = time.delta_secs().min(0.05);
@@ -738,7 +742,10 @@ fn player_move(
     let fall_speed = if p.air == AirMode::Wingsuit { p.velocity.length() } else { -p.velocity.y };
     let mut ground_hit = false;
     let start = t.translation;
+    let trace = std::env::var_os("FC3_COLLISION_DEBUG").is_some() && time.elapsed_secs() >= *next_collision_log;
+    let mut contacts = Vec::new();
     let out = move_and_slide.move_and_slide(collider, start, Quat::IDENTITY, p.velocity, std::time::Duration::from_secs_f32(dt), &config, &filter, |hit| {
+        if trace { contacts.push((hit.entity, hit.point, *hit.normal, hit.distance)); }
         if hit.normal.y > MIN_GROUND_NORMAL_Y {
             ground_hit = true;
         }
@@ -750,11 +757,25 @@ fn player_move(
     // Step up: if horizontal motion was blocked, retry from a raised position.
     let wanted = Vec3::new(p.velocity.x, 0.0, p.velocity.z) * dt;
     let achieved = Vec3::new(new_pos.x - start.x, 0.0, new_pos.z - start.z);
+    if trace && wanted.length() > 0.001 && achieved.length() < wanted.length() * 0.5 {
+        *next_collision_log = time.elapsed_secs() + 1.0;
+        info!("player collision: blocked at {start:?}, wanted {wanted:?}, achieved {achieved:?}, grounded {was_grounded}");
+        for (entity, point, normal, distance) in contacts {
+            let identity = collision_ids.get(entity).ok();
+            info!("player collision: hit {entity:?} id {:?} name {:?} parent {:?}, point {point:?}, normal {normal:?}, distance {distance}",
+                identity.and_then(|v| v.0).map(|v| v.0), identity.and_then(|v| v.1).map(|v| v.as_str()),
+                identity.and_then(|v| v.2).map(|v| v.parent()));
+        }
+    }
     if was_grounded && wanted.length() > 0.001 && achieved.length() < wanted.length() * 0.5 {
         let up = Vec3::Y * STEP_HEIGHT;
         let raised = start + up;
         let clear =
             move_and_slide.spatial_query.cast_shape(collider, start, Quat::IDENTITY, Dir3::Y, &ShapeCastConfig::from_max_distance(STEP_HEIGHT), &filter);
+        if trace {
+            info!("player collision: step clearance {:?}", clear.as_ref().map(|h| (h.entity,
+                collision_ids.get(h.entity).ok().and_then(|v| v.0).map(|v| v.0), h.distance, h.normal1)));
+        }
         if clear.is_none() {
             let step_out = move_and_slide.move_and_slide(
                 collider,
@@ -767,7 +788,8 @@ fn player_move(
                 |_| MoveAndSlideHitResponse::Accept,
             );
             let moved = Vec3::new(step_out.position.x - start.x, 0.0, step_out.position.z - start.z);
-            if moved.length() > achieved.length() + 0.01 {
+            if trace { info!("player collision: raised step achieved {moved:?}"); }
+            if step_advances(wanted, achieved, moved) {
                 // Settle back down onto the step.
                 let down = move_and_slide.spatial_query.cast_shape(
                     collider,
@@ -777,7 +799,7 @@ fn player_move(
                     &ShapeCastConfig::from_max_distance(STEP_HEIGHT + 0.05),
                     &filter,
                 );
-                if let Some(d) = down {
+                if let Some(d) = down.filter(|d| d.normal1.y > MIN_GROUND_NORMAL_Y || -d.normal2.y > MIN_GROUND_NORMAL_Y) {
                     new_pos = step_out.position - Vec3::Y * (d.distance - 0.01).max(0.0);
                     new_vel = Vec3::new(step_out.projected_velocity.x, 0.0, step_out.projected_velocity.z);
                     ground_hit = true;
@@ -839,6 +861,34 @@ fn player_move(
     }
     t.translation = new_pos;
     p.velocity = new_vel;
+}
+
+/// Compare progress along the requested direction, using a relative margin.
+/// A fixed centimetre-per-frame threshold made low steps impossible at high
+/// frame rates, while sideways sliding could incorrectly qualify as progress.
+fn step_advances(wanted: Vec3, achieved: Vec3, stepped: Vec3) -> bool {
+    let distance = wanted.length();
+    if !distance.is_finite() || distance <= 0.001 { return false; }
+    let direction = wanted / distance;
+    stepped.dot(direction) > achieved.dot(direction).max(0.0) + distance * 0.05
+}
+
+#[cfg(test)]
+mod step_tests {
+    use super::*;
+
+    #[test]
+    fn step_progress_is_consistent_across_frame_rates_and_rejects_sideways_motion() {
+        for fps in [30.0, 60.0, 144.0, 360.0, 1000.0] {
+            let wanted = Vec3::NEG_Z * (4.0 / fps);
+            assert!(step_advances(wanted, wanted * 0.1, wanted * 0.9), "{fps} FPS");
+            assert!(!step_advances(wanted, wanted * 0.1, wanted * 0.12));
+            assert!(!step_advances(wanted, Vec3::ZERO, Vec3::X * wanted.length()));
+            assert!(!step_advances(wanted, Vec3::ZERO, -wanted));
+        }
+        assert!(!step_advances(Vec3::ZERO, Vec3::ZERO, Vec3::X));
+        assert!(!step_advances(Vec3::splat(f32::NAN), Vec3::ZERO, Vec3::X));
+    }
 }
 
 /// `FC3_SLIDE_TEST`: sprints for two seconds, then crouches into a slide,
