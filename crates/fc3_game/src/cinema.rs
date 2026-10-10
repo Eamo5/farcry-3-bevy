@@ -405,8 +405,23 @@ fn vehicle_pose(keys: &[cinema::VehicleKey], t: f32) -> Option<(Transform, f32, 
 fn recorded_pose(g: &cinema::Group, t: f32) -> Option<(Transform, f32, f32)> {
     g.clips.iter().find_map(|c| match &c.kind {
         ClipKind::VehicleMovement { keys } => vehicle_pose(keys, t - c.start),
+        ClipKind::Movement { keys } => movement_pose(keys, t - c.start).map(|p| (p, 0.0, 0.0)),
         _ => None,
     })
+}
+
+fn movement_pose(keys: &[cinema::MovementKey], t: f32) -> Option<Transform> {
+    let pose = |k: &cinema::MovementKey| Transform { translation: to_bevy(k.pos),
+        rotation: Quat::from_array(fc3_formats::world::angles_to_bevy_quat(k.angles)), scale: Vec3::ONE };
+    let first = keys.first()?;
+    if t <= first.time { return Some(pose(first)); }
+    let last = keys.last()?;
+    if t >= last.time { return Some(pose(last)); }
+    let i = keys.partition_point(|k| k.time < t);
+    let (a, b) = (&keys[i - 1], &keys[i]);
+    let w = ((t - a.time) / (b.time - a.time).max(1e-6)).clamp(0.0, 1.0);
+    let (a, b) = (pose(a), pose(b));
+    Some(Transform { translation: a.translation.lerp(b.translation, w), rotation: a.rotation.slerp(b.rotation, w), scale: Vec3::ONE })
 }
 
 fn anchored_at(clips: &[cinema::Clip], t: f32) -> bool {
@@ -553,6 +568,10 @@ fn play_scenes(
             let Some(&id) = p.bindings.get(&g.uid) else { continue };
             let Some((_, mut at, vehicle)) = props.iter_mut().find(|(pid, _, _)| pid.0 == id) else { continue };
             *at = p.origin * local;
+            if matches!(g.clips.first().map(|c| &c.kind), Some(ClipKind::Movement { .. }))
+                && (p.t * 2.0) as u32 != (prev * 2.0) as u32 {
+                debug!("cinema {}: prop {id} at t={:.2} world {:.2?}", p.seq.name, p.t, at.translation);
+            }
             if std::env::var("FC3_VEHICLE_DEBUG").is_ok() && (p.t / 5.0) as u32 != (prev / 5.0) as u32 {
                 info!("cinema {}: recorded vehicle {id} at t={:.1} world {:.2?}", p.seq.name, p.t, at.translation);
             }
@@ -743,7 +762,7 @@ fn play_scenes(
 /// leave the body in place, so flag/establishing shots cannot teleport Jason
 /// into scenery or outside his mission zone.
 #[allow(clippy::type_complexity)]
-fn scene_view(
+pub(crate) fn scene_view(
     cinema: Res<Cinema>,
     settings: Res<crate::settings::Settings>,
     mut players: Query<(&mut Transform, &mut Player), Without<PlayerCamera>>,
@@ -952,6 +971,7 @@ mod tests {
         let handle = app.world_mut().resource_mut::<Assets<Fc3Clip>>().add(Fc3Clip(std::sync::Arc::new(clip)));
         let vehicle = app.world_mut().spawn((crate::objects::PlacedId(100), Transform::IDENTITY)).id();
         let actor = app.world_mut().spawn((StoryActor::new(200, None, false), Transform::IDENTITY)).id();
+        let prop = app.world_mut().spawn((crate::objects::PlacedId(300), Transform::IDENTITY)).id();
         let movement = cinema::Clip { start: 0.0, duration: 1.0, kind: ClipKind::VehicleMovement { keys: vec![
             cinema::VehicleKey { time: 0.0, pos: [10.0, 20.0, 30.0], angles: [0.0, 0.0, -90.0], gas: 0.0, steering: 0.0 },
             cinema::VehicleKey { time: 1.0, pos: [20.0, 20.0, 30.0], angles: [0.0, 0.0, -90.0], gas: 1.0, steering: 0.0 }] } };
@@ -959,22 +979,32 @@ mod tests {
         let animation = cinema::Clip { start: 0.0, duration: 1.0, kind: ClipKind::Animation { source: "loop".into(), from: 0, to: 30,
             blend: 0.0, anchored: true } };
         app.world_mut().resource_mut::<Cinema>().playing.push(Playing { scene: 1, meta: None, file: "ride".into(), t: 0.5, paused: true,
-            origin: Transform::from_xyz(100.0, 0.0, 0.0), anchor: Some(100), bindings: HashMap::from([(1, 100), (2, 200)]),
+            origin: Transform::from_xyz(100.0, 0.0, 0.0), anchor: Some(100), bindings: HashMap::from([(1, 100), (2, 200), (3, 300)]),
             clips: HashMap::from([("loop".into(), handle)]), waited: 3.0,
             seq: Sequence { duration: 1.0, groups: vec![
                 cinema::Group { uid: 1, kind: GroupKind::Generic, name: "truck".into(), archetype: 0, clips: vec![movement, simple] },
-                cinema::Group { uid: 2, kind: GroupKind::Character, name: "driver".into(), archetype: 0, clips: vec![animation] }], ..default() } });
+                cinema::Group { uid: 2, kind: GroupKind::Character, name: "driver".into(), archetype: 0, clips: vec![animation] },
+                cinema::Group { uid: 3, kind: GroupKind::Generic, name: "prop".into(), archetype: 0, clips: vec![
+                    cinema::Clip { start: 0.0, duration: 1.0, kind: ClipKind::Movement { keys: vec![
+                        cinema::MovementKey { time: 0.0, pos: [0.0, 0.0, 1.0], angles: [0.0, 0.0, 179.0] },
+                        cinema::MovementKey { time: 1.0, pos: [4.0, 0.0, 1.0], angles: [0.0, 0.0, -179.0] },
+                    ] } },
+                ] }], ..default() } });
         app.update();
         let vt = *app.world().get::<Transform>(vehicle).unwrap();
         assert!(vt.translation.abs_diff_eq(Vec3::new(115.0, 30.0, -20.0), 1e-5));
         let expected = vt.transform_point(Vec3::new(-0.4, 0.8 + HALF_HEIGHT, -0.2));
         assert!(app.world().get::<Transform>(actor).unwrap().translation.abs_diff_eq(expected, 1e-4));
         assert!(app.world().get::<StoryActor>(actor).unwrap().in_scene);
+        let pt = app.world().get::<Transform>(prop).unwrap();
+        assert!(pt.translation.abs_diff_eq(Vec3::new(102.0, 1.0, 0.0), 1e-5));
+        assert!(pt.forward().as_vec3().abs_diff_eq(Vec3::Z, 1e-4));
         // The driver retains his passenger-relative pose through the final hold.
         app.world_mut().resource_mut::<Cinema>().playing[0].t = 1.5;
         app.world_mut().resource_mut::<Cinema>().playing[0].seq.pause_at_end = true;
         app.update();
         assert!(app.world().get::<Transform>(vehicle).unwrap().translation.abs_diff_eq(Vec3::new(120.0, 30.0, -20.0), 1e-5));
+        assert!(app.world().get::<Transform>(prop).unwrap().translation.abs_diff_eq(Vec3::new(104.0, 1.0, 0.0), 1e-5));
     }
 
     #[test]

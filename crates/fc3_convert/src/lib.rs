@@ -1706,11 +1706,11 @@ fn convert_cinema(job: &Job) -> Result<()> {
         }
         Some(())
     })?;
-    write_atomic(job.root(), CINEMA_STAMP, b"vehicle movement, clip anchors and Bezier FOV\n", job.ctx)
+    write_atomic(job.root(), CINEMA_STAMP, b"vehicle/prop movement, clip anchors and Bezier FOV\n", job.ctx)
 }
 
 /// Marks the current sequence conversion schema.
-const CINEMA_STAMP: &str = "cinema/stamp-bezier-fov.txt";
+const CINEMA_STAMP: &str = "cinema/stamp-prop-movement.txt";
 
 /// Packs every Domino script the file lists name, and the ones they refer to
 /// that the lists don't.

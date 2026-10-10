@@ -1327,6 +1327,24 @@ Release build and refreshed-cache vine replay pass (`fc3-postfx-cache`),
 releasing at Y 94.586 and starting the following authored scenes. This is
 source preservation and curve/timing fidelity, not post-effect rendering.
 
+The next live replay exposed a separate DOC_020 failure: the greenhouse
+scene loaded with duration zero despite cue points at 1.06667, 2.13333 and
+3.2 seconds. Its source uses `CMovementTrack`, with six numeric Bézier
+channels rather than a skeletal animation. Conversion now preserves those
+entity paths and playback applies them in the scene coordinate frame,
+including shortest-path rotation interpolation and endpoint holds. A new
+cinema stamp upgrades old caches.
+
+Workspace tests, installed greenhouse parsing/cache round-trip, release builds
+and full conversion pass (`fc3-prop-movement-*`, `fc3-greenhouse-installed-test`).
+The existing scene-system ownership regression now also verifies a moving
+generic prop alongside a vehicle and anchored passenger. In the live
+`fc3-greenhouse-movement` vine fixture, the scene loads with its 4.26667-second
+duration, moves entity 2073485233983864237 from approximately
+(-1900.09,98.15,-2376.05) at 0.5 s to (-1893.05,98.15,-2404.27) at 1.01 s,
+and reaches GH_StartPOS at 1.06667 s, where the script pauses it. Later
+greenhouse cues still need physical campaign progression validation.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

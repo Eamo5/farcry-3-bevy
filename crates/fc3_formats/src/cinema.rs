@@ -101,6 +101,13 @@ pub struct VehicleKey {
     pub steering: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MovementKey {
+    pub time: f32,
+    pub pos: [f32; 3],
+    pub angles: [f32; 3],
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClipKind {
     /// A skeletal animation played from frame `from` (30 fps) on.
@@ -121,6 +128,10 @@ pub enum ClipKind {
     /// vehicle's world displacement while simple animation poses its parts.
     VehicleMovement {
         keys: Vec<VehicleKey>,
+    },
+    /// An authored prop/entity path: numeric channels 0..5, Dunia XYZ/angles.
+    Movement {
+        keys: Vec<MovementKey>,
     },
     /// A spoken line (voice from the speaker).
     Dialog {
@@ -256,6 +267,18 @@ fn vehicle_keys(e: &Element) -> Vec<VehicleKey> {
     }).collect()
 }
 
+fn movement_keys(e: &Element) -> Vec<MovementKey> {
+    let tracks: Vec<_> = (0..6).map(|i| bezier_keys(e, &i.to_string())).collect();
+    if tracks[..3].iter().any(Vec::is_empty) { return Vec::new(); }
+    let end = tracks.iter().filter_map(|k| k.last().map(|k| k.time)).fold(0.0f32, f32::max);
+    let steps = ((end / FOV_STEP).ceil() as usize).min(200_000);
+    (0..=steps).map(|i| {
+        let time = (i as f32 * FOV_STEP).min(end);
+        let values: Vec<_> = tracks.iter().map(|k| sample_bezier(k, time).unwrap_or(0.0)).collect();
+        MovementKey { time, pos: [values[0], values[1], values[2]], angles: [values[3], values[4], values[5]] }
+    }).collect()
+}
+
 /// Tangents contain both time and value. Solve the cubic time channel
 /// before evaluating its value; linear interpolation loses authored easing.
 fn sample_bezier(keys: &[BezierKey], t: f32) -> Option<f32> {
@@ -278,6 +301,10 @@ fn sample_bezier(keys: &[BezierKey], t: f32) -> Option<f32> {
 }
 
 fn clip_of(e: &Element) -> Option<Clip> {
+    if e.name == "CMovementTrack" {
+        let keys = movement_keys(e);
+        return Some(Clip { start: 0.0, duration: keys.last()?.time, kind: ClipKind::Movement { keys } });
+    }
     if e.name == "CVehicleMovementTrack" {
         let keys = vehicle_keys(e);
         let duration = keys.last()?.time;
@@ -529,6 +556,9 @@ impl Sequence {
                     ClipKind::VehicleMovement { keys } => format!("vehicle\t{}", keys.iter().map(|k|
                         format!("{},{},{},{},{},{},{},{},{}", k.time, k.pos[0], k.pos[1], k.pos[2], k.angles[0], k.angles[1], k.angles[2], k.gas, k.steering)
                     ).collect::<Vec<_>>().join(";")),
+                    ClipKind::Movement { keys } => format!("movement\t{}", keys.iter().map(|k|
+                        format!("{},{},{},{},{},{},{}", k.time, k.pos[0], k.pos[1], k.pos[2], k.angles[0], k.angles[1], k.angles[2])
+                    ).collect::<Vec<_>>().join(";")),
                     ClipKind::Dialog { sound } => format!("dialog\t{sound}"),
                     ClipKind::Facial { source, from, to, blend } => format!("face\t{from}\t{to}\t{blend}\t{source}"),
                     ClipKind::Sound { sound, kind } => format!("sound\t{sound}\t{kind}"),
@@ -585,6 +615,12 @@ impl Sequence {
                     let kind = match f.get(3).copied().unwrap_or_default() {
                         "anim" => ClipKind::Animation { from: gu(1), to: gu(2), blend: gn(3), source: g(4).to_string(), anchored: g(5) == "1" },
                         "simple" => ClipKind::SimpleAnimation { from: gu(1), to: gu(2), source: g(3).to_string() },
+                        "movement" => ClipKind::Movement { keys: g(1).split(';').filter_map(|k| {
+                            let v: Vec<f32> = k.split(',').filter_map(|x| x.parse().ok()).collect();
+                            (v.len() == 7 && v.iter().all(|x| x.is_finite())).then(|| MovementKey {
+                                time: v[0], pos: [v[1], v[2], v[3]], angles: [v[4], v[5], v[6]],
+                            })
+                        }).collect() },
                         "vehicle" => ClipKind::VehicleMovement { keys: g(1).split(';').filter_map(|k| {
                             let v: Vec<f32> = k.split(',').filter_map(|x| x.parse().ok()).collect();
                             (v.len() == 9 && v.iter().all(|x| x.is_finite())).then(|| VehicleKey { time: v[0], pos: [v[1], v[2], v[3]],
@@ -652,6 +688,25 @@ mod tests {
         assert!(parse_postfx_library(&xml.replace("</CinemaPostFX>",
             "<CGameplaySequence sName=\"POSTFX:EASED\"/></CinemaPostFX>")).is_err());
         assert!(parse_postfx_library("<CinemaPostFX/>").is_err());
+    }
+
+    #[test]
+    #[ignore = "requires locally installed Far Cry 3 archives"]
+    fn installed_greenhouse_movement_keeps_its_path_and_cue_timing() {
+        let vfs = crate::Vfs::open_install(&crate::find_install().expect("installed Far Cry 3"), None).unwrap();
+        let bytes = vfs.read(r"sequences\fc3_main\doc01_b02\seq_doc01_b02_hauntedgreenhouse.cseq").unwrap();
+        let seq = parse(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        assert!((seq.duration - 4.26667).abs() < 0.001);
+        assert_eq!(seq.sync_points.len(), 3);
+        assert!(seq.sync_points.iter().all(|s| s.time < seq.duration));
+        let ClipKind::Movement { keys } = &seq.groups[0].clips[0].kind else { panic!("prop movement missing") };
+        let first = keys.first().unwrap();
+        assert!((first.pos[0] + 15.4969).abs() < 0.001);
+        assert!((first.pos[1] + 58.0762).abs() < 0.001);
+        assert!((first.angles[2] - 75.9999).abs() < 0.001);
+        assert_eq!(keys.last().unwrap().time, seq.duration);
+        let text = seq.to_text();
+        assert_eq!(Sequence::from_text(&text).unwrap().to_text(), text);
     }
 
     #[test]
