@@ -1276,6 +1276,17 @@ cutscene is paused and verifies it remains pending, then resumes it to
 natural completion (`fc3-cinema-skip-ownership-test.log`). This prevents
 skipping a gameplay move from issuing a successful completion receipt.
 
+Non-looping cinematic sampling now clamps to the authored endpoint while
+retaining the elapsed interval for event crossings. Previously an overshoot
+could sample outside every clip on the completion frame, dropping the view
+before the final pose was applied. A scene-system regression verifies the
+terminal camera position and FOV at 16, 37 and 100 ms timesteps, followed by
+release on the next frame. All six non-installed cinematic tests pass
+(`fc3-cinema-endpoint-tests.log`). The release build and opt-in vine fixture
+also pass (`fc3-vine-endpoint`): completion at Y 94.586, following authored
+scenes started, normal weapon pose after release. Cave geometry/material
+gaps remain visible in the final image.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

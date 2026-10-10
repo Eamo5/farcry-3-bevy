@@ -507,6 +507,10 @@ fn play_scenes(
         }
         let (a, b) = (prev, p.t);
         let crossed = |s: f32| s >= a && s < b || (a == 0.0 && s == 0.0 && b > 0.0);
+        // Keep the elapsed interval for event crossings, but sample the
+        // endpoint on the last frame instead of falling outside every clip.
+        // This is also the body pose handed back by player-track scenes.
+        if !p.seq.looping { p.t = p.t.min(p.seq.duration); }
         for g in &p.seq.groups {
             let speaker = p.bindings.get(&g.uid).copied();
             for c in &g.clips {
@@ -884,6 +888,51 @@ mod tests {
         cinema.reset();
         assert!(!cinema.take_built_finished("reset"));
         assert!(cinema.built_results.is_empty());
+    }
+
+    #[test]
+    fn completing_between_ticks_still_samples_the_authored_camera_endpoint() {
+        for millis in [16, 37, 100] {
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
+                .init_asset::<Fc3Clip>().init_asset::<Fc3Skeleton>()
+                .init_resource::<Cinema>().init_resource::<CacheInfo>().init_resource::<crate::story::StoryUi>()
+                .init_resource::<ButtonInput<KeyCode>>().init_resource::<crate::fp::Cinematic>()
+                .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(millis)))
+                .add_message::<crate::sound::PlaySfx>().add_systems(Update, (start_scenes, play_scenes).chain());
+            let pack = fc3_formats::scripts::ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap();
+            let story = fc3_story::Story::new(pack, fc3_story::data::StoryData::default()).unwrap();
+            app.insert_non_send(StoryHost::new(story, None));
+            let duration = 0.233;
+            app.world_mut().resource_mut::<Cinema>().play_built_tracked(Built {
+                name: "endpoint".into(), origin: Transform::from_xyz(10.0, 20.0, 30.0), bindings: HashMap::new(),
+                seq: Sequence { duration, groups: vec![cinema::Group {
+                    uid: 1, kind: GroupKind::Camera, name: "camera".into(), archetype: 0,
+                    clips: vec![
+                        cinema::Clip { start: 0.0, duration, kind: ClipKind::CameraCut { start: true, hide_hud: true } },
+                        cinema::Clip { start: 0.0, duration, kind: ClipKind::CameraAnimation { keys: vec![
+                            cinema::CameraKey { time: 0.0, pos: [0.0; 3], rot: [0.0, 0.0, 0.0, 1.0], fov: 60.0 },
+                            cinema::CameraKey { time: duration, pos: [1.0, 2.0, 3.0], rot: [0.0, 0.0, 0.0, 1.0], fov: 45.0 },
+                        ] } },
+                    ],
+                }], ..default() },
+            });
+            let mut completed = false;
+            for _ in 0..30 {
+                app.update();
+                let mut cinema = app.world_mut().resource_mut::<Cinema>();
+                if cinema.take_built_finished("endpoint") {
+                    let (view, fov) = cinema.view.expect("the completion frame must retain its endpoint view");
+                    assert!(view.translation.abs_diff_eq(Vec3::new(11.0, 23.0, 28.0), 1e-5));
+                    assert_eq!(fov, 45.0);
+                    completed = true;
+                    break;
+                }
+            }
+            assert!(completed, "scene did not complete at {millis} ms timestep");
+            app.update();
+            assert!(app.world().resource::<Cinema>().view.is_none());
+        }
     }
 
     #[test]
