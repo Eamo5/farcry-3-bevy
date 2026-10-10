@@ -1287,6 +1287,46 @@ also pass (`fc3-vine-endpoint`): completion at Y 94.586, following authored
 scenes started, normal weapon pose after release. Cave geometry/material
 gaps remain visible in the final image.
 
+The local opt-in vine prototype now loads the authored
+`vine_hallucination_camera_shaking` move (one-second clip), applying its
+camera-bone/root motion relative to its initial frame during the configured
+one-second pre-teleport window. A reversible camera offset is removed before
+player/scene updates; the installed regression covers timing, actual view
+motion, paused non-accumulation, cinematic precedence and reset cleanup
+(`fc3-vine-shake-test.log`). The controller is ordered before CinemaSet so
+completion is consumed only after the preceding frame's camera/body pose
+has been applied. Release build and the complete ladder fixture pass in
+`fc3-vine-shake-full`; these prototype changes remain local, not accepted
+as full transition parity. Dolly/puff/post-FX rendering is still missing.
+
+Effect investigation extracted the installed
+`worlds/fc3_main/generated/cinema_postfx.xml` into the local temp directory.
+It contains the authored `postfx:Mushroom_Sequence.Vine_Climbing` FOV curve
+(85 -> 150 -> 85 over roughly five seconds) and mushroom IN/LOOP/OUT effects,
+but not the GSF `dolly_zoom` / `mush_sequence_transitions` names. Their mapping
+must be established before substituting that curve. Lua explicitly disables
+`postfx:mush_postfx.02` on DisablePostFX and enables `.03` on GSF stop;
+the current host handles only black-screen post-FX, so those effects are
+another concrete missing rendering path.
+
+The converter now preserves the complete gameplay post-effect XML at
+`cinema/postfx.xml`, validated through the shared timeline parser. Supported
+tracks can be read by exact effect name; unsupported blur/color definitions
+remain intact in the source cache. FOV sampling now evaluates both Bézier
+time/value tangents using the same evaluator as recorded vehicle tracks.
+Unsupported enabled tracks contribute their authored duration, while disabled
+tracks do not. A new cinema stamp refreshes existing sequence caches.
+
+Verification: workspace and all installed-data tests pass
+(`fc3-postfx-workspace-tests`, `fc3-postfx-installed-tests`); full conversion
+finishes with zero errors. The extracted and cached XML share SHA-256
+`5027270a780bded3ef3330225a8ac2705b97414e8a9391edeec5bb3640c7ce38`.
+Regression coverage checks nonlinear easing, duplicate effect names, disabled
+track timing, the installed vine FOV curve, and mushroom-loop timing/sound.
+Release build and refreshed-cache vine replay pass (`fc3-postfx-cache`),
+releasing at Y 94.586 and starting the following authored scenes. This is
+source preservation and curve/timing fidelity, not post-effect rendering.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

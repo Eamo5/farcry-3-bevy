@@ -19,6 +19,9 @@ use crate::xml::Element;
 
 /// The cache folder for converted sequences: `cinema/<crc64 of path>.seq`.
 pub const CINEMA_DIR: &str = "cinema";
+pub const POSTFX_LIBRARY: &str = r"worlds\fc3_main\generated\cinema_postfx.xml";
+/// Preserve the whole source library, including effect types not rendered yet.
+pub const POSTFX_CACHE_REL: &str = "cinema/postfx.xml";
 
 /// The cache path of a sequence by its archive path.
 pub fn sequence_rel(archive_path: &str) -> String {
@@ -210,38 +213,24 @@ fn sound_id(s: Option<&str>) -> Option<u32> {
     (v != u32::MAX && v != 0).then_some(v)
 }
 
-/// A Bezier float track's keys (time, value), from a clip's
+/// A Bezier float track's keys and time/value tangents, from a clip's
 /// `AnimationTrackCollection`, by track name.
-fn bezier_keys(clip: &Element, name: &str) -> Vec<(f32, f32)> {
+fn bezier_keys(clip: &Element, name: &str) -> Vec<BezierKey> {
     let mut out = Vec::new();
     clip.walk(&mut |e| {
         if e.name == "Track" && e.attr("Name") == Some(name) {
-            e.walk(&mut |k| {
-                if k.name == "Key" {
-                    if let (Some(t), Some(v)) = (k.f32("Time"), k.f32("Value")) {
-                        out.push((t, v));
-                    }
-                }
-            });
+            for k in e.child("Keys").into_iter().flat_map(|k| &k.children) {
+                let (Some(time), Some(value)) = (k.f32("Time"), k.f32("Value")) else { continue };
+                if !time.is_finite() || !value.is_finite() { continue; }
+                let tangent = |name| k.child(name).and_then(|t| Some([t.f32("Time")?, t.f32("Value")?]))
+                    .filter(|v| v.iter().all(|x| x.is_finite())).unwrap_or([time, value]);
+                out.push(BezierKey { time, value, incoming: tangent("TangentIn"), outgoing: tangent("TangentOut") });
+            }
         }
     });
-    out.sort_by(|a, b| a.0.total_cmp(&b.0));
-    out.dedup_by(|a, b| a.0 == b.0);
+    out.sort_by(|a, b| a.time.total_cmp(&b.time));
+    out.dedup_by(|a, b| a.time == b.time);
     out
-}
-
-fn sample_keys(keys: &[(f32, f32)], t: f32) -> Option<f32> {
-    let first = keys.first()?;
-    if t <= first.0 {
-        return Some(first.1);
-    }
-    for w in keys.windows(2) {
-        if t <= w[1].0 {
-            let f = if w[1].0 > w[0].0 { (t - w[0].0) / (w[1].0 - w[0].0) } else { 1.0 };
-            return Some(w[0].1 + (w[1].1 - w[0].1) * f);
-        }
-    }
-    keys.last().map(|k| k.1)
 }
 
 #[derive(Clone, Copy)]
@@ -254,22 +243,7 @@ struct BezierKey {
 
 fn vehicle_keys(e: &Element) -> Vec<VehicleKey> {
     let names = ["X", "Y", "Z", "Pitch", "Roll", "Yaw", "Gas", "Steering"];
-    let tracks: Vec<Vec<BezierKey>> = names.iter().map(|name| {
-        let mut keys = Vec::new();
-        e.walk(&mut |track| {
-            if track.name != "Track" || track.attr("Name") != Some(*name) { return; }
-            for k in track.child("Keys").into_iter().flat_map(|k| &k.children) {
-                let (Some(time), Some(value)) = (k.f32("Time"), k.f32("Value")) else { continue };
-                if !time.is_finite() || !value.is_finite() { continue; }
-                let tangent = |name| k.child(name).and_then(|t| Some([t.f32("Time")?, t.f32("Value")?]))
-                    .filter(|v| v.iter().all(|x| x.is_finite())).unwrap_or([time, value]);
-                keys.push(BezierKey { time, value, incoming: tangent("TangentIn"), outgoing: tangent("TangentOut") });
-            }
-        });
-        keys.sort_by(|a, b| a.time.total_cmp(&b.time));
-        keys.dedup_by(|a, b| a.time == b.time);
-        keys
-    }).collect();
+    let tracks: Vec<Vec<BezierKey>> = names.iter().map(|name| bezier_keys(e, name)).collect();
     // An absent position channel isn't a usable recorded path.
     if tracks[..3].iter().any(Vec::is_empty) { return Vec::new(); }
     let end = tracks.iter().filter_map(|k| k.last().map(|k| k.time)).fold(0.0f32, f32::max);
@@ -349,7 +323,7 @@ fn clip_of(e: &Element) -> Option<Clip> {
                 return None;
             }
             let n = ((duration / FOV_STEP).ceil() as usize).clamp(1, 20_000);
-            ClipKind::Fov { samples: (0..=n).filter_map(|i| sample_keys(&keys, i as f32 * FOV_STEP)).collect() }
+            ClipKind::Fov { samples: (0..=n).filter_map(|i| sample_bezier(&keys, i as f32 * FOV_STEP)).collect() }
         }
         _ => return None,
     };
@@ -418,6 +392,26 @@ fn collect_groups(e: &Element, groups: &mut Vec<Group>, overlay: &mut Vec<Clip>)
 pub fn parse(xml: &str) -> Result<Sequence> {
     let root = crate::xml::parse(xml).context("no XML")?;
     let seq = if root.name == "CCinematicSequence" { &root } else { root.child("CCinematicSequence").context("no CCinematicSequence")? };
+    Ok(parse_sequence(seq))
+}
+
+/// Read supported timeline tracks from the named gameplay-effect library.
+/// The cached XML remains authoritative for unsupported blur/color effects.
+pub fn parse_postfx_library(xml: &str) -> Result<Vec<Sequence>> {
+    let root = crate::xml::parse(xml).context("no post-FX XML")?;
+    anyhow::ensure!(root.name == "CinemaPostFX", "no CinemaPostFX root");
+    let mut names = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for e in root.children.iter().filter(|e| e.name == "CGameplaySequence") {
+        let name = e.attr("sName").context("unnamed gameplay effect")?;
+        anyhow::ensure!(!name.is_empty() && names.insert(name.to_ascii_lowercase()), "empty or duplicate gameplay effect {name}");
+        out.push(parse_sequence(e));
+    }
+    anyhow::ensure!(!out.is_empty(), "empty post-FX library");
+    Ok(out)
+}
+
+fn parse_sequence(seq: &Element) -> Sequence {
     let mut groups = Vec::new();
     let mut overlay = Vec::new();
     collect_groups(seq, &mut groups, &mut overlay);
@@ -435,8 +429,16 @@ pub fn parse(xml: &str) -> Result<Sequence> {
             });
         }
     }
-    let duration = groups.iter().flat_map(|g| &g.clips).map(|c| c.start + c.duration).fold(0.0f32, f32::max);
-    Ok(Sequence {
+    // Unsupported visual tracks still occupy authored time. A blur-only
+    // gameplay sequence must not become a zero-duration loop.
+    fn timeline_end(e: &Element) -> f32 {
+        if e.bool("bEnabled") == Some(false) { return 0.0; }
+        let end = e.f32("timeStartTime").zip(e.f32("timeDuration"))
+            .map(|(start, duration)| start + duration.max(0.0)).filter(|v| v.is_finite()).unwrap_or(0.0);
+        e.children.iter().map(timeline_end).fold(end, f32::max)
+    }
+    let duration = groups.iter().flat_map(|g| &g.clips).map(|c| c.start + c.duration).fold(timeline_end(seq), f32::max);
+    Sequence {
         name: seq.attr("sName").unwrap_or_default().to_string(),
         duration,
         looping: seq.bool("bLoop").unwrap_or(false),
@@ -444,7 +446,7 @@ pub fn parse(xml: &str) -> Result<Sequence> {
         cutscene: seq.bool("bIsCutscene").unwrap_or(false),
         groups,
         sync_points,
-    })
+    }
 }
 
 /// A camera path from its `.animtrackcol.rml` (an FCB: tracks
@@ -619,6 +621,59 @@ impl Sequence {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gameplay_effects_preserve_easing_names_and_unsupported_track_duration() {
+        let xml = r#"<CinemaPostFX>
+          <CGameplaySequence sName="postfx:eased" bLoop="1">
+            <CSequenceTrackGroup><COverlayTrack>
+              <CFOVClip timeStartTime="0" timeDuration="1">
+                <Track Name="FOVOverTime"><Keys>
+                  <Key Time="0" Value="60"><TangentOut Time="0.33333333" Value="60"/></Key>
+                  <Key Time="1" Value="100"><TangentIn Time="0.66666667" Value="60"/></Key>
+                </Keys></Track>
+              </CFOVClip>
+              <CBlurPostFxClip timeStartTime="1" timeDuration="2"/>
+            </COverlayTrack>
+            <COverlayTrack bEnabled="0"><CBlurPostFxClip timeStartTime="0" timeDuration="99"/></COverlayTrack>
+            </CSequenceTrackGroup>
+          </CGameplaySequence>
+        </CinemaPostFX>"#;
+        let effects = parse_postfx_library(xml).unwrap();
+        assert_eq!(effects[0].name, "postfx:eased");
+        assert!(effects[0].looping);
+        assert_eq!(effects[0].duration, 3.0);
+        let ClipKind::Fov { samples } = &effects[0].groups[0].clips[0].kind else { panic!("FOV missing") };
+        // Uniform time handles and value handles at 60 produce 60 + 40*t^3,
+        // not the old straight line (80 at the midpoint).
+        assert!((samples[(0.5 / FOV_STEP).round() as usize] - 65.0).abs() < 0.001);
+        assert_eq!(samples[0], 60.0);
+        assert!((samples.last().unwrap() - 100.0).abs() < 0.001);
+        assert!(parse_postfx_library(&xml.replace("</CinemaPostFX>",
+            "<CGameplaySequence sName=\"POSTFX:EASED\"/></CinemaPostFX>")).is_err());
+        assert!(parse_postfx_library("<CinemaPostFX/>").is_err());
+    }
+
+    #[test]
+    #[ignore = "requires locally installed Far Cry 3 archives"]
+    fn installed_postfx_library_preserves_vine_curve_and_mushroom_loop_timing() {
+        let vfs = crate::Vfs::open_install(&crate::find_install().expect("installed Far Cry 3"), None).unwrap();
+        let bytes = vfs.read(POSTFX_LIBRARY).unwrap();
+        let effects = parse_postfx_library(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        let vine = effects.iter().find(|e| e.name == "postfx:Mushroom_Sequence.Vine_Climbing").unwrap();
+        assert!((vine.duration - 5.001).abs() < 0.001);
+        let samples = vine.groups.iter().flat_map(|g| &g.clips).find_map(|c| match &c.kind {
+            ClipKind::Fov { samples } => Some(samples), _ => None,
+        }).unwrap();
+        assert_eq!(samples[0], 85.0);
+        assert!(samples.iter().copied().fold(0.0f32, f32::max) > 149.0);
+        assert!((samples.last().unwrap() - 85.0).abs() < 0.1);
+        let mush = effects.iter().find(|e| e.name == "postfx:mush_postfx.03_LOOP").unwrap();
+        assert!(mush.looping);
+        assert_eq!(mush.duration, 1.0);
+        assert!(mush.groups.iter().flat_map(|g| &g.clips).any(|c|
+            matches!(c.kind, ClipKind::Sound { sound: 0x000a95ae, .. })));
+    }
 
     const XML: &str = r#"<Sequence>
 	<CCinematicSequence sName="test" bLoop="0" bPauseAtEnd="0" bIsCutscene="1">

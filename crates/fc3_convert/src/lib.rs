@@ -892,6 +892,16 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         if let Err(e) = result { job.error(format!("specific gameplay settings: {e:#}")); }
     }
 
+    // ---- authored gameplay post-effects (preserve unsupported tracks too)
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::cinema::POSTFX_CACHE_REL) {
+        let result = (|| -> Result<()> {
+            let bytes = job.vfs.read(fc3_formats::cinema::POSTFX_LIBRARY)?;
+            fc3_formats::cinema::parse_postfx_library(std::str::from_utf8(&bytes)?)?;
+            write_atomic(job.root(), fc3_formats::cinema::POSTFX_CACHE_REL, &bytes, job.ctx)
+        })();
+        if let Err(e) = result { job.error(format!("gameplay post-effects: {e:#}")); }
+    }
+
     // ---- faces: the rigs, which character uses which, and every facial clip
     if opts.only_sectors.is_none() && (job.should_write(fc3_formats::facial::PAK_REL) || job.should_write(fc3_formats::facial::DEFINITIONS_REL)) {
         if let Err(e) = convert_facial(&job) {
@@ -1696,11 +1706,11 @@ fn convert_cinema(job: &Job) -> Result<()> {
         }
         Some(())
     })?;
-    write_atomic(job.root(), CINEMA_STAMP, b"vehicle movement and clip anchors\n", job.ctx)
+    write_atomic(job.root(), CINEMA_STAMP, b"vehicle movement, clip anchors and Bezier FOV\n", job.ctx)
 }
 
 /// Marks the current sequence conversion schema.
-const CINEMA_STAMP: &str = "cinema/stamp-vehicle-anchors.txt";
+const CINEMA_STAMP: &str = "cinema/stamp-bezier-fov.txt";
 
 /// Packs every Domino script the file lists name, and the ones they refer to
 /// that the lists don't.
