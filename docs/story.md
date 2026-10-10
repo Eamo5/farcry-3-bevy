@@ -1345,6 +1345,31 @@ duration, moves entity 2073485233983864237 from approximately
 and reaches GH_StartPOS at 1.06667 s, where the script pauses it. Later
 greenhouse cues still need physical campaign progression validation.
 
+The local vine controller now blends its transition camera toward the
+authored upper look angle (10 degrees over 0.4 seconds), concurrently with
+the dolly timer. Local controller inspection confirms the view interpolation
+runs during that timer, not as an extra phase. `fc3-vine-look-tests` verifies
+shortest-path yaw, timing, fixed body position and cinematic precedence;
+`fc3-vine-look-mid.png` captures the pre-teleport view. Dolly FOV, puff and
+post-effect rendering remain unfinished, so this controller remains opt-in.
+
+A new optional ladder-fixture walk target (`FC3_TRAVERSAL_WALK_TO=x,z`) uses
+ordinary look/movement input after dismount. Its first run exposed fixture
+input being written too late in Update; moving the fixture after action
+collection in PreUpdate fixes that. `fc3-vine-input-order` then walks about
+22 metres from the transition endpoint to (-1877.34,94.21,-2500.49), with
+health 100, confirming return of physical movement control. The ladder
+approach is still repositioned; this is not an unassisted campaign run.
+
+That walk revealed the ocean surface rendering above the dry cave, despite
+the earlier water-occupancy fix. The water fragment shader now rejects
+fragments beneath the sampled terrain. `fc3-cave-water-mask-final.png`
+shows the rock ceiling instead of the ocean, and `fc3-water-mask-ocean.png`
+checks that the offshore ocean still renders (Dunia -2600,2555,115, noclip,
+yaw -90, pitch -15). Release build and both live shader runs pass without
+shader errors. Overbright cave foliage/lighting remains a separate visible
+parity gap; this change addresses only water leaking through dry terrain.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

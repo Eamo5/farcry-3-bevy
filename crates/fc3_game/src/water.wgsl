@@ -198,6 +198,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let dist = distance(p, view.world_position.xyz);
     let depth = depth_at(p.xz);
 
+    // Surface water ends at terrain, including when viewed from a cave
+    // beneath dry ground. Depth clamping alone leaves reflective foam above
+    // the cave even though no surface-water basin exists at this position.
+    if ground_at(p.xz) >= p.y {
+        discard;
+    }
+
     // Ripples: two scrolling normal maps over the swell normal.
     let n1 = decode_normal(textureSample(ripples, wrap_sampler, p.xz * 0.06 + vec2<f32>(t * 0.011, t * 0.006)));
     let n2 = decode_normal(textureSample(swell, wrap_sampler, p.xz * 0.017 - vec2<f32>(t * 0.004, -t * 0.008)));
