@@ -2358,6 +2358,17 @@ fn main() -> Result<()> {
                 }
             }
         }
+        "clip-info" => {
+            let path = args.get(1).context("usage: clip-info <archive animation path>")?;
+            let clip = fc3_formats::anim::parse_clip(&vfs.read(path)?)?;
+            println!("{path}: {:.3}s, {:.1} fps, skeleton {:#x}, {} tracks, {} subclips", clip.duration, clip.frame_rate, clip.skeleton_id, clip.tracks.len(), clip.sub_clips.len());
+            if let Some(root) = &clip.root_motion {
+                println!("root: start {:?} rotation {:?}, {} keys, end {:?} rotation {:?}", root.start_translation, root.start_rotation,
+                    root.times.len(), root.translations.last(), root.rotations.last());
+            }
+            for event in &clip.sounds { println!("sound {:.3}s {:#x}", event.0, event.1); }
+            for attachment in &clip.attachments { println!("attachment {attachment:?}"); }
+        }
         "moves" => {
             // The engine's named moves, their states and clips: moves [name
             // part]

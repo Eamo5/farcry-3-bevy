@@ -31,13 +31,67 @@ impl Plugin for TraversalPlugin {
             Update,
             (
                 load_ways.run_if(resource_exists::<CacheInfo>),
-                traversal_test,
-                (zip_prompt, tower_prompt).before(HudSet).after(crate::turrets::man_turrets),
-                climb,
-                ride,
+                traversal_test.run_if(traversal_controls_available),
+                (zip_prompt, tower_prompt).before(HudSet).after(crate::turrets::man_turrets).run_if(traversal_controls_available),
+                climb.run_if(traversal_controls_available),
+                ride.run_if(traversal_controls_available),
             )
                 .chain(),
         );
+    }
+}
+
+// Traversal owns the capsule just like walking does. Menus and cinematic
+// holds must suspend that ownership, including already-mounted movement.
+fn traversal_controls_available(state: Res<State<crate::menu::GameState>>, hold: Res<crate::fp::Cinematic>) -> bool {
+    *state.get() == crate::menu::GameState::Playing && hold.0 <= 0.0
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use crate::menu::GameState;
+
+    #[test]
+    fn mounted_zipline_freezes_in_menus_and_cinematics_then_resumes() {
+        let mut app = App::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_millis(100));
+        app.insert_resource(time)
+            .insert_resource(State::new(GameState::Playing))
+            .init_resource::<crate::fp::Cinematic>()
+            .init_resource::<ActionState>()
+            .insert_resource(Ways { data: Traversal {
+                cables: vec![Cable { zipline: true, a: [0.0, 20.0, 0.0], b: [0.0, 10.0, -100.0] }],
+                ..default()
+            }, ..default() })
+            .insert_resource(Mount::Zip { cable: 0, s: 0.0, speed: 4.0 })
+            .add_systems(Update, ride.run_if(traversal_controls_available));
+        let e = app.world_mut().spawn((Transform::default(), Health::new(100.0), ColliderDisabled, Player {
+            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: false, crouching: false,
+            swimming: false, noclip: false, spawning: false, keep_height: false,
+            last_landing_speed: 0.0, sprinting: false, spawned_at: 0.0, driving: true,
+            eye: 1.7, air: default(), mantle: None, mounted: None, sliding: None, dragging: false,
+        })).id();
+        app.update();
+        let position = app.world().get::<Transform>(e).unwrap().translation;
+        let mounted = *app.world().resource::<Mount>();
+        for state in [GameState::Paused, GameState::Map, GameState::Journal, GameState::Shop, GameState::MainMenu, GameState::Loading] {
+            app.insert_resource(State::new(state));
+            app.update();
+            assert_eq!(app.world().get::<Transform>(e).unwrap().translation, position);
+            assert_eq!(*app.world().resource::<Mount>(), mounted);
+        }
+        app.insert_resource(State::new(GameState::Playing));
+        app.world_mut().resource_mut::<crate::fp::Cinematic>().0 = 0.2;
+        app.update();
+        assert_eq!(app.world().get::<Transform>(e).unwrap().translation, position);
+        assert_eq!(*app.world().resource::<Mount>(), mounted);
+        app.world_mut().resource_mut::<crate::fp::Cinematic>().0 = 0.0;
+        app.update();
+        assert_ne!(app.world().get::<Transform>(e).unwrap().translation, position);
+        assert!(app.world().get::<Player>(e).unwrap().driving);
+        assert!(app.world().get::<ColliderDisabled>(e).is_some());
     }
 }
 
@@ -49,7 +103,7 @@ pub struct Ways {
 }
 
 /// What the player is holding on to.
-#[derive(Resource, Default, Clone, Copy, PartialEq)]
+#[derive(Resource, Default, Clone, Copy, PartialEq, Debug)]
 pub enum Mount {
     #[default]
     None,

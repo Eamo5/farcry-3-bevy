@@ -1108,6 +1108,27 @@ authored Ladder, First_Vine_Point (2073403098251930447), and Second_Vine_Point
 path; the vine gameplay and its `vine_climbing_ended` / `dolly_zoom_started`
 events remain unimplemented. The test does not fabricate these events.
 
+Vine investigation resolves the prefab's actual ladder child to
+2078490335079601680 (`Ladders/Ladder_Vines10m_0`), at Dunia
+[-1912.48, 2555.83, 113.66137]. Its CLadder selects HandOverHand, with
+ten overridden steps and a one-metre step height. The two cinematic anchors
+are not the top and bottom of that ladder: the second is roughly 42 metres
+away horizontally and 19 metres lower. A simple ladder-top completion signal
+would therefore omit the hallucination relocation. `fc3tool clip-info`
+reports source clip duration, root-motion endpoints, sounds and attachments;
+the `vine_jason_allucination.mab` clip is 3.433 seconds with zero net root
+translation. The relocation must be owned by the gameplay controller, not
+inferred from that clip's displacement. That controller remains unfinished.
+
+The traversal investigation also found that climb, zip riding and interaction
+systems ran regardless of menus or cinematic input holds. They now yield
+while outside Playing or while the cinematic hold is active. The ECS
+regression runs an occupied zip line through all six non-playing states and
+a cinematic hold, verifies unchanged capsule position and ride progress, then
+verifies movement resumes with collision ownership intact. Release workspace
+tests and game/tool builds pass (`fc3-traversal-ownership-{tests,build}.log`).
+This is an automated ownership regression, not manual vine validation.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected
