@@ -1091,6 +1091,23 @@ image confirms "Go talk to Dr. Earnhardt", health 100, two syringes, and pistol
 ammo 5/0. This verifies that automated-input segment from a checkpoint, not
 an uninterrupted manual campaign or full visual/gameplay/UX parity.
 
+`FC3_STORY_AUTOPILOT_GRAPH=<path substring>` limits trigger automation to
+listeners owned by that graph family, following nested `_graph` ancestry.
+With world graphs now running, the unrestricted helper otherwise visits
+waterfall effects and DLC triggers instead of staying on the tested mission.
+This filter affects test trigger selection, not normal gameplay listeners.
+
+`fc3-doctor-focused` used `doc_020` from the paired post-outpost checkpoint,
+played the 66-second doctor briefing and 70-second Daisy scene without skips,
+and completed DOC_020_BRIEF_B10, DOC_020_BRIEF, DOC_020_B05C and DOC_020_B10E.
+No recorded death, retry or Lua script error occurred. The helper repositions
+the player at triggers, so this is script/cinematic progression evidence only.
+It stops in DOC_020_B20E, which requests `CVineClimbingGameplay` with the
+authored Ladder, First_Vine_Point (2073403098251930447), and Second_Vine_Point
+(2073403264386214747). The game currently handles only QTEGSF in that command
+path; the vine gameplay and its `vine_climbing_ended` / `dolly_zoom_started`
+events remain unimplemented. The test does not fabricate these events.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

@@ -779,12 +779,35 @@ impl Story {
     /// The triggers scripts wait on now: (trigger, event, a point inside,
     /// enabled), for tools that drive the story without a world.
     pub fn watched_triggers(&self) -> Vec<(u64, String, [f32; 3], bool)> {
+        self.watched_triggers_in_graph(None)
+    }
+
+    /// Automation can select a graph family without entering unrelated world
+    /// effects or optional missions. Nested library boxes retain their graph
+    /// ancestry, so their triggers remain eligible for the owning mission.
+    pub fn watched_triggers_in_graph(&self, graph: Option<&str>) -> Vec<(u64, String, [f32; 3], bool)> {
         let c = self.core.borrow();
+        let graph = graph.map(str::to_ascii_lowercase);
         let mut out = Vec::new();
         for l in c.listeners.values() {
             let Listen::Entity(t, e) = &l.on else { continue };
             if !matches!(e.as_str(), "Enter" | "Use" | "EnterFOV") || !c.is_loaded(*t) {
                 continue;
+            }
+            if let Some(needle) = &graph {
+                let mut table = l.callback.target.clone();
+                let mut matched = false;
+                for _ in 0..16 {
+                    if table.get::<Table>("_type").and_then(|ty| ty.get::<String>("_path"))
+                        .is_ok_and(|path| path.to_ascii_lowercase().contains(needle)) {
+                        matched = true;
+                        break;
+                    }
+                    let Ok(parent) = table.get::<Table>("_graph") else { break };
+                    if parent == table { break; }
+                    table = parent;
+                }
+                if !matched { continue; }
             }
             let Some(entry) = c.data.entities.get(t) else { continue };
             let point = match triggers::shape_of(entry) {

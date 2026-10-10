@@ -1178,7 +1178,8 @@ fn run_story(
         .unwrap_or(6.0).max(0.5);
     if gameplay && health.as_ref().is_none_or(|h| !h.dead) && !p.driving && cinema.view.is_none() && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
         && host.quiet > autopilot_delay && host.story.watched_loot_filters().is_empty() {
-        let watched = host.story.watched_triggers();
+        let graph = std::env::var("FC3_STORY_AUTOPILOT_GRAPH").ok();
+        let watched = host.story.watched_triggers_in_graph(graph.as_deref());
         let awaiting_rock = host.story.watched_signals().iter().any(|s| s == "throw_rock");
         // Stuck: triggers stepped into before they were armed go again.
         if host.quiet > 25.0 {
