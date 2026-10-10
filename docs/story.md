@@ -1388,6 +1388,30 @@ pass (`fc3-vine-cycle-{workspace,installed}-tests.log`,
 `FC3_VINE_GAMEPLAY_TEST`; dolly FOV, puff, post-effects, unassisted approach
 and end-to-end campaign validation remain outstanding.
 
+The effect-name mapping is now established from the installed entity-library
+entity `PostFXs:PostFXs/Database`, rather than inferred from similar names.
+`dolly_zoom` (sFX 0x730fb317, priority 1, intensity selector 2) maps to
+`postFx:mushroom_sequence.vine_climbing`, case-insensitively matching the
+cinematic XML. `mush_sequence_transitions` (sFX 0x9ede26c1, priority 1000)
+maps to `postfx:mush_postfx.transition`, with authored `_IN` and `_OUT`
+sequences. `fc3_formats::postfx` preserves the mapping, priorities, intensity
+selectors and fade type/time/sequence metadata; the installed regression
+resolves both effects and all their referenced sequences.
+
+The opt-in vine controller now plays the mapped dolly FOV curve, independently
+of camera pose, from dolly start through the stand-up animation. It retracts
+its projection override before each camera update and releases it when the
+curve finishes or the controller resets. The installed ECS regression checks
+the 85-degree start, samples before/after teleport, normal restoration, reset
+and camera replacement during retry. `fc3-vine-dolly-mid.png` captures the
+live effect; `fc3-vine-dolly-final.png` captures ordinary pistol presentation
+after release. The replay reaches the 22-metre walk target with health 100.
+Workspace and installed-data tests, release build and live runs pass
+(`fc3-vine-dolly-{workspace,installed}-tests.log`, `fc3-vine-dolly-build.log`).
+This supersedes the earlier unresolved mapping/FOV notes; particle puff,
+transition post-effect rendering and original-game visual comparison remain
+outstanding. The controller remains opt-in.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

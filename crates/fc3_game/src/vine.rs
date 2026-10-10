@@ -13,8 +13,8 @@ impl Plugin for VinePlugin {
         app.init_resource::<Vines>().add_systems(Update,
             run.after(crate::story::StorySet).before(crate::cinema::CinemaSet)
                 .run_if(in_state(crate::menu::GameState::Playing)))
-            .add_systems(PreUpdate, restore_shake)
-            .add_systems(PostUpdate, (align_dolly_view, shake_view).chain().after(crate::cinema::scene_view)
+            .add_systems(PreUpdate, (restore_shake, restore_dolly_fov))
+            .add_systems(PostUpdate, (align_dolly_view, shake_view, dolly_fov).chain().after(crate::cinema::scene_view)
                 .before(bevy::transform::TransformSystems::Propagate));
     }
 }
@@ -50,6 +50,8 @@ struct Vine {
     destination: Transform,
     climb_yaw: f32,
     look_start: Vec2,
+    dolly_effect: Option<Sequence>,
+    effect_time: Option<f32>,
 }
 
 /// Keep the climbed offset and facing, rather than snapping to the second
@@ -98,6 +100,15 @@ fn run(
             ensure!(vines.active.is_none(), "another vine gameplay is active");
             let settings = fc3_formats::gsf::VineSettings::parse(&std::fs::read(
                 info.as_ref().context("cache unavailable")?.root.join(fc3_formats::gsf::CACHE_REL))?)?;
+            let root = &info.as_ref().unwrap().root;
+            let effects = fc3_formats::postfx::parse_library(&std::fs::read(root.join("story/entitylibrary.fcb"))?)?;
+            let mapping = effects.iter().find(|e| e.name.eq_ignore_ascii_case(&settings.dolly_postfx))
+                .context("missing vine dolly effect mapping")?;
+            let sequences = fc3_formats::cinema::parse_postfx_library(&std::fs::read_to_string(
+                root.join(fc3_formats::cinema::POSTFX_CACHE_REL))?)?;
+            let dolly_effect = sequences.into_iter().find(|s| s.name.eq_ignore_ascii_case(&mapping.sequence))
+                .context("missing mapped vine dolly sequence")?;
+            info!("vine: effect {} maps to {}", mapping.name, dolly_effect.name);
             let id = |key: &str| -> anyhow::Result<u64> { Ok(start.params.get(key).context("missing vine binding")?.parse()?) };
             let data = host.story.data();
             let anchor = |key: &str| -> anyhow::Result<Transform> {
@@ -119,7 +130,7 @@ fn run(
                 r"graphics\actors_\_skeleton_master\hips_ref.skeleton")));
             Ok(Vine { id: start.id, ladder, first: anchor("First_Vine_Point")?, second: anchor("Second_Vine_Point")?,
                 settings, clip, handle, shake, skeleton, phase: Phase::Waiting, destination: Transform::IDENTITY,
-                climb_yaw: 0.0, look_start: Vec2::ZERO })
+                climb_yaw: 0.0, look_start: Vec2::ZERO, dolly_effect: Some(dolly_effect), effect_time: None })
         })();
         match prepared {
             Ok(v) => { info!("vine: armed gameplay {} on ladder {}", v.id, v.ladder); vines.active = Some(v); }
@@ -140,6 +151,7 @@ fn run(
     }
     let dt = time.delta_secs();
     if dt <= 0.0 { return; }
+    if let Some(t) = &mut v.effect_time { *t += dt; }
     let mounted = mounted_on(&mount, &ways, v.ladder);
     match &mut v.phase {
         Phase::Waiting if mounted => {
@@ -155,6 +167,7 @@ fn run(
                 v.destination = stand_up_origin(*pose, v.first, v.second);
                 v.look_start = Vec2::new(player.yaw, player.pitch);
                 v.phase = Phase::Dolly(0.0);
+                v.effect_time = Some(0.0);
                 hold.0 = hold.0.max(0.2);
                 player.velocity = Vec3::ZERO;
                 host.story.message("dolly_zoom_started");
@@ -224,6 +237,43 @@ fn mounted_on(mount: &Mount, ways: &Ways, id: u64) -> bool {
 #[derive(Component)]
 struct ShakenView { base: Transform, applied: Transform }
 
+#[derive(Component)]
+struct DollyFov { base: f32, applied: f32 }
+
+fn restore_dolly_fov(mut commands: Commands, mut cameras: Query<(Entity, &mut Projection, &DollyFov)>) {
+    for (entity, mut projection, effect) in &mut cameras {
+        if let Projection::Perspective(p) = &mut *projection {
+            if p.fov == effect.applied { p.fov = effect.base; }
+        }
+        commands.entity(entity).remove::<DollyFov>();
+    }
+}
+
+fn effect_fov(sequence: &Sequence, time: f32) -> Option<f32> {
+    if time < 0.0 || time > sequence.duration { return None; }
+    sequence.groups.iter().flat_map(|g| &g.clips).find_map(|clip| {
+        let ClipKind::Fov { samples } = &clip.kind else { return None };
+        if time < clip.start || time > clip.start + clip.duration { return None; }
+        samples.get(((time - clip.start) / fc3_formats::cinema::FOV_STEP) as usize).copied()
+            .filter(|fov| fov.is_finite() && *fov > 0.0 && *fov < 180.0)
+    })
+}
+
+/// The mapped post-effect owns FOV independently of the animated camera pose.
+/// It spans the teleport, then releases to the current scene/player projection.
+fn dolly_fov(vines: Res<Vines>, mut commands: Commands,
+    mut cameras: Query<(Entity, &mut Projection), With<PlayerCamera>>) {
+    let Some(v) = &vines.active else { return };
+    let (Some(sequence), Some(time)) = (&v.dolly_effect, v.effect_time) else { return };
+    let Some(fov) = effect_fov(sequence, time) else { return };
+    for (entity, mut projection) in &mut cameras {
+        let Projection::Perspective(p) = &mut *projection else { continue };
+        let applied = fov.to_radians();
+        commands.entity(entity).insert(DollyFov { base: p.fov, applied });
+        p.fov = applied;
+    }
+}
+
 fn dolly_angles(start: Vec2, facing: f32, upper_degrees: f32, elapsed: f32, duration: f32) -> Vec2 {
     let fraction = if duration > 0.0 { (elapsed / duration).clamp(0.0, 1.0) } else { 1.0 };
     let turn = (facing - start.x + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
@@ -280,6 +330,59 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires FC3_TEST_CACHE with the authored post-effect library"]
+    fn installed_dolly_fov_spans_teleport_and_restores_projection_on_release() {
+        let root = std::path::PathBuf::from(std::env::var_os("FC3_TEST_CACHE").expect("FC3_TEST_CACHE"));
+        let sequences = fc3_formats::cinema::parse_postfx_library(&std::fs::read_to_string(
+            root.join(fc3_formats::cinema::POSTFX_CACHE_REL)).unwrap()).unwrap();
+        let sequence = sequences.into_iter().find(|s| s.name.eq_ignore_ascii_case(
+            "postfx:Mushroom_Sequence.Vine_Climbing")).unwrap();
+        let mut app = App::new();
+        app.init_resource::<Vines>().add_systems(PreUpdate, restore_dolly_fov).add_systems(PostUpdate, dolly_fov);
+        let camera = app.world_mut().spawn((PlayerCamera, Projection::Perspective(PerspectiveProjection {
+            fov: 70.0f32.to_radians(), ..default()
+        }))).id();
+        let fov = |world: &World| {
+            let Projection::Perspective(p) = world.get::<Projection>(camera).unwrap() else { panic!() };
+            p.fov.to_degrees()
+        };
+        let mut v = active_vine();
+        v.phase = Phase::Dolly(0.0);
+        v.dolly_effect = Some(sequence.clone());
+        v.effect_time = Some(0.0);
+        app.world_mut().resource_mut::<Vines>().active = Some(v);
+        app.update();
+        assert!((fov(app.world()) - 85.0).abs() < 0.001);
+        for t in [1.0, 2.5, 3.0, 4.0, 5.0] {
+            let mut vines = app.world_mut().resource_mut::<Vines>();
+            let v = vines.active.as_mut().unwrap();
+            v.phase = if t < 2.5 { Phase::Dolly(t) } else { Phase::Animation };
+            v.effect_time = Some(t);
+            app.update();
+            assert!((fov(app.world()) - effect_fov(&sequence, t).unwrap()).abs() < 0.001);
+        }
+        app.world_mut().resource_mut::<Vines>().active.as_mut().unwrap().effect_time = Some(6.0);
+        app.update();
+        assert!((fov(app.world()) - 70.0).abs() < 0.001);
+        app.world_mut().resource_mut::<Vines>().active.as_mut().unwrap().effect_time = Some(2.0);
+        app.update();
+        app.world_mut().resource_mut::<Vines>().reset();
+        app.update();
+        assert!((fov(app.world()) - 70.0).abs() < 0.001);
+        // A camera replacement during retry takes precedence over old cleanup.
+        let mut v = active_vine();
+        v.dolly_effect = Some(sequence);
+        v.effect_time = Some(1.0);
+        app.world_mut().resource_mut::<Vines>().active = Some(v);
+        app.update();
+        *app.world_mut().get_mut::<Projection>(camera).unwrap() = Projection::Perspective(
+            PerspectiveProjection { fov: 55.0f32.to_radians(), ..default() });
+        app.world_mut().resource_mut::<Vines>().reset();
+        app.update();
+        assert!((fov(app.world()) - 55.0).abs() < 0.001);
+    }
+
+    #[test]
     fn dolly_alignment_uses_authored_time_and_shortest_yaw_without_moving_the_body() {
         let mut app = App::new();
         app.init_resource::<Vines>().init_resource::<Cinema>().add_systems(Update, align_dolly_view);
@@ -321,6 +424,7 @@ mod tests {
         Vine { id: 408, ladder: 123, first: Transform::IDENTITY, second: Transform::IDENTITY,
             clip: String::new(), handle: Handle::default(), shake: Handle::default(), skeleton: Handle::default(),
             phase: Phase::Animation, destination: Transform::IDENTITY, climb_yaw: 0.0, look_start: Vec2::ZERO,
+            dolly_effect: None, effect_time: None,
             settings: fc3_formats::gsf::VineSettings {
                 stand_up_move: String::new(), camera_shake_move: String::new(), teleport_particle: String::new(),
                 teleport_postfx: String::new(), dolly_postfx: String::new(), camera_speed: 1.0,

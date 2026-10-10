@@ -25,6 +25,7 @@ pub mod outposts;
 pub mod nav;
 pub mod oasis;
 pub mod patrols;
+pub mod postfx;
 pub mod progression;
 pub mod traversal;
 pub mod mesh;
