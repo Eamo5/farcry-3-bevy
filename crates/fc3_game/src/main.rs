@@ -47,6 +47,7 @@ mod profile;
 mod progression;
 mod faces;
 mod qte;
+mod vine;
 mod retire;
 mod save;
 mod settings;
@@ -397,6 +398,7 @@ fn main() {
             music::MusicPlugin,
             video::VideoPlugin,
             qte::QtePlugin,
+            vine::VinePlugin,
             faces::FacesPlugin,
         ))
         .add_plugins((

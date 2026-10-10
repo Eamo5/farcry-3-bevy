@@ -905,13 +905,14 @@ fn run_story(
         Query<Entity, Or<(With<crate::story_actors::StoryActor>, With<crate::wildlife::WildAnimal>)>>, Commands, ResMut<HiddenEntities>,
         Query<&crate::story_actors::StoryActor, With<crate::stealth::Tagged>>,
     ),
-    (mut xp_gain, mut progress, mut music, mut rock_test, mut videos, mut qtes): (
+    (mut xp_gain, mut progress, mut music, mut rock_test, mut videos, mut qtes, mut vines): (
         MessageWriter<crate::progression::XpGain>,
         ResMut<crate::progression::Progress>,
         ResMut<crate::music::Music>,
         Option<ResMut<crate::stealth::RockAimTest>>,
         ResMut<crate::video::Videos>,
         ResMut<crate::qte::Qtes>,
+        ResMut<crate::vine::Vines>,
     ),
 ) {
     // (Not a run condition: those may run off the main thread.)
@@ -987,6 +988,7 @@ fn run_story(
             music.reset();
             videos.reset();
             qtes.reset();
+            vines.reset();
             ui.subtitle = None;
             // Rebuild mission actors and discard transient wildlife together.
             // Leaving an ambient predator at its post-death position makes
@@ -1434,13 +1436,22 @@ fn run_story(
                         looped: a(4) == "true",
                         volume: a(3).parse().unwrap_or(1.0),
                     }),
-                    // Quick-time events play in `qte`; other specific
-                    // gameplays aren't played yet.
+                    // Specific gameplays own their playback and completion.
                     "CreateSpecificGameplay" if a(1) == "QTEGSF" => qtes.pending.push(crate::qte::QteStart {
                         id: a(0).parse().unwrap_or(0),
                         params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                     }),
-                    "DestroySpecificGameplay" => qtes.cancelled.push(a(0).parse().unwrap_or(0)),
+                    // Opt-in until anchor/stand-up alignment and visual phases
+                    // have been validated against the authored transition.
+                    "CreateSpecificGameplay" if a(1) == "CVineClimbingGameplay" && std::env::var_os("FC3_VINE_GAMEPLAY_TEST").is_some() => vines.pending.push(crate::vine::Start {
+                        id: a(0).parse().unwrap_or(0),
+                        params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                    }),
+                    "DestroySpecificGameplay" => {
+                        let id = a(0).parse().unwrap_or(0);
+                        qtes.cancelled.push(id);
+                        vines.cancelled.push(id);
+                    }
                     "StopBinkVideo" => videos.stops.push(false),
                     "StopFullscreenVideo" => videos.stops.push(true),
                     "PlaySound" => {

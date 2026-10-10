@@ -1370,6 +1370,24 @@ yaw -90, pitch -15). Release build and both live shader runs pass without
 shader errors. Overbright cave foliage/lighting remains a separate visible
 parity gap; this change addresses only water leaking through dry terrain.
 
+The opt-in vine controller and its story/traversal wiring are now included
+in the repository. `FC3_TRAVERSAL_LADDER_MOTION=cycle` exercises ascent for
+1.5 seconds, rest for 0.75 seconds, descent for 0.75 seconds, then ascent
+again through ordinary movement input. `fc3-vine-slide.err.log` records
+VineClimb -> VineRest -> VineSlide -> VineClimb, with downward velocity
+approximately -3 m/s and a 1.50-metre descent between samples 0.50 seconds
+apart. `fc3-vine-slide-mid.png` captures the slide pose while that context
+is active. The full replay completes the stand-up transition and reaches
+the post-dismount walk target with health 100. Foliage intersects the visible
+hands/body in the slide capture; this is not a claim of visual parity.
+
+Verification: `cargo test --locked --release --workspace`, the workspace's
+ignored `installed_` tests with `FC3_TEST_CACHE`, and the release game build
+pass (`fc3-vine-cycle-{workspace,installed}-tests.log`,
+`fc3-vine-slide-build.log`). The controller remains gated by
+`FC3_VINE_GAMEPLAY_TEST`; dolly FOV, puff, post-effects, unassisted approach
+and end-to-end campaign validation remain outstanding.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

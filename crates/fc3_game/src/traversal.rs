@@ -31,13 +31,13 @@ impl Plugin for TraversalPlugin {
             Update,
             (
                 load_ways.run_if(resource_exists::<CacheInfo>),
-                traversal_test.run_if(traversal_controls_available),
                 (zip_prompt, tower_prompt).before(HudSet).after(crate::turrets::man_turrets).run_if(traversal_controls_available),
                 climb.run_if(traversal_controls_available),
                 ride.run_if(traversal_controls_available),
             )
                 .chain(),
-        );
+        ).add_systems(PreUpdate, traversal_test.after(crate::controls::update_actions)
+            .run_if(traversal_controls_available));
     }
 }
 
@@ -70,6 +70,7 @@ mod ownership_tests {
             bevy::transform::TransformPlugin, PhysicsPlugins::default()))
             .init_resource::<ActionState>()
             .init_resource::<crate::mission_layers::MissionLayers>()
+            .init_resource::<crate::vine::Vines>()
             .insert_resource(Ways { data: Traversal {
                 ladders: vec![fc3_formats::traversal::Ladder {
                     id: 0, mission_layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
@@ -351,6 +352,7 @@ fn climb(
     time: Res<Time>,
     actions: Res<ActionState>,
     ways: Res<Ways>,
+    vines: Res<crate::vine::Vines>,
     host: Option<NonSend<crate::story::StoryHost>>,
     layers: Res<crate::mission_layers::MissionLayers>,
     spatial: avian3d::prelude::SpatialQuery,
@@ -413,7 +415,7 @@ fn climb(
                 // Over the top onto the landing: beyond the ladder, else back on
                 // this side; with nothing to stand on, stay at the top.
                 let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([e]);
-                let landing = ladder_landing(&spatial, base, l.top, side, &filter);
+                let landing = if vines.owns_ladder(l.id) { None } else { ladder_landing(&spatial, base, l.top, side, &filter) };
                 match landing {
                     Some((dir, centre)) => {
                         t.translation = centre;
@@ -519,7 +521,9 @@ fn traversal_test(
     mut actions: ResMut<ActionState>,
     mut stage: Local<u32>,
     mut next_log: Local<f32>,
+    mut ladder_time: Local<f32>,
     mut players: Query<(&mut Transform, &mut Player, &Health)>,
+    cameras: Query<&Transform, (With<crate::player::PlayerCamera>, Without<Player>)>,
     (mut spawns, td, npcs, heights): (
         MessageWriter<crate::npc::SpawnEnemy>,
         Res<crate::stealth::Takedown>,
@@ -608,7 +612,45 @@ fn traversal_test(
             info!("ladder test: entity {}, foot {base:?}, top {:.1}", l.id, l.top);
             *stage = 1;
         }
-        (1, "ladder") => actions.movement.y = 1.0,
+        (1, "ladder") => {
+            actions.movement.y = 1.0;
+            if matches!(*mount, Mount::Ladder { .. }) { *stage = 2; *ladder_time = 0.0; }
+        }
+        (2, "ladder") => {
+            if matches!(*mount, Mount::Ladder { .. }) {
+                *ladder_time += time.delta_secs();
+                // Exercise all authored vine locomotion clips through input,
+                // with enough initial height to slide without dismounting.
+                actions.movement.y = if std::env::var("FC3_TRAVERSAL_LADDER_MOTION").as_deref() == Ok("cycle") {
+                    match *ladder_time {
+                        t if t < 1.5 => 1.0,
+                        t if t < 2.25 => 0.0,
+                        t if t < 3.0 => -1.0,
+                        _ => 1.0,
+                    }
+                } else { 1.0 };
+            }
+            else { *stage = 3; }
+        }
+        (3, "ladder") => {
+            // Optional post-dismount probe: ordinary look/walk controls only.
+            // The initial ladder fixture is still a repositioned test setup.
+            if let Ok(target) = std::env::var("FC3_TRAVERSAL_WALK_TO") {
+                let coords: Vec<f32> = target.split(',').filter_map(|v| v.parse().ok()).collect();
+                if coords.len() == 2 && coords.iter().all(|v| v.is_finite()) {
+                    let delta = Vec3::new(coords[0] - here.x, 0.0, coords[1] - here.z);
+                    if delta.length() < 0.6 {
+                        info!("traversal test: post-dismount walk reached {here:?}");
+                        *stage = 4;
+                    } else {
+                        let desired = (-delta.x).atan2(-delta.z);
+                        let turn = (p.yaw - desired + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+                        actions.look.x = turn.clamp(-time.delta_secs() * 2.0, time.delta_secs() * 2.0);
+                        if turn.abs() < 0.2 { actions.movement.y = 1.0; }
+                    }
+                }
+            }
+        }
         (0, "tower") => {
             let Some(at) = ways.data.towers.iter().map(|p| Vec3::from(*p)).min_by(|a, b| a.distance(here).total_cmp(&b.distance(here))) else { return };
             t.translation = at + Vec3::new(1.0, HALF_HEIGHT, 0.0);
@@ -630,6 +672,8 @@ fn traversal_test(
             Mount::Ladder { .. } => "ladder".to_string(),
         };
         info!("traversal test: {state}, at {:?}, health {:.0}, towers {}", t.translation, h.current, progress.towers.len());
+        debug!("traversal pose: yaw {} pitch {} eye {} rotation {:?}, driving {} spawning {}, velocity {:?}", p.yaw, p.pitch, p.eye, t.rotation, p.driving, p.spawning, p.velocity);
+        debug!("traversal camera: {:?}", cameras.single().ok());
         if kind == "zip_takedown" {
             if let Some((n, nh)) = npcs.iter().min_by(|a, b| a.0.translation.distance(t.translation).total_cmp(&b.0.translation.distance(t.translation))) {
                 info!("zip test: nearest enemy {:.1?} off, dead {}", n.translation - t.translation, nh.dead);
