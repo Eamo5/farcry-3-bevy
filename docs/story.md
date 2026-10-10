@@ -1464,6 +1464,33 @@ and disabled offshore comparison runs are near 250 ms/frame, with about
 5 ms on the measured main thread (`fc3-radial-blur-{perf,baseline}.err.log`).
 This does not isolate a blur-induced slowdown or establish acceptable FPS.
 
+The 250-ms stall is isolated to the VSync/presentation path in this test
+environment: the same offshore scene with `--novsync` captures at 360 FPS
+without blur and 329 FPS with the fixed authored transition effect
+(`fc3-blur-novsync.png`, `fc3-blur-enabled-novsync.png`). These are screenshot
+counter samples, not a controlled GPU benchmark. The normal VSync setting
+has not been changed.
+
+`FC3_POSTFX_GAMEPLAY_TEST=1` now opts the script host into mushroom effect
+playback using the installed PostFX database. Start/stop requests resolve
+the authored IN/LOOP/OUT sequences, use gameplay time, preserve elapsed
+overshoot at phase boundaries, select blur by effect priority, and clear
+render ownership on expiry/stop/retry. Repeated starts of active effects and
+repeated stops during OUT do not restart their timers. Unsupported intensity
+selectors and timed-fade modes are excluded; rendering still supports only
+masked radial blur. Sound/other post-effect channels are not yet played.
+
+The paired doctor replay logs .02 starting, stopping at stand-up, then .03
+starting/stopping and .04 starting via ordinary Lua requests. It completes
+the vine and reaches (-1877.27,94.47,-2500.37), health 100.
+`fc3-script-postfx-final.png` shows the endpoint at 94 FPS with `--novsync`;
+the established cave-lighting overexposure remains visible. Lifecycle tests
+cover IN/LOOP/OUT overshoot, duplicate commands, stop/restart, and retry;
+an installed ECS regression checks .02/.03 rendering-component ownership.
+Workspace/installed tests and release build pass
+(`fc3-script-postfx-{workspace,all-installed}-tests.log`,
+`fc3-script-postfx-build.log`). Kernel calibration and vine puff remain open.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

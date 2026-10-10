@@ -60,8 +60,8 @@ fn load_fixture(mut commands: Commands, server: Res<AssetServer>) {
             ClipKind::Blur { texture: other, kind: 1, .. } => other == texture,
             _ => true,
         }), "fixture cannot combine different blur masks");
-        let mask = server.load_with_settings(crate::cache_assets::cache_path(&fc3_formats::cache::texture_rel(texture)),
-            |settings: &mut bevy::image::ImageLoaderSettings| { settings.is_srgb = false; });
+        let mask = server.load_builder().with_settings(|settings: &mut bevy::image::ImageLoaderSettings| { settings.is_srgb = false; })
+            .load(crate::cache_assets::cache_path(&fc3_formats::cache::texture_rel(texture)));
         let fixed = std::env::var("FC3_POSTFX_TEST_TIME").ok().and_then(|s| s.parse::<f32>().ok())
             .filter(|t| t.is_finite() && *t >= 0.0);
         Ok(Fixture { sequence, mask, elapsed: 0.0, fixed })
@@ -72,18 +72,20 @@ fn load_fixture(mut commands: Commands, server: Res<AssetServer>) {
     }
 }
 
-fn sample(sequence: &Sequence, time: f32) -> Option<ScreenBlur> {
+pub(crate) fn sampled(sequence: &Sequence, time: f32) -> Option<(ScreenBlur, &str)> {
     if !time.is_finite() || time < 0.0 || sequence.duration <= 0.0 { return None; }
     let time = if sequence.looping { time % sequence.duration } else { time };
     if time > sequence.duration { return None; }
     sequence.groups.iter().flat_map(|g| &g.clips).filter_map(|c| {
-        let ClipKind::Blur { kind: 1, samples, priority, .. } = &c.kind else { return None };
+        let ClipKind::Blur { kind: 1, samples, priority, texture, .. } = &c.kind else { return None };
         if time < c.start || time > c.start + c.duration { return None; }
         let v = samples.get(((time - c.start) / FOV_STEP) as usize)?;
         Some((*priority, ScreenBlur { params: Vec4::new(v[0], v[7], v[8], 0.0),
-            colour: Vec4::from_slice(&v[1..5]), direction: Vec4::new(v[5], v[6], 0.0, 0.0) }))
-    }).max_by_key(|(priority, _)| *priority).map(|(_, blur)| blur)
+            colour: Vec4::from_slice(&v[1..5]), direction: Vec4::new(v[5], v[6], 0.0, 0.0) }, texture.as_str()))
+    }).max_by_key(|(priority, _, _)| *priority).map(|(_, blur, texture)| (blur, texture))
 }
+
+fn sample(sequence: &Sequence, time: f32) -> Option<ScreenBlur> { sampled(sequence, time).map(|(blur, _)| blur) }
 
 fn fixture(time: Res<Time>, fixture: Option<ResMut<Fixture>>, cameras: Query<Entity, With<PlayerCamera>>, mut commands: Commands) {
     let Some(mut fixture) = fixture else { return };

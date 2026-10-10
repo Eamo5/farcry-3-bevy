@@ -905,7 +905,7 @@ fn run_story(
         Query<Entity, Or<(With<crate::story_actors::StoryActor>, With<crate::wildlife::WildAnimal>)>>, Commands, ResMut<HiddenEntities>,
         Query<&crate::story_actors::StoryActor, With<crate::stealth::Tagged>>,
     ),
-    (mut xp_gain, mut progress, mut music, mut rock_test, mut videos, mut qtes, mut vines): (
+    (mut xp_gain, mut progress, mut music, mut rock_test, mut videos, mut qtes, mut vines, mut postfx): (
         MessageWriter<crate::progression::XpGain>,
         ResMut<crate::progression::Progress>,
         ResMut<crate::music::Music>,
@@ -913,6 +913,7 @@ fn run_story(
         ResMut<crate::video::Videos>,
         ResMut<crate::qte::Qtes>,
         ResMut<crate::vine::Vines>,
+        ResMut<crate::script_postfx::PostEffects>,
     ),
 ) {
     // (Not a run condition: those may run off the main thread.)
@@ -989,6 +990,7 @@ fn run_story(
             videos.reset();
             qtes.reset();
             vines.reset();
+            postfx.reset();
             ui.subtitle = None;
             // Rebuild mission actors and discard transient wildlife together.
             // Leaving an ambient predator at its post-death position makes
@@ -1509,6 +1511,7 @@ fn run_story(
                     "OverrideShopMenu" => shop_override.set(a(0) == "true" || a(0) == "1", a(1).parse().unwrap_or(0), a(2).parse().unwrap_or(0)),
                     "CAPI_Player.StartPostFX" | "CAPI_Player.StopPostFX" => {
                         let on = name.ends_with("StartPostFX");
+                        if a(0) == fc3_story::PLAYER.to_string() { postfx.request(&a(1), on); }
                         match a(1).to_ascii_lowercase().as_str() {
                             "blackscreennowfx" => scripted.fade = if on { (1.0, 1.0, 0.0) } else { (0.0, 0.0, 0.0) },
                             "blackscreenfx" | "fadetoblackfx" => scripted.fade = (scripted.fade.0, if on { 1.0 } else { 0.0 }, 0.6),

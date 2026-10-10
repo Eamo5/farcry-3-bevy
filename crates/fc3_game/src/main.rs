@@ -49,6 +49,7 @@ mod faces;
 mod qte;
 mod vine;
 mod screen_blur;
+mod script_postfx;
 mod retire;
 mod save;
 mod settings;
@@ -401,6 +402,7 @@ fn main() {
             qte::QtePlugin,
             vine::VinePlugin,
             screen_blur::ScreenBlurPlugin,
+            script_postfx::PostFxPlugin,
             faces::FacesPlugin,
         ))
         .add_plugins((
