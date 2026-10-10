@@ -2358,6 +2358,10 @@ fn main() -> Result<()> {
                 }
             }
         }
+        "vine-settings" => {
+            let bytes = vfs.read(fc3_formats::gsf::LIBRARY)?;
+            println!("{:#?}", fc3_formats::gsf::VineSettings::parse(&bytes)?);
+        }
         "clip-info" => {
             let path = args.get(1).context("usage: clip-info <archive animation path>")?;
             let clip = fc3_formats::anim::parse_clip(&vfs.read(path)?)?;

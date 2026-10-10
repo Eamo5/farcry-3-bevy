@@ -1129,6 +1129,26 @@ verifies movement resumes with collision ownership intact. Release workspace
 tests and game/tool builds pass (`fc3-traversal-ownership-{tests,build}.log`).
 This is an automated ownership regression, not manual vine validation.
 
+The vine defaults are now recovered from the installed
+`generated/databases/generic/gsf.lib`, which conversion previously omitted.
+Full conversion preserves that library as `story/gsf.lib`; the typed
+`fc3_formats::gsf::VineSettings` reader retains animation/effect string
+references, camera bounds and timing offsets without substituting defaults.
+`fc3tool vine-settings` prints the decoded settings. In particular,
+Climb_Max_Time is 6 seconds, Dolly_Zoom_Duration is 2.5 seconds, horizontal
+limits are [-30, 30] degrees, vertical limits [-60, 0], and the transition
+post-FX offset is **-1** (not a nonnegative duration). The configured puff is
+`mushroom_puff_transition2`, rather than the binary's fallback name.
+
+The installed-data regression checks those values, references, and rejection
+of a nonfinite climb time. `fc3-vine-settings-test.log` passes;
+`fc3-vine-settings-workspace.log` passes; the game-data refresh reports zero
+errors and writes the 96,812-byte library. The local binary also confirms
+separate `dolly_zoom_started`, `DisablePostFX`, and `vine_climbing_ended`
+dispatches. This supplies the missing configuration for the controller;
+runtime CVineClimbingGameplay and its physical/visual validation remain to
+be implemented. No new campaign completion is claimed by this data change.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

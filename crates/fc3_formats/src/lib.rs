@@ -13,6 +13,7 @@ pub mod environment;
 pub mod facial;
 pub mod fcb;
 pub mod grade;
+pub mod gsf;
 pub mod hash;
 pub mod havok;
 pub mod kits;

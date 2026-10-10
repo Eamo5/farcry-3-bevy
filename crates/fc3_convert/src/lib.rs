@@ -880,6 +880,16 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
+    // ---- specific-gameplay defaults, separate from Domino's instance bindings
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::gsf::CACHE_REL) {
+        let result = (|| -> Result<()> {
+            let bytes = job.vfs.read(fc3_formats::gsf::LIBRARY)?;
+            fc3_formats::gsf::VineSettings::parse(&bytes)?;
+            write_atomic(job.root(), fc3_formats::gsf::CACHE_REL, &bytes, job.ctx)
+        })();
+        if let Err(e) = result { job.error(format!("specific gameplay settings: {e:#}")); }
+    }
+
     // ---- faces: the rigs, which character uses which, and every facial clip
     if opts.only_sectors.is_none() && (job.should_write(fc3_formats::facial::PAK_REL) || job.should_write(fc3_formats::facial::DEFINITIONS_REL)) {
         if let Err(e) = convert_facial(&job) {
