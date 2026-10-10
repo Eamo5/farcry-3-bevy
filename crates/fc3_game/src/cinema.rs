@@ -165,6 +165,8 @@ struct Playing {
     seq: Sequence,
     t: f32,
     paused: bool,
+    /// A dispatched pausing cue; excluded when ordinary playback resumes.
+    paused_cue: bool,
     /// The scene entity's place (Bevy space).
     origin: Transform,
     /// Track group uid -> world entity id.
@@ -174,6 +176,20 @@ struct Playing {
     clips: HashMap<String, Handle<Fc3Clip>>,
     /// Seconds spent waiting for clips to load.
     waited: f32,
+}
+
+/// Stop both pose sampling and event dispatch at the first pausing cue.
+/// The half-open event interval includes that cue but excludes everything
+/// after it. Ordinary resume advances its lower bound by one float ULP.
+fn advance_to_pause(seq: &Sequence, from: f32, dt: f32) -> (f32, f32, bool) {
+    if !dt.is_finite() || dt <= 0.0 { return (from, from, false); }
+    let end = from + dt;
+    let pause = seq.sync_points.iter().filter(|s| s.kind != 1 && s.pause && s.time >= from && s.time <= end)
+        .map(|s| s.time).min_by(f32::total_cmp);
+    match pause {
+        Some(t) => (t, t.next_up(), true),
+        None => (end, end, false),
+    }
 }
 
 /// A scene entity's bindings for one of its sequences.
@@ -230,7 +246,7 @@ fn start_scenes(host: Option<NonSendMut<StoryHost>>, mut cinema: ResMut<Cinema>,
     for b in std::mem::take(&mut cinema.built) {
         let clips = clip_handles(&b.seq, &server);
         debug!("cinema: built {} ({:.1} s)", b.name, b.seq.duration);
-        cinema.playing.push(Playing { scene: 0, meta: None, file: b.name, bindings: b.bindings, anchor: None, origin: b.origin, seq: b.seq, t: 0.0, paused: false, clips, waited: 0.0 });
+        cinema.playing.push(Playing { scene: 0, meta: None, file: b.name, bindings: b.bindings, anchor: None, origin: b.origin, seq: b.seq, t: 0.0, paused: false, paused_cue: false, clips, waited: 0.0 });
     }
     for r in requests {
         debug!("cinema request: {} {} {} {:?}", r.mode, r.scene, r.file, r.sync);
@@ -271,12 +287,14 @@ fn start_scenes(host: Option<NonSendMut<StoryHost>>, mut cinema: ResMut<Cinema>,
                     if r.meta.is_some() {
                         p.meta = r.meta;
                     }
-                    p.paused = false;
                     match (r.mode.as_str(), r.sync.as_deref()) {
                         ("play_from_start", _) => p.t = 0.0,
                         ("play_at_sync_point", Some(sp)) => p.t = sync_time(&p.seq, sp),
+                        _ if p.paused_cue => p.t = p.t.next_up(),
                         _ => {}
                     }
+                    p.paused = false;
+                    p.paused_cue = false;
                     continue;
                 }
                 let text = std::fs::read_to_string(info.root.join(cinema::sequence_rel(&archive))).ok();
@@ -309,6 +327,7 @@ fn start_scenes(host: Option<NonSendMut<StoryHost>>, mut cinema: ResMut<Cinema>,
                     seq,
                     t,
                     paused: false,
+                    paused_cue: false,
                     clips,
                     waited: 0.0,
                 };
@@ -517,10 +536,10 @@ fn play_scenes(
             }
         }
         let prev = p.t;
-        if !p.paused {
-            p.t += dt;
-        }
-        let (a, b) = (prev, p.t);
+        let (sample, b, pause) = advance_to_pause(&p.seq, prev, if p.paused { 0.0 } else { dt });
+        p.t = sample;
+        if pause { p.paused = true; p.paused_cue = true; }
+        let a = prev;
         let crossed = |s: f32| s >= a && s < b || (a == 0.0 && s == 0.0 && b > 0.0);
         // Keep the elapsed interval for event crossings, but sample the
         // endpoint on the last frame instead of falling outside every clip.
@@ -910,6 +929,56 @@ mod tests {
     }
 
     #[test]
+    fn pausing_cues_clamp_prop_motion_and_defer_later_sound_until_resume() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
+            .init_asset::<Fc3Clip>().init_asset::<Fc3Skeleton>()
+            .init_resource::<Cinema>().init_resource::<CacheInfo>().init_resource::<crate::story::StoryUi>()
+            .init_resource::<ButtonInput<KeyCode>>().init_resource::<crate::fp::Cinematic>()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(250)))
+            .add_message::<crate::sound::PlaySfx>().add_systems(Update, (start_scenes, play_scenes).chain());
+        let pack = fc3_formats::scripts::ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap();
+        app.insert_non_send(StoryHost::new(fc3_story::Story::new(pack, fc3_story::data::StoryData::default()).unwrap(), None));
+        let prop = app.world_mut().spawn((crate::objects::PlacedId(100), Transform::IDENTITY)).id();
+        let seq = Sequence { duration: 1.0,
+            // Intentionally not ordered: the earliest pause wins.
+            sync_points: vec![
+                cinema::SyncPoint { name: "second".into(), time: 0.2, kind: 0, pause: true },
+                cinema::SyncPoint { name: "first".into(), time: 0.1, kind: 0, pause: true },
+            ],
+            groups: vec![cinema::Group { uid: 1, kind: GroupKind::Generic, name: "prop".into(), archetype: 0,
+                clips: vec![
+                    cinema::Clip { start: 0.0, duration: 1.0, kind: ClipKind::Movement { keys: vec![
+                        cinema::MovementKey { time: 0.0, pos: [0.0; 3], angles: [0.0; 3] },
+                        cinema::MovementKey { time: 1.0, pos: [10.0, 0.0, 0.0], angles: [0.0; 3] },
+                    ] } },
+                    cinema::Clip { start: 0.15, duration: 0.001, kind: ClipKind::Sound { sound: 123, kind: 0 } },
+                ] }], ..default() };
+        assert_eq!(advance_to_pause(&seq, 0.0, 0.8), (0.1, 0.1f32.next_up(), true));
+        assert_eq!(advance_to_pause(&seq, 0.1, 0.0), (0.1, 0.1, false));
+        app.world_mut().resource_mut::<Cinema>().playing.push(Playing { scene: 1, meta: None, file: "pause-test".into(),
+            seq, t: 0.0, paused: false, paused_cue: false, origin: Transform::IDENTITY, anchor: None,
+            bindings: HashMap::from([(1, 100)]), clips: HashMap::new(), waited: 3.0 });
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<Cinema>().playing[0].t, 0.1);
+        assert_eq!(app.world().get::<Transform>(prop).unwrap().translation.x, 1.0);
+        assert!(app.world().resource::<Messages<crate::sound::PlaySfx>>().is_empty());
+        app.update();
+        assert_eq!(app.world().resource::<Cinema>().playing[0].t, 0.1);
+        let resume = || Request { mode: "play".into(), scene: 1, file: "pause-test".into(), sync: None, meta: None };
+        app.world_mut().resource_mut::<Cinema>().requests.push(resume());
+        app.update();
+        assert_eq!(app.world().resource::<Cinema>().playing[0].t, 0.2);
+        assert_eq!(app.world().get::<Transform>(prop).unwrap().translation.x, 2.0);
+        assert_eq!(app.world().resource::<Messages<crate::sound::PlaySfx>>().len(), 1);
+        app.world_mut().resource_mut::<Cinema>().requests.push(resume());
+        app.update();
+        assert!(app.world().resource::<Cinema>().playing[0].t > 0.29);
+        assert!(!app.world().resource::<Cinema>().playing[0].paused);
+    }
+
+    #[test]
     fn completing_between_ticks_still_samples_the_authored_camera_endpoint() {
         for millis in [16, 37, 100] {
             let mut app = App::new();
@@ -978,7 +1047,7 @@ mod tests {
         let simple = cinema::Clip { start: 0.0, duration: 1.0, kind: ClipKind::SimpleAnimation { source: "loop".into(), from: 0, to: 30 } };
         let animation = cinema::Clip { start: 0.0, duration: 1.0, kind: ClipKind::Animation { source: "loop".into(), from: 0, to: 30,
             blend: 0.0, anchored: true } };
-        app.world_mut().resource_mut::<Cinema>().playing.push(Playing { scene: 1, meta: None, file: "ride".into(), t: 0.5, paused: true,
+        app.world_mut().resource_mut::<Cinema>().playing.push(Playing { scene: 1, meta: None, file: "ride".into(), t: 0.5, paused: true, paused_cue: false,
             origin: Transform::from_xyz(100.0, 0.0, 0.0), anchor: Some(100), bindings: HashMap::from([(1, 100), (2, 200), (3, 300)]),
             clips: HashMap::from([("loop".into(), handle)]), waited: 3.0,
             seq: Sequence { duration: 1.0, groups: vec![
@@ -1036,7 +1105,7 @@ mod tests {
     fn meta_stop_releases_loops_without_stopping_other_scenes_or_qtes() {
         let playing = |scene, meta, name: &str| Playing {
             scene, meta, file: name.into(), seq: Sequence { looping: true, ..Default::default() },
-            t: 0.0, paused: false, origin: Transform::default(),
+            t: 0.0, paused: false, paused_cue: false, origin: Transform::default(),
                 bindings: HashMap::new(), anchor: None, clips: HashMap::new(), waited: 0.0,
         };
         let mut cinema = Cinema::default();

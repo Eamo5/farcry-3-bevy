@@ -1586,6 +1586,39 @@ intersection during stand-up; that remains unresolved. Release build,
 workspace tests and all three puff tests pass (`fc3-puff-atlas-build.log`,
 `fc3-puff-atlas-workspace-tests.log`, `fc3-puff-atlas-tests.log`).
 
+### Authored cinematic pause boundaries
+
+Playback previously dispatched a pausing sync point but retained the entire
+frame's elapsed time, sampling the prop beyond the cue and potentially
+dispatching later sounds/cues. It now finds the earliest authored pause,
+samples exactly that time, and restricts event dispatch to that boundary.
+Ordinary resume excludes the already-dispatched cue by advancing one float
+ULP; explicit restart/seek retain their own semantics. Paused frames do not
+advance the event interval. The ECS regression covers exact prop placement,
+sound deferred until resume, consecutive pauses, and unsorted pause markers;
+a large interval also stops at the earliest cue.
+
+Release build, workspace and installed-data tests pass
+(`fc3-cinema-pause-{build,workspace-tests,installed-tests}.log`). The live
+DOC_020 replay reaches the rock and bird `FreezeFrame_1` pauses at time zero,
+the greenhouse `GH_StartPOS` notification, completes the vine transition and
+walks to (-1877.37,94.25,-2500.43) with health 100, without logged warnings or
+errors (`fc3-cinema-pause-final.err.log`). The greenhouse cues themselves are
+non-pausing script notifications: this fix does not establish physical
+progression through `GH_POS2`/`GH_POS3`.
+
+Native vine timing investigation narrows the negative post-FX offset behavior:
+`0x10d81e70..0x10d81e8e` sets the absolute teleport deadline from current time
+plus dolly duration. `0x10d81c9c..0x10d81cd5` starts the transition effect only
+when current time exceeds deadline minus offset. The pre-teleport update at
+`0x10d81d8e` performs that check, then `0x10d81da1..0x10d81db6` transitions at
+the deadline. Thus installed offset -1 puts the effect threshold one second
+beyond the deadline: ordinary frame steps leave it inactive, not scheduled
+for an automatic post-teleport start. A hitch exceeding that gap could cross
+both tests in the same update. This is static native control-flow evidence
+(`vine-controller-all.txt`), not an original-game visual comparison; automatic
+`mush_sequence_transitions` activation remains disabled.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected
