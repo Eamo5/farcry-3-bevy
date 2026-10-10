@@ -1018,6 +1018,35 @@ cleanup marker, not merely process success. The fixture uses injected lethal
 fall damage; it is not uninterrupted combat evidence. Broader dynamic-world
 rollback, population fidelity and outpost completion remain open.
 
+The outpost combat fixture now uses ordinary syringe/manual-heal input, aims
+at rig heads, searches nearby corpses through normal Interact when out of
+ammo, and includes authored dogs/nearby dangerous wildlife in target selection.
+`fc3-outpost-heal` finished alive with 100 health and one remaining syringe;
+`fc3-outpost-head` records a body-search transaction followed by a real reload.
+These are automated-input fixtures, with navigation limitations, not manual
+campaign parity evidence.
+
+`FC3_STORY_WAIT_DEBUG=1` exposes wait diagnostics without enabling teleporting
+autopilot and logs story actor deaths. This revealed that all five JAS_100
+pirates died but their `CGroupSizeEvent` listener never received a removal.
+Deaths now emit MemberRemoved with the remaining loaded, living member count;
+group queries agree with it. Duplicate death reports are ignored and group
+event delivery deduplicates subscription groups before dispatching callbacks.
+Installed-Lua regression tests verify two size listeners receive each death
+exactly once, unrelated deaths are ignored, and singleton dead-state listeners
+receive StateStart/MemberInState with the updated count.
+
+The next authored condition requires the mission dog. Its
+`CAIDogNetworkComponent` was not recognized by the generic animal binder;
+it now selects dog behavior while retaining the authored model, pose and ID.
+Deaths also notify `CGroupCombatEvent` dead-state listeners. In
+`fc3-dog-state`, ordinary combat killed dog 2077647746472455879 and all five
+pirates; both conditions advanced to the `JAS_100_OUTPOST_UNLOCKED` message
+wait. That message has not arrived, so full outpost completion remains
+unverified. A later crocodile death and retry in that run are recorded, not
+counted as an uninterrupted success. Alive-state combat transitions and
+general group addition/removal notifications still need implementation.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

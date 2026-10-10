@@ -506,7 +506,7 @@ impl Story {
     pub fn group_event(&mut self, entity: u64, event: &str, args: Vec<Arg>) {
         {
             let mut c = self.core.borrow_mut();
-            let groups: Vec<String> = c
+            let groups: std::collections::BTreeSet<String> = c
                 .listeners
                 .values()
                 .filter_map(|l| match &l.on {
@@ -596,7 +596,31 @@ impl Story {
     /// the `Die` event for every group it is in, and it counts as dead from
     /// now on.
     pub fn killed(&mut self, id: u64) {
-        self.core.borrow_mut().dead.insert(id);
+        if !self.core.borrow_mut().dead.insert(id) { return; }
+        {
+            let mut c = self.core.borrow_mut();
+            let groups: std::collections::BTreeSet<String> = c.listeners.values().filter_map(|l| match &l.on {
+                Listen::Group(g, event) if event == "CGroupSizeEvent" || event == "CGroupCombatEvent" => Some(g.clone()),
+                _ => None,
+            }).collect();
+            for group in groups {
+                let members = c.groups(&values::Text(group.clone()));
+                if !members.contains(&id) { continue; }
+                let count = members.iter().filter(|&&e| c.is_loaded(e) && !c.dead.contains(&e)).count();
+                c.raise(&Listen::Group(group.clone(), "CGroupSizeEvent".into()), vec![
+                    Arg::Str("CGroupSizeEvent".into()), Arg::Str("MemberRemoved".into()), Arg::Num(count as f64),
+                ]);
+                let dead = members.iter().filter(|&&e| c.is_loaded(e) && c.is_dead(e)).count();
+                if dead == 1 {
+                    c.raise(&Listen::Group(group.clone(), "CGroupCombatEvent".into()), vec![
+                        Arg::Str("CGroupCombatEvent".into()), Arg::Str("DeadStart".into()), Arg::Num(dead as f64),
+                    ]);
+                }
+                c.raise(&Listen::Group(group, "CGroupCombatEvent".into()), vec![
+                    Arg::Str("CGroupCombatEvent".into()), Arg::Str("DeadMemberIn".into()), Arg::Num(dead as f64),
+                ]);
+            }
+        }
         self.group_event(id, "Die", vec![Arg::id(PLAYER), Arg::Num(0.0), Arg::id(id), Arg::Str(String::new())]);
     }
 
@@ -848,6 +872,15 @@ impl Story {
             t.get::<Table>("_graph").ok().map(|g| path(&g)).filter(|n| !n.is_empty()).unwrap_or_else(|| path(t))
         };
         let mut out: Vec<String> = c.listeners.values().map(|l| format!("{:?} -> {} {}", l.on, graph(&l.callback.target), l.callback.method)).collect();
+        let groups: std::collections::BTreeSet<_> = c.listeners.values().filter_map(|l| match &l.on {
+            Listen::Group(g, event) if event == "CGroupSizeEvent" => Some(g.clone()),
+            _ => None,
+        }).collect();
+        for group in groups {
+            let members: Vec<_> = c.groups(&values::Text(group.clone())).into_iter().map(|id|
+                (id, c.data.name_of(id).unwrap_or_default(), c.is_loaded(id), c.dead.contains(&id))).collect();
+            out.push(format!("group {group} members (id, name, loaded, dead): {members:?}"));
+        }
         out.extend(c.delays.values().filter(|d| d.running).map(|d| format!("delay {:.1}/{:.1}s -> {}", d.elapsed, d.seconds, d.callback.method)));
         out.sort();
         out
@@ -1059,6 +1092,80 @@ mod tests {
 
     fn empty_story() -> Story {
         Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), StoryData::default()).unwrap()
+    }
+
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
+    fn installed_group_size_listener_observes_each_death_once_and_queries_remaining_members() {
+        let cache = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let pack = ScriptPack::from_bytes(&std::fs::read(cache.join(fc3_formats::scripts::DOMINO_PACK_REL)).unwrap()).unwrap();
+        let mut data = StoryData::default();
+        data.groups.insert(0x12345678, vec![10, 11]);
+        let mut story = Story::new(pack, data).unwrap();
+        let mut view = View::default();
+        for id in [10, 11, 12] { view.spawned.insert(id, Live { alive: true, ..Default::default() }); }
+        story.update(0.0, view);
+        let mut listeners = Vec::new();
+        for _ in 0..2 {
+            let listener = story.domino().create("Domino/System/GroupSizeListener_v4.lua").unwrap();
+            let lua = story.domino().lua();
+            listener.set("group", "#12345678").unwrap();
+            listener.set("autoDisable", false).unwrap();
+            for output in ["Enabled", "Disabled", "MemberAdded"] {
+                listener.set(output, lua.globals().get::<mlua::Function>("DummyFunction").unwrap()).unwrap();
+            }
+            listener.set("MemberRemoved", lua.load(r#"return function(self)
+                assert(self.memberCount == #GetEntitiesInGroup(self.group))
+                self.received = (self.received or 0) + 1
+            end"#).eval::<mlua::Function>().unwrap()).unwrap();
+            story.domino().call(&listener, "Enable").unwrap();
+            assert_eq!(listener.get::<u32>("memberCount").unwrap(), 2);
+            listeners.push(listener);
+        }
+        story.killed(10);
+        story.killed(10); // Duplicate reports cannot advance counters again.
+        story.killed(12); // A death outside this group cannot notify it.
+        for listener in &listeners {
+            assert_eq!(listener.get::<u32>("received").unwrap(), 1);
+            assert_eq!(listener.get::<u32>("memberCount").unwrap(), 1);
+        }
+        story.killed(11);
+        for listener in &listeners {
+            assert_eq!(listener.get::<u32>("received").unwrap(), 2);
+            assert_eq!(listener.get::<u32>("memberCount").unwrap(), 0);
+        }
+        assert_eq!(story.errors(), 0);
+    }
+
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
+    fn installed_dead_state_listener_receives_singleton_death_without_duplicate_delivery() {
+        let cache = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let pack = ScriptPack::from_bytes(&std::fs::read(cache.join(fc3_formats::scripts::DOMINO_PACK_REL)).unwrap()).unwrap();
+        let mut story = Story::new(pack, StoryData::default()).unwrap();
+        let mut view = View::default();
+        view.spawned.insert(10, Live { alive: true, ..Default::default() });
+        story.update(0.0, view);
+        let listener = story.domino().create("Domino/System/AI/StateListener.lua").unwrap();
+        let lua = story.domino().lua();
+        listener.set("group", "10").unwrap();
+        listener.set("autoDisable", false).unwrap();
+        for output in ["Enabled", "Disabled", "StateStop"] {
+            listener.set(output, lua.globals().get::<mlua::Function>("DummyFunction").unwrap()).unwrap();
+        }
+        for (output, field) in [("StateStart", "starts"), ("MemberInState", "members")] {
+            listener.set(output, lua.load(format!(r#"return function(self)
+                assert(self.memberCountInState == 1)
+                assert(GetGroupInStateMemberCount(self.group, 4) == 1)
+                self.{field} = (self.{field} or 0) + 1
+            end"#)).eval::<mlua::Function>().unwrap()).unwrap();
+        }
+        story.domino().call(&listener, "Dead").unwrap();
+        story.killed(10);
+        story.killed(10);
+        assert_eq!(listener.get::<u32>("starts").unwrap(), 1);
+        assert_eq!(listener.get::<u32>("members").unwrap(), 1);
+        assert_eq!(story.errors(), 0);
     }
 
     #[test]

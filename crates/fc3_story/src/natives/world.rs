@@ -60,7 +60,7 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.lua("GetEntitiesInGroup", |lua, c, group: Text| {
         let ids: Vec<u64> = match group.id() {
             Some(id) => vec![id],
-            None => c.groups(&group).into_iter().filter(|e| c.is_loaded(*e)).collect(),
+            None => c.groups(&group).into_iter().filter(|e| c.is_loaded(*e) && !c.dead.contains(e)).collect(),
         };
         id_list(lua, ids)
     })?;

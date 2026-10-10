@@ -223,7 +223,11 @@ fn spawn_actors(
         if have.contains(&e.id) || !host.story.is_loaded(e.id) || host.story.is_dead(e.id) {
             continue;
         }
-        let animal = e.component("CAnimalNetworkComponent").and_then(|_| crate::wildlife::story_species(&e.name));
+        let animal = if e.component("CAIDogNetworkComponent").is_some() {
+            crate::wildlife::story_species("attackdog_fc3")
+        } else {
+            e.component("CAnimalNetworkComponent").and_then(|_| crate::wildlife::story_species(&e.name))
+        };
         if let Some(species) = animal {
             if animals.as_ref().is_none_or(|a| !a.ready_for_story(species, &server)) {
                 continue;
@@ -592,6 +596,9 @@ fn actor_deaths(host: Option<NonSendMut<StoryHost>>, mut actors: Query<(&mut Sto
         if h.dead && !a.dead {
             a.dead = true;
             let id = a.id;
+            if std::env::var("FC3_STORY_WAIT_DEBUG").is_ok() {
+                info!("story actor death: {id}");
+            }
             host.story.killed(id);
         }
     }

@@ -2285,6 +2285,12 @@ fn outpost_fire_test(
     mut actions: ResMut<crate::controls::ActionState>,
     mut pulse: Local<f32>,
     mut route: Local<(f32, Vec<Vec3>)>,
+    busy: Res<crate::fp::HandsBusy>,
+    mut heal_pulse: Local<f32>,
+    bodies: Query<(Entity, &GlobalTransform), With<crate::pickups::LootableBody>>,
+    heads: Query<&HeadPos>,
+    stats: Query<&crate::combat::PlayerStats, With<Player>>,
+    animals: Query<(Entity, &Transform, &crate::wildlife::WildAnimal, &Health, Option<&crate::story_actors::StoryActor>), Without<Player>>,
 ) {
     use crate::controls::Action;
     if std::env::var("FC3_OUTPOST_FIRE_TEST").is_err() { return; }
@@ -2292,28 +2298,61 @@ fn outpost_fire_test(
     if !host.story.blocks().iter().any(|m| m.0 == "JAS_100_B10" && m.1 == "Running") || cinema.view.is_some() { return; }
     let Ok((pe, at, mut player, health, inv)) = players.single_mut() else { return };
     if health.dead || player.spawning || player.driving { return; }
+    *heal_pulse = (*heal_pulse - time.delta_secs()).max(0.0);
+    let can_heal = stats.single().is_ok_and(|s| s.medkits > 0) || health.current < crate::combat::HEALTH_SEGMENT;
+    if can_heal && health.current < health.max * 0.6 && !busy.busy() && *heal_pulse == 0.0 {
+        actions.press(Action::Medkit);
+        *heal_pulse = 1.0;
+        info!("outpost fire test: ordinary heal input at {:.1} health", health.current);
+        return;
+    }
     let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
     let filter = SpatialQueryFilter::from_excluded_entities([pe]);
-    let target = npcs.iter().filter(|(_, _, n, h)| n.faction.hostile_to_player() && !h.dead)
-        .filter_map(|(e, t, _, _)| {
-            let delta = t.translation + Vec3::Y * 0.6 - eye;
+    let needs_ammo = inv.slot().mag == 0 && inv.slot().reserve == 0;
+    let candidates: Vec<_> = npcs.iter().filter(|(_, _, n, h)| n.faction.hostile_to_player() && !h.dead)
+        .map(|(e, t, _, _)| (e, t.translation, heads.get(e).map_or(t.translation + Vec3::Y * 0.6, |head| head.0)))
+        .chain(animals.iter().filter(|(_, t, animal, h, story)| !h.dead && animal.dangerous()
+            && (story.is_some() || t.translation.distance(at.translation) < 15.0))
+            .map(|(e, t, _, _, _)| (e, t.translation, t.translation)))
+        .collect();
+    let target = candidates.iter().filter(|_| !needs_ammo)
+        .filter_map(|&(e, _, aim_at)| {
+            let delta = aim_at - eye;
             let distance = delta.length();
             let dir = Dir3::new(delta).ok()?;
             (distance < 30.0 && spatial.cast_ray(eye, dir, distance + 0.2, true, &filter).is_some_and(|h| h.entity == e))
                 .then_some((e, dir.as_vec3(), distance))
         }).min_by(|a, b| a.2.total_cmp(&b.2));
     let Some((target, direction, distance)) = target else {
+        let body = needs_ammo.then(|| bodies.iter().min_by(|a, b|
+            a.1.translation().distance_squared(at.translation).total_cmp(&b.1.translation().distance_squared(at.translation))))
+            .flatten();
+        if let Some((entity, body_at)) = body {
+            let feet = at.translation - Vec3::Y * crate::player::HALF_HEIGHT;
+            let delta = body_at.translation() - feet;
+            if delta.with_y(0.0).length() + delta.y.abs() * 0.5 < 2.4 {
+                *pulse -= time.delta_secs();
+                if *pulse <= 0.0 && !busy.busy() {
+                    actions.press(Action::Interact);
+                    *pulse = 0.5;
+                    info!("outpost fire test: ordinary search input at {entity:?}");
+                }
+                return;
+            }
+        }
         route.0 -= time.delta_secs();
         if route.0 <= 0.0 {
             route.0 = 1.0;
-            let nearest = npcs.iter().filter(|(_, _, n, h)| n.faction.hostile_to_player() && !h.dead)
-                .min_by(|a, b| a.1.translation.distance_squared(at.translation).total_cmp(&b.1.translation.distance_squared(at.translation)));
-            route.1 = nearest.and_then(|(_, t, _, _)| nav.path(
+            let nearest = candidates.iter()
+                .min_by(|a, b| a.1.distance_squared(at.translation).total_cmp(&b.1.distance_squared(at.translation)));
+            let destination = if needs_ammo { body.map(|(_, t)| t.translation()) }
+                else { nearest.map(|(_, at, _)| *at - Vec3::Y * crate::player::HALF_HEIGHT) };
+            route.1 = destination.and_then(|destination| nav.path(
                 at.translation - Vec3::Y * crate::player::HALF_HEIGHT,
-                t.translation - Vec3::Y * crate::player::HALF_HEIGHT)).unwrap_or_default();
+                destination)).unwrap_or_default();
             if time.elapsed_secs() as u32 % 5 == 0 {
                 info!("outpost fire test: approach from {:.1?}, nearest {:?}, {} route nodes", at.translation,
-                    nearest.map(|(e, t, _, _)| (e, t.translation)), route.1.len());
+                    nearest.map(|(e, at, _)| (e, at)), route.1.len());
             }
         }
         while route.1.first().is_some_and(|p| (*p - at.translation).with_y(0.0).length() < 1.0) {

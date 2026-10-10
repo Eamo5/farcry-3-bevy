@@ -1143,7 +1143,8 @@ fn run_story(
     if commands.iter().any(|c| !matches!(c, Command::Layer { .. } | Command::Print(_) | Command::Dialog { .. })) {
         host.quiet = 0.0;
     }
-    if gameplay && std::env::var("FC3_STORY_AUTOPILOT").is_ok() && host.quiet > 20.0 && host.quiet - dt <= 20.0 {
+    if gameplay && (std::env::var("FC3_STORY_AUTOPILOT").is_ok() || std::env::var("FC3_STORY_WAIT_DEBUG").is_ok())
+        && host.quiet > 20.0 && host.quiet - dt <= 20.0 {
         info!("story autopilot: stalled; triggers {:?}, signals {:?}", host.story.watched_triggers(), host.story.watched_signals());
         for w in host.story.waiting_on() {
             info!("story autopilot: waiting on {w}");
