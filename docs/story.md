@@ -1075,6 +1075,22 @@ No death, unlock, sequence-completion, or mission-completion events were
 injected by this combat fixture. `FC3_STORY_WAIT_DEBUG` now also prints Lua
 failure stacks, which identified the erroneous exit-zone failure above.
 
+The building-approach stall was a stale input lock, not a failed navigation
+route: `fc3-approach-debug` showed movement sensitivity 1 and valid route nodes,
+but `fp::Cinematic` remained 0.2 after the flag sequence stopped. External
+sequence/video holds now count down during Playing even with no arm action
+running; active producers continue renewing their holds. The regression
+checks renewal and expiry without an arm rig or action.
+
+`fc3-hold-expiry` then completed JAS_100_B10 and JAS_100_MAIN. From the paired
+outpost checkpoint, the fixture used ordinary movement/fire/reload/healing
+controls, played the six-second flag scene, physically entered the building,
+and played the full 62-second JAS_100 scene. No scene skip, direct damage or
+completion injection, player death or retry occurred in this run. Its final
+image confirms "Go talk to Dr. Earnhardt", health 100, two syringes, and pistol
+ammo 5/0. This verifies that automated-input segment from a checkpoint, not
+an uninterrupted manual campaign or full visual/gameplay/UX parity.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

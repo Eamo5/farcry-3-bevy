@@ -2285,7 +2285,7 @@ fn outpost_fire_test(
     mut actions: ResMut<crate::controls::ActionState>,
     mut pulse: Local<f32>,
     mut route: Local<(f32, Vec<Vec3>)>,
-    busy: Res<crate::fp::HandsBusy>,
+    (busy, scripted, fp_cinema): (Res<crate::fp::HandsBusy>, Res<crate::story::ScriptedPlayer>, Res<crate::fp::Cinematic>),
     mut heal_pulse: Local<f32>,
     bodies: Query<(Entity, &GlobalTransform), With<crate::pickups::LootableBody>>,
     heads: Query<&HeadPos>,
@@ -2360,6 +2360,7 @@ fn outpost_fire_test(
             if time.elapsed_secs() as u32 % 5 == 0 {
                 info!("outpost fire test: approach from {:.1?}, nearest {:?}, {} route nodes", at.translation,
                     nearest.map(|(e, at, _)| (e, at)), route.1.len());
+                info!("outpost fire test: destination {destination:?}, next {:?}, movement {}, cinematic {}, noclip {}", route.1.first(), scripted.movement, fp_cinema.0, player.noclip);
             }
         }
         while route.1.first().is_some_and(|p| (*p - at.translation).with_y(0.0).length() < 1.0) {

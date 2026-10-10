@@ -25,6 +25,7 @@ impl Plugin for FpPlugin {
         app.init_resource::<FpState>()
             .init_resource::<Cinematic>()
             .init_resource::<HandsBusy>()
+            .add_systems(PreUpdate, expire_cinematic_hold.run_if(in_state(crate::menu::GameState::Playing)))
             .add_message::<TakedownAnim>()
             .add_message::<FpAction>()
             .add_systems(OnExit(crate::menu::GameState::Loading), load_fp)
@@ -198,6 +199,34 @@ impl Quarter {
 /// Seconds left of a takedown: the player can't move or look around.
 #[derive(Resource, Default)]
 pub struct Cinematic(pub f32);
+
+/// Sequences and videos renew short holds while active; their last renewal
+/// must expire even when no first-person action is running to update it.
+fn expire_cinematic_hold(time: Res<Time>, mut hold: ResMut<Cinematic>) {
+    hold.0 = (hold.0 - time.delta_secs()).max(0.0);
+}
+
+#[cfg(test)]
+mod cinematic_hold_tests {
+    use super::*;
+
+    #[test]
+    fn external_hold_expires_without_an_active_arm_action() {
+        let mut app = App::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_millis(50));
+        app.insert_resource(time).init_resource::<Cinematic>().add_systems(Update, expire_cinematic_hold);
+        for _ in 0..8 {
+            app.world_mut().resource_mut::<Cinematic>().0 = 0.2;
+            app.update();
+            assert!(app.world().resource::<Cinematic>().0 > 0.0);
+        }
+        for _ in 0..5 { app.update(); }
+        assert_eq!(app.world().resource::<Cinematic>().0, 0.0);
+        app.update();
+        assert_eq!(app.world().resource::<Cinematic>().0, 0.0);
+    }
+}
 
 /// Seconds the hands are busy with a takedown, a heal or looting: no firing,
 /// reloading, throwing or starting another action.
