@@ -1673,6 +1673,34 @@ rock (`fc3-relative-step.err.log`); this controller correction is not evidence
 of a completed greenhouse approach. No authored rock collider was removed or
 altered. The remaining passage route/collision question is still open.
 
+### Wildlife vertical melee range and further cave progression
+
+The opt-in `FC3_TRAVERSAL_WALK_JUMP=1` probe presses the ordinary jump action
+when grounded and nearly stationary while steering toward a route waypoint,
+at most once a second. This physically cleared the first rock obstruction
+without collider edits and reached approximately (-1881.08,95.75,-2450.00).
+That run reproduced the earlier unexplained death: the combat log identifies
+a boar melee source at (-1882.09,151.98,-2450.51), over 56 metres above the
+player (`fc3-cave-jump.err.log`). Wildlife selected targets and checked melee
+reach using only X/Z distance, letting surface animals attack through the
+cave ceiling.
+
+Wildlife now uses full spatial distance for both player and NPC targets.
+Horizontal steering remains separate from perception/attack range. The ECS
+regression forces an attacking boar at horizontal coincidence and vertical
+separations ±3 and ±56 metres, verifies no damage and exit from attack state,
+then verifies nearby melee still works. Wildlife tests, workspace tests and
+release build pass (`fc3-wildlife-height-{tests,workspace-tests,build}.log`).
+This fixes vertical reach, not general line-of-sight or path accessibility.
+
+A 65-second physical replay after the fix remains at health 100 in the cave
+instead of dying to the surface boar (`fc3-wildlife-height.err.log`). A further
+waypoint/jump replay reaches (-1879.52,95.20,-2460.33), more than 60 metres
+beyond the vine release, before stalling on the next lateral leg
+(`fc3-cave-jump-west.err.log`). The greenhouse still only reports
+`GH_StartPOS`; no physical `GH_POS2`/`GH_POS3` progression is claimed. The
+jump-assisted route is a diagnostic fixture rather than an unassisted playthrough.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

@@ -523,6 +523,7 @@ fn traversal_test(
     mut next_log: Local<f32>,
     mut ladder_time: Local<f32>,
     mut walk_waypoint: Local<usize>,
+    mut next_walk_jump: Local<f32>,
     mut players: Query<(&mut Transform, &mut Player, &Health)>,
     cameras: Query<&Transform, (With<crate::player::PlayerCamera>, Without<Player>)>,
     (mut spawns, td, npcs, heights): (
@@ -656,7 +657,16 @@ fn traversal_test(
                         let desired = (-delta.x).atan2(-delta.z);
                         let turn = (p.yaw - desired + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
                         actions.look.x = turn.clamp(-time.delta_secs() * 2.0, time.delta_secs() * 2.0);
-                        if turn.abs() < 0.2 { actions.movement.y = 1.0; }
+                        if turn.abs() < 0.2 {
+                            actions.movement.y = 1.0;
+                            if std::env::var("FC3_TRAVERSAL_WALK_JUMP").as_deref() == Ok("1")
+                                && p.grounded && now >= *next_walk_jump
+                                && Vec2::new(p.velocity.x, p.velocity.z).length() < 0.5 {
+                                actions.press(Action::Jump);
+                                *next_walk_jump = now + 1.0;
+                                info!("traversal test: ordinary jump probe at {here:?}");
+                            }
+                        }
                     }
                 }
             }

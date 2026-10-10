@@ -850,13 +850,15 @@ fn animal_ai(
         }
         // The nearest person: the player counts as farther when crouched.
         let crouched = if player.crouching { 0.5 } else { 1.0 };
-        let player_dist = Vec2::new(pt.translation.x - pos.x, pt.translation.z - pos.z).length();
+        // Horizontal steering does not imply horizontal attack range: a
+        // surface animal cannot bite a player in the cave beneath it.
+        let player_dist = pt.translation.distance(pos);
         let player_available = !ph.dead && !player.noclip && !player.spawning
             && cinema.as_ref().is_none_or(|c| c.view.is_none());
         let mut target = player_available.then_some((pe, pt.translation, player_dist, player_dist / crouched));
         if s.habitat != Habitat::Sea {
             for (ne, np) in &npcs {
-                let d = Vec2::new(np.x - pos.x, np.z - pos.z).length();
+                let d = np.distance(pos);
                 if target.is_none_or(|t| d < t.3) {
                     target = Some((*ne, *np, d, d));
                 }
@@ -1200,6 +1202,19 @@ mod tests {
         }
         // Leaving the cinematic restores ordinary combat, not invulnerability.
         app.world_mut().resource_mut::<crate::cinema::Cinema>().view = None;
+        let original_player = *app.world().get::<Transform>(player).unwrap();
+        for separation in [-56.0, -3.0, 3.0, 56.0] {
+            let animal_pos = app.world().get::<Transform>(root).unwrap().translation;
+            app.world_mut().get_mut::<Transform>(player).unwrap().translation = animal_pos + Vec3::Y * separation;
+            let mut animal = app.world_mut().get_mut::<WildAnimal>(root).unwrap();
+            animal.mood = Mood::Attack;
+            animal.attack_cooldown = 0.0;
+            app.world_mut().resource_mut::<Messages<DamageEvent>>().clear();
+            app.update();
+            assert!(app.world().resource::<Messages<DamageEvent>>().is_empty(), "vertical melee at {separation} metres");
+            assert!(!matches!(app.world().get::<WildAnimal>(root).unwrap().mood, Mood::Attack));
+        }
+        *app.world_mut().get_mut::<Transform>(player).unwrap() = original_player;
         let mut animal = app.world_mut().get_mut::<WildAnimal>(root).unwrap();
         animal.mood = Mood::Attack;
         animal.attack_cooldown = 0.0;
