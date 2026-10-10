@@ -799,6 +799,7 @@ fn yaw_to(v: Vec3) -> f32 {
 #[allow(clippy::too_many_arguments)]
 fn animal_ai(
     time: Res<Time>,
+    spatial: SpatialQuery,
     cinema: Option<Res<crate::cinema::Cinema>>,
     heights: Res<Heightfield>,
     mut rng: ResMut<Rng>,
@@ -949,7 +950,9 @@ fn animal_ai(
             Mood::Attack => {
                 anim = AnimKind::Attack;
                 a.yaw = yaw_to(Vec3::new(to_player.x, 0.0, to_player.z));
-                if a.attack_cooldown <= 0.0 && dist < 2.2 && !ph_dead && reachable {
+                if a.attack_cooldown <= 0.0 && dist < 2.2 && !ph_dead && reachable
+                    && spatial.cast_ray(pos, Dir3::new(to_player).unwrap_or(Dir3::X), dist, true,
+                        &SpatialQueryFilter::from_excluded_entities([e, target_e])).is_none() {
                     a.attack_cooldown = 1.2;
                     let amount = s.damage;
                     damage.write(DamageEvent { target: target_e, amount, kind: DamageKind::Melee, source: Some(pos), instigator: Some(e), headshot: false });
@@ -1155,7 +1158,8 @@ mod tests {
             }
         }
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default(), bevy::mesh::MeshPlugin,
+            bevy::transform::TransformPlugin, PhysicsPlugins::default()))
             .init_resource::<ActionState>().init_resource::<crate::settings::Settings>()
             .init_resource::<Progress>().init_resource::<crate::hud::HudState>()
             .init_resource::<crate::fp::HandsBusy>().init_resource::<crate::story::ScriptedPlayer>()
@@ -1215,6 +1219,22 @@ mod tests {
             assert!(!matches!(app.world().get::<WildAnimal>(root).unwrap().mood, Mood::Attack));
         }
         *app.world_mut().get_mut::<Transform>(player).unwrap() = original_player;
+        *app.world_mut().get_mut::<Transform>(root).unwrap() = position;
+        let wall = app.world_mut().spawn((RigidBody::Static, Collider::cuboid(0.1, 10.0, 6.0),
+            Transform::from_xyz(0.5, 1.0, 0.0))).id();
+        // Let physics register the barrier before testing the attack itself.
+        app.update();
+        app.update();
+        let mut animal = app.world_mut().get_mut::<WildAnimal>(root).unwrap();
+        animal.mood = Mood::Attack;
+        animal.attack_cooldown = 0.0;
+        app.world_mut().resource_mut::<Messages<DamageEvent>>().clear();
+        app.update();
+        assert!(app.world().resource::<Messages<DamageEvent>>().is_empty(), "melee crossed a solid wall");
+        app.world_mut().despawn(wall);
+        app.update();
+        app.update();
+        app.world_mut().resource_mut::<Messages<DamageEvent>>().clear();
         let mut animal = app.world_mut().get_mut::<WildAnimal>(root).unwrap();
         animal.mood = Mood::Attack;
         animal.attack_cooldown = 0.0;

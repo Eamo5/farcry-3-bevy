@@ -1701,6 +1701,25 @@ beyond the vine release, before stalling on the next lateral leg
 `GH_StartPOS`; no physical `GH_POS2`/`GH_POS3` progression is claimed. The
 jump-assisted route is a diagnostic fixture rather than an unassisted playthrough.
 
+Wildlife melee also now requires an unobstructed physics ray between attacker
+and target, excluding their own collider entities. This check occurs only
+when an otherwise valid attack is ready, and blocked attempts do not deal
+damage or consume the cooldown. The wildlife ECS test now uses real physics:
+it inserts a solid wall between a boar and the player, confirms no damage,
+then removes the wall and confirms nearby attacks resume. Vertical-distance
+and cinematic/unavailable-player checks remain covered. Workspace tests and
+release build pass (`fc3-wildlife-barrier-{workspace-tests,build}.log`). This
+is a melee obstruction check, not a complete wildlife navigation solution.
+
+The eastward physical route `-1880,-2460;-1870,-2460;-1870,-2440;` followed by
+the first greenhouse trigger reaches its first three waypoints at health 100
+(`fc3-cave-jump-east2.err.log`), including (-1870.10,92.45,-2440.58), about
+82 metres beyond the vine exit. It then stalls near
+(-1872.84,92.29,-2435.47); the screenshot shows close tree geometry clipping
+the view. No death or warning/error is logged, but `GH_POS2`/`GH_POS3` remain
+unreached. The dead-tree passage and its script-driven geometry are the next
+physical progression investigation.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected
