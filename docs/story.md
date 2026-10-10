@@ -1180,6 +1180,18 @@ rocks at Y 124.54 (`fc3-ladder-clearance.err.log`). The special vine transition
 is still pending; retaining the ladder is collision recovery, not mission
 completion or visual parity evidence.
 
+Climbing also left `Player.velocity` at zero after mounting, even while
+moving the capsule upward. First-person ladder playback derives its rate
+from that velocity, so the locomotion loop had no motion signal. Traversal
+now reports actual vertical displacement per frame, including partial motion
+as it reaches the top, then zero while blocked or after stepping off at the
+bottom. Measuring capsule centres directly avoids a tiny persistent velocity
+from repeatedly subtracting/readding the capsule half-height. The ECS
+regression exercises ascending, stopping, descending, and holding at an
+unlandable top (`fc3-climb-velocity-workspace.log`, full workspace pass).
+The release game build passes. This repairs the animation's motion input;
+vine-specific clip selection and the hallucination controller remain open.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

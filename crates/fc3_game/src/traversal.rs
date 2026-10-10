@@ -52,6 +52,49 @@ mod ownership_tests {
     use super::*;
     use crate::menu::GameState;
 
+    fn mounted_player() -> Player {
+        Player {
+            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: false, crouching: false,
+            swimming: false, noclip: false, spawning: false, keep_height: false,
+            last_landing_speed: 0.0, sprinting: false, spawned_at: 0.0, driving: true,
+            eye: 1.7, air: default(), mantle: None, mounted: None, sliding: None, dragging: false,
+        }
+    }
+
+    #[test]
+    fn ladder_velocity_tracks_motion_and_stops_at_a_blocked_top() {
+        use avian3d::prelude::*;
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default(), bevy::mesh::MeshPlugin,
+            bevy::transform::TransformPlugin, PhysicsPlugins::default()))
+            .init_resource::<ActionState>()
+            .init_resource::<crate::mission_layers::MissionLayers>()
+            .insert_resource(Ways { data: Traversal {
+                ladders: vec![fc3_formats::traversal::Ladder {
+                    id: 0, mission_layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
+                    base: [0.0; 3], top: 3.0, facing: [0.0, 0.0, 1.0],
+                }], ..default()
+            }, ..default() })
+            .insert_resource(Mount::Ladder { index: 0, side: Vec3::Z });
+        let e = app.world_mut().spawn((Transform::from_xyz(0.0, HALF_HEIGHT + 1.0, 0.45),
+            Health::new(100.0), ColliderDisabled, mounted_player())).id();
+        app.update();
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_millis(100));
+        app.insert_resource(time);
+        for axis in [1.0, 0.0, -1.0] {
+            app.world_mut().resource_mut::<ActionState>().movement.y = axis;
+            app.world_mut().run_system_once(climb).unwrap();
+            assert!((app.world().get::<Player>(e).unwrap().velocity.y - axis * 3.0).abs() < 0.001);
+        }
+        app.world_mut().resource_mut::<ActionState>().movement.y = 1.0;
+        for _ in 0..12 { app.world_mut().run_system_once(climb).unwrap(); }
+        assert!((app.world().get::<Transform>(e).unwrap().translation.y - (3.0 - 0.05 + HALF_HEIGHT)).abs() < 0.001);
+        assert_eq!(app.world().get::<Player>(e).unwrap().velocity, Vec3::ZERO);
+        assert!(matches!(*app.world().resource::<Mount>(), Mount::Ladder { .. }));
+    }
+
     #[derive(Resource, Default)]
     struct Landing(Option<(Vec3, Vec3)>);
 
@@ -102,12 +145,7 @@ mod ownership_tests {
             }, ..default() })
             .insert_resource(Mount::Zip { cable: 0, s: 0.0, speed: 4.0 })
             .add_systems(Update, ride.run_if(traversal_controls_available));
-        let e = app.world_mut().spawn((Transform::default(), Health::new(100.0), ColliderDisabled, Player {
-            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: false, crouching: false,
-            swimming: false, noclip: false, spawning: false, keep_height: false,
-            last_landing_speed: 0.0, sprinting: false, spawned_at: 0.0, driving: true,
-            eye: 1.7, air: default(), mantle: None, mounted: None, sliding: None, dragging: false,
-        })).id();
+        let e = app.world_mut().spawn((Transform::default(), Health::new(100.0), ColliderDisabled, mounted_player())).id();
         app.update();
         let position = app.world().get::<Transform>(e).unwrap().translation;
         let mounted = *app.world().resource::<Mount>();
@@ -381,18 +419,29 @@ fn climb(
                         p.velocity = dir * 1.0;
                         release(&mut p, &mut mount, &mut commands);
                     }
-                    None => t.translation = Vec3::new(base.x, l.top - 0.05 + HALF_HEIGHT, base.z) + side * 0.45,
+                    None => {
+                        let y = l.top - 0.05;
+                        p.velocity = Vec3::Y * climb_velocity(t.translation.y, y + HALF_HEIGHT, dt);
+                        t.translation = Vec3::new(base.x, y + HALF_HEIGHT, base.z) + side * 0.45;
+                    }
                 }
                 return;
             }
             if y <= base.y && climb < 0.0 {
                 y = base.y;
+                p.velocity = Vec3::ZERO;
                 release(&mut p, &mut mount, &mut commands);
+            } else {
+                p.velocity = Vec3::Y * climb_velocity(t.translation.y, y + HALF_HEIGHT, dt);
             }
             t.translation = Vec3::new(base.x, y + HALF_HEIGHT, base.z) + side * 0.45;
         }
         Mount::Zip { .. } => {}
     }
+}
+
+fn climb_velocity(from: f32, to: f32, dt: f32) -> f32 {
+    if dt > 0.0 { (to - from) / dt } else { 0.0 }
 }
 
 /// A ground hit alone is not a landing: the capsule also needs headroom
