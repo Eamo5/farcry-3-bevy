@@ -3,6 +3,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$Checkpoint,
     [switch]$Doorway,
+    [switch]$Interior,
     [string]$Output = "$env:LOCALAPPDATA\Temp\opencode\doc020-greenhouse",
     [string]$Binary = ''
 )
@@ -25,7 +26,8 @@ try {
     $env:FC3_TRAVERSAL_TEST = 'ladder'
     $env:FC3_TRAVERSAL_LADDER_ID = '2078490335079601680'
     $env:FC3_TRAVERSAL_WALK_TO = '-1880,-2460;-1870,-2460;-1870,-2440;-1865,-2430;-1880,-2422;-1890.59,-2413.37;-1892.61,-2406.09;-1894.49,-2398.20'
-    if ($Doorway) { $env:FC3_TRAVERSAL_WALK_TO += ';-1896.96,-2388.27' }
+    if ($Doorway -or $Interior) { $env:FC3_TRAVERSAL_WALK_TO += ';-1896.96,-2388.27' }
+    if ($Interior) { $env:FC3_TRAVERSAL_WALK_TO += ';-1898,-2387;-1897,-2382' }
     $env:FC3_TRAVERSAL_WALK_JUMP = '1'
     $env:FC3_STORY_LOAD = $Checkpoint
     $env:RUST_LOG = 'warn,farcry3::traversal=info,farcry3::combat=info,farcry3::cinema=debug,farcry3::story=info'
@@ -38,7 +40,7 @@ try {
     $text = [IO.File]::ReadAllText($log) -replace '\x1b\[[0-9;]*m', ''
     $previous = -1
     $cues = @('GH_StartPOS', 'GH_POS2', 'GH_POS3')
-    if ($Doorway) { $cues += 'DoorOpen' }
+    if ($Doorway -or $Interior) { $cues += 'DoorOpen' }
     foreach ($cue in $cues) {
         $hits = [regex]::Matches($text, "reached $cue at")
         if ($hits.Count -ne 1 -or $hits[0].Index -le $previous) { throw "Missing, repeated or out-of-order cue: $cue" }

@@ -1779,6 +1779,28 @@ Those runs do **not** verify entry into the greenhouse or its dark room
 Next identify the blocking collider and the opened door's placement relative
 to the greenhouse frame before changing collision or route geometry.
 
+### Physical greenhouse entrance verified
+
+Collision tracing identifies the failed eastern door alignment as cliff rocks
+2073401302886394177 (`Rock_Volcanic_BaseCliff_01_489`) and
+2073101669188507305 (`Rock_Volcanic_BaseCliff_01_343`), not the animated door.
+The western approach via (-1898,-2387), then (-1897,-2382), physically passes
+the doorway and reaches the interior floor at roughly Y 99.36. A further
+probe hits 2073476604492790878 (`Greenhouse_TableWoodLong_01_11`) at the
+interior table, rather than a closed-door collider. No collision was removed.
+
+`docs/validation/doc020-greenhouse.ps1 -Interior` now verifies this entrance
+route, all greenhouse/door cues, survival, and route completion. Its actual
+run passes with health 100 and no logged warnings/errors; evidence is in
+`Temp/opencode/doc020-interior/`. The inspected screenshot clearly shows the
+greenhouse interior, but also a large obstructing brown surface, striped
+window materials and a 19 FPS counter. Those visual/performance defects are
+unresolved and this is not visual parity. Attempts to continue around the
+table still stall near (-1896.36,99.36,-2379.59), and the dark-room trigger
+and mushroom interaction remain unverified. Next identify the intrusive
+interior mesh and the table route, including whether unsupported RealTree
+growth contributes to the obstruction.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected
