@@ -1491,6 +1491,31 @@ Workspace/installed tests and release build pass
 (`fc3-script-postfx-{workspace,all-installed}-tests.log`,
 `fc3-script-postfx-build.log`). Kernel calibration and vine puff remain open.
 
+The vine's `Teleport_Particle` now resolves to the original particle-library
+definition, which full conversion preserves byte-for-byte in
+`particles/vine-puff.xml`. Its diffuse atlas is converted under the standard
+texture-cache path, resolving the authored `.png` reference to the installed
+`.xbt`. `fc3_formats::particle_effects` exposes emitter settings while keeping
+the complete source tree, including unsupported fields, paired curve knots,
+local-space flags and custom polygon vertices. It does not substitute cinema
+Bezier keys or generic smoke parameters for the particle curve format.
+
+The installed puff has one active, non-looping Smoke3 emitter: one initial
+particle, a base rate of 4/s over a one-second emission window, base lifetime
+10 seconds, base speed 0.2, local offset (0,0,0.7), and a 5x5 atlas at 10 FPS
+with FPS variance 2. Size/speed/alpha/gravity and flipbook-speed curves remain
+authored; the six-vertex sprite shape is retained. These are data findings,
+not yet proof of the original runtime's emission-count boundary behavior.
+
+The extraction regression checks exact name matching and raw preservation;
+installed regressions resolve the GSF reference, verify the emitter metadata,
+retain duplicate knots, and compare cached XML and reconstructed atlas DDS
+bytes against the installed source. Release builds, workspace and installed
+tests pass; full conversion reports zero errors
+(`fc3-vine-puff-{build,convert,workspace-tests,all-installed-tests}.log`).
+Actual puff simulation/rendering and its attachment/stop semantics remain
+unfinished.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

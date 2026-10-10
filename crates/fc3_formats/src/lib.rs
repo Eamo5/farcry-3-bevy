@@ -25,6 +25,7 @@ pub mod outposts;
 pub mod nav;
 pub mod oasis;
 pub mod patrols;
+pub mod particle_effects;
 pub mod postfx;
 pub mod progression;
 pub mod traversal;

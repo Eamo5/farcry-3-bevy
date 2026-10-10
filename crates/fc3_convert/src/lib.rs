@@ -902,6 +902,27 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         if let Err(e) = result { job.error(format!("gameplay post-effects: {e:#}")); }
     }
 
+    // ---- vine particle: resolve the GSF binding and retain its complete
+    // emitter/curve definition rather than replacing it with generic smoke.
+    if opts.only_sectors.is_none() {
+        let result = (|| -> Result<()> {
+            let settings = fc3_formats::gsf::VineSettings::parse(&job.vfs.read(fc3_formats::gsf::LIBRARY)?)?;
+            let library = job.vfs.read(fc3_formats::lights::PARTICLE_LIBRARY)?;
+            let xml = fc3_formats::particle_effects::effect_xml(std::str::from_utf8(&library)?, &settings.teleport_particle)?;
+            let effect = fc3_formats::particle_effects::Effect::parse(xml)?;
+            for emitter in effect.emitters.iter().filter(|e| e.active && !e.texture.is_empty()) {
+                let path = emitter.texture_path()?;
+                let rel = cache::texture_rel(&path);
+                if job.should_write(&rel) { convert_texture_to(&job, &path, &rel)?; }
+            }
+            if job.should_write(fc3_formats::particle_effects::VINE_CACHE_REL) {
+                write_atomic(job.root(), fc3_formats::particle_effects::VINE_CACHE_REL, xml.as_bytes(), job.ctx)?;
+            }
+            Ok(())
+        })();
+        if let Err(e) = result { job.error(format!("vine particle: {e:#}")); }
+    }
+
     // ---- faces: the rigs, which character uses which, and every facial clip
     if opts.only_sectors.is_none() && (job.should_write(fc3_formats::facial::PAK_REL) || job.should_write(fc3_formats::facial::DEFINITIONS_REL)) {
         if let Err(e) = convert_facial(&job) {
