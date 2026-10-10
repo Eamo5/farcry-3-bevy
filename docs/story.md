@@ -1720,6 +1720,41 @@ the view. No death or warning/error is logged, but `GH_POS2`/`GH_POS3` remain
 unreached. The dead-tree passage and its script-driven geometry are the next
 physical progression investigation.
 
+### Physical greenhouse cue progression verified
+
+The successful route goes east around the close tree before returning to the
+authored approach: `-1880,-2460;-1870,-2460;-1870,-2440;-1865,-2430;`
+`-1880,-2422;-1890.59,-2413.37;-1892.61,-2406.09;-1894.49,-2398.20`.
+With the ordinary jump probe enabled, physical occupancy now resumes the
+greenhouse through **all three** cues in order: `GH_StartPOS`, `GH_POS2`,
+`GH_POS3`. The player finishes near (-1894.37,99.18,-2398.74), health 100.
+`fc3-greenhouse-three-cues.png` shows the greenhouse beyond the cave opening;
+the associated log contains each cue once and no warnings/errors or death.
+This supersedes the earlier unreached-cue status, but does not establish
+visual parity or an unassisted campaign playthrough.
+
+`docs/validation/doc020-greenhouse.ps1` preserves this fixture as a repeatable
+check. Supply the paired DOC_020_B20E story snapshot via `-Checkpoint`; it
+verifies that the `.game.txt` companion exists, isolates FC3 test environment
+variables, runs ordinary movement/jump input, and checks cue order/count,
+route completion, final health, no retry/death/runtime errors, and screenshot
+creation. It restores the caller's environment afterwards. On Windows with
+restricted script execution, use process-local
+`powershell -NoProfile -ExecutionPolicy Bypass -File docs/validation/doc020-greenhouse.ps1 -Checkpoint <path>`.
+The script itself was executed successfully; its validated evidence is under
+`Temp/opencode/doc020-greenhouse/{replay.err.log,greenhouse.png}`. The first
+invocations exposed execution-policy and default-path issues; the latter was
+fixed before the passing run. No machine execution policy was changed.
+
+Source inspection also identifies unfinished visual/gameplay work in the
+dead-tree section. `HK_Realtrees` initializes grouped trees with
+`UpdateRealTreeRegen(...,0)` and later invokes `SetRealTreeGrowthSpeed`.
+Procedural growth is not implemented in the game host. The current story
+native also calls the growth callback immediately, before the Lua box has
+finished counting its group, which needs a real asynchronous completion
+lifecycle. These deficiencies remain; the new physical route bypasses the
+obstruction rather than claiming they are resolved.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected
