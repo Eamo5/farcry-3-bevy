@@ -1710,7 +1710,7 @@ fn convert_cinema(job: &Job) -> Result<()> {
 }
 
 /// Marks the current sequence conversion schema.
-const CINEMA_STAMP: &str = "cinema/stamp-prop-movement.txt";
+const CINEMA_STAMP: &str = "cinema/stamp-blur-tracks.txt";
 
 /// Packs every Domino script the file lists name, and the ones they refer to
 /// that the lists don't.

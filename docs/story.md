@@ -1412,6 +1412,23 @@ This supersedes the earlier unresolved mapping/FOV notes; particle puff,
 transition post-effect rendering and original-game visual comparison remain
 outstanding. The controller remains opt-in.
 
+The mushroom transition's blur tracks are now retained as typed cinematic
+clips, including all nine animated channels (factor, RGBA, direction XY,
+texture alpha and mask offset), texture path, blur type, priority and the
+three intensity switches. IN and OUT are separate three-second sequences;
+the two-second looping sequence holds factor 5, alpha/mask offset 1 and
+`graphics\postfx\tunnel.xbt`. The IN/OUT alpha and mask curves respectively
+rise 0->1 and fall 1->0. Curves use the same time/value Bezier sampling as
+FOV, and survive text-cache round trips. Cinematic cache invalidation now
+includes these tracks (`cinema/stamp-blur-tracks.txt`).
+
+`fc3-mush-blur-{workspace,installed}-tests.log` and
+`fc3-mush-blur-build.log` pass; full conversion reports zero errors in
+`fc3-mush-blur-convert.log`. This is authored-data support, not rendered
+blur parity: the runtime still needs the masked radial-blur pass and the
+effect's IN/LOOP/OUT lifecycle. Local native enum registration confirms
+blur selector 1 is Radial.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

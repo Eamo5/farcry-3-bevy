@@ -172,6 +172,15 @@ pub enum ClipKind {
     Fov {
         samples: Vec<f32>,
     },
+    /// Authored screen blur, including mask and intensity-control switches.
+    Blur {
+        texture: String,
+        kind: u32,
+        priority: u32,
+        intensity: [bool; 3],
+        /// BlurFactor, RGBA, Direction XY, TextureAlpha, MaskOffset.
+        samples: Vec<[f32; 9]>,
+    },
 }
 
 /// Curves are kept sampled at this step (seconds).
@@ -351,6 +360,23 @@ fn clip_of(e: &Element) -> Option<Clip> {
             }
             let n = ((duration / FOV_STEP).ceil() as usize).clamp(1, 20_000);
             ClipKind::Fov { samples: (0..=n).filter_map(|i| sample_bezier(&keys, i as f32 * FOV_STEP)).collect() }
+        }
+        "CBlurPostFxClip" => {
+            let blur = e.children.iter().find(|e| e.name == "Blur")?;
+            let intensity = blur.children.iter().find(|e| e.name == "Intensity");
+            let channels = ["BlurFactor", "BlurColor_R", "BlurColor_G", "BlurColor_B", "BlurColor_A",
+                "Direction_X", "Direction_Y", "TextureAlpha", "MaskOffset"];
+            let keys = channels.map(|name| bezier_keys(e, name));
+            if keys.iter().any(|k| k.is_empty()) { return None; }
+            let n = ((duration / FOV_STEP).ceil() as usize).clamp(1, 20_000);
+            ClipKind::Blur {
+                texture: blur.attr("fileTexture").unwrap_or_default().to_string(),
+                kind: blur.u32("selBlurType")?, priority: e.u32("nPriority").unwrap_or(0),
+                intensity: ["bOnBlurFactor", "bOnTextureAlpha", "bOnMaskOffset"].map(|name|
+                    intensity.and_then(|e| e.bool(name)).unwrap_or(false)),
+                samples: (0..=n).map(|i| std::array::from_fn(|channel|
+                    sample_bezier(&keys[channel], i as f32 * FOV_STEP).unwrap())).collect(),
+            }
         }
         _ => return None,
     };
@@ -574,6 +600,9 @@ impl Sequence {
                     }
                     ClipKind::PlayerCamera => "pcam".to_string(),
                     ClipKind::Fov { samples } => format!("fov\t{}", samples.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";")),
+                    ClipKind::Blur { texture, kind, priority, intensity, samples } => format!("blur\t{texture}\t{kind}\t{priority}\t{},{},{}\t{}",
+                        b(intensity[0]), b(intensity[1]), b(intensity[2]), samples.iter().map(|sample|
+                            sample.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")).collect::<Vec<_>>().join(";")),
                 };
                 out += &format!("clip\t{}\t{}\t{body}\n", c.start, c.duration);
             }
@@ -643,6 +672,17 @@ impl Sequence {
                         },
                         "pcam" => ClipKind::PlayerCamera,
                         "fov" => ClipKind::Fov { samples: g(1).split(';').filter_map(|x| x.parse().ok()).collect() },
+                        "blur" => {
+                            let switches: Vec<u8> = g(4).split(',').map(str::parse).collect::<Result<_, _>>().ok()?;
+                            if switches.len() != 3 || switches.iter().any(|v| *v > 1) { return None; }
+                            let samples = g(5).split(';').map(|row| {
+                                let values: Vec<f32> = row.split(',').map(str::parse).collect::<Result<_, _>>().ok()?;
+                                if values.iter().any(|v| !v.is_finite()) { return None; }
+                                values.try_into().ok()
+                            }).collect::<Option<Vec<[f32; 9]>>>()?;
+                            ClipKind::Blur { texture: g(1).to_string(), kind: g(2).parse().ok()?, priority: g(3).parse().ok()?,
+                                intensity: [switches[0] != 0, switches[1] != 0, switches[2] != 0], samples }
+                        }
                         _ => continue,
                     };
                     seq.groups.last_mut()?.clips.push(Clip { start, duration, kind });
@@ -723,6 +763,22 @@ mod tests {
         assert_eq!(samples[0], 85.0);
         assert!(samples.iter().copied().fold(0.0f32, f32::max) > 149.0);
         assert!((samples.last().unwrap() - 85.0).abs() < 0.1);
+        for (name, alpha) in [("transition", [1.0, 1.0]), ("transition_IN", [0.0, 1.0]), ("transition_OUT", [1.0, 0.0])] {
+            let effect = effects.iter().find(|e| e.name == format!("postfx:mush_postfx.{name}")).unwrap();
+            let ClipKind::Blur { texture, kind, priority, intensity, samples } = &effect.groups.iter()
+                .flat_map(|g| &g.clips).find(|c| matches!(c.kind, ClipKind::Blur { .. })).unwrap().kind else { unreachable!() };
+            assert_eq!(texture, r"graphics\postfx\tunnel.xbt");
+            assert_eq!(*kind, 1);
+            assert_eq!(*priority, 0);
+            assert_eq!(*intensity, [true; 3]);
+            assert!(samples.iter().all(|v| (v[0] - 5.0).abs() < 0.001
+                && v[1..5].iter().all(|c| c.abs() < 0.001) && v[5..7].iter().all(|c| (*c - 1.0).abs() < 0.001)));
+            for (sample, expected) in [(samples.first().unwrap(), alpha[0]), (samples.last().unwrap(), alpha[1])] {
+                assert!((sample[7] - expected).abs() < 0.001);
+                assert!((sample[8] - expected).abs() < 0.001);
+            }
+            assert_eq!(Sequence::from_text(&effect.to_text()).unwrap(), *effect);
+        }
         let mush = effects.iter().find(|e| e.name == "postfx:mush_postfx.03_LOOP").unwrap();
         assert!(mush.looping);
         assert_eq!(mush.duration, 1.0);
