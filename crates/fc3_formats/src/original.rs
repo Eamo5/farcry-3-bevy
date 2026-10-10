@@ -580,6 +580,18 @@ pub fn compatible(vs: &ShaderEntry, ps: &ShaderEntry) -> bool {
     })
 }
 
+/// Unlit's installed descriptor requires mesh UVs. Generic compatibility also
+/// permits world-position mapping (needed by terrain), which can otherwise
+/// pair an Unlit diffuse sampler with a world-position output. Mean-colour
+/// probes cannot detect that error.
+pub fn material_uv_compatible(shader: &str, vs: &ShaderEntry, ps: &ShaderEntry) -> bool {
+    shader != "Unlit" || ps.inputs.iter().filter(|i| i.flags & 3 == 1).all(|i| {
+        vs.outputs.iter().find(|o| (o.usage, o.usage_index) == (i.usage, i.usage_index)).is_some_and(|o| {
+            vs.inputs.iter().any(|v| v.usage == USAGE_TEXCOORD && v.register < 32 && o.flags & (1 << v.register) != 0)
+        })
+    })
+}
+
 /// A raw material value as floats (small integers stored as u32 become numbers).
 pub fn param_floats(raw: &[u8]) -> Vec<f32> {
     match raw.len() {
@@ -878,7 +890,7 @@ fn pair_pass(
         // rejected for brightness (a black `DiffuseColor` paints the map
         // black), but only for materials no pair takes as they are.
         let pick = |skinned: bool, neutral: bool| {
-            set.vertex_shaders_for(ps, skinned).take(VS_TRIES).find_map(|vs| {
+            set.vertex_shaders_for(ps, skinned).filter(|vs| material_uv_compatible(&m.shader, vs, ps)).take(VS_TRIES).find_map(|vs| {
                 let vs_obj = object(vs.hash)?;
                 match check_with(set, vs, &vs_obj, ps, &ps_obj, s, neutral) {
                     Ok(n) => Some((vs, n)),
@@ -1032,6 +1044,22 @@ pub fn diagnose(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unlit_rejects_world_position_as_diffuse_uv() {
+        // Installed greenhouse pair's input/output dependency metadata. Its
+        // TEXCOORD4 output depends on POSITION0, not texture coordinates.
+        let mut vs = ShaderEntry::from_line("64c1e197728d54dc vs 0 0 0.0:0:0:0,10.0:1:1:0 0.0:0:-:1,5.0:1:0:0,5.1:2:1:2,5.2:3:2:0,5.3:4:3:0,5.4:5:4:1 - - 0 0").unwrap();
+        let ps = ShaderEntry::from_line("69067e32118fcf59 ps 0 0 5.0:0:0:0,5.3:1:3:0,5.4:2:4:1 - 0:1 - 15 0").unwrap();
+        assert!(compatible(&vs, &ps));
+        assert!(!material_uv_compatible("Unlit", &vs, &ps));
+        assert!(material_uv_compatible("Terrain", &vs, &ps));
+        vs.inputs[1].usage = USAGE_TEXCOORD;
+        vs.inputs[1].usage_index = 0;
+        vs.outputs.last_mut().unwrap().flags = 2;
+        assert!(material_uv_compatible("Unlit", &vs, &ps));
+        vs.outputs.pop();
+        assert!(!material_uv_compatible("Unlit", &vs, &ps));
+    }
     use super::*;
 
     /// A made-up descriptor in the game's layout.

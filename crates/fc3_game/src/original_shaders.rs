@@ -507,6 +507,16 @@ impl AssetLoader for OriginalMaterialLoader {
         if vs == 0 {
             return Ok(mat);
         }
+        // Older caches may contain a mean-colour-validated Unlit pair whose
+        // texture lookup receives world position instead of the mesh UVs.
+        if cm.shader == "Unlit" {
+            let valid = library().is_some_and(|lib| {
+                lib.entry(vs).zip(lib.entry(o.ps)).is_some_and(|(vs, ps)| {
+                    fc3_formats::original::material_uv_compatible(&cm.shader, vs, ps)
+                })
+            });
+            if !valid { return Ok(mat); }
+        }
         for (r, v) in vs_constants {
             if (*r as usize) < 256 {
                 mat.vs_constants.f[*r as usize] = Vec4::from_array(*v);

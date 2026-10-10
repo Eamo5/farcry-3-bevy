@@ -1834,6 +1834,41 @@ transparent light shafts and a visible interior instead of the opaque brown
 obstruction. It reports 77 FPS; this single capture is not a controlled
 performance comparison. The vertically striped windows remain unresolved.
 
+### Greenhouse window UV pairing correction
+
+The striped windows are a shader-pairing defect, not damaged texture data.
+The installed `WinSpeBreak` entities use the `wms_*panes.xbg` meshes and
+override their material with
+`graphics\_materials\hlevasseur-m-20110826103423.material.bin` (`Unlit`,
+two-sided, premultiplied blending, diffuse tiling 2x2). The cached
+`textures/48b244bd21ae8108.dds` is the intact 256x256 four-pane window image;
+the pane meshes carry nonconstant two-dimensional UVs. `fc3tool fcm` now
+reports UV counts and bounds to make such checks reproducible.
+
+The cached pair `64c1e197728d54dc` / `69067e32118fcf59` feeds world XY from
+the vertex shader into the pixel shader's diffuse lookup. The vertex shader
+has no texture-coordinate input at all. Its metadata passes generic pairing
+because that permits position-based sampling for terrain; the mean-colour
+validation cannot distinguish correct UVs from world coordinates. On vertical
+walls the resulting constant coordinate produces the stripes.
+
+Unlit pairing now requires texture-only pixel inputs to depend on vertex UVs,
+per the installed Unlit descriptor. The renderer checks this for existing
+caches too, retaining the standard Unlit material when the cached pair fails.
+That path uses authored mesh UVs, tiling, premultiplied blending, two-sidedness
+and now the authored Unlit diffuse tint. Other Unlit controls documented above
+remain incomplete; this is not a claim of full shader parity. New conversion
+runs filter incompatible candidates before the vertex-candidate budget.
+
+The regression uses the installed pair's dependency metadata, verifies its
+rejection, preserves generic position-based sampling, accepts a UV-fed input
+and rejects a missing output. Workspace tests and release build pass
+(`Temp/opencode/fc3-window-{tests,build}.log`). The repeated `-Interior`
+validation passes all four cues, physical route completion and health 100
+(`Temp/opencode/doc020-window-fixed/`). Its inspected `greenhouse.png` shows
+recognizable dirty window panes instead of vertical stripes. Interior route
+progression beyond the entrance and RealTree growth remain outstanding.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

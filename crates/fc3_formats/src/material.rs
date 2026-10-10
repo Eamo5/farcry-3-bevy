@@ -75,7 +75,7 @@ pub fn dye_param(shader: &str, params: &[(u32, Vec<u8>)]) -> Option<[f32; 3]> {
 /// comes out black instead of white.
 pub fn single_dye(shader: &str, params: &[(u32, Vec<u8>)]) -> Option<[f32; 3]> {
     let metal = shader == "Metal" || shader == "Metal_Advanced";
-    if !(shader.starts_with("Generic_FC3") || shader == "Hair" || shader == "Blended" || shader == "Simple" || metal) {
+    if !(shader.starts_with("Generic_FC3") || shader == "Hair" || shader == "Blended" || shader == "Simple" || shader == "Unlit" || metal) {
         return None;
     }
     let mut dye = dye_param(shader, params)?;

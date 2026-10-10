@@ -460,6 +460,13 @@ fn main() -> Result<()> {
             }
             for part in m.lods.first().map(|l| l.parts.as_slice()).unwrap_or(&[]) {
                 println!("  part material {} verts {}", part.material, part.positions.len());
+                for (name, uvs) in [("uv0", &part.uvs), ("uv1", &part.uvs1)] {
+                    if !uvs.is_empty() {
+                        let min = uvs.iter().fold([f32::INFINITY; 2], |a, b| [a[0].min(b[0]), a[1].min(b[1])]);
+                        let max = uvs.iter().fold([f32::NEG_INFINITY; 2], |a, b| [a[0].max(b[0]), a[1].max(b[1])]);
+                        println!("    {name}: {} values, {min:?} .. {max:?}", uvs.len());
+                    }
+                }
                 if part.positions.len() <= 16 {
                     for (i, p) in part.positions.iter().enumerate() {
                         println!("    {p:.2?} uv {:.3?} n {:.2?}", part.uvs.get(i), part.normals.get(i));
