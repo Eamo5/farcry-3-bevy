@@ -26,10 +26,31 @@ impl Plugin for PickupsPlugin {
                 attach_pickup_models,
                 spin_weapon_pickups,
                 glint,
-                (interact, loot_bodies).chain().before(crate::hud::HudSet).after(crate::turrets::man_turrets),
+                (mark_takedown_loot, interact, loot_bodies).chain().before(crate::hud::HudSet).after(crate::turrets::man_turrets),
                 detonate_explosives,
             ),
         );
+    }
+}
+
+/// A takedown's victim, searched as he falls (`SP_LootTakedown`).
+#[derive(Component)]
+pub struct AutoLoot;
+
+/// Takedowns (the blows that kill outright) mark their victims to be
+/// searched once `SP_LootTakedown` is learned.
+fn mark_takedown_loot(
+    perks: Res<crate::progression::Perks>,
+    mut hits: MessageReader<crate::combat::DamageEvent>,
+    players: Query<(), With<Player>>,
+    mut commands: Commands,
+) {
+    for hit in hits.read() {
+        if perks.loot_takedown && hit.amount >= 10_000.0 && hit.instigator.is_some_and(|i| players.contains(i)) {
+            if let Ok(mut e) = commands.get_entity(hit.target) {
+                e.insert(AutoLoot);
+            }
+        }
     }
 }
 
@@ -37,12 +58,14 @@ impl Plugin for PickupsPlugin {
 #[derive(Component)]
 pub struct LootableBody {
     pub role: crate::npc::Role,
+    /// The body's rig (its graphic kit picks the game's loot for it).
+    pub rig: Option<Entity>,
 }
 
 /// Searching a body: cash, ammo for the guns carried, and sometimes what the
 /// enemy fought with.
 #[allow(clippy::too_many_arguments)]
-fn loot_bodies(
+pub(crate) fn loot_bodies(
     actions: Res<crate::controls::ActionState>,
     settings: Res<crate::settings::Settings>,
     mut hud: ResMut<HudState>,
@@ -54,32 +77,51 @@ fn loot_bodies(
     mut players: Query<(&Transform, &Player, &mut Inventory, &Health, &mut PlayerStats)>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     (busy, mut gestures): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>),
+    (crafting, kits, auto): (Option<Res<crate::crafting::CraftCatalog>>, Query<&crate::characters::KitId>, Query<(), With<AutoLoot>>),
 ) {
     use crate::npc::Role;
-    // Another interaction is on offer (a pickup is nearer).
-    if hud.prompt.is_some() {
-        return;
-    }
     let Ok((pt, player, mut inv, health, mut stats)) = players.single_mut() else { return };
-    if health.dead || player.noclip || player.driving || player.swimming || busy.busy() {
+    // A takedown's victim is searched as he falls, with no prompt.
+    let taken = bodies.iter().find(|(e, _, _)| auto.contains(*e));
+    // Another interaction is on offer (a pickup is nearer).
+    if taken.is_none() && (hud.prompt.is_some() || health.dead || player.noclip || player.driving || player.swimming || busy.busy()) {
         return;
     }
-    let feet = pt.translation - Vec3::Y * crate::player::HALF_HEIGHT;
-    let Some((e, body, _)) = bodies
-        .iter()
-        .map(|(e, b, gt)| (e, b, Vec2::new(gt.translation().x - feet.x, gt.translation().z - feet.z).length() + (gt.translation().y - feet.y).abs() * 0.5))
-        .filter(|(_, _, d)| *d < 2.4)
-        .min_by(|a, b| a.2.total_cmp(&b.2))
-    else {
+    // (Bodies, like the player, are placed by their capsule's centre.)
+    let centre = pt.translation;
+    let Some((e, body, _)) = taken.map(|(e, b, _)| (e, b, 0.0)).or_else(|| {
+        bodies
+            .iter()
+            .map(|(e, b, gt)| (e, b, Vec2::new(gt.translation().x - centre.x, gt.translation().z - centre.z).length() + (gt.translation().y - centre.y).abs() * 0.5))
+            .filter(|(_, _, d)| *d < 2.4)
+            .min_by(|a, b| a.2.total_cmp(&b.2))
+    }) else {
         return;
     };
-    hud.prompt = Some(format!("{}  search the body", actions.label(crate::controls::Action::Interact, &settings)));
-    if !actions.just_pressed(crate::controls::Action::Interact) {
+    if taken.is_none() {
+        hud.prompt = Some(format!("{}  search the body", actions.label(crate::controls::Action::Interact, &settings)));
+        if !actions.just_pressed(crate::controls::Action::Interact) {
+            return;
+        }
+        gestures.write(crate::fp::FpAction::LootBody { crouch: player.crouching });
+    }
+    *progress.stats.entry(crate::progression::stat::BODIES_LOOTED).or_insert(0) += 1;
+    // What the game gives this kind of enemy: cash, loot to sell, ammunition.
+    let kit = body.rig.and_then(|r| kits.get(r).ok()).map_or(0, |k| k.0);
+    if let Some(loot) = crafting.as_ref().and_then(|c| c.roll_body(kit, &mut rng)) {
+        let (found, full) = take_loot(&loot, crafting.as_ref().unwrap(), &mut progress, &mut inv, &mut stats, &perks);
+        let mut note = if found.is_empty() { "Nothing useful".to_string() } else { format!("Found {}", found.join(", ")) };
+        if full {
+            note += " (rucksack full)";
+        }
+        hud.notify(note);
+        sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 0.6 });
+        commands.entity(e).remove::<LootableBody>();
         return;
     }
-    gestures.write(crate::fp::FpAction::LootBody { crouch: player.crouching });
     let mut found = Vec::new();
-    let cash = progress.add_money(5 + (rng.f32() * 40.0) as u32);
+    // (`SP_LootDoubleCash`: twice the cash.)
+    let cash = progress.add_money((5 + (rng.f32() * 40.0) as u32) * if perks.double_cash { 2 } else { 1 });
     if cash > 0 {
         found.push(format!("${cash}"));
     }
@@ -110,6 +152,42 @@ fn loot_bodies(
     commands.entity(e).remove::<LootableBody>();
 }
 
+/// Takes what was rolled: the cash (doubled by `SP_LootDoubleCash`), loot items
+/// into the rucksack as far as it holds, and ammunition and gadgets as far as
+/// there is room. Returns what was found, and whether the rucksack filled.
+fn take_loot(
+    loot: &crate::crafting::BodyLoot,
+    crafting: &crate::crafting::CraftCatalog,
+    progress: &mut crate::progression::Progress,
+    inv: &mut Inventory,
+    stats: &mut PlayerStats,
+    perks: &crate::progression::Perks,
+) -> (Vec<String>, bool) {
+    let mut found = Vec::new();
+    let cash = progress.add_money(loot.cash * if perks.double_cash { 2 } else { 1 });
+    if cash > 0 {
+        found.push(format!("${cash}"));
+    }
+    let room = crafting.loot_capacity(progress).saturating_sub(crate::crafting::loot_count(progress));
+    let mut full = false;
+    for (i, id) in loot.items.iter().enumerate() {
+        if i as u32 >= room {
+            full = true;
+            break;
+        }
+        *progress.loot.entry(*id).or_insert(0) += 1;
+        found.extend(crafting.item(*id).map(|i| i.name.clone()).filter(|n| !n.is_empty()));
+    }
+    for &(id, n) in &loot.supplies {
+        let Some(item) = crafting.item(id) else { continue };
+        let got = crate::progression::give_supply(item, n, inv, stats, perks, progress);
+        if got > 0 {
+            found.push(if item.gadget != 0 || n == 1 { item.name.clone() } else { format!("{got} rounds") });
+        }
+    }
+    (found, full)
+}
+
 /// Persistent world changes made by the player.
 #[derive(Resource, Default)]
 pub struct WorldState {
@@ -133,6 +211,8 @@ pub enum PickupKind {
     Relic,
     Letter,
     MemoryCard,
+    /// Body armour.
+    Armour,
 }
 
 /// How many of each collectible the island holds.
@@ -154,6 +234,7 @@ impl PickupKind {
             PickupKind::Relic => "relic".into(),
             PickupKind::Letter => "lost letter".into(),
             PickupKind::MemoryCard => "memory card".into(),
+            PickupKind::Armour => "body armor".into(),
         }
     }
 }
@@ -204,6 +285,8 @@ pub fn classify(name: &str) -> Option<Classified> {
         }
     } else if n.starts_with("pickups/loot/") {
         PickupKind::Loot
+    } else if n.starts_with("pickups/armor/") {
+        PickupKind::Armour
     } else if n.starts_with("pickups/plants/") {
         PickupKind::Plant(crate::syringes::Plant::from_name(&n)?)
     } else if n.starts_with("pickups/collectibles/") {
@@ -223,6 +306,10 @@ pub fn classify(name: &str) -> Option<Classified> {
     };
     Some(Classified::Pickup(kind))
 }
+
+/// A loot container's prototype name (its authored loot groups).
+#[derive(Component)]
+pub struct LootSource(pub String);
 
 #[derive(Component)]
 pub struct Pickup {
@@ -345,7 +432,7 @@ fn interact(
     mut players: Query<(&Transform, &Player, &mut Inventory, &Health, &mut PlayerStats)>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     (busy, mut gestures, mut xp, mut looted, scripted): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>, MessageWriter<crate::progression::XpGain>, MessageWriter<crate::progression::ItemLooted>, Res<crate::story::ScriptedPlayer>),
-    crafting: Option<Res<crate::crafting::CraftCatalog>>,
+    (crafting, sources): (Option<Res<crate::crafting::CraftCatalog>>, Query<&LootSource>),
 ) {
     let Ok((pt, player, mut inv, health, mut stats)) = players.single_mut() else { return };
     if health.dead || player.noclip || player.driving || busy.busy() {
@@ -385,20 +472,39 @@ fn interact(
     if matches!(p.kind, PickupKind::Plant(_)) && !player.swimming {
         gestures.write(crate::fp::FpAction::LootPlant { crouch: player.crouching });
     }
-    let msg = apply_reward(p.kind, &mut inv, &mut stats, &mut world, &mut progress, &perks, &mut rng);
+    let rolled = match (p.kind, sources.get(e), crafting.as_ref()) {
+        (PickupKind::Loot, Ok(source), Some(c)) => c.roll_container(&source.0, &mut rng).map(|loot| (loot, c)),
+        _ => None,
+    };
+    let msg = if let Some((loot, c)) = rolled {
+        let (found, full) = take_loot(&loot, c, &mut progress, &mut inv, &mut stats, &perks);
+        let mut note = if found.is_empty() { "Nothing useful".to_string() } else { format!("Found {}", found.join(", ")) };
+        if full {
+            note += " (rucksack full)";
+        }
+        note
+    } else if p.kind == PickupKind::Armour {
+        let value = crafting.as_ref().map_or(0.0, |c| c.armour_value());
+        progress.armour = progress.armour.max(value);
+        "Body armor".to_string()
+    } else {
+        apply_reward(p.kind, &mut inv, &mut stats, &mut world, &mut progress, &perks, &mut rng)
+    };
     if let PickupKind::Plant(plant) = p.kind {
         looted.write(crate::progression::ItemLooted(crate::progression::LootKind::Plant(plant)));
     }
     actions.consume(crate::controls::Action::Interact);
     hud.notify(msg);
     // Collectibles are worth experience as well as cash.
+    // (Their XP is the game's, by kind.)
+    let collectible = |what: &str| crafting.as_ref().map_or(0, |c| c.collectible_xp(what));
     let found = match p.kind {
-        PickupKind::Relic => Some((50, "relic")),
-        PickupKind::Letter => Some((75, "lost letter")),
-        PickupKind::MemoryCard => Some((100, "memory card")),
+        PickupKind::Relic => Some((collectible("relic"), "relic")),
+        PickupKind::Letter => Some((collectible("letter"), "lost letter")),
+        PickupKind::MemoryCard => Some((collectible("sd card"), "memory card")),
         _ => None,
     };
-    if let Some((amount, reason)) = found {
+    if let Some((amount, reason)) = found.filter(|(amount, _)| *amount > 0) {
         xp.write(crate::progression::XpGain { amount, reason });
     }
     sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 0.6 });
@@ -435,6 +541,8 @@ fn apply_reward(
 ) -> String {
     let (grenade_cap, medkit_cap) = (perks.grenade_cap, perks.medkit_cap);
     match kind {
+        // (Worn in `interact`, at the converted armour value.)
+        PickupKind::Armour => String::new(),
         PickupKind::Ammo => format!("+{} rounds", give_ammo(inv, 1.0)),
         PickupKind::Explosives => {
             inv.grenades = (inv.grenades + 1).min(grenade_cap);
@@ -502,7 +610,8 @@ fn apply_reward(
         }
         PickupKind::Plant(plant) => {
             let _ = &world;
-            progress.plants[plant.index()] += 1;
+            // (Horticulture 101: two of each plant picked.)
+            progress.plants[plant.index()] += if perks.double_plants { 2 } else { 1 };
             let have = progress.plants[plant.index()];
             format!("{} ({have}) - craft in the journal", plant.name())
         }

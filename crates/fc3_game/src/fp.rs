@@ -43,8 +43,9 @@ impl Plugin for FpPlugin {
     }
 }
 
-/// The generic first-person arms.
-const ARMS: &str = r"graphics\__fc3_graphics\_common\characters\multiplayer\pvp\rebels\rebel_assault_fpsarms.xbg";
+/// Jason's own first-person arms (his skin, with the tattoo's material, and
+/// his shirt's sleeves).
+const ARMS: &str = r"graphics\__fc3_graphics\_common\characters\unique\jason\jason_fp_clean.xbg";
 
 /// Clip folders (under `cache::FP_CLIP_ROOT`) by weapon model folder.
 const FOLDERS: &[(&str, &str)] = &[
@@ -1453,7 +1454,9 @@ fn load_fp(mut state: ResMut<FpState>, server: Res<AssetServer>, info: Res<crate
         warn!("no first-person clips in the cache ({}); re-run the converter", cache::FP_CLIPS_REL);
         return;
     }
-    state.arms = Some(server.load_builder().with_settings(|s: &mut ModelSettings| s.skinned = true).load(skinned_cache_path(&cache::model_rel(ARMS))));
+    // (FC3_FP_ARMS=<model path>, tests: other arms.)
+    let arms = std::env::var("FC3_FP_ARMS").unwrap_or_else(|_| ARMS.to_string());
+    state.arms = Some(server.load_builder().with_settings(|s: &mut ModelSettings| s.skinned = true).load(skinned_cache_path(&cache::model_rel(&arms))));
     state.props = PROPS.iter().map(|(name, path)| (*name, server.load(cache_path(&cache::model_rel(path))))).collect();
 }
 

@@ -119,7 +119,9 @@ mod river_param {
 
 /// A river material from a converted `WaterRiver` one.
 fn river_material(cm: &CachedMaterial, server: &AssetServer, materials: &mut Assets<RiverMaterial>) -> Option<Handle<RiverMaterial>> {
-    let tex = |h: u32| cm.textures.iter().find(|(k, _)| *k == h).map(|(_, p)| p.clone());
+    // (An unset map is an empty path: no map, not a missing one, which would
+    // load as plain white and turn the whole river to foam.)
+    let tex = |h: u32| cm.textures.iter().find(|(k, p)| *k == h && !p.is_empty()).map(|(_, p)| p.clone());
     let floats = |h: u32| cm.params.iter().find(|(k, _)| *k == h).map(|(_, raw)| fc3_formats::original::param_floats(raw)).unwrap_or_default();
     let ripples = tex(river_param::RIPPLES)?;
     let foam = tex(river_param::FOAM);

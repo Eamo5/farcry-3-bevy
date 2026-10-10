@@ -477,6 +477,7 @@ fn takedown(
     (mut particles, mut rng, busy): (ResMut<crate::particles::Particles>, ResMut<crate::weapons::Rng>, Res<crate::fp::HandsBusy>),
     mut anims: MessageWriter<crate::fp::TakedownAnim>,
     (mut mount, mut commands, heights): (ResMut<crate::traversal::Mount>, Commands, Res<crate::terrain::Heightfield>),
+    (mut stats, mut rewards): (MessageWriter<crate::progression::StatGain>, ResMut<crate::progression::TakedownRewards>),
 ) {
     let Ok((pe, mut pt, mut p, h, mut inv)) = players.single_mut() else { return };
     let dt = time.delta_secs();
@@ -498,7 +499,7 @@ fn takedown(
     // On a zip line only the drop onto someone below is open.
     let zipping = matches!(*mount, crate::traversal::Mount::Zip { .. });
     // In the water only the pull off a dock (Death From Below) is open.
-    if *state.get() != crate::menu::GameState::Playing || h.dead || (p.swimming && !perks.death_from_below) || p.noclip || (p.driving && !zipping) {
+    if *state.get() != crate::menu::GameState::Playing || h.dead || !perks.takedown || (p.swimming && !perks.death_from_below) || p.noclip || (p.driving && !zipping) {
         return;
     }
     let fwd = Vec3::new(-p.yaw.sin(), 0.0, -p.yaw.cos());
@@ -528,6 +529,7 @@ fn takedown(
             if actions.just_pressed(Action::Melee) {
                 actions.consume(Action::Melee);
                 td.chain_window = 0.0;
+                rewards.0.insert(target, "TakedownKnifeThrow");
                 damage.write(DamageEvent {
                     target,
                     amount: 10_000.0,
@@ -607,7 +609,11 @@ fn takedown(
                 p.last_landing_speed = 0.0;
                 let from = npcs.get(target).map(|(_, _, n, _)| crate::fp::Quarter::of(n.yaw, -flat)).unwrap_or(crate::fp::Quarter::Back);
                 strike(&mut td, &mut inv, target, pe, pt.translation, &mut damage, &mut sfx);
+                stats.write(crate::progression::StatGain { stat: crate::progression::stat::TAKEDOWNS_FROM_ABOVE, amount: 1 });
+                let reward = if second.is_some() { "TakedownFromAboveDouble" } else { "TakedownFromAbove" };
+                rewards.0.insert(target, reward);
                 if let Some((e2, _)) = second {
+                    rewards.0.insert(e2, reward);
                     damage.write(DamageEvent {
                         target: e2,
                         amount: 10_000.0,
@@ -660,6 +666,8 @@ fn takedown(
                 let facing = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
                 let front = facing.dot(flat) < -0.3;
                 strike(&mut td, &mut inv, target, pe, at, &mut damage, &mut sfx);
+                stats.write(crate::progression::StatGain { stat: crate::progression::stat::TAKEDOWNS_FROM_BELOW, amount: 1 });
+                rewards.0.insert(target, if p.swimming { "TakedownFromWater" } else { "TakedownFromLedge" });
                 debug!("takedown from below ({} m up, front {front}, water {})", at.y - crate::player::HALF_HEIGHT - feet, p.swimming);
                 anims.write(crate::fp::TakedownAnim {
                     victim: target,
@@ -781,6 +789,16 @@ fn takedown(
     let npc_facing = npcs.get(target).map(|(_, _, n, _)| Vec3::new(-n.yaw.sin(), 0.0, -n.yaw.cos())).unwrap_or(flat);
     let style = if npc_facing.dot(flat) < -0.3 { crate::fp::TakedownStyle::Front } else { crate::fp::TakedownStyle::Back };
     strike(&mut td, &mut inv, target, pe, t.translation, &mut damage, &mut sfx);
+    stats.write(crate::progression::StatGain { stat: crate::progression::stat::TAKEDOWN_KILLS, amount: 1 });
+    // (The XP each victim is worth, by the takedown that kills him.)
+    let heavy = npcs.get(target).is_ok_and(|(_, _, n, _)| n.role.armoured());
+    rewards.0.insert(target, if heavy { "HeavyTakedown" } else if grenade.is_some() { "TakedownGrenadePinPull" } else { "StandardTakedown" });
+    if let Some(c) = chain {
+        rewards.0.insert(c, "TakedownChain");
+    }
+    for e in pistol.iter().flatten() {
+        rewards.0.insert(*e, "TakedownPistolMarksman");
+    }
     anims.write(crate::fp::TakedownAnim { victim: target, style, chain, grenade, drag, second: None, pistol });
     // The knife throw (or the kick) is part of the takedown: no separate
     // window, a longer hold.

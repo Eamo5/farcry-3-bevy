@@ -254,12 +254,18 @@ fn spawn_objects(
                 continue;
             }
             if let Some(Classified::Pickup(kind)) = classify(&e.name) {
-                commands.spawn((
-                    Pickup { kind, id: e.id, visual: placed.get(&(i as u32)).copied() },
-                    Transform::from_translation(Vec3::from_array(e.translation)),
-                    Visibility::Visible,
-                    ChildOf(root),
-                ));
+                let pickup = commands
+                    .spawn((
+                        Pickup { kind, id: e.id, visual: placed.get(&(i as u32)).copied() },
+                        Transform::from_translation(Vec3::from_array(e.translation)),
+                        Visibility::Visible,
+                        ChildOf(root),
+                    ))
+                    .id();
+                // (A container's own loot, by its prototype.)
+                if kind == crate::pickups::PickupKind::Loot {
+                    commands.entity(pickup).insert(crate::pickups::LootSource(e.name.clone()));
+                }
             }
         }
         slot.root = Some(root);

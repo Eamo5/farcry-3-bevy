@@ -127,14 +127,28 @@ fn apply_damage(
     mut stats: Query<&mut PlayerStats, Without<Health>>,
     scripted: Res<crate::story::ScriptedPlayer>,
     instigators: Query<(Option<&crate::wildlife::WildAnimal>, Option<&crate::npc::Npc>, Option<&crate::story_actors::StoryActor>, Option<&Name>)>,
+    players: Query<(), With<crate::player::Player>>,
+    driving: Option<Res<crate::vehicles::Driving>>,
+    mut progress: ResMut<crate::progression::Progress>,
 ) {
     for ev in events.read() {
         let Ok((mut h, gt, ps, armour, scale)) = targets.get_mut(ev.target) else { continue };
         if h.dead {
             continue;
         }
-        // The player's skills soften incoming damage.
-        let mut amount = if ps.is_some() { ev.amount * perks.damage_taken * settings.difficulty.damage_taken() } else { ev.amount };
+        // The one-hit syringe: whatever the player lands kills.
+        if ps.is_none() && boosts.active(crate::syringes::Syringe::OneHitKill) && ev.instigator.is_some_and(|i| players.contains(i)) {
+            h.current = 0.0;
+        }
+        // The player's skills soften incoming damage (blasts, fire and blows
+        // each have their own).
+        let resist = match ev.kind {
+            DamageKind::Explosion => perks.explosion_taken,
+            DamageKind::Fire => perks.fire_taken,
+            DamageKind::Melee => perks.melee_taken,
+            _ => 1.0,
+        };
+        let mut amount = if ps.is_some() { ev.amount * perks.damage_taken * resist * settings.difficulty.damage_taken() } else { ev.amount };
         if let Some(a) = armour.filter(|_| ev.kind == DamageKind::Bullet && !ev.headshot) {
             amount *= a.0;
         }
@@ -145,14 +159,32 @@ fn apply_damage(
                 _ => 1.0,
             };
         }
+        // (`SP_VehicleExtraHealth`: the vehicle the player drives takes less.)
+        if driving.as_ref().is_some_and(|d| d.vehicle == Some(ev.target)) {
+            amount *= perks.vehicle_damage;
+        }
         // Syringes: the fighter's halves damage, the fireproof one stops burns.
         if ps.is_some() {
-            if boosts.active(crate::syringes::Syringe::Fighter) && ev.kind != DamageKind::Drown {
-                amount *= 0.5;
-            }
-            if boosts.active(crate::syringes::Syringe::Fireproof) && ev.kind == DamageKind::Fire {
+            use crate::syringes::Syringe;
+            if boosts.active(Syringe::Fireproof) && ev.kind == DamageKind::Fire {
                 amount = 0.0;
             }
+            if boosts.active(Syringe::AnimalShield) && ev.instigator.and_then(|e| instigators.get(e).ok()).is_some_and(|(animal, ..)| animal.is_some()) {
+                amount *= 0.5;
+            }
+            if boosts.active(Syringe::Invincible) {
+                amount = 0.0;
+            }
+        }
+        // Body armour takes blows, blasts and bullets first (`SP_ArmorDefense` makes
+        // it go further).
+        if ps.is_some() && progress.armour > 0.0 && matches!(ev.kind, DamageKind::Bullet | DamageKind::Explosion | DamageKind::Melee) {
+            let absorbed = amount.min(progress.armour * perks.armour_absorb);
+            progress.armour = (progress.armour - absorbed / perks.armour_absorb).max(0.0);
+            if progress.armour < 0.5 {
+                progress.armour = 0.0;
+            }
+            amount -= absorbed;
         }
         // FC3_GOD (tests), or a mission's scene: the player takes no damage.
         if ps.is_some() && (scripted.god || std::env::var("FC3_GOD").is_ok()) {
@@ -192,7 +224,7 @@ fn apply_damage(
     let _ = &mut stats;
 }
 
-fn player_regen(time: Res<Time>, mut q: Query<(&mut Health, &mut PlayerStats), With<Player>>) {
+fn player_regen(time: Res<Time>, perks: Res<crate::progression::Perks>, mut q: Query<(&mut Health, &mut PlayerStats), With<Player>>) {
     let dt = time.delta_secs();
     for (mut h, mut ps) in &mut q {
         ps.burning = (ps.burning - dt).max(0.0);
@@ -206,7 +238,7 @@ fn player_regen(time: Res<Time>, mut q: Query<(&mut Health, &mut PlayerStats), W
             continue;
         }
         h.since_damage += dt;
-        if h.since_damage > REGEN_DELAY {
+        if h.since_damage > REGEN_DELAY * perks.regen_delay {
             // Regenerate to the top of the current (partially filled) segment.
             let cap = ((h.current / HEALTH_SEGMENT).ceil() * HEALTH_SEGMENT).clamp(HEALTH_SEGMENT, h.max);
             if h.current < cap {
@@ -254,10 +286,10 @@ fn use_medkit(
     }
     if ps.medkits > 0 {
         ps.medkits -= 1;
-        let to = if perks.medkit_full_heal { h.max } else { (h.current + MEDKIT_HEAL).min(h.max) };
+        let to = if perks.medkit_full_heal { h.max } else { (h.current + MEDKIT_HEAL + perks.medkit_bonus).min(h.max) };
         heals.write(crate::fp::FpAction::Syringe { to });
     } else if manual {
-        heals.write(crate::fp::FpAction::ManualHeal { kind: ps.last_hurt, to: (2.0 * HEALTH_SEGMENT).min(h.max) });
+        heals.write(crate::fp::FpAction::ManualHeal { kind: ps.last_hurt, to: (perks.manual_heal_bars * HEALTH_SEGMENT).min(h.max) });
     }
 }
 

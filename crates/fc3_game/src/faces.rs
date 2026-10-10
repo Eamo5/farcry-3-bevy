@@ -27,7 +27,7 @@ impl Plugin for FacesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Voices>()
             .add_systems(OnExit(crate::menu::GameState::Loading), load_faces)
-            .add_systems(Update, start_voices)
+            .add_systems(Update, (start_voices, attach_kit_faces))
             .add_systems(PostUpdate, pose_faces.after(crate::characters::animate_characters).before(TransformSystems::Propagate));
     }
 }
@@ -45,6 +45,8 @@ pub struct FaceLibrary {
     pak: Option<(PathBuf, PakIndex)>,
     /// Definition key -> its rig's path hash.
     definitions: HashMap<u32, u64>,
+    /// Graphic kit id -> the definition key its characters wear.
+    kit_faces: HashMap<u64, u32>,
     rigs: HashMap<u64, Option<Arc<FaceRig>>>,
     clips: HashMap<u64, Option<Arc<FaceClip>>>,
 }
@@ -60,7 +62,8 @@ impl FaceLibrary {
         f.read_exact(&mut header)?;
         let index = PakIndex::parse(&header)?;
         let definitions = facial::definitions_from_text(&std::fs::read_to_string(root.join(facial::DEFINITIONS_REL))?);
-        Ok(FaceLibrary { pak: Some((path, index)), definitions, ..Default::default() })
+        let kit_faces = std::fs::read_to_string(root.join(facial::KIT_FACES_REL)).map(|t| facial::kit_faces_from_text(&t)).unwrap_or_default();
+        Ok(FaceLibrary { pak: Some((path, index)), definitions, kit_faces, ..Default::default() })
     }
 
     fn read(&self, hash: u64) -> Option<Vec<u8>> {
@@ -132,6 +135,43 @@ impl Face {
     /// faces don't blink together).
     pub fn new(rig: Arc<FaceRig>, idle: Option<Arc<FaceClip>>, phase: f32) -> Face {
         Face { rig, joints: None, scene: None, voice: None, idle: idle.map(|c| (c, phase)) }
+    }
+}
+
+/// Gives generic characters the face their kit wears, blinking. Kits the
+/// game gives no face of their own wear the face of a kit of the same
+/// faction (the name before the first `_`) that has one.
+fn attach_kit_faces(
+    library: Option<ResMut<FaceLibrary>>,
+    chars: Option<Res<crate::characters::CharacterAssets>>,
+    rigs: Query<(Entity, &crate::characters::KitId), (With<CharacterRig>, Without<Face>)>,
+    mut fallback: Local<Option<HashMap<u64, u32>>>,
+    mut commands: Commands,
+) {
+    let Some(mut library) = library else { return };
+    if rigs.is_empty() || library.kit_faces.is_empty() {
+        return;
+    }
+    let fallback = fallback.get_or_insert_with(|| {
+        let kits = chars.as_ref().map(|c| c.kits.as_slice()).unwrap_or_default();
+        let faction = |name: &str| name.split('_').next().unwrap_or(name).to_ascii_lowercase();
+        kits.iter()
+            .filter(|k| !library.kit_faces.contains_key(&k.id))
+            .filter_map(|k| {
+                let same = kits.iter().find(|o| faction(&o.name) == faction(&k.name) && library.kit_faces.contains_key(&o.id))?;
+                Some((k.id, library.kit_faces[&same.id]))
+            })
+            .collect()
+    });
+    for (e, kit) in &rigs {
+        let key = library.kit_faces.get(&kit.0).or_else(|| fallback.get(&kit.0)).copied();
+        let rig = key.and_then(|k| library.rig(k));
+        let phase = ((e.to_bits() & 0xffff_ffff) as f32 * 0.618).fract() * 4.0;
+        match rig {
+            Some(rig) => commands.entity(e).insert(Face::new(rig, library.idle(), phase)),
+            // (No face: don't look again.)
+            None => commands.entity(e).remove::<crate::characters::KitId>(),
+        };
     }
 }
 

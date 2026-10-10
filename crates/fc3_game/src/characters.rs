@@ -163,8 +163,15 @@ pub struct KitPart {
 /// A loaded graphic kit: one weighted list of parts per slot.
 pub struct LoadedKit {
     pub name: String,
+    /// The kit's id (0 if unknown).
+    pub id: u64,
     pub slots: Vec<Vec<KitPart>>,
 }
+
+/// The graphic kit a generic character was dressed from (its face follows
+/// from it, see `faces`).
+#[derive(Component, Clone, Copy)]
+pub struct KitId(pub u64);
 
 /// A loaded [`LookDef`].
 pub struct Look {
@@ -241,6 +248,7 @@ pub fn load_kit(server: &AssetServer, k: kits::Kit) -> LoadedKit {
     let material = |path: &str| -> Handle<StandardMaterial> { server.load(cache_path(&cache::material_rel(path))) };
     LoadedKit {
         name: k.name,
+        id: k.id,
         slots: k
             .slots
             .into_iter()
@@ -476,7 +484,9 @@ pub fn spawn_villager(
     let i = usize::from(female);
     let kit = &assets.kits[assets.villager_kits[i]?];
     let parts = dress(kit, models, rng);
-    spawn_dressed_rig(commands, parent, &parts, None, assets.villager_clips[i].clone(), offset, None)
+    let rig = spawn_dressed_rig(commands, parent, &parts, None, assets.villager_clips[i].clone(), offset, None)?;
+    commands.entity(rig).insert(KitId(kit.id));
+    Some(rig)
 }
 
 /// Dresses a kit: a weighted part per slot, with matching material swaps,
@@ -539,7 +549,9 @@ pub fn spawn_character(
     // The part with the fullest bone list builds the rig.
     parts.sort_by_key(|p| std::cmp::Reverse(p.model.bones.len()));
     let weapon = models.get(&look.weapon);
-    spawn_dressed_rig(commands, parent, &parts, weapon, assets.human.clone(), offset, None)
+    let rig = spawn_dressed_rig(commands, parent, &parts, weapon, assets.human.clone(), offset, None)?;
+    commands.entity(rig).insert(KitId(kit.id));
+    Some(rig)
 }
 
 /// A part of the weapon a character holds (on its `RightHand` joint).

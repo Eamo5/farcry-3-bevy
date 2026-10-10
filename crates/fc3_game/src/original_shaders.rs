@@ -1060,7 +1060,10 @@ fn attach_swaps(
     settings: Res<OriginalShaders>,
     server: Res<AssetServer>,
     mut commands: Commands,
-    parts: Query<(Entity, &MeshMaterial3d<StandardMaterial>, Has<SkinnedPart>), (Or<(With<PropPart>, With<SkinnedPart>)>, Without<OriginalSwap>)>,
+    parts: Query<
+        (Entity, &MeshMaterial3d<StandardMaterial>, Has<SkinnedPart>),
+        (Or<(With<PropPart>, With<SkinnedPart>)>, Without<OriginalSwap>, Without<crate::tattoo::NoOriginal>),
+    >,
 ) {
     if !settings.enabled {
         return;

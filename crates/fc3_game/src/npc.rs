@@ -42,7 +42,7 @@ impl Plugin for NpcPlugin {
                 )
                     .chain(),
             )
-            .add_systems(Update, (npc_test_spawn, npc_test_pose, npc_test_log, npc_test_stealth, kill_test, melee_test).after(sink_corpses))
+            .add_systems(Update, (npc_test_spawn, npc_test_pose, npc_test_log, npc_test_stealth, kill_test.before(crate::pickups::loot_bodies), melee_test).after(sink_corpses))
             .add_systems(PreUpdate, outpost_fire_test.after(crate::controls::update_actions).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(PostUpdate, track_heads.after(TransformSystems::Propagate));
     }
@@ -1000,7 +1000,7 @@ pub fn role_from_weapon(prefs: &str) -> Option<Role> {
     })
 }
 
-fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker_id: u64, rng: &mut Rng) -> Npc {
+pub(crate) fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker_id: u64, rng: &mut Rng) -> Npc {
     let stats = role.stats(faction);
     Npc {
         faction,
@@ -1063,6 +1063,19 @@ fn despawn_far(
 }
 
 /// Builds awareness from sight; gunshots and explosions alert nearby enemies.
+/// How far (m) guards hear the player's steps at a ground speed.
+fn footstep_range(speed: f32, crouching: bool, sprinting: bool) -> f32 {
+    if speed < 0.5 {
+        0.0
+    } else if crouching {
+        if speed > 2.5 { 3.5 } else { 1.5 }
+    } else if sprinting {
+        13.0
+    } else {
+        6.0
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn perceive(
     time: Res<Time>,
@@ -1200,6 +1213,18 @@ fn perceive(
             }
         } else {
             npc.awareness = (npc.awareness - dt * if alert { 0.05 } else { 0.12 }).max(0.0);
+        }
+        // Steps heard out of sight: a sprint carries farthest, a crouch
+        // hardly at all (`SP_SilentRun` quietens them).
+        if !friendly && !visible && !ph.dead && !unseen && !player.driving && player.grounded && time.elapsed_secs() - player.spawned_at >= 5.0 {
+            let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
+            let heard = footstep_range(speed, player.crouching, player.sprinting) * perks.footstep_noise;
+            if dist < heard {
+                npc.awareness = (npc.awareness + (1.0 - dist / heard) * 0.9 * dt).min(1.0);
+                if npc.awareness > 0.35 {
+                    npc.last_known = Some(pt.translation);
+                }
+            }
         }
         for n in noises.iter().filter(|_| !friendly) {
             if t.translation.distance(n.at) < n.radius {
@@ -2043,7 +2068,7 @@ fn react_to_death(
         }
         commands.entity(d.entity).remove::<(Collider, RigidBody)>().insert(Corpse { age: 0.0, fall_axis: side, skinned, found: false });
         if npc.faction.hostile_to_player() {
-            commands.entity(d.entity).insert(crate::pickups::LootableBody { role: npc.role });
+            commands.entity(d.entity).insert(crate::pickups::LootableBody { role: npc.role, rig: npc.rig });
         }
         // A flamer's fuel tank goes up when he falls.
         if npc.role == Role::Flamer {
@@ -2399,6 +2424,7 @@ fn kill_test(
     players: Query<(Entity, &Transform), With<Player>>,
     mut damage: MessageWriter<DamageEvent>,
     mut commands: Commands,
+    (mut actions, progress, mut searched): (ResMut<crate::controls::ActionState>, Res<crate::progression::Progress>, Local<u8>),
 ) {
     let Ok(mode) = std::env::var("FC3_KILL_TEST") else { return };
     let Some((e, _)) = npcs.iter().find(|(_, n)| n.marker_id == u64::MAX) else { return };
@@ -2410,6 +2436,14 @@ fn kill_test(
         damage.write(DamageEvent { target: e, amount, kind: DamageKind::Bullet, source: Some(pt.translation), instigator: Some(pe), headshot: mode == "head" });
         info!("kill-test: shot ({mode})");
         *shots = 1;
+    }
+    // "loot": search the body once it is down, and log what was found.
+    if mode == "loot" && (4.0..4.3).contains(&t) {
+        actions.press(crate::controls::Action::Interact);
+        *searched = 1;
+    } else if mode == "loot" && t >= 4.5 && *searched == 1 {
+        info!("kill-test: looted: money {} loot {:?}", progress.money, progress.loot);
+        *searched = 2;
     }
     let at: Vec<f32> = std::env::var("FC3_TD_SHOT").unwrap_or_default().split(',').filter_map(|s| s.parse().ok()).collect();
     if let (Some(&when), Some(path)) = (at.get(*shots - (*shots > 0) as usize), args.screenshot.as_ref()) {

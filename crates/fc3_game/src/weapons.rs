@@ -27,6 +27,7 @@ impl Plugin for WeaponsPlugin {
             .add_systems(Update, (fire_test_setup, fire_test_log, scope_sway))
             .add_message::<Explosion>()
             .add_message::<HitMarker>()
+            .add_systems(Startup, load_weapon_stats)
             .add_systems(OnExit(crate::menu::GameState::Loading), (setup_effects, give_player_loadout).chain())
             .add_systems(
                 Update,
@@ -91,6 +92,10 @@ pub struct WeaponDef {
     pub hold: Vec3,
     /// Quiet: little noise for enemies to hear, no flash.
     pub silenced: bool,
+    /// Seconds to put it away and to bring it out (a swap is the one's
+    /// holster and the other's draw).
+    pub holster: f32,
+    pub draw: f32,
 }
 
 const MODEL_ROOT: &str = r"graphics\__fc3_graphics\_common\weapons\";
@@ -102,7 +107,69 @@ impl WeaponDef {
     }
 }
 
+/// The game's own handling for the player's weapons (`fc3_formats::weapons`),
+/// once read from the cache: [`weapon_defs`] applies it.
+static WEAPON_STATS: std::sync::OnceLock<Vec<fc3_formats::weapons::WeaponStats>> = std::sync::OnceLock::new();
+
+fn load_weapon_stats(info: Option<Res<crate::data::CacheInfo>>) {
+    let Some(info) = info else { return };
+    match std::fs::read_to_string(info.root.join(fc3_formats::weapons::STATS_REL)).map_err(anyhow::Error::from).and_then(|t| fc3_formats::weapons::from_text(&t)) {
+        Ok(stats) => {
+            let n = apply_stats(&mut base_weapon_defs(), &stats);
+            info!("weapons: the game's handling for {n} weapons");
+            let _ = WEAPON_STATS.set(stats);
+        }
+        Err(e) => warn!("weapons: no handling table ({e:#}); re-run the converter"),
+    }
+}
+
+/// Puts the game's handling on the weapons whose model it names: damage
+/// a bullet, fire rate, magazine, reload time, pellets and silence (the
+/// launchers, bow and flamethrower keep their own damage; mounted guns their
+/// endless belts). Returns how many matched.
+pub fn apply_stats(defs: &mut [WeaponDef], stats: &[fc3_formats::weapons::WeaponStats]) -> usize {
+    use WeaponClass::*;
+    let mut n = 0;
+    for d in defs.iter_mut().filter(|d| !d.model.is_empty() && d.class != Melee) {
+        let key = fc3_formats::weapons::model_key(&d.model_path());
+        let Some(s) = stats.iter().find(|s| fc3_formats::weapons::model_key(&s.model) == key) else { continue };
+        n += 1;
+        if s.damage > 0.0 && !matches!(d.class, Launcher | GrenadeLauncher | Bow | Flamethrower) {
+            d.damage = s.damage;
+        }
+        if s.fire_rate > 0.0 {
+            d.interval = 60.0 / s.fire_rate;
+        }
+        if s.magazine > 0 && d.class != Mounted {
+            d.magazine = s.magazine;
+        }
+        if s.reload > 0.0 {
+            d.reload_time = s.reload;
+        }
+        if s.pellets > 1 {
+            d.pellets = s.pellets;
+        }
+        if s.draw > 0.0 {
+            d.draw = s.draw;
+        }
+        if s.holster > 0.0 {
+            d.holster = s.holster;
+        }
+        d.silenced = s.silent;
+    }
+    n
+}
+
+/// The weapons, with the game's handling once it is loaded.
 pub fn weapon_defs() -> Vec<WeaponDef> {
+    let mut defs = base_weapon_defs();
+    if let Some(stats) = WEAPON_STATS.get() {
+        apply_stats(&mut defs, stats);
+    }
+    defs
+}
+
+fn base_weapon_defs() -> Vec<WeaponDef> {
     use WeaponClass::*;
     let w = |name, model, class, damage, rpm: f32, automatic, magazine, max_reserve, spread, reload_time, ads_fov, recoil, hold| WeaponDef {
         name,
@@ -121,6 +188,8 @@ pub fn weapon_defs() -> Vec<WeaponDef> {
         recoil,
         hold,
         silenced: false,
+        holster: 0.1,
+        draw: 0.25,
     };
     // Hand positions by kind of weapon.
     let pistol = Vec3::new(0.16, -0.17, -0.42);
@@ -384,6 +453,13 @@ impl Attachment {
     /// magazines on everything that has one).
     pub fn fits(self, d: &WeaponDef) -> bool {
         use WeaponClass::*;
+        // A weapon the game's shop knows sells only the attachments it lists.
+        if let Some(stats) = WEAPON_STATS.get() {
+            let key = fc3_formats::weapons::model_key(&d.model_path());
+            if stats.iter().any(|s| fc3_formats::weapons::model_key(&s.model) == key) {
+                return self.offered(d, stats).is_some();
+            }
+        }
         let folder = d.model.split('\\').next().unwrap_or("");
         match self {
             Attachment::Suppressor => matches!(d.class, Pistol | Smg | Rifle | Sniper) && !d.silenced && !NO_SUPPRESSOR.contains(&folder),
@@ -403,12 +479,32 @@ impl Attachment {
     }
 
     pub fn price(self, d: &WeaponDef) -> u32 {
+        // The shop's own price for this weapon's attachment of the kind, where
+        // the game sells one: a suppressor, the larger magazine, or the sight
+        // this one shows as (a sniper's scope, a rifle's ACOG, a reflex).
+        if let Some(cost) = WEAPON_STATS.get().and_then(|stats| self.offered(d, stats)) {
+            return cost;
+        }
         match (self, d.class) {
             (Attachment::Suppressor, WeaponClass::Sniper) => 450,
             (Attachment::Suppressor, _) => 300,
             (Attachment::Optic, WeaponClass::Sniper | WeaponClass::Rifle) => 350,
             (Attachment::Optic, _) => 200,
             (Attachment::ExtendedMag, _) => 250,
+        }
+    }
+
+    fn offered(self, d: &WeaponDef, stats: &[fc3_formats::weapons::WeaponStats]) -> Option<u32> {
+        use fc3_formats::weapons::{ATTACH_BARREL, ATTACH_MAGAZINE, ATTACH_SCOPE, ATTACH_SIGHT};
+        let key = fc3_formats::weapons::model_key(&d.model_path());
+        let offers = &stats.iter().find(|s| fc3_formats::weapons::model_key(&s.model) == key)?.attachments;
+        let named = |kind: u32, word: &str| offers.iter().filter(|o| o.kind == kind && o.name.to_ascii_lowercase().contains(word)).map(|o| o.cost).min();
+        match (self, d.class) {
+            (Attachment::Suppressor, _) => named(ATTACH_BARREL, "suppress"),
+            (Attachment::ExtendedMag, _) => named(ATTACH_MAGAZINE, ""),
+            (Attachment::Optic, WeaponClass::Sniper) => named(ATTACH_SCOPE, ""),
+            (Attachment::Optic, WeaponClass::Rifle) => named(ATTACH_SIGHT, "acog").or_else(|| named(ATTACH_SIGHT, "reflex")),
+            (Attachment::Optic, _) => named(ATTACH_SIGHT, "reflex"),
         }
     }
 
@@ -495,7 +591,7 @@ fn scope_sway(
     }
     if sway.holding {
         sway.held += dt;
-        let out = sway.held > BREATH_HOLD;
+        let out = sway.held > BREATH_HOLD * perks.scope_breath;
         if out || !want {
             sway.holding = false;
             sway.recover = if out { BREATH_RECOVER } else { 0.6 };
@@ -922,6 +1018,7 @@ fn switch_weapon(
     time: Res<Time>,
     mut q: Query<(&mut Inventory, &Health), With<Player>>,
     mut wheel: ResMut<crate::weapon_wheel::WeaponWheel>,
+    perks: Res<crate::progression::Perks>,
 ) {
     use crate::controls::Action;
     let Ok((mut inv, health)) = q.single_mut() else { return };
@@ -965,11 +1062,14 @@ fn switch_weapon(
     }
     if let Some(t) = target {
         if t != inv.current {
+            let away = inv.def().holster;
             wheel.previous = Some(inv.slots[inv.current].def);
             inv.current = t;
             inv.reloading = 0.0;
-            inv.switching = 0.35;
-            inv.cooldown = inv.cooldown.max(0.35);
+            // The one put away, the other drawn (the swap bonus: faster).
+            let swap = (away + inv.def().draw) / perks.swap_speed.max(0.1);
+            inv.switching = swap;
+            inv.cooldown = inv.cooldown.max(swap);
         }
     }
 }
@@ -982,12 +1082,17 @@ fn reload(
     hud: Res<crate::hud::HudState>,
     perks: Res<crate::progression::Perks>,
     time: Res<Time>,
-    mut q: Query<(&mut Inventory, &Health), With<Player>>,
+    mut q: Query<(&mut Inventory, &Health, &Player)>,
     busy: Res<crate::fp::HandsBusy>,
     foley: Res<crate::characters::ArmsFoley>,
 ) {
-    let Ok((mut inv, health)) = q.single_mut() else { return };
+    let Ok((mut inv, health, player)) = q.single_mut() else { return };
     let dt = time.delta_secs();
+    // Sprinting breaks off a reload (until `SP_SprintReload` is learned).
+    if inv.reloading > 0.0 && player.sprinting && !perks.sprint_reload {
+        inv.reloading = 0.0;
+        return;
+    }
     if inv.reloading > 0.0 {
         // Any reload (manual or automatic) satisfies the scripted test's reload step.
         script.reloaded = true;
@@ -1028,13 +1133,21 @@ fn reload(
         return;
     }
     if d.class != WeaponClass::Melee && (want || s.mag == 0) && s.mag < d.magazine && s.reserve > 0 && inv.switching <= 0.0 && !busy.busy() {
-        inv.reloading = d.reload_time / perks.reload_speed;
-        inv.aiming = false;
+        let bow = if d.class == WeaponClass::Bow { perks.bow_speed } else { 1.0 };
+        inv.reloading = d.reload_time / perks.reload_speed / bow;
+        // `SP_FastAimedReload` keeps a pistol or sniper rifle in the sights.
+        inv.aiming &= aimed_reload(&perks, d.class);
         // The arms' reload clip sounds its own magazine and bolt.
         if !foley.reload {
             sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::RELOAD, at: None, volume: 0.8 });
         }
     }
+}
+
+/// Whether a reload keeps the sights up (`SP_FastAimedReload`, pistols and sniper
+/// rifles).
+fn aimed_reload(perks: &crate::progression::Perks, class: WeaponClass) -> bool {
+    perks.aimed_reload && matches!(class, WeaponClass::Pistol | WeaponClass::Sniper)
 }
 
 fn spread_dir(rng: &mut Rng, forward: Vec3, right: Vec3, up: Vec3, deg: f32) -> Vec3 {
@@ -1080,11 +1193,13 @@ fn fire(
     parents: Query<&ChildOf>,
     writers: (MessageWriter<DamageEvent>, MessageWriter<HitMarker>, MessageWriter<crate::npc::Noise>),
     sounds: (MessageWriter<crate::sound::PlaySfx>, MessageWriter<crate::sound::LoopSfx>, crate::surfaces::SurfaceProbe),
-    mut shot_fx: crate::particles::ShotFx,
+    (mut shot_fx, boosts, mount): (crate::particles::ShotFx, Option<Res<crate::syringes::Boosts>>, Res<crate::traversal::Mount>),
 ) {
     use crate::controls::Action;
     use crate::particles::fx;
     let (bino, actions, captured, perks, busy, heads, wheel) = inputs;
+    // (The steady-aim syringe: far less kick.)
+    let steady = if boosts.as_ref().is_some_and(|b| b.active(crate::syringes::Syringe::Steady)) { 0.3 } else { 1.0 };
     let (mut damage, mut markers, mut noise) = writers;
     let (mut sfx, mut loops, probe) = sounds;
     let Some(fx) = fx else { return };
@@ -1112,11 +1227,23 @@ fn fire(
     // story driver supplies ordinary actions, not scripted infinite firing.
     let story_input = args.automated() && (std::env::var("FC3_STORY_AUTOPILOT").is_ok()
         || std::env::var("FC3_OUTPOST_FIRE_TEST").is_ok());
-    let can_act =
-        (captured.0 || scripted || story_input) && !health.dead && !player.noclip && !player.swimming && !player.driving && bino.blend < 0.3 && !busy.busy() && !wheel.open;
+    // On a zip line only one-handed guns fire, with `SP_ShootOnZipline`.
+    let zip_ok = !matches!(*mount, crate::traversal::Mount::Zip { .. }) || (perks.zip_shoot && inv.def().class == WeaponClass::Pistol);
+    let can_act = (captured.0 || scripted || story_input)
+        && !health.dead
+        && !player.noclip
+        && !player.swimming
+        && !player.driving
+        && bino.blend < 0.3
+        && !busy.busy()
+        && !wheel.open
+        && zip_ok;
     // FC3_AIM (tests): hold aim down the sights.
     let aim_held = actions.pressed(Action::Aim) || std::env::var("FC3_AIM").is_ok();
-    inv.aiming = (can_act || std::env::var("FC3_AIM").is_ok()) && aim_held && inv.reloading <= 0.0 && inv.def().class != WeaponClass::Melee;
+    inv.aiming = (can_act || std::env::var("FC3_AIM").is_ok())
+        && aim_held
+        && (inv.reloading <= 0.0 || aimed_reload(&perks, inv.def().class))
+        && inv.def().class != WeaponClass::Melee;
     let target_aim = if inv.aiming { 1.0 } else { 0.0 };
     inv.aim_blend += (target_aim - inv.aim_blend) * (dt * 12.0).min(1.0);
     if (scripted || story_input) && std::env::var("FC3_FIRE_DEBUG").is_ok() && (time.elapsed_secs() * 4.0) as u32 != ((time.elapsed_secs() - dt) * 4.0) as u32 {
@@ -1153,7 +1280,7 @@ fn fire(
     if let Some(tail) = weapon_sound(&d, player_e, &mut sfx, &mut loops) {
         inv.auto_tail = tail;
     }
-    inv.cooldown = d.interval;
+    inv.cooldown = if d.class == WeaponClass::Bow { d.interval / perks.bow_speed } else { d.interval };
     inv.shots_fired += 1;
     let cur = inv.current;
     if d.class != WeaponClass::Melee {
@@ -1196,7 +1323,7 @@ fn fire(
     }
     if d.class == WeaponClass::GrenadeLauncher || d.class == WeaponClass::Bow {
         let bow = d.class == WeaponClass::Bow;
-        let dir = if bow { spread_dir(&mut rng, forward, right, up, d.spread * (1.0 - 0.9 * inv.aim_blend)) } else { forward };
+        let dir = if bow { spread_dir(&mut rng, forward, right, up, d.spread * (1.0 - 0.9 * inv.aim_blend) * perks.bow_spread) } else { forward };
         // A special arrow nocked: one fewer of them; plain arrows once they run out.
         let kind = if bow { inv.arrow_kind } else { 0 };
         if kind > 0 {
@@ -1338,7 +1465,7 @@ fn fire(
         fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, 0.35);
         inv.spread_bloom = (inv.spread_bloom + 0.3).min(2.5);
         inv.recoil_kick = (inv.recoil_kick + 0.8).min(1.6);
-        let kick = d.recoil * (1.0 - 0.4 * aim) * perks.recoil;
+        let kick = d.recoil * (1.0 - 0.4 * aim) * perks.recoil * steady;
         player.pitch = (player.pitch + kick).min(1.5);
         inv.recoil_offset += kick;
         inv.since_shot = 0.0;
@@ -1357,7 +1484,7 @@ fn fire(
         }
         inv.spread_bloom = (inv.spread_bloom + 0.35).min(2.5);
         inv.recoil_kick = (inv.recoil_kick + 1.0).min(1.6);
-        let kick = d.recoil * (1.0 - 0.4 * aim) * perks.recoil;
+        let kick = d.recoil * (1.0 - 0.4 * aim) * perks.recoil * steady;
         player.pitch = (player.pitch + kick).min(1.5);
         inv.recoil_offset += kick;
         inv.since_shot = 0.0;
@@ -1458,6 +1585,9 @@ fn weapon_sound(
 #[derive(Component)]
 pub struct ProjectileModel(pub Handle<Fc3Model>);
 
+/// Seconds from the pin to the blast.
+const GRENADE_FUSE: f32 = 3.0;
+
 fn throw_grenade(
     actions: Res<crate::controls::ActionState>,
     fx: Option<Res<EffectAssets>>,
@@ -1466,11 +1596,13 @@ fn throw_grenade(
     mut players: Query<(Entity, &mut Inventory, &Player, &Health)>,
     camera: Query<&GlobalTransform, With<PlayerCamera>>,
     busy: Res<crate::fp::HandsBusy>,
+    (perks, time, mut cooking): (Res<crate::progression::Perks>, Res<Time>, Local<Option<f32>>),
 ) {
     let Some(fx) = fx else { return };
     let Ok((e, mut inv, player, health)) = players.single_mut() else { return };
     let Ok(cam) = camera.single() else { return };
     if health.dead || player.noclip || player.swimming || player.driving || player.mounted.is_some() || busy.busy() {
+        *cooking = None;
         return;
     }
     let molotov = actions.just_pressed(crate::controls::Action::Molotov) && inv.molotovs > 0;
@@ -1498,19 +1630,39 @@ fn throw_grenade(
         ));
         return;
     }
-    if !actions.just_pressed(crate::controls::Action::Grenade) || inv.grenades == 0 {
-        return;
+    // `SP_CookThrowables`: the pin comes out as the key goes down and the grenade
+    // flies as it comes up, with what is left of its fuse (held too long, it
+    // goes off in hand). Without it, it is thrown at once.
+    let mut fuse = GRENADE_FUSE;
+    let mut at_feet = false;
+    if let Some(t) = cooking.as_mut() {
+        *t += time.delta_secs();
+        if actions.pressed(crate::controls::Action::Grenade) && *t < GRENADE_FUSE {
+            return;
+        }
+        fuse = (GRENADE_FUSE - *t).max(0.0);
+        at_feet = fuse <= 0.0;
+        *cooking = None;
+    } else {
+        if !actions.just_pressed(crate::controls::Action::Grenade) || inv.grenades == 0 {
+            return;
+        }
+        inv.grenades -= 1;
+        if perks.cook_grenades {
+            *cooking = Some(0.0);
+            return;
+        }
     }
-    inv.grenades -= 1;
     fp.gesture = Some("grenade");
     let f = cam.forward().as_vec3();
+    let velocity = if at_feet { Vec3::ZERO } else { (f + Vec3::Y * 0.25).normalize() * 17.0 + player.velocity * 0.5 };
     commands.spawn((
         Projectile {
             incendiary: false,
             arrow: false,
-            velocity: (f + Vec3::Y * 0.25).normalize() * 17.0 + player.velocity * 0.5,
+            velocity,
             gravity: 9.81,
-            fuse: Some(3.0),
+            fuse: Some(fuse.max(0.01)),
             explode_on_impact: false,
             radius: 8.0,
             damage: 180.0,
@@ -1936,4 +2088,77 @@ pub fn node_pose(model: &Fc3Model, name: &str) -> Option<Transform> {
         i = b.parent as usize;
     }
     Some(Transform::from_matrix(m))
+}
+
+/// An unarmed inventory (tests).
+#[cfg(test)]
+pub(crate) fn test_inventory() -> Inventory {
+    let defs = weapon_defs();
+    let unarmed = defs.iter().position(|d| d.name == UNARMED).unwrap();
+    Inventory {
+        defs,
+        models: Vec::new(),
+        slots: vec![WeaponSlot { def: unarmed, mag: 0, reserve: 0 }],
+        current: 0,
+        grenades: 0,
+        molotovs: 0,
+        c4: 0,
+        mines: 0,
+        cooldown: 0.0,
+        reloading: 0.0,
+        switching: 0.0,
+        aiming: false,
+        aim_blend: 0.0,
+        recoil_kick: 0.0,
+        spread_bloom: 0.0,
+        shots_fired: 0,
+        recoil_offset: 0.0,
+        since_shot: 0.0,
+        reserve_scale: 1.0,
+        attachments: Vec::new(),
+        attachment_models: Vec::new(),
+        mounted_from: None,
+        auto_tail: 0,
+        arrow_kind: 0,
+        special_arrows: [0; 2],
+        paints: Vec::new(),
+        paint_options: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+
+    #[test]
+    fn the_games_handling_goes_on_the_weapons_its_model_names() {
+        let stats = vec![
+            fc3_formats::weapons::WeaponStats {
+                name: "AK47".into(),
+                model: r"graphics\__fc3_graphics\_common\weapons\ak74m\ak74m_tp.xbg".into(),
+                damage: 40.0,
+                fire_rate: 600.0,
+                magazine: 30,
+                reload: 2.4,
+                pellets: 1,
+                ..Default::default()
+            },
+            fc3_formats::weapons::WeaponStats {
+                name: "RPG7".into(),
+                model: r"graphics\__fc3_graphics\_common\weapons\rpg7\rpg7_tp.xbg".into(),
+                damage: 5.0,
+                fire_rate: 30.0,
+                magazine: 1,
+                ..Default::default()
+            },
+        ];
+        let mut defs = base_weapon_defs();
+        assert_eq!(apply_stats(&mut defs, &stats), 2);
+        let ak = defs.iter().find(|d| d.name == "AK-74M Rifle").unwrap();
+        assert_eq!((ak.damage, ak.magazine, ak.reload_time), (40.0, 30, 2.4));
+        assert!((ak.interval - 0.1).abs() < 1e-6);
+        // Launchers keep their own (blast) damage.
+        let rpg = defs.iter().find(|d| d.name == "RPG-7").unwrap();
+        assert!(rpg.damage > 5.0);
+    }
 }

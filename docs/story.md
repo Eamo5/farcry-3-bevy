@@ -42,7 +42,9 @@ converter packs the scripts and the world data they need into the cache.
   included.
 * `facial/faces.pak`, `facial/definitions.txt`: every face rig and facial
   clip (named ones and spoken lines' lip-sync), and which rig a definition
-  key names (`fc3_formats::facial`).
+  key names (`fc3_formats::facial`); `facial/kit_faces.txt`: the face
+  definition each graphic kit's characters wear (from the entity library's
+  archetypes).
 * `video/*.bik`: the single-player Bink videos, kept as they are.
 
 ## The box protocol
@@ -146,7 +148,125 @@ is the story's own:
   exploration piece now and then in calm, and the states missions start and
   stop. Priority decides; during a mission only states at or above the
   service's mission priority play.
-* **Rewards** go to the player's XP and money.
+* **Rewards** go to the player's XP and money. The scripts' own handouts
+  arrive as natives the host applies: `GivePlayerXP` and the outposts'
+  `GivePlayerOutpostXPBonus`, `AddPlayerMoney` / `WithdrawPlayerMoney` /
+  `SetPlayerMoney`, `AddArmor`, `RemoveLootItem`, `GiveAmmoToPlayer`
+  (magazines for every gun carried), `RefillGadgetAmmo` and
+  `EnableWholeTattoo` (saved). `AddBonusPlan` / `RemoveBonusPlan` lend an
+  ability for a while by its bonus plan's name (the last mission's
+  takedowns), saved with the progress.
+* **Skill tree**: the converter writes `progression/skills.txt` from the
+  `AbilityService` template (`fc3tool skills [--bonuses]` prints it). The
+  journal's skills page lays each branch out in its authored rows and
+  columns. An ability opens when its mission completes
+  (`UnlockOnMissionComplete`, recorded as missions finish and synced from the
+  story's state on start) or when the scripts call
+  `CAPI_Player.SetAbilityUpgradable`; free roam opens every one. It then needs
+  its prerequisites, its statistic (takedowns by kind, handgun, melee and
+  grenade kills, money spent at stores, attachments bought, undetected
+  outposts, medicine crafted, bull sharks, relics) and its points. What an
+  ability does is mapped by id in `Perks::from_progress`, with its strength
+  from its bonus plans: health slots, reload speed, spread, swimming, fall,
+  explosion, fire and melee resistance, medkit and manual heals, regeneration
+  delay, syringe duration, loot doubling and sale price, and the takedown
+  family (no takedowns at all before the Takedown ability). Levels follow the
+  game's XP table. Mechanics behind abilities (by id): sliding needs
+  `SP_Slide`, a held grenade cooks with `SP_CookThrowables` (too long and it
+  goes off in hand), sprinting breaks off a reload until `SP_SprintReload`,
+  swapping and breath scale with their bonuses, the scope-breath abilities
+  hold a scope's breath longer (`SP_SniperHoldBreathA`/`B`),
+  `SP_FastAimedReload` keeps a pistol or sniper rifle in the sights,
+  `SP_ShootOnZipline` lets pistols fire from a zip line (nothing else does),
+  `SP_MountedGunHandling` slows a mounted gun's heat, the bow abilities draw
+  faster and steadier, `SP_CrouchRun` hurries a crouch with the sprint key,
+  `SP_LongerSprintBurst` adds its sprint speed, `SP_VehicleExtraHealth`
+  softens hits on the vehicle driven, `SP_ArmorDefense` stretches body
+  armour, and `SP_SilentRun` quietens
+  steps (guards hear steps out of sight, a sprint farthest and a crouch
+  hardly at all), and `SP_LootTakedown` searches a takedown's victim as he
+  falls. The tattoo grows with what is learned (below). Not done yet: the
+  knife throw's extra XP, and the statistics of activities that aren't in
+  the game (supply drops, Wanted Dead).
+* **XP**: the converter adds the game's XP rewards (`XPRewards`) to
+  `progression/skills.txt`, each looting prototype's own XP (`XpGiven`) to
+  its source, and collectibles' XP to their items. A kill is worth the
+  victim's XP (by the kit he wears, or the animal's own) times how he died:
+  headshots, explosions, stealth kills and each kind of takedown (the
+  takedown code notes which killed whom). Radio towers and collectibles
+  give the game's amounts.
+* **Weapons' handling**: the converter writes `weapons/stats.txt` from the
+  entity library's `WeaponProperties:FC3/*` prototypes (`CWeaponProperties`:
+  damage a bullet, fire rate, magazine, reload, draw and holster times,
+  pellets, silence), each joined to its `weapons:FC3/*` model. A swap takes
+  the one weapon's holster time and the other's draw time.
+  `weapons::weapon_defs` puts them on the weapons whose model they name
+  (the launchers, bow and flamethrower keep their own blast and burn
+  damage; mounted guns their belts), so every copy of the table (loadout,
+  saves, pickups) carries them; without the table the built-in values stay.
+* **Shop and loot**: the converter adds the shopping database's supplies and
+  loot to `progression/recipes.txt`: each item's price, rounds per purchase,
+  shop placement and (for body armour) its pickup's armour value, and the
+  loot groups (cash, items, ammunition and gadgets, each with its chance and
+  range, resolved to the shop items that sell them) with each looting
+  prototype's groups and graphic kit. The supplies tab sells the database's
+  consumables and ammunition (for the guns carried) at its prices; refilling
+  everything costs the boxes it takes. Body armour absorbs bullets, blasts
+  and blows until spent and shows beside health. A searched body rolls its
+  kit's own loot groups: cash, loot items into the rucksack (as far as it
+  holds), ammunition and gadgets; kits the game gives no loot keep the older
+  cash and ammo. Loot chests roll their prototype's own groups the same way,
+  and armour pickups put on the shop armour's value. The SELL tab sells loot
+  by the stack or all at once, at the item's price scaled by the sale-price
+  skill.
+* **Crafting** follows the converted recipes throughout. Each gear chain
+  (holster, rucksack, syringe kit, wallet, ammo, munitions, fuel and rocket
+  packs, grenade pouch, quiver) crafts tier by tier, and capacities are its
+  crafted tiers' bonuses on the base kit: weapon slots, syringes, wallet,
+  grenades, explosives, arrows, loot, and the ammo pouch's tier. Free roam
+  keeps its own kit and gains what is crafted beyond it. Syringes are the
+  potion recipes, kept by recipe (`Progress::potions`; older saves' syringes
+  map onto the recipes that do the same) and lasting as their recipe says.
+  The ones the game plays: wildlife, enemy and plant vision, fireproof, deep
+  dive, sprint burst, animal resistance, animal repellent, steady aim,
+  one-hit kills and invincibility, and the temporary health boost
+  (`Temphealthboost`): its recipe's
+  extra health slots (read from its effect) on top and a full heal; those
+  bars show in amber and are lost as they're hurt, never regenerating. The
+  HUD shows as many bars as the player's health has. Special arrows are the arrow-tip recipes: each tips one arrow with a
+  grenade or a molotov from the inventory (the shop no longer sells them).
+  The journal shows the rucksack's fill, loot to sell included.
+* **The tattoo** (`tattoo`): the first-person arms are Jason's own model,
+  and his left arm's material multiplies in the tattoo's design (second UV
+  set) where the mask's piece id is revealed. The skill tree's
+  `TattooParts` give each part's ids. A skill part shows one id per learned
+  ability of the part; the story's pieces (`Dennis1`, `Citra1`, the bosses',
+  `Final`) show once the scripts open them with `SetAbilityUpgradable`, or
+  all at once in free roam; the relics part shows one dot per relic.
+  `CAPI_Player.ShowTattoo` hides or shows it all. The converter adds the
+  parts to `progression/skills.txt` and brings the design and mask into
+  `textures/` (the mask uncompressed, so its ids stay exact). The design
+  wraps (the arm's second UVs run past the 0..1 square), and tattooed parts
+  never go on the translated original shaders, whose skin shader would draw
+  the whole design. The right arm's material names the downloadable tribal
+  tattoo in the same slot; it keeps the standard material, the skin without
+  it.
+* **Handbook**: the converter writes `progression/handbook.txt` from
+  `wikiitems.lib` and the encyclopedia's categories (localised names and
+  texts; the manual's pages left out, tutorials put under the tutorial
+  subcategory their name gives). The journal's HANDBOOK tab lists each
+  category's subcategories, a page of their entries and the one read. In
+  the story a page opens from the start, with its mission, or with its
+  script group (`UnlockItemsFromScript`, which also opens the shop's
+  script-locked supplies; groups are saved). Pages the engine opens as the
+  player meets what they describe: an animal's once one is killed or
+  skinned, a plant's once gathered (by name, saved as met), and as many of
+  a kind of collectible as have been found; weapons and vehicles are open
+  from the start. Free roam opens all of them.
+* **UI type**: Windows' Bahnschrift replaces Bevy's built-in monospace
+  (closer to the game's own bitmap Trade Gothic, and it has the curly quotes
+  and accents the game's text uses). `FC3_UI_FONT=<file>` picks another, and
+  `FC3_UI_FONT=builtin` keeps Bevy's.
 * **Contextual actions**: a character walks to the spot along the navmesh,
   plays the action's start clip, then its loop in place of the idle; a
   patrol-path action walks the path its parameters name and ends at its end.
@@ -248,7 +368,19 @@ is the story's own:
   one use. A gamepad's shared reload control is suppressed during the hold.
 * **Faces** (`faces`): characters with a `CFacialPoseComponent` get its face
   rig; a scene's facial track poses the face over the body clip, and a spoken
-  line plays its lip-sync clip on the speaker.
+  line plays its lip-sync clip on the speaker. Generic characters (enemies,
+  villagers) wear the face their graphic kit's archetype names (a kit without
+  one borrows a same-faction kit's). Every face blinks on the library's idle
+  loop, each from its own phase, outside scenes.
+* **Barks** (`barks`): the converter joins each voice's stimulus resources
+  (`dialog\<voice>\stimuli\*`) to the single-player bark manager's
+  variations into `dialog/barks.txt` (per voice and situation, the sound ids
+  and their lengths). Each enemy takes one of his faction's numbered voices
+  (by entity; heavies their faction's heavy voice) and speaks on spotting the player, losing him, giving up the
+  search, reloading, throwing a grenade, running for the alarm, being hurt
+  and dying, with battle yells, search mutters and idle
+  chatter between; within earshot, two at a time, his face mouthing the
+  line where the game has its lip-sync.
 * **Scenes' props and figures**: a scene's generic groups play their simple
   animations on the objects they hold (the clip's root at the scene's place,
   the prop's node on it): machetes, bottles, tools. Kit-dressed figures (the

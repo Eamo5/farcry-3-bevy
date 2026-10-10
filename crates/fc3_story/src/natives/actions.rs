@@ -99,6 +99,7 @@ const ACTIONS: &[&str] = &[
     "CAPI_Player.ForceSetPlayerInVehicle",
     "CAPI_Player.GiveAmmoToPlayer",
     "CAPI_Player.GiveMedpacksToPlayer",
+    "CAPI_Player.GivePlayerOutpostXPBonus",
     "CAPI_Player.GivePlayerXP",
     "CAPI_Player.LockPlayerActionMap",
     "CAPI_Player.PushPlayerActionMap",

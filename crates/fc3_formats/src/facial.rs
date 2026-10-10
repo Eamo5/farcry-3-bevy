@@ -560,6 +560,40 @@ impl PakIndex {
     }
 }
 
+/// Graphic kit id -> the face definition its characters use, one `kit key`
+/// (hex) per line.
+pub const KIT_FACES_REL: &str = "facial/kit_faces.txt";
+
+/// Which face definition each graphic kit's characters use: the entity
+/// library's archetypes that carry both a `CGraphicKitComponent` and a
+/// `CFacialPoseComponent` (the first archetype of a kit decides).
+pub fn kit_faces(library: &Object) -> Vec<(u64, u32)> {
+    let mut out: Vec<(u64, u32)> = Vec::new();
+    library.walk(&mut |o, _| {
+        let comps = o.child("Components").map(|c| c.as_ref()).unwrap_or(o);
+        let Some(kit) = comps.child("CGraphicKitComponent").and_then(|c| c.u64("kitidGraphicKit")).filter(|&k| k != 0 && k != u64::MAX) else { return };
+        let Some(key) = comps.child("CFacialPoseComponent").and_then(|c| FaceChoice::from_component(c).default) else { return };
+        if !out.iter().any(|(k, _)| *k == kit) {
+            out.push((kit, key));
+        }
+    });
+    out.sort();
+    out
+}
+
+pub fn kit_faces_to_text(table: &[(u64, u32)]) -> String {
+    table.iter().map(|(k, f)| format!("{k:016x} {f:08x}\n")).collect()
+}
+
+pub fn kit_faces_from_text(text: &str) -> std::collections::HashMap<u64, u32> {
+    text.lines()
+        .filter_map(|l| {
+            let (k, f) = l.split_once(' ')?;
+            Some((u64::from_str_radix(k, 16).ok()?, u32::from_str_radix(f.trim(), 16).ok()?))
+        })
+        .collect()
+}
+
 /// The definitions table in the cache's text form.
 pub fn definitions_to_text(defs: &[(u32, u64)]) -> String {
     defs.iter().map(|(k, h)| format!("{k:08x} {h:016x}\n")).collect()
@@ -795,6 +829,15 @@ mod tests {
         let expect = quat_slerp(QUAT_IDENTITY, q, 0.5);
         assert!((0..4).all(|k| (p[k] - expect[k]).abs() < 1e-5));
         assert_eq!(partial_rotation(q, 1.0).map(|v| (v * 1e4).round()), [-q[0], -q[1], -q[2], -q[3]].map(|v| (v * 1e4).round()));
+    }
+
+    #[test]
+    fn kit_faces_round_trip() {
+        let table = vec![(0xA773_2017_0000_0200, 0x1234_5678), (7, 0xFFFF_0000)];
+        let back = kit_faces_from_text(&kit_faces_to_text(&table));
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[&0xA773_2017_0000_0200], 0x1234_5678);
+        assert_eq!(back[&7], 0xFFFF_0000);
     }
 
     #[test]

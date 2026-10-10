@@ -46,6 +46,8 @@ mod player_audio;
 mod profile;
 mod progression;
 mod faces;
+mod tattoo;
+mod barks;
 mod qte;
 mod vine;
 mod screen_blur;
@@ -406,6 +408,8 @@ fn main() {
             script_postfx::PostFxPlugin,
             faces::FacesPlugin,
         ))
+        .add_plugins(tattoo::TattooPlugin)
+        .add_plugins(barks::BarksPlugin)
         .add_plugins((
             lamps::LampsPlugin,
             particles::ParticlesPlugin,

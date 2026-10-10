@@ -414,6 +414,11 @@ fn main() -> Result<()> {
             for n in KNOWN_NAMES {
                 names.add(n);
             }
+            if let Some(dll) = fc3_formats::find_install().and_then(|d| d.parent().map(|p| p.join("bin").join("FC3.dll"))) {
+                if let Ok(b) = std::fs::read(dll) {
+                    names.add_identifiers_from(&b);
+                }
+            }
             let mut found = None;
             root.walk(&mut |o, _| {
                 if found.is_none() && o.is("Entity") && o.str("hidName").is_some_and(|s| s.to_ascii_lowercase().contains(&needle)) {
@@ -949,6 +954,34 @@ fn main() -> Result<()> {
                             g.archetype,
                             bound.unwrap_or_else(|| "unbound".into())
                         );
+                    }
+                }
+            }
+        }
+        "skills" => {
+            // The skill tree as the converter reads it: skills [--bonuses]
+            use fc3_formats::{fcb, oasis, progression as p};
+            let bytes = vfs.read(p::TEMPLATES)?;
+            let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+            let templates = fcb::parse(&bytes[at..])?;
+            let strings = oasis::Strings::from_bytes(&vfs.read(r"languages\english\oasisstrings_compressed.bin")?)?;
+            let tree = p::skill_tree(&templates, &|id| strings.get(id).unwrap_or_default().to_string())?;
+            let bonuses = args.iter().any(|a| a == "--bonuses");
+            println!("{} branches, {} abilities, {} levels", tree.branches.len(), tree.abilities.len(), tree.xp_levels.len());
+            for b in &tree.branches {
+                println!("branch {} {} '{}'", b.number, b.key, b.name);
+            }
+            for a in &tree.abilities {
+                println!(
+                    "{:40} b{} cost {} r{} c{} buy {} avail {} mission '{}' script {} stat {}/{} req {:?} value {} '{}'",
+                    a.id, a.branch, a.cost, a.row, a.column, a.purchasable, a.available, a.unlock_mission, a.unlock_script, a.stat, a.stat_target, a.requires, a.value, a.name
+                );
+                if a.stat != 0 {
+                    println!("    stat {} x{}: '{}'", a.stat, a.stat_target, a.stat_text);
+                }
+                if bonuses {
+                    for x in &a.bonuses {
+                        println!("    bonus attr {} {} {}", x.attribute, if x.additive { "+" } else { "x" }, x.value);
                     }
                 }
             }
@@ -2288,6 +2321,32 @@ fn main() -> Result<()> {
                 fc3_formats::fcb::dump(&e.components, &names, 16, &mut text);
                 println!("{text}");
             }
+        }
+        "proto" => {
+            // The cached entity library's prototype with a library item id
+            // (hex, as shop items' arkArchetype name it): proto <id>
+            let id = u64::from_str_radix(args.get(1).context("usage: proto <hex id>")?.trim_start_matches("0x"), 16)?;
+            let bytes = std::fs::read(fc3_formats::cache::default_cache_root().join("story/entitylibrary.fcb"))?;
+            let start = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+            let root = fc3_formats::fcb::parse(&bytes[start..])?;
+            let mut names = fc3_formats::fcb::NameDb::default();
+            for n in KNOWN_NAMES {
+                names.add(n);
+            }
+            if let Some(dll) = fc3_formats::find_install().and_then(|d| d.parent().map(|p| p.join("bin").join("FC3.dll"))) {
+                if let Ok(b) = std::fs::read(dll) {
+                    names.add_identifiers_from(&b);
+                }
+            }
+            let mut found = None;
+            root.walk(&mut |o, _| {
+                if found.is_none() && o.is("EntityPrototype") && o.u64("disLibItemId") == Some(id) {
+                    found = Some(o.clone());
+                }
+            });
+            let mut out = String::new();
+            fc3_formats::fcb::dump(&found.context("no prototype with that id")?, &names, 64, &mut out);
+            println!("{out}");
         }
         "story-entities" => {
             // Searches the cache's story entity table by name, class, id,

@@ -329,10 +329,12 @@ fn collect_menu_events(
         }
     }
     if current.0 == GameState::Journal && (old_state != GameState::Journal || old_page != current.1) {
-        events.0.push(match current.1 {
-            JournalPage::Crafting => "CDominoCraftingPageOpenedEvent",
-            JournalPage::Skills => "CDominoSkillPageOpenedEvent",
-        });
+        let event = match current.1 {
+            JournalPage::Crafting => Some("CDominoCraftingPageOpenedEvent"),
+            JournalPage::Skills => Some("CDominoSkillPageOpenedEvent"),
+            JournalPage::Handbook => None,
+        };
+        events.0.extend(event);
     }
 }
 
@@ -830,6 +832,12 @@ fn start_story(world: &mut World, mut tried: Local<bool>) {
         }
     }
     info!("story started in {:.1}s{}", started.elapsed().as_secs_f32(), if saved.is_some() { " from its save" } else { "" });
+    // Its completed missions open abilities in the skill tree.
+    let done: Vec<String> = story.missions().iter().filter(|m| m.1 == "Completed").map(|m| m.0.to_ascii_lowercase()).collect();
+    if let Some(mut progress) = world.get_resource_mut::<crate::progression::Progress>() {
+        progress.story = true;
+        progress.missions.extend(done);
+    }
     let mut host = StoryHost::new(story, saved);
     // Continue runs before this host exists during startup. Retain its paired
     // inventory here too, so death before the next checkpoint can roll back.
@@ -901,9 +909,10 @@ fn run_story(
         ResMut<StoryCrafts>,
         ResMut<crate::crafting::CraftCatalog>,
     ),
-    (checkpoint_actors, mut commands_out, mut hidden, tagged): (
+    (checkpoint_actors, mut commands_out, mut hidden, tagged, mut tattoo): (
         Query<Entity, Or<(With<crate::story_actors::StoryActor>, With<crate::wildlife::WildAnimal>)>>, Commands, ResMut<HiddenEntities>,
         Query<&crate::story_actors::StoryActor, With<crate::stealth::Tagged>>,
+        ResMut<crate::tattoo::TattooShown>,
     ),
     (mut xp_gain, mut progress, mut music, mut rock_test, mut videos, mut qtes, mut vines, mut postfx): (
         MessageWriter<crate::progression::XpGain>,
@@ -1354,6 +1363,10 @@ fn run_story(
             }
             Command::MissionState { name, state, block } => {
                 info!("story: {name} {state}");
+                // A mission done opens the abilities it gates.
+                if block.is_none() && state == "Completed" {
+                    progress.missions.insert(name.to_ascii_lowercase());
+                }
                 if block.is_some() && state == "Completed" {
                     host.last_completed = Some(name);
                 }
@@ -1532,6 +1545,82 @@ fn run_story(
                         clock.hours = h + m / 60.0 + sec / 3600.0;
                     }
                     "SetTimeScale" => clock.speed = crate::sky::CLOCK_SPEED * a(0).parse().unwrap_or(1.0f32).max(0.0),
+                    // The arm's tattoo shown or hidden.
+                    "CAPI_Player.ShowTattoo" if a(0) == fc3_story::PLAYER.to_string() => {
+                        let show = a(1) != "false" && a(1) != "0";
+                        if tattoo.0 != show {
+                            tattoo.0 = show;
+                        }
+                    }
+                    // The scripts open an ability in the skill tree.
+                    "CAPI_Player.SetAbilityUpgradable" if a(0) == fc3_story::PLAYER.to_string() => {
+                        progress.upgradable.insert(a(1));
+                    }
+                    // A script group opened (shop items, handbook pages).
+                    "UnlockItemsFromScript" => {
+                        progress.unlocks.insert(a(0));
+                    }
+                    // Rewards and fees the scripts hand out.
+                    "CAPI_Player.GivePlayerXP" | "CAPI_Player.GivePlayerOutpostXPBonus" if a(0) == fc3_story::PLAYER.to_string() => {
+                        let amount = a(1).parse::<f64>().unwrap_or(0.0).max(0.0) as u32;
+                        if amount > 0 {
+                            let reason = if name == "CAPI_Player.GivePlayerXP" { "Bonus" } else { "Outpost bonus" };
+                            xp_gain.write(crate::progression::XpGain { amount, reason });
+                        }
+                    }
+                    "CAPI_Player.AddPlayerMoney" | "CAPI_Player.WithdrawPlayerMoney" | "CAPI_Player.SetPlayerMoney" if a(0) == fc3_story::PLAYER.to_string() => {
+                        let amount = a(1).parse::<f64>().unwrap_or(0.0).max(0.0) as u32;
+                        match name.as_str() {
+                            "CAPI_Player.AddPlayerMoney" => {
+                                progress.add_money(amount);
+                            }
+                            "CAPI_Player.WithdrawPlayerMoney" => progress.money = progress.money.saturating_sub(amount),
+                            _ => progress.money = amount.min(progress.money_cap()),
+                        }
+                    }
+                    "CAPI_Player.AddArmor" if a(0) == fc3_story::PLAYER.to_string() => {
+                        progress.armour = progress.armour.max(a(1).parse::<f32>().unwrap_or(0.0));
+                    }
+                    "CAPI_Player.EnableWholeTattoo" if a(0) == fc3_story::PLAYER.to_string() => progress.whole_tattoo = true,
+                    // Abilities lent for a while, by their bonus plan.
+                    "CAPI_Player.AddBonusPlan" if a(0) == fc3_story::PLAYER.to_string() => {
+                        progress.bonus_plans.insert(a(1).to_ascii_lowercase());
+                    }
+                    "CAPI_Player.RemoveBonusPlan" if a(0) == fc3_story::PLAYER.to_string() => {
+                        progress.bonus_plans.remove(&a(1).to_ascii_lowercase());
+                    }
+                    "CAPI_Player.RemoveLootItem" if a(0) == fc3_story::PLAYER.to_string() => {
+                        if let (Ok(id), Ok(n)) = (a(1).parse::<f64>(), a(2).parse::<f64>()) {
+                            let id = id as u32;
+                            let left = progress.loot.get(&id).copied().unwrap_or(0).saturating_sub(n.max(0.0) as u32);
+                            if left == 0 {
+                                progress.loot.remove(&id);
+                            } else {
+                                progress.loot.insert(id, left);
+                            }
+                        }
+                    }
+                    "CAPI_Player.GiveAmmoToPlayer" if a(0) == fc3_story::PLAYER.to_string() => {
+                        // Magazines for every gun carried.
+                        if let Ok(mut inv) = inventory.single_mut() {
+                            let clips = a(1).parse::<f64>().unwrap_or(1.0).max(0.0) as u32;
+                            let classes: Vec<(crate::weapons::WeaponClass, u32)> = inv.slots.iter().map(|s| (inv.defs[s.def].class, inv.defs[s.def].magazine)).collect();
+                            for (class, magazine) in classes {
+                                inv.add_ammo(class, magazine * clips);
+                            }
+                        }
+                    }
+                    "CAPI_Player.RefillGadgetAmmo" if a(0) == fc3_story::PLAYER.to_string() => {
+                        if let Ok(mut inv) = inventory.single_mut() {
+                            match a(1).to_ascii_lowercase().as_str() {
+                                "grenade" => inv.grenades = inv.grenades.max(perks.grenade_cap),
+                                "molotov" => inv.molotovs = inv.molotovs.max(crate::weapons::MOLOTOV_CAP),
+                                "c4" => inv.c4 = inv.c4.max(perks.explosive_cap),
+                                "mine" => inv.mines = inv.mines.max(perks.explosive_cap),
+                                _ => {}
+                            }
+                        }
+                    }
                     "CAPI_Pawn.HealPawn" if a(0) == fc3_story::PLAYER.to_string() => {
                         heal = true;
                     }

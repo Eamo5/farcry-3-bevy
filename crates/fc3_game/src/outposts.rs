@@ -300,6 +300,7 @@ fn sabotage_alarms(
     players: Query<(&Transform, &Health), With<Player>>,
     mut hud: ResMut<HudState>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
+    (mut xp, skills): (MessageWriter<crate::progression::XpGain>, Option<Res<crate::progression::Skills>>),
 ) {
     let Ok((pt, h)) = players.single() else { return };
     if h.dead || hud.prompt.is_some() {
@@ -316,6 +317,11 @@ fn sabotage_alarms(
                 let left = o.disabled.iter().filter(|d| !**d).count();
                 hud.notify(if left == 0 { "All alarms disabled".to_string() } else { format!("Alarm disabled ({left} left)") });
                 sfx.write(crate::sound::PlaySfx { event: ALARM_OFF, at: Some(*a), volume: 1.0 });
+                // (The game's reward for it.)
+                let amount = skills.as_ref().and_then(|s| s.xp_reward("DisableAlarm")).unwrap_or(0.0) as u32;
+                if amount > 0 {
+                    xp.write(crate::progression::XpGain { amount, reason: "Alarm disabled" });
+                }
             }
             return;
         }

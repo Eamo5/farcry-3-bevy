@@ -77,6 +77,7 @@ const DRAG_SPEED: f32 = 1.5;
 const WALK_SPEED: f32 = 4.2;
 const SPRINT_SPEED: f32 = 7.5;
 const CROUCH_SPEED: f32 = 2.0;
+const CROUCH_RUN_SPEED: f32 = 3.4;
 const SWIM_SPEED: f32 = 3.2;
 const JUMP_SPEED: f32 = 5.0;
 const GRAVITY: f32 = 19.0;
@@ -674,7 +675,8 @@ fn player_move(
     p.swimming = crate::water::submerged(t.translation.with_y(feet), &heights, 1.3);
     // Crouching at a sprint: a slide, low and fast, slowing to a crouch.
     let flat_speed = Vec2::new(p.velocity.x, p.velocity.z).length();
-    if p.sliding.is_none() && p.sprinting && p.grounded && flat_speed > SLIDE_MIN_SPEED && input_ok && actions.just_pressed(Action::Crouch) {
+    // (Once `SP_Slide` is learned.)
+    if p.sliding.is_none() && perks.slide && p.sprinting && p.grounded && flat_speed > SLIDE_MIN_SPEED && input_ok && actions.just_pressed(Action::Crouch) {
         p.sliding = Some(0.0);
         let boost = Vec3::new(p.velocity.x, 0.0, p.velocity.z).normalize_or_zero() * SLIDE_BOOST;
         p.velocity += boost;
@@ -710,11 +712,16 @@ fn player_move(
     let speed = if p.dragging {
         DRAG_SPEED
     } else if p.swimming {
-        SWIM_SPEED * perks.swim * if boosts.active(crate::syringes::Syringe::Diver) { 1.3 } else { 1.0 }
+        SWIM_SPEED * perks.swim * if boosts.active(crate::syringes::Syringe::SprintBurst) { 1.3 } else { 1.0 }
     } else if p.crouching {
-        CROUCH_SPEED
+        // (`SP_CrouchRun`: the sprint key hurries a crouch along.)
+        if perks.crouch_run && key(Action::Sprint) {
+            CROUCH_RUN_SPEED
+        } else {
+            CROUCH_SPEED
+        }
     } else if p.sprinting {
-        SPRINT_SPEED * perks.sprint * if boosts.active(crate::syringes::Syringe::Explorer) { 1.3 } else { 1.0 }
+        SPRINT_SPEED * perks.sprint * if boosts.active(crate::syringes::Syringe::SprintBurst) { 1.3 } else { 1.0 }
     } else {
         WALK_SPEED
     };
@@ -1010,5 +1017,31 @@ fn slide_test(
             p.crouching,
             p.sprinting
         );
+    }
+}
+
+/// A player standing still on the ground (tests).
+#[cfg(test)]
+pub(crate) fn test_player() -> Player {
+    Player {
+        velocity: Vec3::ZERO,
+        yaw: 0.0,
+        pitch: 0.0,
+        grounded: true,
+        crouching: false,
+        swimming: false,
+        noclip: false,
+        spawning: false,
+        keep_height: false,
+        last_landing_speed: 0.0,
+        sprinting: false,
+        spawned_at: 0.0,
+        driving: false,
+        eye: EYE_HEIGHT,
+        air: AirMode::None,
+        mantle: None,
+        mounted: None,
+        sliding: None,
+        dragging: false,
     }
 }

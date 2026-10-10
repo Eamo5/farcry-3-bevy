@@ -121,8 +121,11 @@ fn stream_layers(
             }
             for (i, entity) in content.entities.iter().enumerate() {
                 if let Some(kind) = layer_pickup(entity, &world.removed, data.as_deref()) {
-                    commands.spawn((crate::pickups::Pickup { kind, id: entity.id, visual: placed.get(&(i as u32)).copied() },
-                        Transform::from_translation(Vec3::from_array(entity.translation)), Visibility::Visible, ChildOf(lroot)));
+                    let pickup = commands.spawn((crate::pickups::Pickup { kind, id: entity.id, visual: placed.get(&(i as u32)).copied() },
+                        Transform::from_translation(Vec3::from_array(entity.translation)), Visibility::Visible, ChildOf(lroot))).id();
+                    if kind == crate::pickups::PickupKind::Loot {
+                        commands.entity(pickup).insert(crate::pickups::LootSource(entity.name.clone()));
+                    }
                 }
             }
             have.insert(*layer, lroot);

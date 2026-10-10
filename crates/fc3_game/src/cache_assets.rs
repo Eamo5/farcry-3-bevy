@@ -362,6 +362,9 @@ impl AssetLoader for MaterialLoader {
         if let Some(flow) = Flow::of(&cm) {
             FLOWING.lock().unwrap().insert(ctx.path().to_string(), flow);
         }
+        if let Some(o) = &cm.original {
+            crate::tattoo::note_material(&ctx.path().to_string(), &o.samplers);
+        }
         Ok(build_material(ctx, &cm))
     }
 

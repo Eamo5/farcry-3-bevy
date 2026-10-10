@@ -486,6 +486,7 @@ fn tower_prompt(
     mut xp: MessageWriter<crate::progression::XpGain>,
     players: Query<(&Transform, &Health, &crate::weapons::Inventory), With<Player>>,
     mut taken: MessageWriter<TowerTaken>,
+    skills: Option<Res<crate::progression::Skills>>,
 ) {
     let Ok((t, h, inv)) = players.single() else { return };
     if hud.prompt.is_some() || h.dead {
@@ -502,7 +503,11 @@ fn tower_prompt(
         progress.towers.insert(i as u32);
         taken.write(TowerTaken { at: Vec3::from(*at) });
         explored.reveal(Vec3::from(*at), 1100.0);
-        xp.write(crate::progression::XpGain { amount: 300, reason: "Radio tower" });
+        // (The game's own reward for a tower.)
+        let amount = skills.as_ref().and_then(|s| s.xp_reward("RadioTower")).unwrap_or(0.0) as u32;
+        if amount > 0 {
+            xp.write(crate::progression::XpGain { amount, reason: "Radio tower" });
+        }
         let freed = catalog.freed_weapons(&inv.defs, progress.towers.len());
         let reward = if freed.is_empty() { String::new() } else { format!(" Free in shops: {}.", freed.join(", ")) };
         hud.notify(format!("Radio tower taken: map revealed.{reward}"));

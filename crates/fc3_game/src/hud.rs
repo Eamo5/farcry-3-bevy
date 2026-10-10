@@ -10,9 +10,30 @@ use crate::weapons::{HitMarker, Inventory, WeaponClass};
 
 pub struct HudPlugin;
 
+/// The UI's typeface: Windows' Bahnschrift, a plain condensed-capable sans
+/// nearer the game's own UI type (its bitmap Trade Gothic) than Bevy's
+/// built-in monospace, and with the curly quotes and accents the game's text
+/// uses. `FC3_UI_FONT=<path>` picks another font file; `FC3_UI_FONT=builtin`
+/// keeps Bevy's.
+fn ui_font(mut fonts: ResMut<Assets<Font>>) {
+    let path = match std::env::var("FC3_UI_FONT") {
+        Ok(p) if p == "builtin" => return,
+        Ok(p) => std::path::PathBuf::from(p),
+        Err(_) => std::path::PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into())).join("Fonts").join("bahnschrift.ttf"),
+    };
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            if fonts.insert(AssetId::default(), Font::from_bytes(bytes)).is_ok() {
+                info!("UI font: {}", path.display());
+            }
+        }
+        Err(e) => info!("UI font {}: {e}; keeping the built-in one", path.display()),
+    }
+}
+
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(FrameTimeDiagnosticsPlugin::default()).init_resource::<HudState>().add_systems(Startup, setup_hud).add_systems(
+        app.add_plugins(FrameTimeDiagnosticsPlugin::default()).init_resource::<HudState>().add_systems(Startup, (ui_font, setup_hud)).add_systems(
             Update,
             (
                 update_crosshair,
@@ -64,6 +85,13 @@ struct CrosshairBar(usize);
 struct HitMarkerUi;
 #[derive(Component)]
 struct HealthSegment(usize);
+/// A health bar's slot (shown as far as the player's health goes).
+#[derive(Component)]
+struct HealthSlot(usize);
+
+/// The most health bars the HUD has room for (all the health-slot skills,
+/// and a boost on top).
+const HEALTH_SLOTS: usize = 12;
 #[derive(Component)]
 struct HealthText;
 #[derive(Component)]
@@ -177,9 +205,15 @@ fn setup_hud(mut commands: Commands) {
     commands.spawn((text("HEALTH", 14.0), HealthText, ChildOf(health_panel)));
     let bar = commands.spawn((Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(4.0), ..default() }, ChildOf(health_panel))).id();
     let segments = (PLAYER_MAX_HEALTH / HEALTH_SEGMENT) as usize;
-    for i in 0..segments {
+    for i in 0..HEALTH_SLOTS {
+        let shown = if i < segments { Display::Flex } else { Display::None };
         let seg = commands
-            .spawn((Node { width: Val::Px(60.0), height: Val::Px(12.0), ..default() }, BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)), ChildOf(bar)))
+            .spawn((
+                Node { width: Val::Px(60.0), height: Val::Px(12.0), display: shown, ..default() },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
+                HealthSlot(i),
+                ChildOf(bar),
+            ))
             .id();
         commands.spawn((
             Node { width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
@@ -434,19 +468,41 @@ fn update_hit_marker(
 }
 
 fn update_health(
+    progress: Res<crate::progression::Progress>,
+    perks: Res<crate::progression::Perks>,
     players: Query<(&Health, &PlayerStats)>,
-    mut segs: Query<(&HealthSegment, &mut Node, &mut BackgroundColor)>,
+    mut segs: Query<(&HealthSegment, &mut Node, &mut BackgroundColor), Without<HealthSlot>>,
+    mut slots: Query<(&HealthSlot, &mut Node), Without<HealthSegment>>,
     mut label: Query<&mut Text, With<HealthText>>,
 ) {
     let Ok((h, ps)) = players.single() else { return };
+    // As many bars as the player's health has (skills and boosts add them).
+    let bars = (h.max / HEALTH_SEGMENT).ceil() as usize;
+    for (slot, mut node) in &mut slots {
+        let display = if slot.0 < bars { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
+    }
     for (seg, mut node, mut bg) in &mut segs {
         let lo = seg.0 as f32 * HEALTH_SEGMENT;
         let fill = ((h.current - lo) / HEALTH_SEGMENT).clamp(0.0, 1.0);
         node.width = Val::Percent(fill * 100.0);
-        bg.0 = if h.current <= HEALTH_SEGMENT { Color::srgb(0.9, 0.25, 0.2) } else { Color::srgb(0.85, 0.85, 0.82) };
+        // (The boost's bars, beyond the player's own, in amber.)
+        bg.0 = if h.current <= HEALTH_SEGMENT {
+            Color::srgb(0.9, 0.25, 0.2)
+        } else if lo >= perks.max_health - 0.1 {
+            Color::srgb(0.95, 0.7, 0.25)
+        } else {
+            Color::srgb(0.85, 0.85, 0.82)
+        };
     }
     if let Ok(mut t) = label.single_mut() {
-        t.0 = format!("HEALTH  {:.0}      MEDKITS  {}", h.current.ceil(), ps.medkits);
+        t.0 = if progress.armour > 0.0 {
+            format!("HEALTH  {:.0}      ARMOR  {:.0}      MEDKITS  {}", h.current.ceil(), progress.armour.ceil(), ps.medkits)
+        } else {
+            format!("HEALTH  {:.0}      MEDKITS  {}", h.current.ceil(), ps.medkits)
+        };
     }
 }
 

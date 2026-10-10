@@ -2,6 +2,7 @@
 
 pub mod anim;
 pub mod archive;
+pub mod barks;
 pub mod audio;
 pub mod cache;
 pub mod cinema;
@@ -41,6 +42,7 @@ pub mod splines;
 pub mod terrain;
 pub mod texture;
 pub mod vegetation;
+pub mod weapons;
 pub mod world;
 pub mod worldmap;
 pub mod xbg;

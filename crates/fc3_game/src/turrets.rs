@@ -308,6 +308,7 @@ fn heat(
     mut gauge: ResMut<GunHeat>,
     mut players: Query<(Entity, &mut Inventory), With<Player>>,
     mut turrets: Query<&mut Turret>,
+    perks: Res<crate::progression::Perks>,
 ) {
     let Ok((pe, mut inv)) = players.single_mut() else { return };
     let dt = time.delta_secs();
@@ -316,7 +317,8 @@ fn heat(
     for mut t in &mut turrets {
         let ours = t.user == Some(pe);
         if ours {
-            t.heat += fired as f32 * HEAT_PER_SHOT;
+            // (`SP_MountedGunHandling`: slower.)
+            t.heat += fired as f32 * HEAT_PER_SHOT * perks.gun_heat;
         }
         if !ours || inv.since_shot > 0.3 {
             t.heat = (t.heat - COOLING * dt).max(0.0);

@@ -810,9 +810,12 @@ fn animal_ai(
     mut anims: Query<&mut AnimRequest>,
     mut damage: MessageWriter<DamageEvent>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
+    boosts: Option<Res<crate::syringes::Boosts>>,
 ) {
     let dt = time.delta_secs();
     let Ok((pe, pt, player, ph)) = players.single() else { return };
+    // (The animal repellent syringe: they leave the player be.)
+    let repellent = boosts.as_ref().is_some_and(|b| b.active(crate::syringes::Syringe::AnimalRepellent));
     let mut call = |event: u32, at: Vec3, volume: f32| {
         if event != 0 {
             sfx.write(crate::sound::PlaySfx { event, at: Some(at), volume });
@@ -854,7 +857,7 @@ fn animal_ai(
         // Horizontal steering does not imply horizontal attack range: a
         // surface animal cannot bite a player in the cave beneath it.
         let player_dist = pt.translation.distance(pos);
-        let player_available = !ph.dead && !player.noclip && !player.spawning
+        let player_available = !ph.dead && !player.noclip && !player.spawning && !repellent
             && cinema.as_ref().is_none_or(|c| c.view.is_none());
         let mut target = player_available.then_some((pe, pt.translation, player_dist, player_dist / crouched));
         if s.habitat != Habitat::Sea {
@@ -1035,6 +1038,7 @@ fn animal_deaths(
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     transforms: Query<&Transform>,
     mut commands: Commands,
+    crafting: Option<Res<crate::crafting::CraftCatalog>>,
 ) {
     let player = players.single().ok();
     for d in died.read() {
@@ -1047,8 +1051,10 @@ fn animal_deaths(
             *req = AnimRequest { kind: AnimKind::Death, rate: 1.0 };
         }
         commands.entity(d.entity).insert(Carcass { species: a.species, age: 0.0, skinned: false }).remove::<(Collider, RigidBody)>();
-        if d.killer.is_some() && d.killer == player {
-            xp.write(crate::progression::XpGain { amount: 30, reason: "Hunt" });
+        // (Each animal's own XP.)
+        let amount = crafting.as_ref().map_or(0, |c| c.animal_xp(a.animal()));
+        if d.killer.is_some() && d.killer == player && amount > 0 {
+            xp.write(crate::progression::XpGain { amount, reason: "Hunt" });
         }
     }
 }
@@ -1065,6 +1071,7 @@ fn skin_animals(
     mut looted: MessageWriter<crate::progression::ItemLooted>,
     (busy, mut gestures, scripted): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>, Res<crate::story::ScriptedPlayer>),
     crafting: Option<Res<crate::crafting::CraftCatalog>>,
+    perks: Option<Res<crate::progression::Perks>>,
 ) {
     let Ok((pt, h)) = players.single() else { return };
     if h.dead || hud.prompt.is_some() || busy.busy() || !scripted.animal_looting {
@@ -1085,10 +1092,12 @@ fn skin_animals(
     }
     hud.prompt = Some(format!("{}  skin {}", actions.label(crate::controls::Action::Interact, &settings), animal.name().to_lowercase()));
     if actions.just_pressed(crate::controls::Action::Interact) {
-        *progress.skins.entry(animal).or_insert(0) += 1;
+        // (Zoology 101: two skins from each.)
+        let n = if perks.as_ref().is_some_and(|p| p.double_skins) { 2 } else { 1 };
+        *progress.skins.entry(animal).or_insert(0) += n;
         looted.write(crate::progression::ItemLooted(crate::progression::LootKind::Skin(animal)));
         actions.consume(crate::controls::Action::Interact);
-        hud.notify(format!("+1 {} skin", animal.name()));
+        hud.notify(format!("+{n} {} skin", animal.name()));
         // The skinning plays out with the machete; the carcass stays.
         c.skinned = true;
         gestures.write(crate::fp::FpAction::Skin { large: SPECIES[c.species].size.0 >= 0.5 });

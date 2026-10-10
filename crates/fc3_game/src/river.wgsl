@@ -69,7 +69,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 
     // Rapids: foam streaming with the current.
     let f = textureSample(foam, wrap_sampler, vec2<f32>(uv.x, uv.y - t * speed * 1.1) / (tile * 0.75));
-    let foam_amt = clamp(f.a * 1.6, 0.0, 1.0) * river.colour.a * (1.0 - smoothstep(80.0, 250.0, dist));
+    // (Foam is light on dark: a material without foam names a black map.)
+    let foam_amt = clamp(max(f.r, max(f.g, f.b)) * f.a * 1.6, 0.0, 1.0) * river.colour.a * (1.0 - smoothstep(80.0, 250.0, dist));
 
     let v = normalize(view.world_position.xyz - p);
     let fresnel = pow(1.0 - clamp(dot(v, n), 0.0, 1.0), 5.0);

@@ -875,6 +875,83 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
+    // ---- what the enemies say, by voice and situation
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::barks::BARKS_REL) {
+        let result = (|| -> Result<()> {
+            use fc3_formats::barks;
+            let variations = barks::bark_variations(&String::from_utf8_lossy(&job.vfs.read(barks::BARK_MANAGER)?));
+            let mut names: Vec<&String> = job
+                .vfs
+                .names
+                .values()
+                .filter(|n| {
+                    let n = n.to_ascii_lowercase();
+                    n.starts_with("dialog\\") && n.contains("\\stimuli\\")
+                })
+                .collect();
+            names.sort();
+            let mut out = Vec::new();
+            for name in names {
+                let parts: Vec<&str> = name.split('\\').collect();
+                let (Some(voice), Some(stimulus)) = (parts.get(1), parts.last()) else { continue };
+                let Ok(bytes) = job.vfs.read(name) else { continue };
+                let Some(at) = bytes.windows(4).position(|w| w == b"nbCF") else { continue };
+                let Ok(resource) = fc3_formats::fcb::parse(&bytes[at..]) else { continue };
+                let lines: Vec<(u32, f32)> = barks::stimulus_lines(&resource).iter().filter_map(|id| variations.get(id)).flatten().copied().collect();
+                if !lines.is_empty() {
+                    out.push(barks::Barks { voice: voice.to_ascii_lowercase(), stimulus: stimulus.to_ascii_lowercase(), lines });
+                }
+            }
+            write_atomic(job.root(), barks::BARKS_REL, barks::to_text(&out).as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("barks: {e:#}"));
+        }
+    }
+
+    // ---- the player's weapons' handling
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::weapons::STATS_REL) {
+        let result = (|| -> Result<()> {
+            let bytes = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
+            let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+            let library = fc3_formats::fcb::parse(&bytes[at..])?;
+            let items = job.vfs.read(fc3_formats::shop::ITEMS_LIB)?;
+            let at = items.windows(4).position(|w| w == b"nbCF").context("no shopping FCB header")?;
+            let items = fc3_formats::fcb::parse(&items[at..])?;
+            let stats = fc3_formats::weapons::weapon_stats(&library, Some(&items));
+            write_atomic(job.root(), fc3_formats::weapons::STATS_REL, fc3_formats::weapons::to_text(&stats).as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("weapon stats: {e:#}"));
+        }
+    }
+
+    // ---- the handbook
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::progression::HANDBOOK_REL) {
+        if let Err(e) = convert_handbook(&job) {
+            job.error(format!("handbook: {e:#}"));
+        }
+    }
+
+    // ---- the skill tree and XP levels, with the tattoo's parts (written again
+    // when an older table lacks them), and the tattoo's design and mask
+    if opts.only_sectors.is_none() {
+        let current = std::fs::read_to_string(job.root().join(fc3_formats::progression::SKILLS_REL)).is_ok_and(|t| t.contains("\ntattoo\t") && t.contains("\nxpreward\t"));
+        if job.should_write(fc3_formats::progression::SKILLS_REL) || !current {
+            if let Err(e) = convert_skills(&job) {
+                job.error(format!("skill tree: {e:#}"));
+            }
+        }
+        for t in [fc3_formats::progression::TATTOO_IMAGE, fc3_formats::progression::TATTOO_MASK] {
+            let rel = cache::texture_rel(t);
+            if job.should_write(&rel) {
+                if let Err(e) = convert_texture_to(&job, t, &rel) {
+                    job.error(format!("tattoo {t}: {e:#}"));
+                }
+            }
+        }
+    }
+
     // ---- the clips the story's contextual actions play
     if opts.only_sectors.is_none() && (job.should_write(fc3_formats::moves::CA_MOVES_REL) || job.should_write(fc3_formats::moves::MOVES_REL)) {
         if let Err(e) = convert_ca_moves(&job) {
@@ -927,6 +1004,19 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     if opts.only_sectors.is_none() && (job.should_write(fc3_formats::facial::PAK_REL) || job.should_write(fc3_formats::facial::DEFINITIONS_REL)) {
         if let Err(e) = convert_facial(&job) {
             job.error(format!("facial: {e:#}"));
+        }
+    }
+    // ---- which face each graphic kit's characters wear
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::facial::KIT_FACES_REL) {
+        let result = (|| -> Result<()> {
+            let bytes = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
+            let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+            let library = fc3_formats::fcb::parse(&bytes[at..])?;
+            let table = fc3_formats::facial::kit_faces(&library);
+            write_atomic(job.root(), fc3_formats::facial::KIT_FACES_REL, fc3_formats::facial::kit_faces_to_text(&table).as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("kit faces: {e:#}"));
         }
     }
 
@@ -1384,7 +1474,9 @@ fn convert_kits(job: &Job) -> Result<Vec<String>> {
             continue;
         };
         let xml = job.vfs.read(file).with_context(|| format!("kit {want}"))?;
-        kits.push(fc3_formats::kits::parse_kit(&String::from_utf8_lossy(&xml))?);
+        let mut kit = fc3_formats::kits::parse_kit(&String::from_utf8_lossy(&xml))?;
+        kit.id = fc3_formats::kits::id_from_file(file);
+        kits.push(kit);
     }
     if job.should_write(cache::KITS_REL) {
         write_atomic(job.root(), cache::KITS_REL, fc3_formats::kits::to_text(&kits).as_bytes(), job.ctx)?;
@@ -1651,6 +1743,31 @@ fn convert_crafting(job: &Job) -> Result<()> {
         shop_items: &shop_items, loot_groups: &loot_groups, library: &library,
     }, &|id| strings.get(id).unwrap_or_default().to_string());
     write_atomic(job.root(), p::RECIPES_REL, metadata.to_text().as_bytes(), job.ctx)
+}
+
+/// The handbook's pages and categories (`fc3_formats::progression::handbook`).
+fn convert_handbook(job: &Job) -> Result<()> {
+    use fc3_formats::{fcb, oasis, progression as p};
+    let read = |path| -> Result<std::sync::Arc<fcb::Object>> {
+        let bytes = job.vfs.read(path)?;
+        let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+        fcb::parse(&bytes[at..])
+    };
+    let strings = oasis::Strings::from_bytes(&job.vfs.read(r"languages\english\oasisstrings_compressed.bin")?)?;
+    let (items, categories, subcategories) = (read(p::WIKI_ITEMS)?, read(p::WIKI_CATEGORIES)?, read(p::WIKI_SUBCATEGORIES)?);
+    let book = p::handbook(&items, &categories, &subcategories, &|id| strings.get(id).unwrap_or_default().to_string());
+    write_atomic(job.root(), p::HANDBOOK_REL, book.to_text().as_bytes(), job.ctx)
+}
+
+/// The skill tree and XP levels (`fc3_formats::progression::skill_tree`).
+fn convert_skills(job: &Job) -> Result<()> {
+    use fc3_formats::{fcb, oasis, progression as p};
+    let bytes = job.vfs.read(p::TEMPLATES)?;
+    let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+    let templates = fcb::parse(&bytes[at..])?;
+    let strings = oasis::Strings::from_bytes(&job.vfs.read(r"languages\english\oasisstrings_compressed.bin")?)?;
+    let tree = p::skill_tree(&templates, &|id| strings.get(id).unwrap_or_default().to_string())?;
+    write_atomic(job.root(), p::SKILLS_REL, tree.to_text().as_bytes(), job.ctx)
 }
 
 /// The moves the story's contextual actions name, with the clips found for
