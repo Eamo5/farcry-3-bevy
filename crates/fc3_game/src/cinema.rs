@@ -169,6 +169,9 @@ struct Playing {
     paused_cue: bool,
     /// The scene entity's place (Bevy space).
     origin: Transform,
+    /// Movement tracks retain the bound prop's initial placement. Capture
+    /// their authored frame once, so pauses/restarts do not accumulate motion.
+    movement_frames: HashMap<u64, Transform>,
     /// Track group uid -> world entity id.
     bindings: HashMap<u64, u64>,
     /// The scene's exposed entity anchor (characters can animate in its frame).
@@ -246,7 +249,7 @@ fn start_scenes(host: Option<NonSendMut<StoryHost>>, mut cinema: ResMut<Cinema>,
     for b in std::mem::take(&mut cinema.built) {
         let clips = clip_handles(&b.seq, &server);
         debug!("cinema: built {} ({:.1} s)", b.name, b.seq.duration);
-        cinema.playing.push(Playing { scene: 0, meta: None, file: b.name, bindings: b.bindings, anchor: None, origin: b.origin, seq: b.seq, t: 0.0, paused: false, paused_cue: false, clips, waited: 0.0 });
+        cinema.playing.push(Playing { scene: 0, meta: None, file: b.name, bindings: b.bindings, anchor: None, origin: b.origin, movement_frames: HashMap::new(), seq: b.seq, t: 0.0, paused: false, paused_cue: false, clips, waited: 0.0 });
     }
     for r in requests {
         debug!("cinema request: {} {} {} {:?}", r.mode, r.scene, r.file, r.sync);
@@ -324,6 +327,7 @@ fn start_scenes(host: Option<NonSendMut<StoryHost>>, mut cinema: ResMut<Cinema>,
                     bindings: bindings(&data, r.scene, &archive),
                     anchor: anchor_of(&data, r.scene, &archive),
                     origin: origin_of(&data, r.scene),
+                    movement_frames: HashMap::new(),
                     seq,
                     t,
                     paused: false,
@@ -586,7 +590,15 @@ fn play_scenes(
             let Some((local, gas, steering)) = recorded_pose(g, p.t) else { continue };
             let Some(&id) = p.bindings.get(&g.uid) else { continue };
             let Some((_, mut at, vehicle)) = props.iter_mut().find(|(pid, _, _)| pid.0 == id) else { continue };
-            *at = p.origin * local;
+            let frame = if p.scene != 0 && g.kind == GroupKind::Generic {
+                g.clips.iter().find_map(|c| match &c.kind {
+                    ClipKind::Movement { keys } => movement_pose(keys, 0.0),
+                    _ => None,
+                }).map(|first| *p.movement_frames.entry(g.uid).or_insert_with(|| {
+                    Transform::from_matrix(at.to_matrix() * first.to_matrix().inverse())
+                })).unwrap_or(p.origin)
+            } else { p.origin };
+            *at = frame * local;
             if matches!(g.clips.first().map(|c| &c.kind), Some(ClipKind::Movement { .. }))
                 && (p.t * 2.0) as u32 != (prev * 2.0) as u32 {
                 debug!("cinema {}: prop {id} at t={:.2} world {:.2?}", p.seq.name, p.t, at.translation);
@@ -957,7 +969,7 @@ mod tests {
         assert_eq!(advance_to_pause(&seq, 0.0, 0.8), (0.1, 0.1f32.next_up(), true));
         assert_eq!(advance_to_pause(&seq, 0.1, 0.0), (0.1, 0.1, false));
         app.world_mut().resource_mut::<Cinema>().playing.push(Playing { scene: 1, meta: None, file: "pause-test".into(),
-            seq, t: 0.0, paused: false, paused_cue: false, origin: Transform::IDENTITY, anchor: None,
+            seq, t: 0.0, paused: false, paused_cue: false, origin: Transform::IDENTITY, movement_frames: HashMap::new(), anchor: None,
             bindings: HashMap::from([(1, 100)]), clips: HashMap::new(), waited: 3.0 });
         app.update();
         app.update();
@@ -976,6 +988,39 @@ mod tests {
         app.update();
         assert!(app.world().resource::<Cinema>().playing[0].t > 0.29);
         assert!(!app.world().resource::<Cinema>().playing[0].paused);
+    }
+
+    #[test]
+    fn bound_movement_keeps_door_hinge_and_restart_frame() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
+            .init_asset::<Fc3Clip>().init_asset::<Fc3Skeleton>()
+            .init_resource::<Cinema>().init_resource::<CacheInfo>().init_resource::<crate::story::StoryUi>()
+            .init_resource::<ButtonInput<KeyCode>>().init_resource::<crate::fp::Cinematic>()
+            .add_message::<crate::sound::PlaySfx>().add_systems(Update, play_scenes);
+        let pack = fc3_formats::scripts::ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap();
+        app.insert_non_send(StoryHost::new(fc3_story::Story::new(pack, fc3_story::data::StoryData::default()).unwrap(), None));
+        let placed = Transform::from_xyz(-1895.85, 98.46, -2379.84).with_rotation(Quat::from_rotation_y(167.0f32.to_radians()));
+        let prop = app.world_mut().spawn((crate::objects::PlacedId(100), placed)).id();
+        let keys = vec![
+            cinema::MovementKey { time: 0.0, pos: [-1.81799, -3.19824, 0.307701], angles: [0.0, 0.0, 91.0001] },
+            cinema::MovementKey { time: 1.33333, pos: [-1.81799, -3.19824, 0.307701], angles: [0.0, 0.0, 179.0] },
+        ];
+        app.world_mut().resource_mut::<Cinema>().playing.push(Playing { scene: 1, meta: None, file: "door-frame".into(),
+            t: 0.0, paused: true, paused_cue: false, origin: Transform::from_xyz(-1898.54, 98.1876, -2388.99)
+                .with_rotation(Quat::from_rotation_y(-21.0f32.to_radians())),
+            movement_frames: HashMap::new(), anchor: None, bindings: HashMap::from([(1, 100)]), clips: HashMap::new(), waited: 3.0,
+            seq: Sequence { duration: 2.0, groups: vec![cinema::Group { uid: 1, kind: GroupKind::Generic,
+                name: "door".into(), archetype: 0, clips: vec![cinema::Clip { start: 0.0, duration: 2.0,
+                    kind: ClipKind::Movement { keys } }] }], ..default() } });
+        for t in [0.0, 1.33333, 1.33333, 0.0, 1.33333] {
+            app.world_mut().resource_mut::<Cinema>().playing[0].t = t;
+            app.update();
+            let at = app.world().get::<Transform>(prop).unwrap();
+            assert!(at.translation.distance(placed.translation) < 0.001);
+            let expected = placed.rotation * Quat::from_rotation_y(if t == 0.0 { 0.0 } else { 87.9999f32.to_radians() });
+            assert!(at.rotation.angle_between(expected).abs() < 0.001);
+        }
     }
 
     #[test]
@@ -1040,7 +1085,8 @@ mod tests {
         let handle = app.world_mut().resource_mut::<Assets<Fc3Clip>>().add(Fc3Clip(std::sync::Arc::new(clip)));
         let vehicle = app.world_mut().spawn((crate::objects::PlacedId(100), Transform::IDENTITY)).id();
         let actor = app.world_mut().spawn((StoryActor::new(200, None, false), Transform::IDENTITY)).id();
-        let prop = app.world_mut().spawn((crate::objects::PlacedId(300), Transform::IDENTITY)).id();
+        let prop = app.world_mut().spawn((crate::objects::PlacedId(300),
+            Transform::from_xyz(100.0, 1.0, 0.0).with_rotation(Quat::from_rotation_y(179.0f32.to_radians())))).id();
         let movement = cinema::Clip { start: 0.0, duration: 1.0, kind: ClipKind::VehicleMovement { keys: vec![
             cinema::VehicleKey { time: 0.0, pos: [10.0, 20.0, 30.0], angles: [0.0, 0.0, -90.0], gas: 0.0, steering: 0.0 },
             cinema::VehicleKey { time: 1.0, pos: [20.0, 20.0, 30.0], angles: [0.0, 0.0, -90.0], gas: 1.0, steering: 0.0 }] } };
@@ -1049,6 +1095,7 @@ mod tests {
             blend: 0.0, anchored: true } };
         app.world_mut().resource_mut::<Cinema>().playing.push(Playing { scene: 1, meta: None, file: "ride".into(), t: 0.5, paused: true, paused_cue: false,
             origin: Transform::from_xyz(100.0, 0.0, 0.0), anchor: Some(100), bindings: HashMap::from([(1, 100), (2, 200), (3, 300)]),
+            movement_frames: HashMap::new(),
             clips: HashMap::from([("loop".into(), handle)]), waited: 3.0,
             seq: Sequence { duration: 1.0, groups: vec![
                 cinema::Group { uid: 1, kind: GroupKind::Generic, name: "truck".into(), archetype: 0, clips: vec![movement, simple] },
@@ -1074,6 +1121,25 @@ mod tests {
         app.update();
         assert!(app.world().get::<Transform>(vehicle).unwrap().translation.abs_diff_eq(Vec3::new(120.0, 30.0, -20.0), 1e-5));
         assert!(app.world().get::<Transform>(prop).unwrap().translation.abs_diff_eq(Vec3::new(104.0, 1.0, 0.0), 1e-5));
+    }
+
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE with refreshed installed-game sequences"]
+    fn installed_greenhouse_doors_share_the_placed_greenhouse_frame() {
+        let root = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let data = fc3_story::data::StoryData::load(&root).unwrap();
+        let greenhouse = origin_of(&data, 2073485233983864237);
+        for (name, door) in [("seq_doc01_b02_doors", 2073691951284110795), ("seq_doc01_b02_doors02", 2073691961113462220)] {
+            let archive = format!(r"sequences\fc3_main\doc01_b02\{name}.cseq");
+            let seq = Sequence::from_text(&std::fs::read_to_string(root.join(cinema::sequence_rel(&archive))).unwrap()).unwrap();
+            let bound = bindings(&data, 2073402072836873209, &archive);
+            let group = seq.groups.iter().find(|g| bound.get(&g.uid) == Some(&door)).unwrap();
+            let (first, _, _) = recorded_pose(group, 0.0).unwrap();
+            let placed = origin_of(&data, door);
+            let frame = Transform::from_matrix(placed.to_matrix() * first.to_matrix().inverse());
+            assert!(frame.translation.distance(greenhouse.translation) < 0.05, "{name}: {frame:?}");
+            assert!(frame.rotation.angle_between(greenhouse.rotation).abs() < 0.002);
+        }
     }
 
     #[test]
@@ -1106,6 +1172,7 @@ mod tests {
         let playing = |scene, meta, name: &str| Playing {
             scene, meta, file: name.into(), seq: Sequence { looping: true, ..Default::default() },
             t: 0.0, paused: false, paused_cue: false, origin: Transform::default(),
+            movement_frames: HashMap::new(),
                 bindings: HashMap::new(), anchor: None, clips: HashMap::new(), waited: 0.0,
         };
         let mut cinema = Cinema::default();

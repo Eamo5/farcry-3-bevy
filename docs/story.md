@@ -1950,6 +1950,39 @@ then `pause` in the same frame and remains at the cue. The physical exit is
 verified, but this does not establish the subsequent CloseDoor/dark-room
 transition or full mission completion.
 
+### Bound door movement frame and CloseDoor
+
+The original ProximityTrigger_v2.lua explicitly calls Enter synchronously
+from Enable for current contacts. Thus the observed play-then-pause ordering
+was consistent with the source script; suppressing or reordering that Enter
+would hide the premature passage caused by the displaced door.
+
+Installed-asset comparison resolves the door motion frame: for **both**
+Doors and Doors02, `placed_door * inverse(first_movement_key)` matches the
+greenhouse's placed transform within 5 cm and 0.002 radians. Applying the
+static cinematic scene placement instead sent the second hinge approximately
+8 m away. Generic bound Movement tracks now capture that placement-relative
+frame once, then evaluate subsequent keys in it. Pauses and in-place restarts
+retain the frame rather than accumulating motion. Recorded vehicle movement
+and explicitly built gameplay sequences retain their existing origins.
+This is calibrated against the authored assets and live playback; the native
+movement-track implementation has not been fully reverse-engineered.
+
+The regression uses the second door's nonzero first key and distinct scene
+origin, verifies hinge preservation and its 88-degree swing, and repeats
+pause/restart samples to detect drift. Installed tests verify the independent
+frame agreement for both doors and retain the original 670 m vehicle-ride
+fixture. Workspace tests and build pass
+(`fc3-bound-motion-{tests,installed-tests,ride-test,workspace-tests,build}.log`).
+
+Two live `-SecondDoor` replays now pass physical occupancy and health 100;
+Doors02 pauses at OpenDoor, receives Play after entry, then reaches CloseDoor.
+The final repeatable script requires all six cues in order
+(`Temp/opencode/doc020-bound-motion-verified/`). The hinge log stays at
+(-1895.85,98.46,-2379.84). This resolves the observed timing failure without
+injecting events or changing trigger Lua semantics. Dark-room arrival,
+RealTree growth and remaining visual/campaign parity still need validation.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected
