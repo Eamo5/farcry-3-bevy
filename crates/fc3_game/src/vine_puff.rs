@@ -22,6 +22,7 @@ pub struct Puff {
     mesh: Option<Handle<Mesh>>,
     entity: Option<Entity>,
     was_active: bool,
+    capture: Option<std::path::PathBuf>,
 }
 
 fn load(mut puff: ResMut<Puff>, server: Res<AssetServer>, mut meshes: ResMut<Assets<Mesh>>,
@@ -48,6 +49,7 @@ fn load(mut puff: ResMut<Puff>, server: Res<AssetServer>, mut meshes: ResMut<Ass
         Transform::IDENTITY, Visibility::Hidden, NotShadowCaster, NotShadowReceiver,
         bevy::camera::visibility::NoFrustumCulling, Name::new("authored vine puff preview"))).id();
     puff.source = Some(e);
+    puff.capture = std::env::var_os("FC3_VINE_PUFF_CAPTURE").map(Into::into);
     puff.mesh = Some(mesh);
     puff.entity = Some(entity);
 }
@@ -198,7 +200,7 @@ fn puff_mesh(e: &Emitter, origin: Transform, camera: Quat, elapsed: f32) -> Mesh
             normals.push((camera * Vec3::Z).to_array());
             uvs.push([(frame % e.frames[0]) as f32 / e.frames[0] as f32 + (point.x * 0.5 + 0.5) / e.frames[0] as f32,
                 (frame / e.frames[0]) as f32 / e.frames[1] as f32 + (0.5 - point.y * 0.5) / e.frames[1] as f32]);
-            frame_blends.push([blend, 0.0]);
+            frame_blends.push([blend, frame as f32]);
             colours.push(rgb.extend(alpha).to_array());
         }
         for n in 1..shape.len().saturating_sub(1) { indices.extend([base, base + n as u32, base + n as u32 + 1]); }
@@ -214,7 +216,8 @@ fn puff_mesh(e: &Emitter, origin: Transform, camera: Quat, elapsed: f32) -> Mesh
 }
 
 fn draw(vines: Res<crate::vine::Vines>, mut puff: ResMut<Puff>, players: Query<&Transform, With<crate::player::Player>>,
-    cameras: Query<&Transform, With<PlayerCamera>>, mut meshes: ResMut<Assets<Mesh>>, mut visibility: Query<&mut Visibility>) {
+    cameras: Query<&Transform, With<PlayerCamera>>, mut meshes: ResMut<Assets<Mesh>>, mut visibility: Query<&mut Visibility>,
+    mut commands: Commands) {
     let (Some(entity), Some(mesh)) = (puff.entity, puff.mesh.clone()) else { return };
     let Ok(mut visible) = visibility.get_mut(entity) else { return };
     let Some((elapsed, offset)) = vines.puff_phase() else {
@@ -235,6 +238,13 @@ fn draw(vines: Res<crate::vine::Vines>, mut puff: ResMut<Puff>, players: Query<&
         *mesh = puff_mesh(e, origin, view.rotation, elapsed);
         *visible = Visibility::Inherited;
     }
+    if (0.5..1.0).contains(&elapsed) {
+        if let Some(path) = puff.capture.take() {
+            use bevy::render::view::window::screenshot::{save_to_disk, Screenshot};
+            info!("vine puff: capture at age {elapsed} to {}", path.display());
+            commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -251,6 +261,34 @@ mod tests {
         assert!(integrals(&triangle, 2.0, 0.0).abs_diff_eq(Vec2::new(0.5, 0.75), 1e-6));
         assert_eq!(integrals(&ramp, 0.0, 0.0), Vec2::ZERO);
         assert_eq!(integrals(&ramp, f32::NAN, 0.0), Vec2::ZERO);
+    }
+
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE with authored vine particle XML"]
+    fn installed_atlas_frame_metadata_covers_row_and_wrap_boundaries() {
+        let root = std::path::PathBuf::from(std::env::var_os("FC3_TEST_CACHE").expect("FC3_TEST_CACHE"));
+        let effect = Effect::parse(&std::fs::read_to_string(root.join(fc3_formats::particle_effects::VINE_CACHE_REL)).unwrap()).unwrap();
+        let e = &effect.emitters[0];
+        let shape = polygon(e);
+        let grid = Vec2::new(e.frames[0] as f32, e.frames[1] as f32);
+        let mut seen = std::collections::BTreeSet::new();
+        for tick in 0..150 {
+            let mesh = puff_mesh(e, Transform::IDENTITY, Quat::IDENTITY, tick as f32 / 100.0);
+            let bevy::mesh::VertexAttributeValues::Float32x2(uvs) = mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap() else { panic!() };
+            let bevy::mesh::VertexAttributeValues::Float32x2(metadata) = mesh.attribute(Mesh::ATTRIBUTE_UV_1).unwrap() else { panic!() };
+            for (sprite_uv, sprite_meta) in uvs.chunks_exact(shape.len()).zip(metadata.chunks_exact(shape.len())) {
+                let frame = sprite_meta[0][1] as u32;
+                seen.insert(frame);
+                assert!(sprite_meta.iter().all(|m| *m == sprite_meta[0]));
+                let cell = Vec2::new((frame % e.frames[0]) as f32, (frame / e.frames[0]) as f32);
+                for (uv, point) in sprite_uv.iter().zip(&shape) {
+                    let local = Vec2::from_array(*uv) * grid - cell;
+                    assert!(local.abs_diff_eq(Vec2::new(point.x * 0.5 + 0.5, 0.5 - point.y * 0.5), 2e-6));
+                }
+            }
+        }
+        assert!(seen.contains(&(e.frames[0] - 1)), "row-end frame not exercised");
+        assert!(seen.contains(&(e.frames[0] * e.frames[1] - 1)), "atlas-wrap frame not exercised");
     }
 
     #[test]
@@ -279,6 +317,7 @@ mod tests {
         let bevy::mesh::VertexAttributeValues::Float32x2(blends) = mesh.attribute(Mesh::ATTRIBUTE_UV_1).unwrap() else { panic!() };
         assert!(blends.iter().all(|b| (0.0..1.0).contains(&b[0])));
         assert!(blends.iter().any(|b| b[0] > 0.01));
+        assert!(blends.iter().all(|b| b[1].fract() == 0.0 && (0.0..25.0).contains(&b[1])));
         assert!(blends.chunks_exact(6).all(|sprite| sprite.iter().all(|v| *v == sprite[0])));
         let shifted = puff_mesh(e, Transform::from_xyz(12.0, -5.0, 7.0), Quat::IDENTITY, 0.5);
         let positions = |m: &Mesh| match m.attribute(Mesh::ATTRIBUTE_POSITION).unwrap() {

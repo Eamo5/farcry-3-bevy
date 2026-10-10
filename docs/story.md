@@ -1567,6 +1567,25 @@ Native tangent evaluation, spread/variation distributions and units,
 lighting, clipping and original stop semantics remain unverified; this is
 still an opt-in preview rather than particle parity.
 
+Atlas interpolation now carries the explicit frame index alongside its blend
+fraction. Inferring the cell from `floor(uv * grid)` incorrectly selects the
+neighbor at right/bottom polygon boundaries, especially across rows and the
+last atlas frame. Both samples now use the same frame-relative coordinates,
+clamped to a half-texel inset to avoid base-level bilinear atlas bleed.
+Installed geometry tests sample 150 ages, including row-end and final-frame
+indices, checking per-sprite metadata and original local polygon UVs.
+
+Wall-clock captures proved unreliable for the short puff window, so opt-in
+`FC3_VINE_PUFF_CAPTURE=<png path>` captures once at the first rendered puff
+age between 0.5 and 1.0 seconds. The phase capture
+`fc3-puff-atlas-phase.png` shows smoke above the climbing view at age
+0.5017865. The replay reports no shader errors, releases the puff, completes
+the transition and reaches (-1877.34,94.28,-2500.47) with health 100.
+The late wall-clock capture also exposes the existing foliage/geometry
+intersection during stand-up; that remains unresolved. Release build,
+workspace tests and all three puff tests pass (`fc3-puff-atlas-build.log`,
+`fc3-puff-atlas-workspace-tests.log`, `fc3-puff-atlas-tests.log`).
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

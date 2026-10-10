@@ -20,11 +20,17 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #ifdef VERTEX_UVS_B
     if params.mode.w > 0.5 {
         let grid = max(params.mode.yz, vec2<f32>(1.0));
-        let cell_uv = in.uv * grid;
-        let cell = floor(cell_uv);
-        let next_index = (cell.y * grid.x + cell.x + 1.0) % (grid.x * grid.y);
+        // UVs can lie exactly on the right/bottom boundary of a cell.
+        // Carry the sprite's frame explicitly rather than floor those UVs.
+        let index = round(in.uv_b.y);
+        let cell = vec2<f32>(index % grid.x, floor(index / grid.x));
+        let local_uv = in.uv * grid - cell;
+        let inset = 0.5 * grid / vec2<f32>(textureDimensions(sheet));
+        let safe_uv = clamp(local_uv, inset, vec2<f32>(1.0) - inset);
+        t = textureSample(sheet, sheet_sampler, (cell + safe_uv) / grid);
+        let next_index = (index + 1.0) % (grid.x * grid.y);
         let next_cell = vec2<f32>(next_index % grid.x, floor(next_index / grid.x));
-        let next = textureSample(sheet, sheet_sampler, (next_cell + fract(cell_uv)) / grid);
+        let next = textureSample(sheet, sheet_sampler, (next_cell + safe_uv) / grid);
         t = mix(t, next, clamp(in.uv_b.x, 0.0, 1.0));
     }
 #endif
