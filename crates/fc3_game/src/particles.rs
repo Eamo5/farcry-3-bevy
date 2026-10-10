@@ -267,8 +267,8 @@ pub struct ParticleMaterial {
 }
 
 impl ParticleMaterial {
-    pub(crate) fn alpha_sheet(sheet: Handle<Image>) -> Self {
-        Self { mode: Vec4::new(1.0, 0.0, 0.0, 0.0), sheet }
+    pub(crate) fn alpha_sheet(sheet: Handle<Image>, frames: [u32; 2], interpolate: bool) -> Self {
+        Self { mode: Vec4::new(1.0, frames[0] as f32, frames[1] as f32, if interpolate { 1.0 } else { 0.0 }), sheet }
     }
 }
 

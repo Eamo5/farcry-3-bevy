@@ -6,7 +6,7 @@
 #import bevy_pbr::forward_io::VertexOutput
 
 struct ParticleParams {
-    // x: 0 additive, 1 texture alpha, 2 brightness as alpha.
+    // x: blend mode; yz: optional flipbook grid; w: interpolate frames.
     mode: vec4<f32>,
 }
 
@@ -16,7 +16,18 @@ struct ParticleParams {
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    let t = textureSample(sheet, sheet_sampler, in.uv);
+    var t = textureSample(sheet, sheet_sampler, in.uv);
+#ifdef VERTEX_UVS_B
+    if params.mode.w > 0.5 {
+        let grid = max(params.mode.yz, vec2<f32>(1.0));
+        let cell_uv = in.uv * grid;
+        let cell = floor(cell_uv);
+        let next_index = (cell.y * grid.x + cell.x + 1.0) % (grid.x * grid.y);
+        let next_cell = vec2<f32>(next_index % grid.x, floor(next_index / grid.x));
+        let next = textureSample(sheet, sheet_sampler, (next_cell + fract(cell_uv)) / grid);
+        t = mix(t, next, clamp(in.uv_b.x, 0.0, 1.0));
+    }
+#endif
 #ifdef VERTEX_COLORS
     let c = in.color;
 #else

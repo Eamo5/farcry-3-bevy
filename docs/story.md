@@ -1544,6 +1544,29 @@ flipbook-speed curves/inter-frame blending, SH lighting, near/soft clipping,
 variation distributions and emitter stop-versus-particle-death semantics
 remain to implement/validate. The preview remains separately opt-in.
 
+The puff preview now evaluates speed, gravity and flipbook progression from
+particle age using analytic integrals of its piecewise-linear preview curves.
+This avoids frame-step integration drift and retains the authored two-second
+gravity delay (normalized age 0.2 of a ten-second life). Gravity respects
+`LocalGravity`; world gravity does not rotate with the camera attachment.
+The initial angle variant is read from the emitter instead of a fixed 360.
+The authored flipbook-speed curve now controls animation advancement, and
+`TexAnimLerp` blends adjacent atlas cells (including wrapping), with a
+per-particle fractional frame carried in the second UV channel. Other
+particle batches retain their existing single-frame shader path.
+
+Regression coverage includes analytic ramp/triangle integrals, paired knots,
+held endpoints, invalid time, the installed FPS integral, world-gravity
+orientation, per-sprite frame blend values and attachment translation.
+Workspace/installed tests and build pass; live shader runs report no errors
+(`fc3-puff-motion-{workspace,all-installed}-tests.log`,
+`fc3-puff-frameblend-build.log`). `fc3-puff-frameblend-mid.png` captures the
+effect; the full replay again releases the puff, completes the transition
+and walks to the cave target with health 100 (`fc3-puff-motion-final.err.log`).
+Native tangent evaluation, spread/variation distributions and units,
+lighting, clipping and original stop semantics remain unverified; this is
+still an opt-in preview rather than particle parity.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected
