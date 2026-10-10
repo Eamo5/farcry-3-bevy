@@ -41,6 +41,7 @@ try {
     $previous = -1
     $cues = @('GH_StartPOS', 'GH_POS2', 'GH_POS3')
     if ($Doorway -or $Interior) { $cues += 'DoorOpen' }
+    if ($Interior) { $cues += 'OpenDoor' }
     foreach ($cue in $cues) {
         $hits = [regex]::Matches($text, "reached $cue at")
         if ($hits.Count -ne 1 -or $hits[0].Index -le $previous) { throw "Missing, repeated or out-of-order cue: $cue" }

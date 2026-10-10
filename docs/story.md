@@ -1869,6 +1869,38 @@ validation passes all four cues, physical route completion and health 100
 recognizable dirty window panes instead of vertical stripes. Interior route
 progression beyond the entrance and RealTree growth remain outstanding.
 
+### Greenhouse dialogue priority deadlock
+
+Physical probing around the tables exposed a closed second door rather than
+an impassable aisle. The route through `(-1897.8,-2380.3)` and
+`(-1896.78,-2379.86)` reaches that door, whose collider is authored entity
+2073691961113462220. `FC3_STORY_DIALOG_DEBUG=1` now logs speaker, dialogue
+event and sound ID. It revealed `0x00164caf` rejected with FailedPriority
+while hallucination line `0x00154be3` was speaking. The installed greenhouse
+Lua depends on that line's Finished/FinishedInterrupted, then `0x00164d8b`,
+then `0x001c32d3`, before starting `seq_DOC01_B02_Doors02`.
+
+The installed FC3.dll StartDialog binding at 0x10655b60 forwards through
+0x10654960, 0x11abecb0 and 0x11405a60 to 0x114053b0. At
+0x114053d7..0x114053e4 an unqueued line is accepted when incoming priority
+is **greater than or equal to** current priority. The old implementation
+required strictly greater priority unless Supersede was true. At
+0x1140549a..0x114054b5, queued requests defer when current priority is
+greater, or equal with Supersede true; other accepted requests replace.
+These observed branches now drive arbitration. Global native priority gates
+at offsets 0x1fc/0x200 are not implemented. Native branch evidence is saved
+in `Temp/opencode/fc3-dialog-priority-native.txt`.
+
+Workspace tests cover the priority/queue/Supersede matrix, deferred playback,
+replacement stop commands and the exact equal-ForcePlay greenhouse case.
+Tests and build pass (`fc3-dialog-priority-{tests,build}.log`). Live replay
+`fc3-greenhouse-dialog-fixed.err.log` confirms the dialogue chain advances
+and reaches Doors02 `OpenDoor`. The physical probe still stalls near the
+second doorway; reaching the cinematic cue does not prove collider alignment
+or room entry. The standard `-Interior` replay passes again with health 100
+(`doc020-dialog-priority-fixed/`) and its script now also requires the
+subsequent `OpenDoor` cue in order. No dialogue completion was injected.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

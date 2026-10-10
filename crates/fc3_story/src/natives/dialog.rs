@@ -58,6 +58,9 @@ fn seconds(c: &Core, sound: &str) -> f64 {
 
 impl Core {
     fn dialog_event(&mut self, speaker: u64, event: &str, sound: &str) {
+        if std::env::var_os("FC3_STORY_DIALOG_DEBUG").is_some() {
+            eprintln!("story dialog: speaker {speaker} {event} {sound}");
+        }
         self.raise(&Listen::Entity(speaker, event.to_string()), vec![Arg::id(speaker), Arg::Str(sound.to_string())]);
     }
 
@@ -75,10 +78,15 @@ impl Core {
         match self.dialogs.speaking.get(&speaker).cloned() {
             None => self.start_line(line),
             Some(current) => {
-                if queue {
+                // FC3.dll 0x114053d7..0x114054b5: without queueing only
+                // strictly lower priorities fail. With queueing, defer a
+                // lower priority, or an equal one when Supersede is set.
+                // Equal unqueued ForcePlay lines interrupt; rejecting them
+                // strands DOC_020's door-opening dialogue chain.
+                if queue && (line.priority < current.priority || (line.priority == current.priority && supersede)) {
                     self.dialog_event(speaker, "Domino_DialogQueued", sound);
                     self.dialogs.queued.entry(speaker).or_default().push_back(line);
-                } else if (supersede && line.priority >= current.priority) || line.priority > current.priority {
+                } else if line.priority >= current.priority {
                     self.dialogs.speaking.remove(&speaker);
                     self.emit(Command::StopDialog { speaker });
                     self.dialog_event(speaker, "Domino_DialogInterrupted", &current.sound);
@@ -148,4 +156,46 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         true
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::rc::Rc;
+    use crate::data::StoryData;
+
+    #[test]
+    fn installed_priority_branch_matrix() {
+        for (priority, relation) in [("Idle", -1), ("Combat", 0), ("ForcePlay", 1)] {
+            for supersede in [false, true] {
+                for queue in [false, true] {
+                    let mut c = Core::new(Rc::new(StoryData::default()));
+                    c.start_dialog(1, "0x00154be3", None, "Combat", false, false);
+                    c.out.clear();
+                    c.start_dialog(1, "0x00164caf", None, priority, supersede, queue);
+                    let deferred = queue && (relation < 0 || (relation == 0 && supersede));
+                    let replaced = !deferred && relation >= 0;
+                    assert_eq!(c.dialogs.speaking[&1].sound, if replaced { "0x00164caf" } else { "0x00154be3" });
+                    assert_eq!(c.dialogs.queued.get(&1).map_or(0, VecDeque::len), usize::from(deferred));
+                    assert_eq!(c.out.iter().filter(|cmd| matches!(cmd, Command::StopDialog { speaker: 1 })).count(), usize::from(replaced));
+                    c.update_dialogs(3.0);
+                    if deferred {
+                        assert_eq!(c.dialogs.speaking[&1].sound, "0x00164caf");
+                    } else {
+                        assert!(!c.dialogs.speaking.contains_key(&1));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn greenhouse_forceplay_replaces_equal_priority_line() {
+        let mut c = Core::new(Rc::new(StoryData::default()));
+        c.start_dialog(1, "0x00154be3", None, "ForcePlay", false, false);
+        c.out.clear();
+        c.start_dialog(1, "0x00164caf", None, "ForcePlay", false, false);
+        assert_eq!(c.dialogs.speaking[&1].sound, "0x00164caf");
+        assert!(matches!(c.out.as_slice(), [Command::StopDialog { speaker: 1 }, Command::Dialog { sound: 0x00164caf, .. }]));
+    }
 }
