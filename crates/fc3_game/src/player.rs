@@ -37,7 +37,7 @@ const GROUND_ACCEL: f32 = 60.0;
 const AIR_ACCEL: f32 = 6.0;
 const STEP_HEIGHT: f32 = 0.45;
 /// Steepest walkable slope (cosine of the angle from vertical).
-const MIN_GROUND_NORMAL_Y: f32 = 0.64;
+pub(crate) const MIN_GROUND_NORMAL_Y: f32 = 0.64;
 
 pub struct PlayerPlugin;
 

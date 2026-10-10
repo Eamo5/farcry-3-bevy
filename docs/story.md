@@ -1168,6 +1168,18 @@ The remaining controller must take ownership during that climb, rather than
 allowing the ordinary top exit. The fixture's initial placement means this
 is not evidence of an unassisted approach or complete vine interaction.
 
+The obstructed exit also exposed a general traversal collision bug: a
+downward ground ray could dismount the player into a wall or low ceiling.
+Ladder exits now require a walkable ground normal and an unobstructed standing
+capsule at the landing, trying both sides before remaining mounted. The
+physics-backed regression covers a blocked preferred side, a clear opposite
+side, a low ceiling, and recovery after the obstructions are removed.
+`fc3-ladder-clearance-test.log` passes. The repeated vine fixture now remains
+mounted at capsule Y 123.51 with health 100 instead of dismounting into the
+rocks at Y 124.54 (`fc3-ladder-clearance.err.log`). The special vine transition
+is still pending; retaining the ladder is collision recovery, not mission
+completion or visual parity evidence.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

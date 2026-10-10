@@ -52,6 +52,41 @@ mod ownership_tests {
     use super::*;
     use crate::menu::GameState;
 
+    #[derive(Resource, Default)]
+    struct Landing(Option<(Vec3, Vec3)>);
+
+    fn probe_landing(spatial: avian3d::prelude::SpatialQuery, mut landing: ResMut<Landing>) {
+        landing.0 = ladder_landing(&spatial, Vec3::ZERO, 3.0, Vec3::Z, &default());
+    }
+
+    #[test]
+    fn ladder_exit_requires_capsule_clearance_and_tries_the_other_side() {
+        use avian3d::prelude::*;
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default(), bevy::mesh::MeshPlugin,
+            bevy::transform::TransformPlugin, PhysicsPlugins::default()))
+            .init_resource::<Landing>();
+        app.world_mut().spawn((RigidBody::Static, Collider::cuboid(8.0, 1.0, 8.0), Transform::from_xyz(0.0, 2.5, 0.0)));
+        let wall = app.world_mut().spawn((RigidBody::Static, Collider::cuboid(2.0, 3.0, 0.7), Transform::from_xyz(0.0, 4.5, -0.8))).id();
+        for _ in 0..4 { app.update(); }
+        app.world_mut().run_system_once(probe_landing).unwrap();
+        let (dir, centre) = app.world().resource::<Landing>().0.expect("opposite side is clear");
+        assert_eq!(dir, Vec3::Z);
+        assert!((centre.y - (3.0 + HALF_HEIGHT + 0.05)).abs() < 0.001);
+
+        let ceiling = app.world_mut().spawn((RigidBody::Static, Collider::cuboid(8.0, 0.2, 8.0), Transform::from_xyz(0.0, 4.6, 0.0))).id();
+        for _ in 0..4 { app.update(); }
+        app.world_mut().run_system_once(probe_landing).unwrap();
+        assert!(app.world().resource::<Landing>().0.is_none(), "low ceiling must prevent dismount");
+
+        app.world_mut().despawn(wall);
+        app.world_mut().despawn(ceiling);
+        for _ in 0..4 { app.update(); }
+        app.world_mut().run_system_once(probe_landing).unwrap();
+        assert_eq!(app.world().resource::<Landing>().0.unwrap().0, Vec3::NEG_Z);
+    }
+
     #[test]
     fn mounted_zipline_freezes_in_menus_and_cinematics_then_resumes() {
         let mut app = App::new();
@@ -339,13 +374,10 @@ fn climb(
                 // Over the top onto the landing: beyond the ladder, else back on
                 // this side; with nothing to stand on, stay at the top.
                 let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([e]);
-                let landing = [-side, side].into_iter().find_map(|dir| {
-                    let probe = Vec3::new(base.x, l.top + 1.0, base.z) + dir * 0.8;
-                    spatial.cast_ray(probe, Dir3::NEG_Y, 2.6, true, &filter).map(|h| (dir, probe.y - h.distance))
-                });
+                let landing = ladder_landing(&spatial, base, l.top, side, &filter);
                 match landing {
-                    Some((dir, ground)) => {
-                        t.translation = Vec3::new(base.x, ground + HALF_HEIGHT + 0.05, base.z) + dir * 0.8;
+                    Some((dir, centre)) => {
+                        t.translation = centre;
                         p.velocity = dir * 1.0;
                         release(&mut p, &mut mount, &mut commands);
                     }
@@ -361,6 +393,26 @@ fn climb(
         }
         Mount::Zip { .. } => {}
     }
+}
+
+/// A ground hit alone is not a landing: the capsule also needs headroom
+/// and room beside the ladder. Reject steep rock faces and enclosed ledges.
+fn ladder_landing(
+    spatial: &avian3d::prelude::SpatialQuery,
+    base: Vec3,
+    top: f32,
+    side: Vec3,
+    filter: &avian3d::prelude::SpatialQueryFilter,
+) -> Option<(Vec3, Vec3)> {
+    let capsule = avian3d::prelude::Collider::capsule(crate::player::CAPSULE_RADIUS, crate::player::CAPSULE_LENGTH);
+    [-side, side].into_iter().find_map(|dir| {
+        let probe = Vec3::new(base.x, top + 1.0, base.z) + dir * 0.8;
+        let ground = spatial.cast_ray(probe, Dir3::NEG_Y, 2.6, true, filter)?;
+        if ground.normal.y < crate::player::MIN_GROUND_NORMAL_Y { return None; }
+        let centre = probe.with_y(probe.y - ground.distance + HALF_HEIGHT + 0.05);
+        spatial.shape_intersections(&capsule, centre, Quat::IDENTITY, filter).is_empty().then_some((dir, centre))
+    })
+
 }
 
 /// A radio tower taken over, at its panel (the story hears of it).
