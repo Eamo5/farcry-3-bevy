@@ -753,6 +753,9 @@ fn scene_view(
                 p.noclip = noclip;
                 p.pitch = 0.0;
                 p.spawning = true;
+                // The scene may end in a cave or on an upper floor. Probe
+                // locally instead of respawning on the terrain above it.
+                p.keep_height = true;
                 *ct = Transform::from_translation(eye);
                 if let Projection::Perspective(pp) = &mut *proj {
                     pp.fov = settings.fov.to_radians();
@@ -804,6 +807,7 @@ mod tests {
         app.update();
         assert_eq!(app.world().get::<Transform>(player).unwrap().translation, expected);
         assert!(!app.world().get::<Player>(player).unwrap().noclip);
+        assert!(app.world().get::<Player>(player).unwrap().keep_height);
     }
 
     #[test]

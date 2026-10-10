@@ -1204,6 +1204,40 @@ context selection and rendering; downward slide still needs live validation.
 Workspace tests, release builds and cache conversion pass. The special
 hallucination transition remains unfinished.
 
+Unverified runtime work: `vine.rs` now has an opt-in
+`FC3_VINE_GAMEPLAY_TEST=1` prototype, handling GSF bindings/cancellation,
+matching the occupied ladder id, climbing timeout, transition timing, an
+anchor-relative relocation, and the installed stand-up clip. It also stops
+ordinary top dismount while the scripted ladder is owned. The transformed
+pose has a unit regression with rotated anchors. The first replay
+(`fc3-vine-runtime`) was run before the opt-in guard was added: it armed id
+408, detected the real mount, waited six seconds, then spent 2.5 seconds in
+the transition delay and played the 3.433-second clip. Lua subsequently
+started the authored rock, greenhouse and bird-flight scenes.
+
+That replay is **not accepted transition validation**: its final camera/arm
+image intersects cave geometry. Destination was Bevy
+[-1878.1532, 93.79022, -2521.6812], computed from the current capsule pose
+between the first/second anchor frames. Check capsule-vs-animation-root
+alignment, the stand-up origin and cinematic ownership before enabling it.
+The dolly phase currently preserves timing and dispatches the Lua event but
+does not yet render the dolly zoom; camera shake, puff and transition post-FX
+are also missing. The prototype remains opt-in, unpushed work, and has not
+verified JAS/DOC campaign completion or full visual/gameplay/UX parity.
+
+Follow-up vine runs found a general cinematic-release bug: releasing the
+camera set spawning without height preservation, briefly snapping the cave
+capsule from about Y 94 to terrain at Y 146 (`fc3-vine-release`). Cinematic
+release now requests local-height grounding, covered by the camera/body
+release regression. The prototype also no longer resets the capsule to its
+pre-animation pose when the stand-up clip ends. The replay after correcting
+the anchor basis and removing the clip's absolute root start reaches a final
+camera around Y 95.3 and releases the capsule at Y 94.59
+(`fc3-vine-basis.err.log`), avoiding the terrain snap. Its final image still
+shows incorrect first-person presentation near cave geometry, so the vine
+prototype remains opt-in and unverified. The verified local-height release
+fix is independent of that prototype.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected
