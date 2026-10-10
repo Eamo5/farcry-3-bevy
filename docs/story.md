@@ -1750,10 +1750,34 @@ Source inspection also identifies unfinished visual/gameplay work in the
 dead-tree section. `HK_Realtrees` initializes grouped trees with
 `UpdateRealTreeRegen(...,0)` and later invokes `SetRealTreeGrowthSpeed`.
 Procedural growth is not implemented in the game host. The current story
-native also calls the growth callback immediately, before the Lua box has
-finished counting its group, which needs a real asynchronous completion
-lifecycle. These deficiencies remain; the new physical route bypasses the
+native queues the growth callback during the same script pump, without waiting
+for rendered growth. `Core::call` queues work rather than re-entering Lua, so
+the group count is initialized before callback delivery (correcting the
+earlier claim of a group-initialization race). Actual growth completion still
+needs a host-driven lifecycle. These deficiencies remain; the new physical route bypasses the
 obstruction rather than claiming they are resolved.
+
+### Greenhouse doorway cue verified; interior entry still unresolved
+
+Extending the verified route to (-1896.96,-2388.27) physically enters
+`ProximityTrigger_House_Door01` (2073401887582854122). Lua starts
+`seq_doc01_b02_doors`, which reaches `DoorOpen` at 1.6 seconds. Inspection of
+the installed `.cseq` confirms a generic movement track for the door with
+rotation 180° -> 70° at the cue -> 180° at sequence end. The graph pauses
+that scene on `DoorOpen`, then enables the interior trigger. The converted
+track contains this rotation, so an absent door-animation clip is not the
+explanation for the stalled entry probe.
+
+The validation script now accepts `-Doorway`, adding that physical waypoint
+and requiring exactly one `DoorOpen` after the three greenhouse cues. Its
+actual run passes with health 100 and no death/retry/warning/error, with
+evidence under `Temp/opencode/doc020-doorway/`. More ambitious entry probes
+stalled near (-1895.47,99.33,-2387.03), and after alignment near
+(-1893.36,101.03,-2386.68); close geometry clips the camera while jumping.
+Those runs do **not** verify entry into the greenhouse or its dark room
+(`fc3-greenhouse-entry` and `fc3-greenhouse-door-aligned` logs/screenshots).
+Next identify the blocking collider and the opened door's placement relative
+to the greenhouse frame before changing collision or route geometry.
 
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
