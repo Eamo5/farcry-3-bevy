@@ -64,6 +64,8 @@ pub struct Cinema {
     /// The view while a scene holds it: world transform and vertical field
     /// of view (degrees).
     pub view: Option<(Transform, f32)>,
+    /// A player track owns the body; an establishing shot only owns the view.
+    pub view_moves_player: bool,
     /// Sequences the game makes itself (a QTE's phases), to start.
     built: Vec<Built>,
 }
@@ -457,6 +459,7 @@ fn play_scenes(
     // Scenes that ended: their characters go back to the world.
     let released = std::mem::take(&mut cinema.released);
     let mut view = None;
+    let mut view_moves_player = false;
     let cinema = &mut *cinema;
     let mut finished = Vec::new();
     for (i, p) in cinema.playing.iter_mut().enumerate() {
@@ -674,6 +677,7 @@ fn play_scenes(
                 );
             }
             view = Some(v);
+            view_moves_player = p.seq.groups.iter().any(|g| g.kind == GroupKind::Player);
         }
         if p.t >= p.seq.duration {
             if p.seq.looping {
@@ -705,11 +709,12 @@ fn play_scenes(
     }
     cinema.released.clear();
     cinema.view = view;
+    cinema.view_moves_player = view_moves_player;
 }
 
-/// While a scene holds the view, the player is where the scene's camera is
-/// (the world streams around them; no physics, the first-person weapon
-/// away), and is set down on the ground where the scene leaves them.
+/// Player-track scenes carry the body with their camera. Camera-only shots
+/// leave the body in place, so flag/establishing shots cannot teleport Jason
+/// into scenery or outside his mission zone.
 #[allow(clippy::type_complexity)]
 fn scene_view(
     cinema: Res<Cinema>,
@@ -730,9 +735,11 @@ fn scene_view(
             }
             p.velocity = Vec3::ZERO;
             let (yaw, _, _) = world.rotation.to_euler(EulerRot::YXZ);
-            p.yaw = yaw;
-            pt.translation = world.translation - eye;
-            pt.rotation = Quat::from_rotation_y(yaw);
+            if cinema.view_moves_player {
+                p.yaw = yaw;
+                pt.translation = world.translation - eye;
+                pt.rotation = Quat::from_rotation_y(yaw);
+            }
             *ct = Transform::from_matrix(pt.to_matrix().inverse() * world.to_matrix());
             if let Projection::Perspective(pp) = &mut *proj {
                 pp.fov = fov.clamp(10.0, 120.0).to_radians();
@@ -761,6 +768,43 @@ fn scene_view(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn camera_only_scene_preserves_body_while_player_track_transfers_it() {
+        let mut app = App::new();
+        app.init_resource::<Cinema>().init_resource::<crate::settings::Settings>().add_systems(Update, scene_view);
+        let start = Vec3::new(-110.0, 154.0, -2270.0);
+        let player = app.world_mut().spawn((Transform::from_translation(start), Player {
+            velocity: Vec3::ZERO, yaw: 0.4, pitch: 0.0, grounded: true, crouching: false, swimming: false, noclip: false,
+            spawning: false, keep_height: false, last_landing_speed: 0.0, sprinting: false, spawned_at: 0.0,
+            driving: false, eye: crate::player::EYE_HEIGHT, air: crate::player::AirMode::None,
+            mantle: None, mounted: None, sliding: None, dragging: false,
+        })).id();
+        let camera = app.world_mut().spawn((PlayerCamera, Transform::default(), Projection::Perspective(PerspectiveProjection::default()))).id();
+        let shot = Transform::from_xyz(-140.0, 170.0, -2290.0);
+        app.world_mut().resource_mut::<Cinema>().view = Some((shot, 55.0));
+        app.update();
+        let body = *app.world().get::<Transform>(player).unwrap();
+        assert_eq!(body.translation, start);
+        assert!((body.transform_point(app.world().get::<Transform>(camera).unwrap().translation) - shot.translation).length() < 0.001);
+        assert!(app.world().get::<Player>(player).unwrap().noclip);
+        app.world_mut().resource_mut::<Cinema>().view = None;
+        app.update();
+        assert_eq!(app.world().get::<Transform>(player).unwrap().translation, start);
+        assert!(!app.world().get::<Player>(player).unwrap().noclip);
+        {
+            let mut cinema = app.world_mut().resource_mut::<Cinema>();
+            cinema.view = Some((shot, 55.0));
+            cinema.view_moves_player = true;
+        }
+        app.update();
+        let expected = shot.translation - Vec3::Y * (crate::player::EYE_HEIGHT - HALF_HEIGHT);
+        assert_eq!(app.world().get::<Transform>(player).unwrap().translation, expected);
+        app.world_mut().resource_mut::<Cinema>().view = None;
+        app.update();
+        assert_eq!(app.world().get::<Transform>(player).unwrap().translation, expected);
+        assert!(!app.world().get::<Player>(player).unwrap().noclip);
+    }
 
     #[test]
     fn recorded_vehicle_pose_interpolates_rotations_and_holds_its_endpoint() {

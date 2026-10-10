@@ -2266,6 +2266,22 @@ fn main() -> Result<()> {
         "facial" => facial_cmd::run(&vfs, &args)?,
         // Parses every named .dpax and .dpdx: facial-survey [path substring]
         "facial-survey" => facial_cmd::survey(&vfs, &args)?,
+        "story-entry" => {
+            // Includes generated/global entries omitted by the sector table.
+            let needle = args.get(1).context("usage: story-entry <id|name part>")?.to_ascii_lowercase();
+            let data = fc3_story::data::StoryData::load(&fc3_formats::cache::default_cache_root())?;
+            let names = component_names();
+            let mut entries: Vec<_> = data.entities.values().filter(|e|
+                e.id.to_string() == needle || e.name.to_ascii_lowercase().contains(&needle)).collect();
+            entries.sort_by_key(|e| e.id);
+            for e in entries {
+                println!("{} {:?} layer {:#x} {} [{}] at {:?}", e.id, e.origin, e.layer, e.name, e.class, e.pos);
+                let mut text = String::new();
+                fc3_formats::fcb::dump(&e.fields, &names, 16, &mut text);
+                fc3_formats::fcb::dump(&e.components, &names, 16, &mut text);
+                println!("{text}");
+            }
+        }
         "story-entities" => {
             // Searches the cache's story entity table by name, class, id,
             // layer or component: story-entities [text] (no text: a summary)

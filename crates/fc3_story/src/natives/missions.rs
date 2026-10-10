@@ -44,8 +44,13 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         }
     })?;
     r.f(&m("MissionBlockComplete"), |c, (owner, save): (Text, Option<bool>)| c.block_complete(owner.id().unwrap_or(0), save.unwrap_or(true)))?;
-    r.f(&m("MissionBlockFail"), |c, (owner, reload, reason): (Text, Option<bool>, Num)| {
-        c.block_fail(owner.id().unwrap_or(0), reload.unwrap_or(true), reason.0.filter(|&r| r >= 0.0).map(|r| r as u32))
+    r.lua(&m("MissionBlockFail"), |lua, c, (owner, reload, reason): (Text, Option<bool>, Num)| {
+        if std::env::var("FC3_STORY_WAIT_DEBUG").is_ok() {
+            eprintln!("story block failure: owner {} player {:?} {}", owner.0, c.view.player,
+                lua.load("return debug.traceback()").eval::<String>().unwrap_or_default());
+        }
+        c.block_fail(owner.id().unwrap_or(0), reload.unwrap_or(true), reason.0.filter(|&r| r >= 0.0).map(|r| r as u32));
+        Ok(())
     })?;
     r.f(&m("MissionComplete"), |c, (owner, text): (Text, Num)| c.mission_complete(owner.id().unwrap_or(0), text.0.filter(|&t| t >= 0.0).map(|t| t as u32)))?;
     r.f(&m("MissionCompleteNotify"), |c, (owner, text): (Text, Num)| {

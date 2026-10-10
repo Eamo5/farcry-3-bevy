@@ -1047,6 +1047,34 @@ unverified. A later crocodile death and retry in that run are recorded, not
 counted as an uninterrupted success. Alive-state combat transitions and
 general group addition/removal notifications still need implementation.
 
+The game now streams start-on-load world Domino graphs with loaded object
+sectors (checking every 0.5 s). The runtime already had this lifecycle, but
+the game never invoked it, so the authored outpost flag controller never
+received the unlock. `fc3tool story-entry <id|name>` inspects the complete
+runtime table, including generated/global safehouses. The installed regression
+checks the flag graph starts once, retains its authored SafeHouse input,
+stops on sector unload, and gets a fresh instance on reload.
+
+Starting that graph exposed a second defect: prefab lookup guessed names,
+while conversion discarded the actual `Children` name/ID table. The flag
+scene resolved to an invalid ID and played around world origin, immediately
+failing the mission's exit zone. Story entity cache version 4 retains these
+references and their child entries; prefab lookup uses the authored table.
+The local full cache refresh completed with zero errors. Roundtrip and
+installed-data regressions verify preservation and resolution of flag scene
+2078504268207249058 at its authored outpost position.
+
+`fc3-prefab` and later runs play the six-second flag sequence and advance to
+"Search for Liza in the main outpost building." Camera-only sequences now
+leave Jason's body at its previous position, while player-track scenes still
+carry it. A system regression verifies both paths and restoration of physics.
+`fc3-camera-body` confirms the corrected handoff in live gameplay, but the
+normal-movement fixture stalls on the building approach and an ambient bear
+kills Jason on one attempt. Full JAS_100 completion remains unverified.
+No death, unlock, sequence-completion, or mission-completion events were
+injected by this combat fixture. `FC3_STORY_WAIT_DEBUG` now also prints Lua
+failure stacks, which identified the erroneous exit-zone failure above.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

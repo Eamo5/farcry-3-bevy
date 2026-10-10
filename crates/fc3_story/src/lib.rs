@@ -1096,6 +1096,33 @@ mod tests {
 
     #[test]
     #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
+    fn installed_flag_controller_starts_once_per_sector_residency() {
+        let cache = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let mut story = Story::open(&cache).unwrap();
+        let flag = 2078504254200370807;
+        assert_eq!(story.domino().lua().load("return CAPI_Entity.GetEntityInPrefab('2078504254200370807', 'FlagCinematicSceneEntity')")
+            .eval::<String>().unwrap(), "2078504268207249058");
+        assert_eq!(story.data().entities[&2078504268207249058].pos, [-110.35325, 2271.5603, 152.863]);
+        story.domino().lua().load("LockSafeHouse('2075834596452213647')").exec().unwrap();
+        story.stream_scripts(Some(&HashSet::new()));
+        assert!(!story.loaded_scripts.contains(&flag));
+        let sectors = HashSet::from([18478]);
+        story.stream_scripts(Some(&sectors));
+        assert!(story.loaded_scripts.contains(&flag));
+        let first = story.instances[&flag].clone();
+        assert_eq!(first.get::<String>("SafeHouse").unwrap(), "2075834596452213647");
+        story.stream_scripts(Some(&sectors));
+        assert_eq!(story.instances[&flag], first);
+        story.stream_scripts(Some(&HashSet::new()));
+        assert!(!story.instances.contains_key(&flag));
+        story.stream_scripts(Some(&sectors));
+        assert!(story.instances.contains_key(&flag));
+        assert_ne!(story.instances[&flag], first);
+        assert_eq!(story.errors(), 0);
+    }
+
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
     fn installed_group_size_listener_observes_each_death_once_and_queries_remaining_members() {
         let cache = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
         let pack = ScriptPack::from_bytes(&std::fs::read(cache.join(fc3_formats::scripts::DOMINO_PACK_REL)).unwrap()).unwrap();

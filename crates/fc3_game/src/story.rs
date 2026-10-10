@@ -38,6 +38,7 @@ impl Plugin for StoryPlugin {
             .init_resource::<StoryCrafts>()
             .init_resource::<StoryMenuEvents>()
             .add_systems(Update, hide_entities.after(StorySet))
+            .add_systems(Update, stream_world_scripts.after(StorySet).run_if(in_state(GameState::Playing)))
             .add_systems(Update, apply_entity_poses.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, apply_entity_physics.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, draw_markers.after(StorySet))
@@ -64,6 +65,23 @@ impl Plugin for StoryPlugin {
 /// The story's frame; systems acting on what it asked run after it.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StorySet;
+
+/// Sector-owned Domino graphs include outpost flag controllers and their
+/// authored unlock cinematics. Start them only after their object sector is
+/// present; the runtime tears them down when the sector or layer leaves.
+fn stream_world_scripts(
+    host: Option<NonSendMut<StoryHost>>,
+    sectors: Query<&crate::objects::SectorObjects>,
+    time: Res<Time>,
+    mut remaining: Local<f32>,
+) {
+    *remaining -= time.delta_secs();
+    if *remaining > 0.0 { return; }
+    *remaining = 0.5;
+    let Some(mut host) = host else { return };
+    let loaded = sectors.iter().map(|s| s.coord.id()).collect();
+    host.story.stream_scripts(Some(&loaded));
+}
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EntityPosesSet;

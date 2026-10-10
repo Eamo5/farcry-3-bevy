@@ -2308,14 +2308,18 @@ fn outpost_fire_test(
     }
     let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
     let filter = SpatialQueryFilter::from_excluded_entities([pe]);
-    let needs_ammo = inv.slot().mag == 0 && inv.slot().reserve == 0;
+    let pirates = host.story.group_members("#C50341A9");
+    let building = host.story.watched_triggers().into_iter().find(|t| t.0 == 2074714802313236257);
+    let cleared = building.is_some() || (!pirates.is_empty() && pirates.iter().all(|id| host.story.is_dead(*id))
+        && host.story.is_dead(2077647746472455879));
+    let needs_ammo = !cleared && inv.slot().mag == 0 && inv.slot().reserve == 0;
     let candidates: Vec<_> = npcs.iter().filter(|(_, _, n, h)| n.faction.hostile_to_player() && !h.dead)
         .map(|(e, t, _, _)| (e, t.translation, heads.get(e).map_or(t.translation + Vec3::Y * 0.6, |head| head.0)))
         .chain(animals.iter().filter(|(_, t, animal, h, story)| !h.dead && animal.dangerous()
             && (story.is_some() || t.translation.distance(at.translation) < 15.0))
             .map(|(e, t, _, _, _)| (e, t.translation, t.translation)))
         .collect();
-    let target = candidates.iter().filter(|_| !needs_ammo)
+    let target = candidates.iter().filter(|_| !needs_ammo && !cleared)
         .filter_map(|&(e, _, aim_at)| {
             let delta = aim_at - eye;
             let distance = delta.length();
@@ -2345,7 +2349,10 @@ fn outpost_fire_test(
             route.0 = 1.0;
             let nearest = candidates.iter()
                 .min_by(|a, b| a.1.distance_squared(at.translation).total_cmp(&b.1.distance_squared(at.translation)));
-            let destination = if needs_ammo { body.map(|(_, t)| t.translation()) }
+            let destination = if cleared {
+                // Walk into the authored main-building trigger after combat.
+                building.as_ref().map(|t| Vec3::new(t.2[0], t.2[2], -t.2[1]))
+            } else if needs_ammo { body.map(|(_, t)| t.translation()) }
                 else { nearest.map(|(_, at, _)| *at - Vec3::Y * crate::player::HALF_HEIGHT) };
             route.1 = destination.and_then(|destination| nav.path(
                 at.translation - Vec3::Y * crate::player::HALF_HEIGHT,

@@ -135,6 +135,10 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.f("CAPI_Entity.GetEntityInPrefab", |c, (prefab, object): (Text, Text)| {
         // A prefab's parts carry its name as a prefix ("<prefab>/<object>").
         let found = prefab.id().and_then(|p| {
+            if let Some(children) = c.data.entities.get(&p).and_then(|e| e.fields.child("Children")) {
+                return children.children.iter().find(|child| child.str("Name").is_some_and(|name| name.eq_ignore_ascii_case(&object.0)))
+                    .and_then(|child| child.u64("ID"));
+            }
             let base = c.data.name_of(p)?.to_ascii_lowercase();
             let want = object.0.to_ascii_lowercase();
             c.data

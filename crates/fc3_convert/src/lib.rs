@@ -1541,10 +1541,13 @@ fn convert_story(job: &Job) -> Result<()> {
         let id = root.u32("Id").unwrap_or(0);
         let source = if path.contains(r"\metasectors\") { story::Source::Metasector(id) } else { story::Source::Sector(id) };
         let mut out = Vec::new();
-        for (layer, e) in fw::layered_entities(&root) {
+        let entries = fw::layered_entities(&root);
+        let prefab_children: HashSet<u64> = entries.iter().filter_map(|(_, e)| e.child("Children"))
+            .flat_map(|children| children.children.iter().filter_map(|child| child.u64("ID"))).collect();
+        for (layer, e) in entries {
             let id = e.u64("disEntityId").unwrap_or(0);
             let components = e.child("Components").cloned().unwrap_or_default();
-            if layer == fw::DEFAULT_MISSION_LAYER && !named.contains(&id) && !story::has_story_component(&components) {
+            if layer == fw::DEFAULT_MISSION_LAYER && !named.contains(&id) && !prefab_children.contains(&id) && !story::has_story_component(&components) {
                 continue;
             }
             out.push(story::StoryEntity {

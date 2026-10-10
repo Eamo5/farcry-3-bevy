@@ -76,8 +76,8 @@ pub fn shop_items(library: &crate::fcb::Object) -> Vec<(String, String, u32)> {
 
 const MAGIC: &[u8; 4] = b"FCSE";
 /// Bumped when what the table keeps changes (2: grouped entities, 3: the
-/// entity's own fields).
-const VERSION: u32 = 3;
+/// entity's own fields, 4: authored prefab child references).
+const VERSION: u32 = 4;
 
 /// Whether a stored table is this version's (an older one is rewritten).
 pub fn is_current(data: &[u8]) -> bool {
@@ -122,8 +122,7 @@ pub struct StoryEntity {
     /// The entity's `Components` object (empty when it has none).
     pub components: Arc<Object>,
     /// The entity's own fields besides name, class and placement (a
-    /// region's shape points and height, bounds), as an object without
-    /// children.
+    /// region's shape points and height, bounds), plus prefab child references.
     pub fields: Arc<Object>,
 }
 
@@ -134,7 +133,8 @@ pub const KEPT_FIELDS: [&str; 4] = ["hidShapePoints", "fHeight", "hidBBoxMin", "
 /// An entity's kept fields as an object.
 pub fn kept_fields(entity: &Object) -> Arc<Object> {
     let hashes: Vec<u32> = KEPT_FIELDS.iter().map(|n| crate::hash::name_hash(n)).collect();
-    Arc::new(Object { name_hash: entity.name_hash, fields: entity.fields.iter().filter(|(h, _)| hashes.contains(h)).cloned().collect(), children: Vec::new() })
+    Arc::new(Object { name_hash: entity.name_hash, fields: entity.fields.iter().filter(|(h, _)| hashes.contains(h)).cloned().collect(),
+        children: entity.children.iter().filter(|c| c.is("Children")).cloned().collect() })
 }
 
 /// Component classes that make an entity matter to the story whatever its
@@ -273,12 +273,16 @@ mod tests {
             pos: [1.0, 2.0, 3.0],
             angles: [0.0, 0.0, 90.0],
             components: comp,
-            fields: Arc::new(Object { name_hash: 0, fields: vec![(crate::hash::name_hash("fHeight"), (-1.0f32).to_le_bytes().to_vec())], children: vec![] }),
+            fields: kept_fields(&Object { name_hash: 0, fields: vec![(crate::hash::name_hash("fHeight"), (-1.0f32).to_le_bytes().to_vec())],
+                children: vec![Arc::new(Object { name_hash: crate::hash::name_hash("Children"), fields: vec![],
+                    children: vec![Arc::new(Object { name_hash: crate::hash::name_hash("Child"),
+                        fields: vec![(crate::hash::name_hash("ID"), 99u64.to_le_bytes().to_vec())], children: vec![] })] })] }),
         };
         let back = from_bytes(&to_bytes(&[e.clone()])).unwrap();
         assert_eq!(back.len(), 1);
         assert_eq!((back[0].id, back[0].source, back[0].name.as_str(), back[0].angles), (e.id, e.source, "Zone", e.angles));
         assert!(has_story_component(&back[0].components));
+        assert_eq!(back[0].fields.child("Children").unwrap().children[0].u64("ID"), Some(99));
     }
 
     #[test]
