@@ -67,6 +67,30 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires installed archives and FC3_TEST_CACHE after full conversion"]
+    fn installed_blur_masks_are_cached_without_replacing_authored_pixels() {
+        let root = std::path::PathBuf::from(std::env::var_os("FC3_TEST_CACHE").expect("FC3_TEST_CACHE"));
+        let vfs = crate::Vfs::open_install(&crate::find_install().expect("installed Far Cry 3"), None).unwrap();
+        let sequences = crate::cinema::parse_postfx_library(
+            std::str::from_utf8(&vfs.read(crate::cinema::POSTFX_LIBRARY).unwrap()).unwrap()).unwrap();
+        let masks: std::collections::BTreeSet<_> = sequences.into_iter().flat_map(|s| s.groups).flat_map(|g| g.clips)
+            .filter_map(|c| match c.kind {
+                crate::cinema::ClipKind::Blur { texture, .. } if !texture.is_empty() => Some(texture.to_ascii_lowercase()),
+                _ => None,
+            }).collect();
+        assert!(masks.contains(r"graphics\postfx\tunnel.xbt"));
+        assert!(masks.contains(r"graphics\postfx\mushbuzz_vignette_01.xbt"));
+        for path in masks {
+            let main = vfs.read(&path).unwrap();
+            let xbt = crate::texture::parse(&main).unwrap();
+            let mip0 = xbt.mip0_path.as_deref().map(|p| vfs.read(p).unwrap());
+            let expected = crate::texture::assemble_dds(&main, mip0.as_deref()).unwrap();
+            let actual = std::fs::read(root.join(crate::cache::texture_rel(&path))).unwrap();
+            assert_eq!(actual, expected, "mask {path}");
+        }
+    }
+
+    #[test]
     #[ignore = "requires locally installed Far Cry 3 archives"]
     fn installed_vine_effect_names_resolve_to_authored_sequences_and_fades() {
         let vfs = crate::Vfs::open_install(&crate::find_install().expect("installed Far Cry 3"), None).unwrap();

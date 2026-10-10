@@ -965,6 +965,25 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     for t in texture_lists {
         textures.extend(t);
     }
+    // Screen-effect masks are not referenced by world materials. Resolve
+    // them from enabled authored clips so a renderer never needs substitute
+    // procedural masks (or access to the original archives at runtime).
+    if opts.only_sectors.is_none() {
+        let effect_masks = (|| -> anyhow::Result<Vec<String>> {
+            let bytes = vfs.read(fc3_formats::cinema::POSTFX_LIBRARY)?;
+            let sequences = fc3_formats::cinema::parse_postfx_library(std::str::from_utf8(&bytes)?)?;
+            Ok(sequences.into_iter().flat_map(|s| s.groups).flat_map(|g| g.clips).filter_map(|c| {
+                match c.kind {
+                    fc3_formats::cinema::ClipKind::Blur { texture, .. } if !texture.is_empty() => Some(texture.to_ascii_lowercase()),
+                    _ => None,
+                }
+            }).collect())
+        })();
+        match effect_masks {
+            Ok(masks) => textures.extend(masks),
+            Err(e) => job.error(format!("post-effect masks: {e:#}")),
+        }
+    }
     let textures: Vec<String> = textures.into_iter().collect();
 
     // ---- textures

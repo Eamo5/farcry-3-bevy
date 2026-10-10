@@ -1429,6 +1429,15 @@ blur parity: the runtime still needs the masked radial-blur pass and the
 effect's IN/LOOP/OUT lifecycle. Local native enum registration confirms
 blur selector 1 is Radial.
 
+Full conversion now collects nonempty blur-mask textures from enabled
+cinematic post-effect clips, independently of world-material references.
+The installed `installed_blur_masks_are_cached_without_replacing_authored_pixels`
+regression compares every collected mask's cached DDS bytes against the
+assembled original XBT data, including tunnel and mushroom-vignette masks.
+Converter build, full conversion and that regression pass
+(`fc3-blur-masks-{build,convert,tests}.log`). Mask availability is now verified;
+masked radial-blur rendering remains the next runtime step.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected
