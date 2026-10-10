@@ -297,13 +297,28 @@ impl AssetLoader for ModelLoader {
             },
             None => None,
         };
+        // Older caches predate NON_SOLID. Inspect emissive materials before
+        // allowing a purely additive light volume to become a physical wall.
+        // Authored Havok geometry remains authoritative.
+        let mut visual_only = false;
+        if havok.is_none() && !m.collision_indices.is_empty() && !m.material_flags.is_empty()
+            && m.material_flags.iter().all(|f| f & mat_flags::EMISSIVE != 0) {
+            visual_only = !m.materials.is_empty();
+            for rel in &m.materials {
+                let additive = match ctx.read_asset_bytes(cache_path(rel)).await {
+                    Ok(bytes) => CachedMaterial::from_bytes(&bytes).is_ok_and(|m| m.is_additive_unlit()),
+                    Err(_) => false,
+                };
+                visual_only &= additive;
+            }
+        }
         let collision = match havok {
             Some(c) => Some(Arc::new(CollisionMesh {
                 positions: c.positions.iter().map(|p| Vec3::from_array(*p)).collect(),
                 triangles: c.indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect(),
                 from_havok: true,
             })),
-            None => (!m.collision_indices.is_empty()).then(|| {
+            None => (!visual_only && !m.collision_indices.is_empty()).then(|| {
                 Arc::new(CollisionMesh {
                     positions: m.collision_positions.iter().map(|p| Vec3::from_array(*p)).collect(),
                     triangles: m.collision_indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect(),
@@ -936,6 +951,10 @@ mod tests {
         let material = fc3_formats::material::parse(&vfs.read(r"graphics\_materials\MADESLONGCHAMPS-M-0708200756257742.material.bin").unwrap()).unwrap();
         assert_eq!(super::unlit_blend(&material.shader, &material.params), Some(bevy::prelude::AlphaMode::Add));
         assert_eq!(super::unlit_blend("Generic_FC3", &material.params), None);
+        let cached = CachedMaterial { shader: material.shader, params: material.params, ..default() };
+        assert!(cached.is_additive_unlit());
+        assert!(!CachedMaterial { shader: "Generic_FC3".into(), ..cached.clone() }.is_additive_unlit());
+        assert!(!CachedMaterial { params: vec![], ..cached }.is_additive_unlit());
     }
     use super::*;
 

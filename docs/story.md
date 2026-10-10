@@ -1983,6 +1983,36 @@ The final repeatable script requires all six cues in order
 injecting events or changing trigger Lua semantics. Dark-room arrival,
 RealTree growth and remaining visual/campaign parity still need validation.
 
+### Dark-room approach: nonblocking light volumes
+
+The next route stalled near (-1888.94,99.43,-2377.40). Collision ancestry
+identified vegetation instance 24 in sector 18770, model
+`models/153d6f9e1dbc6a87.fcm`, placed at (-1883.7,110.636,-2373.85).
+The installed path hashes to `graphics/sky/rays/godray_medium.xbg`: this
+was a render-derived light-shaft collider, not a solid rock or authored
+door. Evidence: `Temp/opencode/fc3-darkroom-identified.err.log`.
+
+Additive Unlit materials (authored BlendingType 2) now carry NON_SOLID in
+new conversions, excluding their triangles from render-derived collision.
+A mixed effect/wall regression preserves both render parts and the solid
+wall's collision. Existing all-emissive caches are checked against their
+material metadata before creating fallback collision; purely additive Unlit
+volumes no longer block. Authored Havok geometry remains authoritative.
+Mixed-material old caches require reconversion to receive the per-part fix.
+Collision diagnostics optionally name solid vegetation instances and trace
+unnamed collider ancestors; no placement or authored collider was removed.
+
+`FC3_TRAVERSAL_WALK_CROUCH_UNTIL` ends held crouch after the specified
+one-based waypoint (inclusive). The new `-DarkRoom` replay extends the
+six-cue route to (-1887.53,-2377.47), releasing crouch after waypoint 15.
+It requires route completion and actual centre occupancy/PLAYER contact at
+trigger 2073611371909540357. The replay passes with health 100:
+`Temp/opencode/doc020-light-volume-fixed/`. The screenshot was inspected:
+the view is nearly black with overbright hands; visual parity is not claimed.
+Workspace tests, release build and installed godray material verification
+pass (`fc3-light-volume-{tests,build,installed-test}.log`). Mushroom
+interactions, rendered RealTree growth and later mission progression remain.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

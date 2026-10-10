@@ -653,6 +653,8 @@ fn traversal_test(
                     let radius = if *walk_waypoint + 1 >= precise_from { radius } else { 0.6 };
                     let crouch = std::env::var("FC3_TRAVERSAL_WALK_CROUCH_FROM").ok()
                         .and_then(|s| s.parse::<usize>().ok()).is_some_and(|from| from > 0 && *walk_waypoint + 1 >= from);
+                    let crouch = crouch && std::env::var("FC3_TRAVERSAL_WALK_CROUCH_UNTIL").ok()
+                        .and_then(|s| s.parse::<usize>().ok()).is_none_or(|until| *walk_waypoint < until);
                     if crouch { actions.hold(Action::Crouch); }
                     let delta = Vec3::new(target.x - here.x, 0.0, target.y - here.z);
                     if delta.length() < radius {

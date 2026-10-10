@@ -2506,6 +2506,7 @@ fn build_material(job: &Job, bin: &str) -> MaterialInfo {
         "skin_advanced" | "skin_cinematic" | "eye" => 0.5,
         _ => 0.8,
     };
+    if out.is_additive_unlit() { out.flags |= mat_flags::NON_SOLID; }
     MaterialInfo { cached: out, textures, tex_paths }
 }
 
@@ -2562,6 +2563,20 @@ fn moving_parts(model: &mut fmesh::Model, skin: &fc3_formats::anim::SkinInfo) ->
     out
 }
 
+#[test]
+fn additive_effect_collision_does_not_remove_solid_parts_or_render_geometry() {
+    let mesh = MeshData { positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        indices: vec![0, 1, 2, 0, 2, 1], submeshes: vec![
+            fmesh::SubMesh { primitive: 0, material: 0, part: -1, index_start: 0, index_count: 3 },
+            fmesh::SubMesh { primitive: 1, material: 1, part: -1, index_start: 3, index_count: 3 },
+        ], ..Default::default() };
+    let model = fmesh::Model { materials: vec![], lods: vec![(0.0, mesh)], bbox_min: [0.0; 3], bbox_max: [1.0; 3], bones: vec![] };
+    let out = build_cached_model(&model, vec!["effect".into(), "wall".into()], vec![mat_flags::NON_SOLID, 0], &[]);
+    assert_eq!(out.lods[0].parts.len(), 2);
+    assert_eq!(out.collision_indices.len(), 3);
+    assert_eq!(out.collision_positions, vec![[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]]);
+}
+
 fn build_cached_model(model: &fmesh::Model, materials: Vec<String>, material_flags: Vec<u32>, pivots: &[Vec<Option<cache::PartPivot>>]) -> CachedModel {
     let slot_flags = |m: usize| material_flags.get(m).copied().unwrap_or(0);
     let mut out = CachedModel { materials, ..Default::default() };
@@ -2603,7 +2618,7 @@ fn build_cached_model(model: &fmesh::Model, materials: Vec<String>, material_fla
     if let Some((_, coarse)) = model.lods.last() {
         let mut remap: HashMap<u32, u32> = HashMap::new();
         for s in &coarse.submeshes {
-            if slot_flags(s.material) & (mat_flags::ALPHA_TEST | mat_flags::NO_DRAW | mat_flags::WATER | mat_flags::VEGETATION) != 0 {
+            if slot_flags(s.material) & (mat_flags::ALPHA_TEST | mat_flags::NO_DRAW | mat_flags::WATER | mat_flags::VEGETATION | mat_flags::NON_SOLID) != 0 {
                 continue;
             }
             for &i in &coarse.indices[s.index_start..s.index_start + s.index_count] {

@@ -555,6 +555,8 @@ pub mod mat_flags {
     pub const NO_DRAW: u32 = 1 << 6;
     /// Untextured placeholder in the source data; drawn as neutral grey.
     pub const PLACEHOLDER: u32 = 1 << 7;
+    /// Visual effects must not supply render-derived blocking geometry.
+    pub const NON_SOLID: u32 = 1 << 8;
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -574,6 +576,14 @@ pub struct CachedMaterial {
     pub textures: Vec<(u32, String)>,
     /// The original shader pair chosen and validated by the converter.
     pub original: Option<OriginalBinding>,
+}
+
+impl CachedMaterial {
+    pub fn is_additive_unlit(&self) -> bool {
+        self.shader.eq_ignore_ascii_case("unlit") && self.params.iter().any(|(id, bytes)| {
+            *id == crate::hash::name_hash("BlendingType") && bytes.as_slice() == 2u32.to_le_bytes()
+        })
+    }
 }
 
 /// A material's original vertex/pixel shader pair with everything needed to

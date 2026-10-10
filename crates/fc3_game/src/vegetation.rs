@@ -509,6 +509,9 @@ fn spawn_vegetation(
                 let trunk = inst.kind == veg_kind::TREE && model.collision.is_some();
                 if solid || trunk {
                     obj.insert(WorldObject { model: handle.clone(), entity_index: u32::MAX });
+                    if std::env::var_os("FC3_COLLISION_DEBUG").is_some() {
+                        obj.insert(Name::new(format!("vegetation instance {idx} model {:?} at {:?}", handle.path(), inst.translation)));
+                    }
                 }
                 // Grass and bushes burn (see `fire`).
                 if is_grass || (inst.kind == veg_kind::MESH && model.is_vegetation) {

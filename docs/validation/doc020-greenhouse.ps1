@@ -5,6 +5,7 @@ param(
     [switch]$Doorway,
     [switch]$Interior,
     [switch]$SecondDoor,
+    [switch]$DarkRoom,
     [string]$Output = "$env:LOCALAPPDATA\Temp\opencode\doc020-greenhouse",
     [string]$Binary = ''
 )
@@ -22,6 +23,7 @@ Get-ChildItem Env: | Where-Object { $_.Name -like 'FC3_*' -or $_.Name -eq 'RUST_
     Remove-Item "Env:$($_.Name)"
 }
 try {
+    if ($DarkRoom) { $SecondDoor = $true }
     $env:FC3_STORY = '1'
     $env:FC3_VINE_GAMEPLAY_TEST = '1'
     $env:FC3_TRAVERSAL_TEST = 'ladder'
@@ -36,13 +38,18 @@ try {
         $env:FC3_TRAVERSAL_WALK_CROUCH_FROM = '12'
         $env:FC3_STORY_TRIGGER_DEBUG = '2073364939755519788'
     }
+    if ($DarkRoom) {
+        $env:FC3_TRAVERSAL_WALK_TO += ';-1887.53,-2377.47'
+        $env:FC3_TRAVERSAL_WALK_CROUCH_UNTIL = '15'
+        $env:FC3_STORY_TRIGGER_DEBUG = '2073611371909540357'
+    }
     $env:FC3_TRAVERSAL_WALK_JUMP = '1'
     $env:FC3_STORY_LOAD = $Checkpoint
     $env:RUST_LOG = 'warn,farcry3::traversal=info,farcry3::combat=info,farcry3::cinema=debug,farcry3::story=info'
     $log = Join-Path $Output 'replay.err.log'
     $image = Join-Path $Output 'greenhouse.png'
     if (Test-Path $image) { Remove-Item $image }
-    $settle = if ($SecondDoor) { 115 } else { 95 }
+    $settle = if ($DarkRoom) { 125 } elseif ($SecondDoor) { 115 } else { 95 }
     $process = Start-Process -FilePath $Binary -ArgumentList "--novsync --screenshot `"$image`" --settle $settle" -PassThru -Wait `
         -RedirectStandardOutput (Join-Path $Output 'replay.log') -RedirectStandardError $log
     if ($process.ExitCode -ne 0) { throw "Replay exited $($process.ExitCode); inspect $log" }
@@ -58,8 +65,11 @@ try {
         $previous = $hits[0].Index
     }
     if ($text -notmatch 'post-dismount walk reached') { throw 'Physical route did not finish' }
-    if ($SecondDoor -and $text -notmatch 'story trigger diagnostic 2073364939755519788: [^\r\n]*inside Some\(true\) contacts \[1\]') {
+    if ($SecondDoor -and !$DarkRoom -and $text -notmatch 'story trigger diagnostic 2073364939755519788: [^\r\n]*inside Some\(true\) contacts \[1\]') {
         throw 'Second-door exit trigger was not physically occupied'
+    }
+    if ($DarkRoom -and $text -notmatch 'story trigger diagnostic 2073611371909540357: [^\r\n]*inside Some\(true\) contacts \[1\]') {
+        throw 'Dark-room trigger was not physically occupied'
     }
     if ($text -match 'player died:|walk aborted|back to the last checkpoint|\bERROR\b|\bWARN\b') { throw "Replay failed; inspect $log" }
     $health = [regex]::Matches($text, 'health ([0-9]+), towers')

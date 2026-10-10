@@ -821,6 +821,18 @@ fn player_move(
             info!("player collision: hit {entity:?} id {:?} name {:?} parent {:?}, point {point:?}, normal {normal:?}, distance {distance}",
                 identity.and_then(|v| v.0).map(|v| v.0), identity.and_then(|v| v.1).map(|v| v.as_str()),
                 identity.and_then(|v| v.2).map(|v| v.parent()));
+            if identity.is_some_and(|v| v.0.is_none() && v.1.is_none()) {
+                let mut parent = identity.and_then(|v| v.2).map(|v| v.parent());
+                for _ in 0..8 {
+                    let Some(ancestor) = parent else { break };
+                    let Ok((id, name, next)) = collision_ids.get(ancestor) else { break };
+                    if id.is_some() || name.is_some() {
+                        info!("player collision: ancestor {ancestor:?} id {:?} name {:?}", id.map(|v| v.0), name.map(|v| v.as_str()));
+                        break;
+                    }
+                    parent = next.map(|v| v.parent());
+                }
+            }
         }
     }
     if was_grounded && wanted.length() > 0.001 && achieved.length() < wanted.length() * 0.5 {
