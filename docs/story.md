@@ -1192,6 +1192,18 @@ unlandable top (`fc3-climb-velocity-workspace.log`, full workspace pass).
 The release game build passes. This repairs the animation's motion input;
 vine-specific clip selection and the hallucination controller remain open.
 
+Traversal cache version 3 now preserves CLadder's `sAnimationPackage` u64,
+read from the component rather than inferred from entity/model names. The
+vine package selects the installed hand-over-hand climb, downward slide and
+rest clips; other packages retain the rigid-ladder context. Cache versions
+1 and 2 remain readable and full conversion upgrades them automatically.
+`fc3-vine-arms` logs VineRest -> VineClimb -> VineRest during the same explicit
+ladder fixture, with no asset-load error recorded. Its final screenshot shows
+the vine rest hand pose at the blocked top. This validates ascending/rest
+context selection and rendering; downward slide still needs live validation.
+Workspace tests, release builds and cache conversion pass. The special
+hallucination transition remains unfinished.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

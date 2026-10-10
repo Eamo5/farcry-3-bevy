@@ -73,6 +73,7 @@ mod ownership_tests {
             .insert_resource(Ways { data: Traversal {
                 ladders: vec![fc3_formats::traversal::Ladder {
                     id: 0, mission_layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
+                    animation_package: 0,
                     base: [0.0; 3], top: 3.0, facing: [0.0, 0.0, 1.0],
                 }], ..default()
             }, ..default() })

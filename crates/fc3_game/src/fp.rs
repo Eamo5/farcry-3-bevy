@@ -87,6 +87,9 @@ enum Context {
     Swim,
     SwimMove,
     Ladder,
+    VineClimb,
+    VineSlide,
+    VineRest,
     Zip,
     /// Model/seat-specific first-person vehicle clip.
     Vehicle(&'static str),
@@ -111,6 +114,9 @@ impl Context {
             Context::Swim => r"locomotion\stand\swim\1stge_uppb_swim_idle_nowep.mab",
             Context::SwimMove => r"locomotion\stand\swim\1stge_uppb_swim_+000fw_nowep.mab",
             Context::Ladder => r"locomotion\ladder\1stge_fulb_laddercycle_a_nowep.mab",
+            Context::VineClimb => r"locomotion\vine\1stge_fulb_vinecycle_a_+000up_nowep.mab",
+            Context::VineSlide => r"locomotion\vine\1stge_fulb_vineslide_-000dn_nowep.mab",
+            Context::VineRest => r"locomotion\vine\1stge_fulb_vinerest_+000up_nowep.mab",
             Context::Zip => r"zipline\1stge_uppb_aimingcenter_+000fw_zip.mab",
             Context::Vehicle(clip) => clip,
             Context::Wingsuit => r"vehicles\other\wingsuit\1stge_fulb_gliding_nodir_nowep_wingsuit.mab",
@@ -1586,11 +1592,12 @@ fn drive_arms(
     server: Res<AssetServer>,
     chars: Option<Res<CharacterAssets>>,
     mut mounts: Query<&mut Visibility>,
-    (holding, driving, vehicles, plain): (
+    (holding, driving, vehicles, plain, ways): (
         Res<crate::traversal::Mount>,
         Res<crate::vehicles::Driving>,
         Query<&crate::vehicles::Vehicle>,
         Query<Entity, With<crate::weapons::ViewModelPart>>,
+        Res<crate::traversal::Ways>,
     ),
     (mut cinematic, mut busy, repairing, bino): (ResMut<Cinematic>, ResMut<HandsBusy>, Res<crate::vehicles::Repairing>, Res<crate::stealth::Binoculars>),
     mut commands: Commands,
@@ -1619,13 +1626,20 @@ fn drive_arms(
             }
             _ if repairing.vehicle.is_some() => Some(Context::Repair),
             crate::traversal::Mount::None if bino.held > 0.0 => Some(Context::Camera),
-            crate::traversal::Mount::Ladder { .. } => Some(Context::Ladder),
+            crate::traversal::Mount::Ladder { index, .. } => Some(
+                if ways.data.ladders.get(index).is_some_and(|l| l.animation_package == fc3_formats::traversal::VINE_ANIMATION_PACKAGE) {
+                    if p.velocity.y > 0.01 { Context::VineClimb }
+                    else if p.velocity.y < -0.01 { Context::VineSlide }
+                    else { Context::VineRest }
+                } else { Context::Ladder }
+            ),
             crate::traversal::Mount::Zip { .. } => Some(Context::Zip),
             _ if p.swimming && !p.driving => Some(if speed > 0.6 { Context::SwimMove } else { Context::Swim }),
             _ => None,
         }
     };
     if context != state.context {
+        debug!("first-person context: {:?} -> {context:?}", state.context);
         debug!("fp context {:?} -> {context:?} (active {})", state.context, state.active);
         state.context = context;
         let shown = |v: bool| if v { Visibility::Inherited } else { Visibility::Hidden };
@@ -1693,7 +1707,7 @@ fn drive_arms(
         }
         let rate = match c {
             Context::SwimMove => (speed / 2.5).clamp(0.6, 1.5),
-            Context::Ladder => (p.velocity.y.abs() / 2.0).clamp(0.0, 1.5),
+            Context::Ladder | Context::VineClimb | Context::VineSlide => (p.velocity.y.abs() / 2.0).clamp(0.0, 1.5),
             _ => 1.0,
         };
         *req = AnimRequest { kind: AnimKind::Idle, rate };

@@ -86,6 +86,8 @@ pub struct WorldEntity {
     pub light: Option<crate::lights::LightParams>,
     /// Cable to another entity (zip lines, power lines).
     pub cable: Option<crate::traversal::CableAnchor>,
+    /// CLadder's authored first-person animation package.
+    pub ladder_animation_package: u64,
     /// The sound event a sound point plays (its sound component's event).
     pub sound_event: Option<u32>,
     /// The particle effect a placed effect plays, by its library name
@@ -126,6 +128,7 @@ pub fn parse_entity(e: &Object) -> WorldEntity {
     let Some(components) = e.child("Components") else { return out };
     out.light = crate::lights::parse_light(components);
     out.cable = crate::traversal::parse_anchor(components);
+    out.ladder_animation_package = components.child("CLadder").and_then(|c| c.u64("sAnimationPackage")).unwrap_or(0);
     out.spline = crate::splines::parse(components);
     for c in &components.children {
         match c.name_hash {

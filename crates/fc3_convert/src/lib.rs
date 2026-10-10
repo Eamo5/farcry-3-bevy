@@ -1973,6 +1973,7 @@ fn convert_sector(job: &Job, id: u32) -> Result<Option<SectorResult>> {
                     ladders.push(fc3_formats::traversal::Ladder {
                         id: e.id,
                         mission_layer: e.mission_layer,
+                        animation_package: e.ladder_animation_package,
                         base: [translation[0] + foot[0], translation[1] + foot[1], translation[2] + foot[2]],
                         top: translation[1] + head[1],
                         facing: [fwd[0] / flat, 0.0, fwd[2] / flat],
