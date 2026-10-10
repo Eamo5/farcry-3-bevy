@@ -1801,6 +1801,39 @@ and mushroom interaction remain unverified. Next identify the intrusive
 interior mesh and the table route, including whether unsupported RealTree
 growth contributes to the obstruction.
 
+### Authored god-ray blend correction
+
+The intrusive brown surface is **not** a tree or solid furniture. A new
+opt-in `FC3_VIEW_MESH_DEBUG=<elapsed seconds>` diagnostic inspects candidate
+render triangles along the camera ray and reports mesh paths, placed IDs
+where available and triangle coordinates. It retains CPU model vertices only
+when enabled; ordinary runs keep the existing render-only asset usage.
+The initial diagnostic attempts exposed visibility scheduling and access to
+render-only meshes; it now uses inherited visibility and skips assets without
+MAIN_WORLD usage. The successful inspection identified the nearest surface
+at 3.19 m as `models/153d6f9e1dbc6a87.fcm`, resolved through the installed file
+list to `graphics\sky\rays\godray_medium.xbg`. The diagnostic is geometric:
+it does not evaluate texture alpha, skinning or shader displacement.
+
+Its original material is
+`graphics\_materials\MADESLONGCHAMPS-M-0708200756257742.material.bin`, shader
+`Unlit`, texture `graphics\__fc3_graphics\singleplayer\_textures\nature\godrays_d.xbt`.
+The installed `engine\shaders\materialdescriptors\unlit.xml` specifies
+BlendingType 0=opaque, 1=alpha, 2=additive and 4=premultiplied alpha. This
+material authors 2. Standard-material conversion previously ignored that
+parameter and treated the mesh as opaque/lit. It now honors these supported
+Unlit blend modes and marks Unlit materials unlit, retaining alpha-test
+precedence. Screen, multiply-add, ZMask, normal attenuation and additional
+Unlit animation/HDR controls still need their own implementations.
+
+The installed-material regression, workspace tests and release build pass
+(`fc3-godray-{tests,workspace-tests,build}.log`). The `-Interior` validation
+script passes again, with all four cues, physical route completion and health
+100 (`Temp/opencode/doc020-godray-fixed/`). Its inspected screenshot shows
+transparent light shafts and a visible interior instead of the opaque brown
+obstruction. It reports 77 FPS; this single capture is not a controlled
+performance comparison. The vertically striped windows remain unresolved.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

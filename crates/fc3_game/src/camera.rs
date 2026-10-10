@@ -10,10 +10,74 @@ pub struct ScreenshotPlugin;
 impl Plugin for ScreenshotPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, (auto_screenshot, tour, perf_log));
+        if std::env::var_os("FC3_VIEW_MESH_DEBUG").is_some() {
+            app.add_systems(PostUpdate, view_mesh_debug.after(bevy::transform::TransformSystems::Propagate));
+        }
         if std::env::var("FC3_HITCH").is_ok() {
             add_hitch_log(app);
         }
     }
+}
+
+/// One-shot crosshair inspection of CPU render triangles, including meshes
+/// without physics colliders. The value is elapsed gameplay seconds.
+fn view_mesh_debug(time: Res<Time>, mut done: Local<bool>, server: Res<AssetServer>, meshes: Res<Assets<Mesh>>,
+    cameras: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
+    parts: Query<(Entity, &Mesh3d, &GlobalTransform, &InheritedVisibility)>,
+    owners: Query<(Option<&crate::objects::PlacedId>, Option<&ChildOf>)>) {
+    let Some(at) = std::env::var("FC3_VIEW_MESH_DEBUG").ok().and_then(|s| s.parse::<f32>().ok()).filter(|v| v.is_finite()) else { return };
+    if *done || time.elapsed_secs() < at { return; }
+    let Ok(camera) = cameras.single() else { return };
+    *done = true;
+    let origin = camera.translation();
+    let direction = camera.forward().as_vec3();
+    let mut hits = Vec::new();
+    let mut inspected = 0;
+    for (entity, handle, transform, visible) in &parts {
+        if !visible.get() { continue; }
+        let Some(mesh) = meshes.get(&handle.0) else { continue };
+        if !mesh.asset_usage.contains(bevy::asset::RenderAssetUsages::MAIN_WORLD) { continue; }
+        if mesh.primitive_topology() != bevy::mesh::PrimitiveTopology::TriangleList { continue; }
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { continue };
+        inspected += 1;
+        let inverse = transform.affine().inverse();
+        let o = inverse.transform_point3(origin);
+        let d = inverse.transform_vector3(direction);
+        if !o.is_finite() || !d.is_finite() { continue; }
+        let indices: Vec<usize> = mesh.indices().map(|i| i.iter().collect()).unwrap_or_else(|| (0..positions.len()).collect());
+        let mut closest = 10.0f32;
+        let mut triangle = None;
+        for tri in indices.chunks_exact(3) {
+            let [a, b, c] = [Vec3::from_array(positions[tri[0]]), Vec3::from_array(positions[tri[1]]), Vec3::from_array(positions[tri[2]])];
+            let (e1, e2) = (b - a, c - a);
+            let p = d.cross(e2);
+            let det = e1.dot(p);
+            if det.abs() < 1e-8 { continue; }
+            let t = o - a;
+            let u = t.dot(p) / det;
+            let q = t.cross(e1);
+            let v = d.dot(q) / det;
+            let distance = e2.dot(q) / det;
+            if u >= 0.0 && v >= 0.0 && u + v <= 1.0 && distance >= 0.0 && distance < closest {
+                closest = distance;
+                triangle = Some([a, b, c]);
+            }
+        }
+        if let Some(triangle) = triangle {
+            let mut owner = entity;
+            let mut id = None;
+            for _ in 0..32 {
+                let Ok((placed, parent)) = owners.get(owner) else { break };
+                if let Some(placed) = placed { id = Some(placed.0); break; }
+                let Some(parent) = parent else { break };
+                owner = parent.parent();
+            }
+            hits.push((closest, entity, id, server.get_path(handle.0.id()).map(|p| p.to_string()), triangle));
+        }
+    }
+    hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+    info!("view mesh inspection: origin {origin:?} direction {direction:?}, {inspected} meshes, {} hits", hits.len());
+    for hit in hits.iter().take(12) { info!("view mesh inspection: {hit:?}"); }
 }
 
 /// `FC3_HITCH`: for each frame over 25 ms, where the main thread's time went

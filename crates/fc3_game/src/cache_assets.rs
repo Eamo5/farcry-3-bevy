@@ -405,6 +405,20 @@ pub fn flow_materials(
     });
 }
 
+fn unlit_blend(shader: &str, params: &[(u32, Vec<u8>)]) -> Option<AlphaMode> {
+    if shader != "Unlit" { return None; }
+    let bytes = &params.iter().find(|(id, _)| *id == fc3_formats::hash::name_hash("BlendingType"))?.1;
+    // Installed engine/shaders/materialdescriptors/unlit.xml defines these
+    // values. Screen, multiply-add and ZMask need dedicated implementations.
+    match u32::from_le_bytes(bytes.as_slice().try_into().ok()?) {
+        0 => Some(AlphaMode::Opaque),
+        1 => Some(AlphaMode::Blend),
+        2 => Some(AlphaMode::Add),
+        4 => Some(AlphaMode::Premultiplied),
+        _ => None,
+    }
+}
+
 fn build_material(ctx: &mut LoadContext, cm: &CachedMaterial) -> StandardMaterial {
     if cm.flags & mat_flags::PLACEHOLDER != 0 {
         return StandardMaterial { base_color: Color::srgb(cm.base_color[0], cm.base_color[1], cm.base_color[2]), perceptual_roughness: 0.9, ..default() };
@@ -412,7 +426,9 @@ fn build_material(ctx: &mut LoadContext, cm: &CachedMaterial) -> StandardMateria
     let diffuse = load_texture(ctx, &cm.diffuse, true, false);
     // Lit effects add their light (foam on a waterfall, spray): their maps
     // carry no alpha.
-    let alpha_mode = if cm.shader == "EffectLit" && cm.flags & mat_flags::ALPHA_TEST == 0 {
+    let alpha_mode = if let Some(mode) = unlit_blend(&cm.shader, &cm.params).filter(|_| cm.flags & mat_flags::ALPHA_TEST == 0) {
+        mode
+    } else if cm.shader == "EffectLit" && cm.flags & mat_flags::ALPHA_TEST == 0 {
         AlphaMode::Add
     } else if cm.flags & mat_flags::ALPHA_TEST != 0 {
         AlphaMode::Mask(0.4)
@@ -454,7 +470,7 @@ fn build_material(ctx: &mut LoadContext, cm: &CachedMaterial) -> StandardMateria
         alpha_mode,
         double_sided,
         cull_mode: if double_sided { None } else { Some(Face::Back) },
-        unlit: cm.flags & mat_flags::EMISSIVE != 0,
+        unlit: cm.shader == "Unlit" || cm.flags & mat_flags::EMISSIVE != 0,
         // Overlays (dirt, stains, decals) lie on their surface: drawn a hair
         // nearer, so they win against it even when it's drawn by the original
         // shaders, whose positions differ in the last bits.
@@ -468,7 +484,10 @@ pub(crate) const DECAL_DEPTH_BIAS: f32 = 4000.0;
 
 fn build_mesh(p: &CachedPart, skinned: bool) -> Mesh {
     let n = p.positions.len();
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
+    let usages = if std::env::var_os("FC3_VIEW_MESH_DEBUG").is_some() {
+        RenderAssetUsages::default()
+    } else { RenderAssetUsages::RENDER_WORLD };
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, usages);
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, p.positions.clone());
     if p.uvs.len() == n {
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, p.uvs.clone());
@@ -910,6 +929,14 @@ impl AssetLoader for SectorLoader {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore = "requires installed Far Cry 3 archives"]
+    fn installed_godray_uses_authored_additive_unlit_blending() {
+        let vfs = fc3_formats::Vfs::open_install(&fc3_formats::find_install().unwrap(), None).unwrap();
+        let material = fc3_formats::material::parse(&vfs.read(r"graphics\_materials\MADESLONGCHAMPS-M-0708200756257742.material.bin").unwrap()).unwrap();
+        assert_eq!(super::unlit_blend(&material.shader, &material.params), Some(bevy::prelude::AlphaMode::Add));
+        assert_eq!(super::unlit_blend("Generic_FC3", &material.params), None);
+    }
     use super::*;
 
     /// The horizon map keeps each 16-bit channel's high byte, in texel order.
