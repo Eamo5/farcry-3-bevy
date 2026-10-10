@@ -8,6 +8,8 @@
 
 use crate::fcb::Object;
 
+pub const CACHE_HEADER: &str = "# traversal 2: ladder entity identities and mission layers";
+
 mod h {
     pub const LINK_COMPONENT: u32 = 0x1C222C20;
     pub const LINK_TARGET: u32 = 0x7C064F01;
@@ -73,6 +75,9 @@ pub struct Cable {
 /// its rungs face (a climber stands on that side).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Ladder {
+    /// Authored entity identity. Zero only for legacy geometry-only caches.
+    pub id: u64,
+    pub mission_layer: u64,
     pub base: [f32; 3],
     pub top: f32,
     pub facing: [f32; 3],
@@ -88,13 +93,13 @@ pub struct Traversal {
 
 impl Traversal {
     pub fn to_text(&self) -> String {
-        let mut s = String::from("# zip|wire ax ay az bx by bz / ladder x y z top fx fy fz / tower x y z\n");
+        let mut s = format!("{CACHE_HEADER}\n# zip|wire ax ay az bx by bz / ladder-entity id layer x y z top fx fy fz / tower x y z\n");
         let v = |p: [f32; 3]| format!("{:.2} {:.2} {:.2}", p[0], p[1], p[2]);
         for c in &self.cables {
             s += &format!("{} {} {}\n", if c.zipline { "zip" } else { "wire" }, v(c.a), v(c.b));
         }
         for l in &self.ladders {
-            s += &format!("ladder {} {:.2} {:.3} {:.3} {:.3}\n", v(l.base), l.top, l.facing[0], l.facing[1], l.facing[2]);
+            s += &format!("ladder-entity {} {} {} {:.2} {:.3} {:.3} {:.3}\n", l.id, l.mission_layer, v(l.base), l.top, l.facing[0], l.facing[1], l.facing[2]);
         }
         for t in &self.towers {
             s += &format!("tower {}\n", v(*t));
@@ -107,10 +112,20 @@ impl Traversal {
         for line in text.lines().filter(|l| !l.starts_with('#')) {
             let mut it = line.split_whitespace();
             let Some(kind) = it.next() else { continue };
+            // Entity ids exceed f64's integer precision, let alone f32's.
+            // Parse identity separately from the geometry coordinates.
+            let id = if kind == "ladder-entity" {
+                let Some(id) = it.next().and_then(|s| s.parse::<u64>().ok()) else { continue };
+                id
+            } else { 0 };
+            let mission_layer = if kind == "ladder-entity" {
+                let Some(layer) = it.next().and_then(|s| s.parse::<u64>().ok()) else { continue };
+                layer
+            } else { crate::world::DEFAULT_MISSION_LAYER };
             let v: Vec<f32> = it.filter_map(|s| s.parse().ok()).collect();
             match (kind, v.len()) {
                 ("zip" | "wire", 6) => t.cables.push(Cable { zipline: kind == "zip", a: [v[0], v[1], v[2]], b: [v[3], v[4], v[5]] }),
-                ("ladder", 7) => t.ladders.push(Ladder { base: [v[0], v[1], v[2]], top: v[3], facing: [v[4], v[5], v[6]] }),
+                ("ladder" | "ladder-entity", 7) => t.ladders.push(Ladder { id, mission_layer, base: [v[0], v[1], v[2]], top: v[3], facing: [v[4], v[5], v[6]] }),
                 ("tower", 3) => t.towers.push([v[0], v[1], v[2]]),
                 _ => {}
             }
@@ -127,7 +142,7 @@ mod tests {
     fn text_roundtrip() {
         let t = Traversal {
             cables: vec![Cable { zipline: true, a: [1.0, 120.5, -3.0], b: [40.0, 101.25, 7.5] }, Cable { zipline: false, a: [0.0, 1.0, 2.0], b: [3.0, 4.0, 5.0] }],
-            ladders: vec![Ladder { base: [5.0, 100.0, 5.0], top: 108.5, facing: [0.0, 0.0, -1.0] }],
+            ladders: vec![Ladder { id: 2078490335079601680, mission_layer: 0xa07db8c44bc1f1, base: [5.0, 100.0, 5.0], top: 108.5, facing: [0.0, 0.0, -1.0] }],
             towers: vec![[10.0, 150.0, -20.0]],
         };
         assert_eq!(Traversal::from_text(&t.to_text()), t);
@@ -141,5 +156,15 @@ mod tests {
         assert!(is_ladder("Radiotower_Ladder01_2"));
         assert!(!is_ladder("Visuals/Ladder_VinesTiledLeaf_4m_1"));
         assert!(is_tower_panel("Interaction/RadioTowerPanel_3"));
+    }
+
+    #[test]
+    fn legacy_ladders_remain_readable_without_inventing_identity() {
+        let old = Traversal::from_text("ladder 1 2 3 12 0 0 -1\n");
+        assert_eq!(old.ladders.len(), 1);
+        assert_eq!(old.ladders[0].id, 0);
+        assert_eq!(old.ladders[0].top, 12.0);
+        assert_eq!(old.ladders[0].mission_layer, crate::world::DEFAULT_MISSION_LAYER);
+        assert!(Traversal::from_text("ladder-entity invalid 1 2 3 12 0 0 -1\n").ladders.is_empty());
     }
 }

@@ -616,7 +616,9 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             job.error(format!("splines: {e:#}"));
         }
     }
-    if opts.only_sectors.is_none() && job.should_write(cache::TRAVERSAL_REL) {
+    let traversal_current = std::fs::read_to_string(job.root().join(cache::TRAVERSAL_REL))
+        .is_ok_and(|text| text.lines().next() == Some(fc3_formats::traversal::CACHE_HEADER));
+    if opts.only_sectors.is_none() && (job.should_write(cache::TRAVERSAL_REL) || !traversal_current) {
         traversal.cables = resolve_cables(&anchors);
         let keep = |p: &[f32; 3]| !fc3_formats::worldmap::in_test_area(p[0], -p[2]);
         traversal.cables.retain(|c| keep(&c.a) && keep(&c.b));
@@ -1957,6 +1959,11 @@ fn convert_sector(job: &Job, id: u32) -> Result<Option<SectorResult>> {
             if fc3_formats::traversal::is_tower_panel(&e.name) {
                 towers.push(translation);
             }
+        }
+        // Mission ladders are usable too. Their entity identity lets the
+        // runtime gate mounting when the story removes or unloads them.
+        {
+            let rotate = |v: [f32; 3]| quat_rotate(rotation, v);
             if fc3_formats::traversal::is_ladder(&e.name) {
                 if let Some((lo, hi)) = e.meshes.first().and_then(|m| job.model_bounds(&m.to_ascii_lowercase())) {
                     let foot = rotate([0.0, lo[1], 0.0]);
@@ -1964,6 +1971,8 @@ fn convert_sector(job: &Job, id: u32) -> Result<Option<SectorResult>> {
                     let fwd = rotate([0.0, 0.0, -1.0]);
                     let flat = (fwd[0] * fwd[0] + fwd[2] * fwd[2]).sqrt().max(1e-3);
                     ladders.push(fc3_formats::traversal::Ladder {
+                        id: e.id,
+                        mission_layer: e.mission_layer,
                         base: [translation[0] + foot[0], translation[1] + foot[1], translation[2] + foot[2]],
                         top: translation[1] + head[1],
                         facing: [fwd[0] / flat, 0.0, fwd[2] / flat],

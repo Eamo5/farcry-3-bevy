@@ -277,6 +277,8 @@ fn climb(
     time: Res<Time>,
     actions: Res<ActionState>,
     ways: Res<Ways>,
+    host: Option<NonSend<crate::story::StoryHost>>,
+    layers: Res<crate::mission_layers::MissionLayers>,
     spatial: avian3d::prelude::SpatialQuery,
     mut mount: ResMut<Mount>,
     mut players: Query<(Entity, &mut Transform, &mut Player, &Health)>,
@@ -286,12 +288,19 @@ fn climb(
     let dt = time.delta_secs();
     let feet = t.translation.y - HALF_HEIGHT;
     let forward = Vec3::new(-p.yaw.sin(), 0.0, -p.yaw.cos());
+    let available = |l: &fc3_formats::traversal::Ladder| {
+        (l.mission_layer == fc3_formats::world::DEFAULT_MISSION_LAYER || layers.present.contains(&l.mission_layer))
+        && (l.id == 0 || host.as_ref().is_none_or(|h| {
+            !h.story.data().entities.contains_key(&l.id) || h.story.is_loaded(l.id)
+        }))
+    };
     match *mount {
         Mount::None => {
             if h.dead || p.driving || p.noclip || p.swimming || actions.movement.y < 0.3 {
                 return;
             }
             let near = ways.data.ladders.iter().enumerate().find(|(_, l)| {
+                if !available(l) { return false; }
                 let base = Vec3::from(l.base);
                 let to = Vec3::new(base.x - t.translation.x, 0.0, base.z - t.translation.z);
                 to.length() < 0.8 && feet > base.y - 0.4 && feet < l.top - 0.3 && forward.dot(to.normalize_or(forward)) > 0.2
@@ -305,8 +314,11 @@ fn climb(
             commands.entity(e).insert(ColliderDisabled);
         }
         Mount::Ladder { index, side } => {
-            let Some(l) = ways.data.ladders.get(index) else {
+            let Some(l) = ways.data.ladders.get(index).filter(|l| available(l)) else {
                 *mount = Mount::None;
+                p.driving = false;
+                p.velocity = Vec3::ZERO;
+                commands.entity(e).remove::<ColliderDisabled>();
                 return;
             };
             let base = Vec3::from(l.base);
@@ -399,6 +411,7 @@ fn tower_prompt(
 fn traversal_test(
     time: Res<Time>,
     ways: Res<Ways>,
+    layers: Res<crate::mission_layers::MissionLayers>,
     mount: Res<Mount>,
     progress: Res<crate::progression::Progress>,
     mut actions: ResMut<ActionState>,
@@ -474,10 +487,13 @@ fn traversal_test(
             *stage = 2;
         }
         (0, "ladder") => {
+            let requested = std::env::var("FC3_TRAVERSAL_LADDER_ID").ok().and_then(|s| s.parse::<u64>().ok());
             let Some(l) = ways
                 .data
                 .ladders
                 .iter()
+                .filter(|l| requested.is_none_or(|id| id == l.id))
+                .filter(|l| l.mission_layer == fc3_formats::world::DEFAULT_MISSION_LAYER || layers.present.contains(&l.mission_layer))
                 .filter(|l| l.top - l.base[1] > 4.0)
                 .min_by(|a, b| Vec3::from(a.base).distance(here).total_cmp(&Vec3::from(b.base).distance(here)))
             else {
@@ -487,7 +503,7 @@ fn traversal_test(
             let side = Vec3::from(l.facing);
             t.translation = base + side * 0.7 + Vec3::Y * (HALF_HEIGHT + 0.05);
             face(&mut p, t.translation, base);
-            info!("ladder test: foot {base:?}, top {:.1}", l.top);
+            info!("ladder test: entity {}, foot {base:?}, top {:.1}", l.id, l.top);
             *stage = 1;
         }
         (1, "ladder") => actions.movement.y = 1.0,

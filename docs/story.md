@@ -1149,6 +1149,25 @@ dispatches. This supplies the missing configuration for the controller;
 runtime CVineClimbingGameplay and its physical/visual validation remain to
 be implemented. No new campaign completion is claimed by this data change.
 
+The next runtime preparation exposed a separate missing interaction: sector
+conversion excluded **all mission-layer ladders** from traversal. Traversal
+cache version 2 now retains each ladder's exact u64 entity id and mission
+layer (parsed independently from float coordinates), includes mission
+ladders, and automatically upgrades older caches on full conversion. Legacy
+geometry-only entries remain readable. Mounting checks the active mission
+layers and known story entity removal state; losing a mounted ladder releases
+the driving/collision lock rather than leaving the player frozen.
+
+`FC3_TRAVERSAL_LADDER_ID` selects an exact ladder in the opt-in ladder fixture.
+`fc3-vine-climb` loads the paired DOC_020_B20E checkpoint, places the player
+at ladder 2078490335079601680's foot, and supplies movement input. Logs show
+the real mount and climb from capsule Y 114.61 through 122.26. It then exits
+at Y 124.54 and is obstructed by cave rocks; the final image confirms this
+is not a usable mission handoff. No special vine events were fabricated.
+The remaining controller must take ownership during that climb, rather than
+allowing the ordinary top exit. The fixture's initial placement means this
+is not evidence of an unassisted approach or complete vine interaction.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected
