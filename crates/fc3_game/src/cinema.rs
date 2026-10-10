@@ -68,6 +68,9 @@ pub struct Cinema {
     pub view_moves_player: bool,
     /// Sequences the game makes itself (a QTE's phases), to start.
     built: Vec<Built>,
+    /// Opt-in completion receipts for gameplay-owned scenes. Disappearance
+    /// from `progress` alone can also mean cancellation, not success.
+    built_results: HashMap<String, bool>,
 }
 
 /// A sequence made by the game (not a file): played like the story's, from
@@ -86,12 +89,25 @@ impl Cinema {
         self.playing.clear();
         self.released.clear();
         self.built.clear();
+        self.built_results.clear();
         self.view = None;
     }
 
     /// Plays a sequence the game made.
     pub fn play_built(&mut self, b: Built) {
         self.built.push(b);
+    }
+
+    pub fn play_built_tracked(&mut self, b: Built) {
+        self.built_results.insert(b.name.clone(), false);
+        self.play_built(b);
+    }
+
+    /// A normal end is acknowledged once. Stop/reset never produces success.
+    pub fn take_built_finished(&mut self, name: &str) -> bool {
+        if self.built_results.get(name) != Some(&true) { return false; }
+        self.built_results.remove(name);
+        true
     }
 
     /// A built sequence's time played and length, while it plays (or waits
@@ -106,6 +122,7 @@ impl Cinema {
 
     /// Ends a built sequence now.
     pub fn stop_built(&mut self, name: &str) {
+        self.built_results.remove(name);
         self.built.retain(|b| b.name != name);
         if let Some(i) = self.playing.iter().position(|p| p.scene == 0 && p.file == name) {
             let p = self.playing.remove(i);
@@ -690,6 +707,9 @@ fn play_scenes(
     }
     for i in finished.into_iter().rev() {
         let p = cinema.playing.remove(i);
+        if p.scene == 0 {
+            if let Some(done) = cinema.built_results.get_mut(&p.file) { *done = true; }
+        }
         host.story.sequence_event(&p.scene.to_string(), &p.file, "Finished", None);
         cinema.released.push(p);
     }
@@ -821,6 +841,43 @@ mod tests {
         assert_eq!(vehicle_pose(&keys, -1.0), vehicle_pose(&keys, 0.0));
         assert_eq!(vehicle_pose(&keys, 10.0), vehicle_pose(&keys, 1.0));
         assert!(vehicle_pose(&[], 0.0).is_none());
+    }
+
+    #[test]
+    fn tracked_playback_distinguishes_finish_pause_stop_and_reset() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
+            .init_asset::<Fc3Clip>().init_asset::<Fc3Skeleton>()
+            .init_resource::<Cinema>().init_resource::<CacheInfo>().init_resource::<crate::story::StoryUi>()
+            .init_resource::<ButtonInput<KeyCode>>().init_resource::<crate::fp::Cinematic>()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
+            .add_message::<crate::sound::PlaySfx>().add_systems(Update, (start_scenes, play_scenes).chain());
+        let pack = fc3_formats::scripts::ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap();
+        let story = fc3_story::Story::new(pack, fc3_story::data::StoryData::default()).unwrap();
+        app.insert_non_send(StoryHost::new(story, None));
+        let built = |name: &str| Built { name: name.into(), origin: Transform::IDENTITY, bindings: HashMap::new(),
+            seq: Sequence { name: name.into(), duration: 0.3, ..default() } };
+        app.world_mut().resource_mut::<Cinema>().play_built_tracked(built("finish"));
+        app.update();
+        app.world_mut().resource_mut::<Cinema>().playing[0].paused = true;
+        for _ in 0..5 { app.update(); }
+        assert!(!app.world_mut().resource_mut::<Cinema>().take_built_finished("finish"));
+        app.world_mut().resource_mut::<Cinema>().playing[0].paused = false;
+        for _ in 0..5 { app.update(); }
+        let mut cinema = app.world_mut().resource_mut::<Cinema>();
+        assert!(cinema.take_built_finished("finish"));
+        assert!(!cinema.take_built_finished("finish"));
+        cinema.play_built_tracked(built("stop"));
+        drop(cinema);
+        app.update();
+        app.world_mut().resource_mut::<Cinema>().stop_built("stop");
+        for _ in 0..5 { app.update(); }
+        let mut cinema = app.world_mut().resource_mut::<Cinema>();
+        assert!(!cinema.take_built_finished("stop"));
+        cinema.play_built_tracked(built("reset"));
+        cinema.reset();
+        assert!(!cinema.take_built_finished("reset"));
+        assert!(cinema.built_results.is_empty());
     }
 
     #[test]

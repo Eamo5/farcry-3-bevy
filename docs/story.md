@@ -1257,6 +1257,19 @@ the existing unloaded-terrain fallback. This verifies the false-swimming fix;
 the prototype's missing dolly/shake/puff effects and remaining cave rendering
 gaps still prevent a full transition-parity claim.
 
+Built cinematics now offer opt-in, one-shot normal-completion receipts.
+The regression runs the actual scene systems through pause/resume, natural
+completion, stop and reset: only natural completion yields a receipt. The
+opt-in vine prototype consumes that receipt rather than inferring success
+from an absent scene. `fc3-vine-receipts` verifies a 3.4-second stand-up,
+one completion at cave elevation Y 94.59, and the subsequent authored rock,
+greenhouse and bird sequences. This is a repositioned ladder fixture, not
+an uninterrupted campaign playthrough. All game tests pass in
+`fc3-vine-lifecycle-tests.log`. Prototype cancellation/layer-loss coverage
+also exposed and fixes retained driving/collider ownership when the ladder
+mount is already gone; that prototype remains local and opt-in while its
+visual phases are unfinished.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected
