@@ -1619,6 +1619,36 @@ both tests in the same update. This is static native control-flow evidence
 (`vine-controller-all.txt`), not an original-game visual comparison; automatic
 `mush_sequence_transitions` activation remains disabled.
 
+### Physical greenhouse approach investigation
+
+The installed `evt_hauntedgreenhouse` graph enables trigger
+2073101807596342485 after starting its scene. Physically entering it resumes
+the greenhouse toward `GH_POS2`; trigger 2073306425406267566 then advances
+toward `GH_POS3`. Their installed Dunia centres are respectively
+(-1890.59,2413.37,99.8585) and (-1892.61,2406.09,100.243). Both cues pause via
+Lua callbacks, rather than authored pause flags. The initial trigger's box
+is loaded/enabled in the vine fixture but the player remains outside it.
+
+The direct post-vine walk toward the first trigger stalls at approximately
+(-1878.6,95.4,-2488.5), against visible cave rock, well before the greenhouse.
+One 65-second run died and retried; a repeat with combat logging stayed at
+health 100 at the same obstruction, so the earlier death cause is unresolved
+(`fc3-greenhouse-{approach,damage}.err.log` and corresponding screenshots).
+
+`FC3_TRAVERSAL_WALK_TO` now accepts ordered semicolon-separated X,Z waypoints
+while retaining single-point compatibility. It still drives only ordinary
+look/walk input after the repositioned ladder setup. Malformed/nonfinite
+coordinates reject the entire route; death aborts route steering rather than
+continuing it after checkpoint retry. The route-parser regression and release
+build pass (`fc3-cave-route-{tests,build}.log`). Live runs validate successive
+waypoint handoff: (-1877,-2500), (-1874,-2489), then (-1867,-2489) were reached
+at health 100 (`fc3-cave-route-east.err.log`). A western probe also reaches
+(-1884,-2494). Both then stall against visible rock on the northward leg.
+These are diagnostic routes, not validated paths through the campaign.
+Next investigate the passage's authored rock-event triggers and collision
+ownership before changing collision geometry; `GH_POS2`/`GH_POS3` remain
+unreached by physical gameplay.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

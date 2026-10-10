@@ -522,6 +522,7 @@ fn traversal_test(
     mut stage: Local<u32>,
     mut next_log: Local<f32>,
     mut ladder_time: Local<f32>,
+    mut walk_waypoint: Local<usize>,
     mut players: Query<(&mut Transform, &mut Player, &Health)>,
     cameras: Query<&Transform, (With<crate::player::PlayerCamera>, Without<Player>)>,
     (mut spawns, td, npcs, heights): (
@@ -538,6 +539,10 @@ fn traversal_test(
     }
     let now = time.elapsed_secs();
     let here = t.translation;
+    if h.dead && *stage == 3 {
+        warn!("traversal test: post-dismount walk aborted on death at {here:?}");
+        *stage = 4;
+    }
     let face = |p: &mut Player, from: Vec3, to: Vec3| {
         let d = to - from;
         p.yaw = (-d.x).atan2(-d.z);
@@ -636,12 +641,17 @@ fn traversal_test(
             // Optional post-dismount probe: ordinary look/walk controls only.
             // The initial ladder fixture is still a repositioned test setup.
             if let Ok(target) = std::env::var("FC3_TRAVERSAL_WALK_TO") {
-                let coords: Vec<f32> = target.split(',').filter_map(|v| v.parse().ok()).collect();
-                if coords.len() == 2 && coords.iter().all(|v| v.is_finite()) {
-                    let delta = Vec3::new(coords[0] - here.x, 0.0, coords[1] - here.z);
+                if let Some(route) = walk_route(&target) {
+                    let Some(target) = route.get(*walk_waypoint) else { *stage = 4; return };
+                    let delta = Vec3::new(target.x - here.x, 0.0, target.y - here.z);
                     if delta.length() < 0.6 {
-                        info!("traversal test: post-dismount walk reached {here:?}");
-                        *stage = 4;
+                        *walk_waypoint += 1;
+                        if *walk_waypoint == route.len() {
+                            info!("traversal test: post-dismount walk reached {here:?}");
+                            *stage = 4;
+                        } else {
+                            info!("traversal test: waypoint {}/{} reached {here:?}", *walk_waypoint, route.len());
+                        }
                     } else {
                         let desired = (-delta.x).atan2(-delta.z);
                         let turn = (p.yaw - desired + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
@@ -678,6 +688,29 @@ fn traversal_test(
             if let Some((n, nh)) = npcs.iter().min_by(|a, b| a.0.translation.distance(t.translation).total_cmp(&b.0.translation.distance(t.translation))) {
                 info!("zip test: nearest enemy {:.1?} off, dead {}", n.translation - t.translation, nh.dead);
             }
+        }
+    }
+}
+
+/// Test-only horizontal route; reject malformed points rather than silently
+/// dropping coordinates and steering to a different location.
+fn walk_route(text: &str) -> Option<Vec<Vec2>> {
+    text.split(';').map(|point| {
+        let (x, z) = point.split_once(',')?;
+        let point = Vec2::new(x.trim().parse().ok()?, z.trim().parse().ok()?);
+        point.is_finite().then_some(point)
+    }).collect()
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+
+    #[test]
+    fn route_preserves_order_and_rejects_malformed_coordinates() {
+        assert_eq!(walk_route("-1877,-2500; -1875, -2488"), Some(vec![Vec2::new(-1877.0, -2500.0), Vec2::new(-1875.0, -2488.0)]));
+        for text in ["", "1,2;", "1,2,3", "1,no,2", "NaN,2", "1,inf", "1,2;;3,4"] {
+            assert!(walk_route(text).is_none(), "accepted {text}");
         }
     }
 }
