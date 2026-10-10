@@ -48,6 +48,7 @@ mod progression;
 mod faces;
 mod qte;
 mod vine;
+mod screen_blur;
 mod retire;
 mod save;
 mod settings;
@@ -399,6 +400,7 @@ fn main() {
             video::VideoPlugin,
             qte::QtePlugin,
             vine::VinePlugin,
+            screen_blur::ScreenBlurPlugin,
             faces::FacesPlugin,
         ))
         .add_plugins((

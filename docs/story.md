@@ -1438,6 +1438,32 @@ Converter build, full conversion and that regression pass
 (`fc3-blur-masks-{build,convert,tests}.log`). Mask availability is now verified;
 masked radial-blur rendering remains the next runtime step.
 
+An opt-in radial-blur rendering fixture is now available:
+`FC3_POSTFX_TEST=postfx:mush_postfx.transition` (or `_IN`/`_OUT`), with
+optional `FC3_POSTFX_TEST_TIME=<seconds>` for a fixed curve sample. It loads
+the authored mask as linear data, samples the preserved curves, renders the
+scene through a masked radial pass, and leaves HUD/subtitles sharp. Missing
+GPU assets leave the scene untouched; expired non-looping clips remove both
+render components. The fixture currently supports a single mask per sequence.
+
+The kernel is explicitly experimental: tap spacing, factor units, mask-offset
+composition and original-game visual matching still need calibration. This
+fixture does not implement gameplay Start/StopPostFX or vine puff timing.
+`fc3-radial-blur-cave.png` shows the rendered mask effect during the paired
+doctor checkpoint replay; `fc3-radial-blur-released.png` shows the ocean after
+the OUT sequence has expired. The initial standalone cave placement did not
+load mission geometry and is not valid cave-progression evidence. The later
+paired replay uses the established fixture instead.
+
+Workspace/installed-data tests and release build pass
+(`fc3-radial-blur-{workspace,installed}-tests.log`, `fc3-radial-blur-build.log`).
+The new installed ECS regression checks IN/OUT samples, loop wrapping,
+invalid times, and component removal after expiry. Live GPU runs report no
+shader validation errors. Performance remains unverified: both the enabled
+and disabled offshore comparison runs are near 250 ms/frame, with about
+5 ms on the measured main thread (`fc3-radial-blur-{perf,baseline}.err.log`).
+This does not isolate a blur-induced slowdown or establish acceptable FPS.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected
