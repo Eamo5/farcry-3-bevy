@@ -266,6 +266,12 @@ pub struct ParticleMaterial {
     sheet: Handle<Image>,
 }
 
+impl ParticleMaterial {
+    pub(crate) fn alpha_sheet(sheet: Handle<Image>) -> Self {
+        Self { mode: Vec4::new(1.0, 0.0, 0.0, 0.0), sheet }
+    }
+}
+
 impl Material for ParticleMaterial {
     fn fragment_shader() -> ShaderRef {
         bevy::asset::AssetPath::from_path_buf(bevy::asset::embedded_path!("particles.wgsl")).with_source("embedded").into()

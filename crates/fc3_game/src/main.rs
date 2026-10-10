@@ -50,6 +50,7 @@ mod qte;
 mod vine;
 mod screen_blur;
 mod script_postfx;
+mod vine_puff;
 mod retire;
 mod save;
 mod settings;
@@ -422,6 +423,7 @@ fn main() {
             birds::BirdsPlugin,
             world_fx::WorldFxPlugin,
         ))
+        .add_plugins(vine_puff::VinePuffPlugin)
         .insert_resource(original_shaders::OriginalShaders { enabled: args.original_shaders })
         .add_systems(Startup, setup);
     if cfg!(feature = "profile") {

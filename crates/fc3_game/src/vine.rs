@@ -8,13 +8,15 @@ use crate::{cache_assets::{cache_path, Fc3Clip, Fc3Skeleton}, cinema::{Built, Ci
 use fc3_formats::cinema::{Clip, ClipKind, Group, GroupKind, Sequence};
 
 pub struct VinePlugin;
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct VineView;
 impl Plugin for VinePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Vines>().add_systems(Update,
             run.after(crate::story::StorySet).before(crate::cinema::CinemaSet)
                 .run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(PreUpdate, (restore_shake, restore_dolly_fov))
-            .add_systems(PostUpdate, (align_dolly_view, shake_view, dolly_fov).chain().after(crate::cinema::scene_view)
+            .add_systems(PostUpdate, (align_dolly_view, shake_view, dolly_fov).chain().in_set(VineView).after(crate::cinema::scene_view)
                 .before(bevy::transform::TransformSystems::Propagate));
     }
 }
@@ -33,6 +35,13 @@ pub struct Vines {
 impl Vines {
     pub fn reset(&mut self) { self.pending.clear(); self.cancelled.clear(); self.active = None; }
     pub fn owns_ladder(&self, id: u64) -> bool { self.active.as_ref().is_some_and(|v| v.ladder == id) }
+    pub(crate) fn puff_phase(&self) -> Option<(f32, f32)> {
+        let v = self.active.as_ref()?;
+        let t = v.effect_time?;
+        let start = (v.settings.dolly_duration - v.settings.particle_before).max(0.0);
+        let end = v.settings.dolly_duration + v.settings.particle_after;
+        (t >= start && t < end).then_some((t - start, v.settings.particle_offset_z))
+    }
 }
 
 enum Phase { Waiting, Climbing(f32), Dolly(f32), Animation }
@@ -328,6 +337,27 @@ fn shake_view(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn puff_window_spans_teleport_and_disappears_on_reset() {
+        let mut v = active_vine();
+        v.settings.dolly_duration = 2.5;
+        v.settings.particle_before = 1.0;
+        v.settings.particle_after = 0.5;
+        v.settings.particle_offset_z = 0.25;
+        let mut vines = Vines { active: Some(v), ..default() };
+        for (time, expected) in [(1.49, None), (1.5, Some(0.0)), (2.5, Some(1.0)), (2.99, Some(1.49)), (3.0, None)] {
+            vines.active.as_mut().unwrap().effect_time = Some(time);
+            match (vines.puff_phase(), expected) {
+                (Some((elapsed, offset)), Some(want)) => { assert!((elapsed - want).abs() < 1e-5); assert_eq!(offset, 0.25); }
+                (None, None) => {}
+                _ => panic!("wrong puff phase at {time}"),
+            }
+        }
+        vines.active.as_mut().unwrap().effect_time = Some(2.0);
+        vines.reset();
+        assert!(vines.puff_phase().is_none());
+    }
 
     #[test]
     #[ignore = "requires FC3_TEST_CACHE with the authored post-effect library"]

@@ -1516,6 +1516,34 @@ tests pass; full conversion reports zero errors
 Actual puff simulation/rendering and its attachment/stop semantics remain
 unfinished.
 
+`FC3_VINE_PUFF_TEST=1` now enables an explicitly provisional puff preview
+alongside the opt-in vine controller. It draws the cached six-vertex sprite
+polygon with the original 5x5 atlas, authored tint/size/alpha knot values,
+initial count and emission rate. Its preview emission window excludes the
+end boundary; native count-boundary behavior remains unverified. Source
+particle curves are retained, while this preview interpolates knot values
+linearly and uses deterministic variation for repeatable captures.
+
+The first capture exposed an incorrect feet-based attachment. Local native
+controller inspection shows `VineClimbingFX` attached to `Camera` with local
+(0, configured offset, -0.8); the preview now composes current player/camera
+transforms after the vine camera systems, avoiding stale propagated poses
+on teleport. `fc3-vine-puff-camera-mid.png` visibly captures the smoke above
+the climbing view. The GSF window begins one second before teleport and
+releases half a second after it; cancellation/reset also hides the preview.
+The full replay logs puff start/release, stand-up completion and an ordinary
+walk to (-1877.34,94.28,-2500.48), health 100
+(`fc3-vine-puff-camera-final.err.log`).
+
+Workspace and installed-data tests plus release build pass
+(`fc3-vine-puff-preview-{workspace,installed}-tests.log`,
+`fc3-vine-puff-camera-build.log`). Regressions cover timing boundaries/reset,
+the six-vertex geometry, translated attachment and eventual lifetime expiry.
+This is not particle parity: native tangent evaluation, velocity/gravity,
+flipbook-speed curves/inter-frame blending, SH lighting, near/soft clipping,
+variation distributions and emitter stop-versus-particle-death semantics
+remain to implement/validate. The preview remains separately opt-in.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected
