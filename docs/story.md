@@ -1270,6 +1270,12 @@ also exposed and fixes retained driving/collider ownership when the ladder
 mount is already gone; that prototype remains local and opt-in while its
 visual phases are unfinished.
 
+Tracked gameplay cinematics also ignore the story cutscene skip shortcut.
+The playback lifecycle regression now presses Enter while the tracked
+cutscene is paused and verifies it remains pending, then resumes it to
+natural completion (`fc3-cinema-skip-ownership-test.log`). This prevents
+skipping a gameplay move from issuing a successful completion receipt.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

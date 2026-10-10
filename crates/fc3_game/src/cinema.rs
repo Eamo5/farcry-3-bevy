@@ -490,7 +490,10 @@ fn play_scenes(
         // for tests).
         // The sync points skipped over still reach the scripts (in order, none
         // pausing), as their graphs go on from them.
-        if p.seq.cutscene && (keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Enter) || std::env::var("FC3_STORY_SKIP_SCENES").is_ok()) {
+        // Gameplay transitions must play through before their owner receives
+        // a completion receipt; the story cutscene shortcut cannot finish them.
+        let tracked = p.scene == 0 && cinema.built_results.contains_key(&p.file);
+        if p.seq.cutscene && !tracked && (keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Enter) || std::env::var("FC3_STORY_SKIP_SCENES").is_ok()) {
             let from = p.t;
             p.t = p.seq.duration;
             p.paused = false;
@@ -856,12 +859,15 @@ mod tests {
         let story = fc3_story::Story::new(pack, fc3_story::data::StoryData::default()).unwrap();
         app.insert_non_send(StoryHost::new(story, None));
         let built = |name: &str| Built { name: name.into(), origin: Transform::IDENTITY, bindings: HashMap::new(),
-            seq: Sequence { name: name.into(), duration: 0.3, ..default() } };
+            seq: Sequence { name: name.into(), duration: 0.3, cutscene: true, ..default() } };
         app.world_mut().resource_mut::<Cinema>().play_built_tracked(built("finish"));
         app.update();
         app.world_mut().resource_mut::<Cinema>().playing[0].paused = true;
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Enter);
         for _ in 0..5 { app.update(); }
         assert!(!app.world_mut().resource_mut::<Cinema>().take_built_finished("finish"));
+        assert!(app.world().resource::<Cinema>().progress("finish").is_some());
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
         app.world_mut().resource_mut::<Cinema>().playing[0].paused = false;
         for _ in 0..5 { app.update(); }
         let mut cinema = app.world_mut().resource_mut::<Cinema>();
