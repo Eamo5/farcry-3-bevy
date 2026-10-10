@@ -242,7 +242,7 @@ fn screen_drops(
     let eye = cam.translation();
     let (wet, was_under) = &mut *state;
     *wet = (*wet - time.delta_secs() / DRY_TIME).max(0.0);
-    let under = eye.y < crate::water::surface_at(eye, &heights);
+    let under = crate::water::submerged(eye, &heights, 0.0);
     if *was_under && !under {
         *wet = 1.0;
     }

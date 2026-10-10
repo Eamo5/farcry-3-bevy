@@ -84,6 +84,32 @@ pub fn surface_at(p: Vec3, heights: &Heightfield) -> f32 {
     surface(p, heights.height_at(p))
 }
 
+/// Surface water occupies exposed basins, not the space beneath dry terrain.
+/// Keep the numerical surface API for buoyancy/geometry; occupancy checks
+/// additionally reject the implicit ocean beneath inland caves.
+pub fn submerged(p: Vec3, heights: &Heightfield, depth: f32) -> bool {
+    let ground = heights.height_at(p);
+    submerged_at_level(p.y, surface(p, ground), ground, depth)
+}
+
+fn submerged_at_level(y: f32, level: f32, ground: Option<f32>, depth: f32) -> bool {
+    y < level - depth && ground.is_none_or(|g| g < level)
+}
+
+#[cfg(test)]
+mod occupancy_tests {
+    use super::*;
+    #[test]
+    fn dry_cave_does_not_inherit_the_ocean_under_the_terrain() {
+        assert!(!submerged_at_level(94.0, 100.0, Some(146.0), 1.3));
+        assert!(!submerged_at_level(95.6, 100.0, Some(146.0), 0.05));
+        assert!(submerged_at_level(94.0, 100.0, Some(90.0), 1.3));
+        assert!(submerged_at_level(122.0, 125.0, Some(120.0), 1.3));
+        assert!(!submerged_at_level(99.0, 100.0, Some(90.0), 1.3));
+        assert!(submerged_at_level(94.0, 100.0, None, 1.3));
+    }
+}
+
 #[derive(Asset, AsBindGroup, TypePath, Clone, Debug)]
 pub struct WaterExt {
     #[uniform(100)]
@@ -584,7 +610,7 @@ fn update_fog(
     let storm = weather.storm();
     let eye = gt.translation();
     let water = surface_at(eye, &heights);
-    let wanted = if eye.y < water - 0.05 {
+    let wanted = if submerged(eye, &heights, 0.05) {
         if water > SEA_LEVEL {
             Some((Color::srgb(0.05, 0.12, 0.08), FogFalloff::Exponential { density: 0.16 }))
         } else {

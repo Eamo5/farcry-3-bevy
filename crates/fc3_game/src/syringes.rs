@@ -302,7 +302,7 @@ fn breath(
     let Ok((pe, p, h)) = players.single() else { return };
     let Ok(cam) = camera.single() else { return };
     air.max = if boosts.active(Syringe::Diver) { AIR * 4.0 } else { AIR };
-    let under = p.swimming && cam.translation().y < crate::water::surface_at(cam.translation(), &heights) - 0.15 && !h.dead;
+    let under = p.swimming && crate::water::submerged(cam.translation(), &heights, 0.15) && !h.dead;
     if !under {
         air.left = (air.left + dt * 8.0).min(air.max);
         air.hurt = 0.0;

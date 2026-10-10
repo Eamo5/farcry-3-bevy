@@ -89,7 +89,7 @@ fn aim_shafts(
     let off = ahead.clamp(-1.0, 1.0).acos().to_degrees();
     let facing = (1.0 - smoothstep(from, to, off)) * (1.0 - smoothstep(1.0, 1.8, ndc.abs().max_element()));
     let eye = cam.translation();
-    let under = eye.y < crate::water::surface_at(eye, &heights);
+    let under = crate::water::submerged(eye, &heights, 0.0);
     let k = if under { 0.0 } else { strength * facing * tod.daylight().clamp(0.0, 1.0) * (1.0 - weather.overcast()) };
     let colour = suns.iter().next().map_or(LinearRgba::WHITE, |l| l.color.to_linear());
     shafts.sun = Vec4::new(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5, k, threshold);

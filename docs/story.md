@@ -1238,6 +1238,25 @@ shows incorrect first-person presentation near cave geometry, so the vine
 prototype remains opt-in and unverified. The verified local-height release
 fix is independent of that prototype.
 
+`fc3-vine-fp-debug` identified the remaining oversized-arm presentation as
+an unexpected Swim/SwimMove context after relocation, rather than a residual
+camera rotation (camera local rotation was identity and pitch zero). The
+surface-water occupancy check treated the entire subsurface below sea level
+as ocean, including the dry cave beneath terrain at Y 146. Swimming,
+underwater fog, audio, atmospheric effects and oxygen now share an occupancy
+predicate that excludes the implicit surface-water plane beneath dry terrain.
+Numerical water heights used for geometry and buoyancy are retained. Explicit
+underground water volumes are still not represented by this surface-water
+model and need separate authored-volume support for flooded caves.
+
+`fc3-cave-water` repeats the opt-in vine fixture: it releases at Y 94.56,
+settles around Y 94.92 with health 100, and never enters Swim. The final image
+shows normal pistol arms and a standing cave view. Workspace tests cover dry
+subsurface space, exposed ocean/inland basins, shallow-water thresholds and
+the existing unloaded-terrain fallback. This verifies the false-swimming fix;
+the prototype's missing dolly/shake/puff effects and remaining cave rendering
+gaps still prevent a full transition-parity claim.
+
 The separate fresh `fc3-opening-repeat.err.log` run exited 0 but again stalled
 at the opening rock objective. The guard became alerted and left its scripted
 action, yet the expected trigger progression did not follow. Its inspected

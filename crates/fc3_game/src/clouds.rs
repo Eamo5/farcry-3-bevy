@@ -459,7 +459,7 @@ fn rain(
     let dt = time.delta_secs();
     let Ok(cam) = cameras.single() else { return };
     let c = cam.translation();
-    let underwater = c.y < crate::water::surface_at(c, &heights);
+    let underwater = crate::water::submerged(c, &heights, 0.0);
     let intensity = if underwater { 0.0 } else { smoothstep(0.3, 1.0, weather.storm()) };
     if intensity > 0.01 {
         let ground = heights.height_at(c).unwrap_or(0.0);

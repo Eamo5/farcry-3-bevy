@@ -618,7 +618,7 @@ fn player_move(
     }
     let feet = t.translation.y - HALF_HEIGHT;
     let water = crate::water::surface_at(t.translation, &heights);
-    p.swimming = feet < water - 1.3;
+    p.swimming = crate::water::submerged(t.translation.with_y(feet), &heights, 1.3);
     // Crouching at a sprint: a slide, low and fast, slowing to a crouch.
     let flat_speed = Vec2::new(p.velocity.x, p.velocity.z).length();
     if p.sliding.is_none() && p.sprinting && p.grounded && flat_speed > SLIDE_MIN_SPEED && input_ok && actions.just_pressed(Action::Crouch) {

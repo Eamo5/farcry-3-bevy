@@ -128,7 +128,7 @@ fn player_audio(
     }
     last.dead = health.dead;
     // Under water: the splash and the muffled bed; coming up again.
-    let under = cam.translation().y < crate::water::surface_at(cam.translation(), &heights) - 0.05 && driving.vehicle.is_none();
+    let under = crate::water::submerged(cam.translation(), &heights, 0.05) && driving.vehicle.is_none();
     if under {
         last.under += dt;
         loops.write(LoopSfx { key: 0x5557_4154, event: snd::UNDERWATER, at: None, volume: 0.8, ..default() });
