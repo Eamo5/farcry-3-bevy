@@ -283,6 +283,7 @@ const AIR: f32 = 30.0;
 fn breath(
     time: Res<Time>,
     boosts: Res<Boosts>,
+    body: Option<Res<crate::player::PlayerBody>>,
     perks: Option<Res<crate::progression::Perks>>,
     mut air: ResMut<Breath>,
     players: Query<(Entity, &Player, &Health)>,
@@ -296,14 +297,17 @@ fn breath(
     let Ok(cam) = camera.single() else { return };
     // (`SP_HoldBreathUnderwater`: longer; the diver's syringe longer still.)
     let lungs = perks.as_ref().map_or(1.0, |p| p.breath);
-    air.max = AIR * lungs * if boosts.active(Syringe::NeverDrown) { 4.0 } else { 1.0 };
+    // The game's air (else ours: seconds of it): its most, what a second
+    // under takes and in the air gives back, and what drowning costs.
+    let oxygen = body.as_ref().and_then(|b| b.0.oxygen).unwrap_or(fc3_formats::body::Oxygen { max: AIR, drain: 1.0, refill: 8.0, drown: 12.0 });
+    air.max = oxygen.max * lungs * if boosts.active(Syringe::NeverDrown) { 4.0 } else { 1.0 };
     let under = p.swimming && crate::water::submerged(cam.translation(), &heights, 0.15) && !h.dead;
     if !under {
-        air.left = (air.left + dt * 8.0).min(air.max);
+        air.left = (air.left + dt * oxygen.refill).min(air.max);
         air.hurt = 0.0;
         return;
     }
-    air.left = (air.left - dt).max(0.0);
+    air.left = (air.left - dt * oxygen.drain).max(0.0);
     // Air left, as a bar on the status line.
     let bars = ((air.left / air.max) * 20.0).ceil() as usize;
     hud.status = Some(format!("AIR  {}{}", "|".repeat(bars), ".".repeat(20 - bars.min(20))));
@@ -313,7 +317,7 @@ fn breath(
             air.hurt = 1.0;
             damage.write(DamageEvent {
                 target: pe,
-                amount: 12.0,
+                amount: oxygen.drown,
                 kind: DamageKind::Drown,
                 source: None,
                 instigator: None,

@@ -166,8 +166,10 @@ pub enum ClipKind {
     CameraAnimation {
         keys: Vec<CameraKey>,
     },
-    /// First-person free look within the scene.
-    PlayerCamera,
+    /// First-person free look within the scene: how far the head turns.
+    PlayerCamera {
+        head: HeadLook,
+    },
     /// Field of view over the clip (degrees, sampled every `FOV_STEP`).
     Fov {
         samples: Vec<f32>,
@@ -181,6 +183,25 @@ pub enum ClipKind {
         /// BlurFactor, RGBA, Direction XY, TextureAlpha, MaskOffset.
         samples: Vec<[f32; 9]>,
     },
+}
+
+/// How a player-camera clip lets the head turn (`CPlayerCameraClip`): its
+/// speed, the seconds before it turns back and how fast, and its least and
+/// most angles (degrees: pitch, roll, yaw).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct HeadLook {
+    pub speed: f32,
+    pub return_delay: f32,
+    pub return_speed: f32,
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+
+impl HeadLook {
+    /// Whether it lets the head turn at all.
+    pub fn turns(&self) -> bool {
+        self.min.iter().zip(&self.max).any(|(a, b)| b > a)
+    }
 }
 
 /// Curves are kept sampled at this step (seconds).
@@ -352,7 +373,26 @@ fn clip_of(e: &Element) -> Option<Clip> {
         "CCameraCutStart" => ClipKind::CameraCut { start: true, hide_hud: e.bool("bHideGameplayHud").unwrap_or(true) },
         "CCameraCutStop" => ClipKind::CameraCut { start: false, hide_hud: false },
         "CCameraAnimationClip" => ClipKind::CameraAnimation { keys: Vec::new() },
-        "CPlayerCameraClip" => ClipKind::PlayerCamera,
+        "CPlayerCameraClip" => {
+            let f = |n: &str| e.attr(n).and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0);
+            let angles = |n: &str| {
+                let v: Vec<f32> = e.attr(n).unwrap_or_default().split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                if v.len() == 3 {
+                    [v[0], v[1], v[2]]
+                } else {
+                    [0.0; 3]
+                }
+            };
+            ClipKind::PlayerCamera {
+                head: HeadLook {
+                    speed: f("fHeadSpeed"),
+                    return_delay: f("fHeadReturnDelay"),
+                    return_speed: f("fHeadReturnSpeed"),
+                    min: angles("vectorHeadMinAngles"),
+                    max: angles("vectorHeadMaxAngles"),
+                },
+            }
+        }
         "CFOVClip" => {
             let keys = bezier_keys(e, "FOVOverTime");
             if keys.is_empty() {
@@ -598,7 +638,10 @@ impl Sequence {
                             .collect();
                         format!("cam\t{}", k.join(";"))
                     }
-                    ClipKind::PlayerCamera => "pcam".to_string(),
+                    ClipKind::PlayerCamera { head: h } => format!(
+                        "pcam\t{}",
+                        [h.speed, h.return_delay, h.return_speed, h.min[0], h.min[1], h.min[2], h.max[0], h.max[1], h.max[2]].map(|v| v.to_string()).join(",")
+                    ),
                     ClipKind::Fov { samples } => format!("fov\t{}", samples.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(";")),
                     ClipKind::Blur { texture, kind, priority, intensity, samples } => format!("blur\t{texture}\t{kind}\t{priority}\t{},{},{}\t{}",
                         b(intensity[0]), b(intensity[1]), b(intensity[2]), samples.iter().map(|sample|
@@ -670,7 +713,15 @@ impl Sequence {
                                 })
                                 .collect(),
                         },
-                        "pcam" => ClipKind::PlayerCamera,
+                        "pcam" => {
+                            let v: Vec<f32> = g(1).split(',').filter_map(|x| x.parse().ok()).collect();
+                            let head = if v.len() == 9 {
+                                HeadLook { speed: v[0], return_delay: v[1], return_speed: v[2], min: [v[3], v[4], v[5]], max: [v[6], v[7], v[8]] }
+                            } else {
+                                HeadLook::default()
+                            };
+                            ClipKind::PlayerCamera { head }
+                        }
                         "fov" => ClipKind::Fov { samples: g(1).split(';').filter_map(|x| x.parse().ok()).collect() },
                         "blur" => {
                             let switches: Vec<u8> = g(4).split(',').map(str::parse).collect::<Result<_, _>>().ok()?;

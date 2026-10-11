@@ -16,8 +16,9 @@ pub struct WorldFxPlugin;
 
 impl Plugin for WorldFxPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnExit(crate::menu::GameState::Loading), (load_effects, spawn_drops))
-            .add_systems(Update, (play_effects, screen_drops).run_if(in_state(crate::menu::GameState::Playing)));
+        app.add_message::<PlaceFire>()
+            .add_systems(OnExit(crate::menu::GameState::Loading), (load_effects, spawn_drops))
+            .add_systems(Update, (place_fires, play_effects, screen_drops).chain().run_if(in_state(crate::menu::GameState::Playing)));
     }
 }
 
@@ -63,6 +64,30 @@ impl Kind {
 #[derive(Resource, Default)]
 struct WorldEffects {
     list: Vec<(Kind, Vec3)>,
+}
+
+/// A fire set down with something (an encounter's camp fire): its flames
+/// (a kind `cache::world_fx_kind` names; none for one without) and the
+/// light it gives (`lamps` takes that).
+#[derive(Message, Clone)]
+pub struct PlaceFire {
+    pub kind: String,
+    pub at: Vec3,
+    pub light: Option<fc3_formats::lights::WorldLight>,
+}
+
+/// Adds set-down fires' flames to the placed effects (once per spot).
+fn place_fires(mut fires: MessageReader<PlaceFire>, effects: Option<ResMut<WorldEffects>>) {
+    let Some(mut effects) = effects else { return };
+    for f in fires.read() {
+        if std::env::var_os("FC3_ENCOUNTER_DEBUG").is_some() {
+            info!("fire set down: {} at {:.1} (light {})", f.kind, f.at, f.light.is_some());
+        }
+        let Some(kind) = Kind::parse(&f.kind) else { continue };
+        if !effects.list.iter().any(|(k, at)| *k == kind && at.distance(f.at) < 0.5) {
+            effects.list.push((kind, f.at));
+        }
+    }
 }
 
 fn load_effects(mut commands: Commands, info: Res<CacheInfo>) {

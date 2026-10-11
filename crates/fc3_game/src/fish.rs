@@ -94,6 +94,7 @@ fn spawn_schools(
     schools: Query<(Entity, &Transform), With<School>>,
     mut rng: ResMut<Rng>,
     mut commands: Commands,
+    regions: Res<crate::wildlife::WildlifeRegions>,
 ) {
     if time.elapsed_secs() < *next {
         return;
@@ -120,6 +121,10 @@ fn spawn_schools(
         }
         let f = pt.forward().as_vec3();
         at = pt.translation + Vec3::new(f.x, 0.0, f.z).normalize_or(Vec3::NEG_Z) * 9.0;
+    }
+    // Over the reefs the game's wildlife regions stock with them.
+    if !test && regions.reef_at(at) == Some(false) {
+        return;
     }
     let Some(y) = swim_height(&heights, at).or(test.then_some(pt.translation.y + 0.5)) else { return };
     at.y = y;

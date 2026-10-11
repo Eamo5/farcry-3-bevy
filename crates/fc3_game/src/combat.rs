@@ -13,7 +13,8 @@ impl Plugin for CombatPlugin {
             .init_resource::<DamageTable>()
             .add_systems(OnExit(crate::menu::GameState::Loading), load_damage_table)
             .add_systems(Startup, add_player_health.after(crate::player::PlayerSpawn))
-            .add_systems(Update, (attach_counters, apply_damage, player_regen, fall_damage, use_medkit, respawn_player).chain());
+            .add_systems(Update, (attach_counters, apply_damage, player_regen, fall_damage, use_medkit, respawn_player).chain())
+            .add_systems(Update, die_on_spawn.before(apply_damage));
     }
 }
 
@@ -242,6 +243,23 @@ pub struct Died {
     pub kind: DamageKind,
 }
 
+/// Spawned dead (an encounter's bodies): it dies as it appears, by no one's
+/// hand, and lies as anyone killed does.
+#[derive(Component)]
+pub struct DieOnSpawn;
+
+fn die_on_spawn(mut fresh: Query<(Entity, &mut Health), Added<DieOnSpawn>>, mut died: MessageWriter<Died>, mut commands: Commands) {
+    for (e, mut h) in &mut fresh {
+        h.current = 0.0;
+        h.dead = true;
+        died.write(Died { entity: e, killer: None, kind: DamageKind::Bullet });
+        if std::env::var_os("FC3_ENCOUNTER_DEBUG").is_some() {
+            info!("encounter: a body lies at {e:?}");
+        }
+        commands.entity(e).remove::<DieOnSpawn>();
+    }
+}
+
 fn add_player_health(mut commands: Commands, player: Query<(Entity, &Transform), With<Player>>) {
     for (e, t) in &player {
         commands.entity(e).insert((
@@ -424,9 +442,35 @@ fn player_regen(
     }
 }
 
-fn fall_damage(perks: Res<crate::progression::Perks>, mut q: Query<(Entity, &mut Player)>, mut damage: MessageWriter<DamageEvent>) {
-    for (e, mut p) in &mut q {
+fn fall_damage(
+    perks: Res<crate::progression::Perks>,
+    body: Res<crate::player::PlayerBody>,
+    (time, mut lifted): (Res<Time>, Local<bool>),
+    mut q: Query<(Entity, &mut Player, &Health, &mut Transform)>,
+    mut damage: MessageWriter<DamageEvent>,
+) {
+    for (e, mut p, h, mut t) in &mut q {
+        // FC3_FALL_TEST=metres: lifted that high 10 s in, to fall.
+        if let Some(height) = std::env::var("FC3_FALL_TEST").ok().and_then(|v| v.parse::<f32>().ok()).filter(|_| !*lifted && time.elapsed_secs() > 10.0) {
+            *lifted = true;
+            t.translation.y += height;
+            info!("fall-test: lifted {height} m");
+        }
         let v = std::mem::take(&mut p.last_landing_speed);
+        // The game's falls: by the height the landing speed comes from, a
+        // share of his health, or death.
+        if let Some(fall) = body.0.fall.filter(|_| body.0.gravity > 0.0 && v > 0.0) {
+            let height = v * v / (2.0 * body.0.gravity);
+            let share = fall.share(height);
+            if std::env::var_os("FC3_FALL_TEST").is_some() {
+                info!("fall-test: landed at {v:.1} m/s, from {height:.1} m: {:.0}% of health", share * 100.0);
+            }
+            if share > 0.0 {
+                let amount = if share >= 1.0 { 100_000.0 } else { share * h.max * perks.fall_damage };
+                damage.write(DamageEvent { target: e, amount, kind: DamageKind::Fall, source: None, instigator: None, headshot: false, hit: Hit::Whole });
+            }
+            continue;
+        }
         // Safe up to ~3 m drops; lethal around 15 m.
         if v > 9.0 {
             let amount = (v - 9.0) * 9.0 * perks.fall_damage;

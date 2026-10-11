@@ -1257,7 +1257,12 @@ pub const ANIMAL_SKINS: &[&str] = &[
     "yanzhou-m-1908201167678161",
     // The vulture (its model carries a grey placeholder).
     "yanzhou-m-0811201153918833",
+    // The pigs, wild and kept.
+    "yanzhou-m-2906201162787162",
 ];
+
+/// The folder of the screen overlays the HUD draws (scopes, blood, slashes).
+pub const SCREEN_OVERLAYS: &str = r"graphics\postfx\";
 
 /// Original path of an animal skin material.
 pub fn animal_skin_path(stem: &str) -> String {
@@ -1365,6 +1370,9 @@ pub const FLICKER_REL: &str = "world/flicker.txt";
 /// `SimpleAnimation` points), one per line: `kind x y z qx qy qz qw`
 /// (see `guard_spot_kind`; Bevy space).
 pub const GUARD_SPOTS_REL: &str = "world/guard_spots.txt";
+/// The guard spots table's first line: which version wrote it (since the
+/// fighters' other points, `move:<name>`).
+pub const GUARD_SPOTS_HEADER: &str = "# fc3-guard-spots 2";
 
 /// Spots where villagers stop to do something (the civilian
 /// `SimpleAnimation` points), one per line like the guard spots: `kind x y

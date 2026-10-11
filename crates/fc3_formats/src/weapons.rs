@@ -17,7 +17,12 @@ use anyhow::{bail, Result};
 use crate::fcb::Object;
 
 pub const STATS_REL: &str = "weapons/stats.txt";
-const MAGIC: &str = "fc3-weapons 4";
+const MAGIC: &str = "fc3-weapons 6";
+
+/// Whether a cached table is in this version's form.
+pub fn is_current(text: &str) -> bool {
+    text.lines().next().map(str::trim) == Some(MAGIC)
+}
 
 /// The shop's attachment kinds (`selAttachmentType`).
 pub const ATTACH_SIGHT: u32 = 1;
@@ -57,6 +62,199 @@ pub struct WeaponStats {
     /// Damage over range: (from, to metres, multiplier at each end).
     pub ranges: Vec<[f32; 4]>,
     pub spread: Option<Spread>,
+    pub aim: Option<Aim>,
+    /// The attachments it takes, by the game's key ("acog", "reflexa",
+    /// "silencerassault", "magupgrade"...).
+    pub gadgets: Vec<Gadget>,
+}
+
+/// An attachment as one weapon takes it: its key, the magazine it brings
+/// (0 if none), and its gadget's modifiers (`CWeaponAttachmentComponent`):
+/// degrees off the aimed FOV, the damage and the shot's noise (radius)
+/// times so much, the spread on the move times so much, the reload times
+/// so much, seconds more for the sights to come up, and the aimed turn
+/// times so much (pad across, up and down, mouse).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Gadget {
+    pub key: String,
+    pub magazine: u32,
+    pub fov: f32,
+    pub damage: f32,
+    pub noise: f32,
+    pub moving_spread: f32,
+    pub reload: f32,
+    pub sight_time: f32,
+    pub look: [f32; 3],
+}
+
+impl Gadget {
+    fn to_text(&self) -> String {
+        let n = [self.fov, self.damage, self.noise, self.moving_spread, self.reload, self.sight_time, self.look[0], self.look[1], self.look[2]];
+        format!("{}:{}:{}", self.key, self.magazine, n.map(|v| v.to_string()).join(":"))
+    }
+
+    fn from_text(s: &str) -> Option<Gadget> {
+        let mut p = s.split(':');
+        let key = p.next()?.to_string();
+        let magazine = p.next()?.parse().ok()?;
+        let v: Vec<f32> = p.filter_map(|x| x.parse().ok()).collect();
+        (v.len() == 9).then(|| Gadget {
+            key,
+            magazine,
+            fov: v[0],
+            damage: v[1],
+            noise: v[2],
+            moving_spread: v[3],
+            reload: v[4],
+            sight_time: v[5],
+            look: [v[6], v[7], v[8]],
+        })
+    }
+}
+
+/// A gadget prototype's modifiers (its key and magazine come from the
+/// weapon).
+fn gadget_mods(component: &Object) -> Option<Gadget> {
+    let m = component.child("modifiers")?;
+    let f = |o: Option<&std::sync::Arc<Object>>, n: &str, d: f32| o.and_then(|o| float(o, n)).unwrap_or(d);
+    let me = Some(m);
+    // The muzzle's sound stim (type 1): how far the shot is heard.
+    let mut noise = 1.0;
+    if let Some(stim) = m.child("MuzzleStim") {
+        for s in stim.children_named("StimModifiers") {
+            if uint(s, "selType") == Some(1) {
+                noise = float(s, "fRadiusMultiplier").unwrap_or(1.0);
+            }
+        }
+    }
+    Some(Gadget {
+        key: String::new(),
+        magazine: 0,
+        fov: f(m.child("fovModifiers"), "fAdditionalIronsightFOVDegrees", 0.0),
+        damage: f(m.child("baseDamagePrimary"), "diceRollMultiplier", 1.0),
+        noise,
+        moving_spread: f(m.child("bulletSpreadMultipliers"), "fBulletSpread_movementModifier", 1.0),
+        reload: f(me, "fReloadTimeMultiplier", 1.0),
+        sight_time: f(me, "fIronsightTransitionTimeAdd", 0.0),
+        look: [
+            f(me, "fLookSpeedMultiplierIronsight", 1.0),
+            f(me, "fVerticalLookSpeedMultiplierIronsight", 1.0),
+            f(me, "fLookSpeedMultiplierIronsightMouse", 1.0),
+        ],
+    })
+}
+
+/// A weapon's attachments (its common properties' `Attachments`), with
+/// their gadgets' modifiers by library item id.
+fn gadgets(common: &Object, mods: &HashMap<u64, Gadget>) -> Vec<Gadget> {
+    let mut out = Vec::new();
+    common.walk(&mut |o, _| {
+        if !o.is("Attachments") {
+            return;
+        }
+        let Some(id) = uint(o, "arkAttachmentArchetypeName").filter(|id| *id != 0) else { return };
+        let Some(key) = o.str_h(0xF2E5_88CD).filter(|k| !k.is_empty() && k != "none") else { return };
+        let Some(m) = mods.get(&id) else { return };
+        out.push(Gadget { key: key.to_ascii_lowercase(), magazine: uint(o, "magazineUpgradeReplacement").unwrap_or(0) as u32, ..m.clone() });
+    });
+    out
+}
+
+/// Aiming down the sights (`IronSight`) and the help a pad gets
+/// (`ShootCorrectionHelpers`): the view's FOV aimed (degrees), the seconds
+/// the sights take to come up, how much slower the player moves and turns
+/// aimed (with a pad, with the mouse, and up and down besides), whether
+/// aiming locks on to a target near the sights (and how fast, degrees a
+/// second, how wide a cylinder, and the distances it fades out between),
+/// and how shots bend toward a target from the hip and aimed (strength,
+/// cylinder factor, farthest distance).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Aim {
+    pub fov: f32,
+    pub transition: f32,
+    pub move_speed: f32,
+    pub look_pad: f32,
+    pub look_mouse: f32,
+    pub look_vertical: f32,
+    pub lock_on: bool,
+    pub lock_speed: f32,
+    pub lock_cylinder: f32,
+    pub lock_fade: (f32, f32),
+    pub correction: [[f32; 3]; 2],
+}
+
+impl Aim {
+    fn to_text(&self) -> String {
+        let [h, i] = self.correction;
+        [
+            self.fov,
+            self.transition,
+            self.move_speed,
+            self.look_pad,
+            self.look_mouse,
+            self.look_vertical,
+            f32::from(u8::from(self.lock_on)),
+            self.lock_speed,
+            self.lock_cylinder,
+            self.lock_fade.0,
+            self.lock_fade.1,
+            h[0],
+            h[1],
+            h[2],
+            i[0],
+            i[1],
+            i[2],
+        ]
+        .map(|v| v.to_string())
+        .join(",")
+    }
+
+    fn from_text(s: &str) -> Option<Aim> {
+        let v: Vec<f32> = s.split(',').filter_map(|x| x.parse().ok()).collect();
+        (v.len() == 17).then(|| Aim {
+            fov: v[0],
+            transition: v[1],
+            move_speed: v[2],
+            look_pad: v[3],
+            look_mouse: v[4],
+            look_vertical: v[5],
+            lock_on: v[6] != 0.0,
+            lock_speed: v[7],
+            lock_cylinder: v[8],
+            lock_fade: (v[9], v[10]),
+            correction: [[v[11], v[12], v[13]], [v[14], v[15], v[16]]],
+        })
+    }
+}
+
+/// A weapon's aiming, from its common properties.
+fn aim(common: &Object) -> Option<Aim> {
+    let sight = common.child("IronSight")?;
+    if !sight.bool("bCanIronsight").unwrap_or(false) {
+        return None;
+    }
+    let f = |n: &str| float(sight, n).unwrap_or(0.0);
+    let helpers = common.child("ShootCorrectionHelpers");
+    let correction = |n: &str| {
+        helpers.and_then(|h| h.child(n)).map_or([0.0; 3], |c| {
+            let f = |n: &str| float(c, n).unwrap_or(0.0);
+            [f("fShootCorrectionStrength"), f("fShootCorrectionCylinderFactor"), f("fShootCorrectionHelperMaxDistance")]
+        })
+    };
+    Some(Aim {
+        fov: f("fIronsightFOVDegrees"),
+        transition: f("fIronsightTransitionTime"),
+        move_speed: f("fMoveSpeedFactor"),
+        look_pad: f("fLookSensitivityFactor"),
+        look_mouse: f("fLookSensitivityFactorMouse"),
+        look_vertical: f("fVerticalLookSensitivityFactor"),
+        lock_on: sight.bool("bIronsightAimingHelperEnabled").unwrap_or(false),
+        lock_speed: f("fAimingHelperLockOnSpeed"),
+        lock_cylinder: f("fSnapAimCylinderFactor"),
+        lock_fade: (f("fAimingHelperFadeOutStartDistance"), f("fAimingHelperFadeOutStopDistance")),
+        correction: [correction("ShootCorrectionHelper"), correction("ShootCorrectionHelperIronsight")],
+    })
+    .filter(|a| a.fov > 0.0)
 }
 
 /// How far a weapon's shots stray (degrees off the aim), from the base
@@ -174,6 +372,8 @@ pub fn weapon_stats(library: &Object, shop_items: Option<&Object>) -> Vec<Weapon
     let mut by_item: HashMap<u64, String> = HashMap::new();
     // Library item id -> a projectile's damage.
     let mut projectiles: HashMap<u64, f32> = HashMap::new();
+    // Library item id -> an attachment gadget's modifiers.
+    let mut gadget_by_id: HashMap<u64, Gadget> = HashMap::new();
     library.walk(&mut |o, _| {
         if !o.is("EntityPrototype") {
             return;
@@ -189,6 +389,11 @@ pub fn weapon_stats(library: &Object, shop_items: Option<&Object>) -> Vec<Weapon
             });
             if let Some(d) = damage {
                 projectiles.insert(id, d);
+            }
+            if name.starts_with("gadgets:") {
+                if let Some(g) = e.child("Components").and_then(|c| c.child("CWeaponAttachmentComponent")).and_then(|c| gadget_mods(c)) {
+                    gadget_by_id.insert(id, g);
+                }
             }
         }
         if let (Some(n), Some(id)) = (name.strip_prefix("weapons:FC3/").filter(|n| !n.contains('.')), uint(o, "disLibItemId")) {
@@ -251,7 +456,14 @@ pub fn weapon_stats(library: &Object, shop_items: Option<&Object>) -> Vec<Weapon
             attachments: Vec::new(),
             ranges,
             spread: spread(&p, fire.map(|f| f.as_ref())),
+            aim: aim(&common),
+            gadgets: Vec::new(),
         });
+        let mut found = gadgets(&common, &gadget_by_id);
+        found.dedup_by(|a, b| a.key == b.key);
+        if let Some(w) = out.last_mut() {
+            w.gadgets = found;
+        }
     }
     if let Some(items) = shop_items {
         // The shop's weapons by their item name ("Assault rifles/P416"),
@@ -291,8 +503,10 @@ pub fn to_text(stats: &[WeaponStats]) -> String {
         let attachments = w.attachments.iter().map(|a| format!("{}:{}:{}", a.kind, a.cost, a.name)).collect::<Vec<_>>().join(";");
         let ranges = w.ranges.iter().map(|r| r.map(|v| v.to_string()).join(":")).collect::<Vec<_>>().join(";");
         let spread = w.spread.map(|s| s.to_text()).unwrap_or_default();
+        let aim = w.aim.map(|a| a.to_text()).unwrap_or_default();
+        let gadgets = w.gadgets.iter().map(|g| g.to_text()).collect::<Vec<_>>().join(";");
         s += &format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{attachments}\t{ranges}\t{spread}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{attachments}\t{ranges}\t{spread}\t{aim}\t{gadgets}\n",
             w.name,
             w.model,
             w.damage,
@@ -343,6 +557,8 @@ pub fn from_text(text: &str) -> Result<Vec<WeaponStats>> {
                     })
                     .unwrap_or_default(),
                 spread: f.get(12).and_then(|s| Spread::from_text(s)),
+                aim: f.get(13).and_then(|s| Aim::from_text(s)),
+                gadgets: f.get(14).map(|g| g.split(';').filter_map(Gadget::from_text).collect()).unwrap_or_default(),
                 ranges: f
                     .get(11)
                     .map(|r| {
@@ -396,6 +612,32 @@ mod tests {
                 moving: 1.4,
                 pellets: Some([1.0, 1.0]),
             }),
+            aim: Some(Aim {
+                fov: 65.0,
+                transition: 0.35,
+                move_speed: 0.4,
+                look_pad: 0.3,
+                look_mouse: 0.7,
+                look_vertical: 1.0,
+                lock_on: true,
+                lock_speed: 45.0,
+                lock_cylinder: 1.0,
+                lock_fade: (40.0, 40.1),
+                correction: [[3.0, 1.0, 15.0], [2.0, 0.75, 25.0]],
+            }),
+            gadgets: vec![
+                Gadget { key: "acog".into(), fov: -30.0, damage: 1.0, noise: 1.0, moving_spread: 1.0, reload: 1.0, look: [1.0; 3], ..Default::default() },
+                Gadget {
+                    key: "magupgrade".into(),
+                    magazine: 40,
+                    damage: 1.0,
+                    noise: 1.0,
+                    moving_spread: 1.0,
+                    reload: 1.0,
+                    look: [1.0; 3],
+                    ..Default::default()
+                },
+            ],
         };
         assert_eq!(from_text(&to_text(&[w.clone()])).unwrap(), vec![w.clone()]);
         assert_eq!(w.range_scale(10.0), 1.0);

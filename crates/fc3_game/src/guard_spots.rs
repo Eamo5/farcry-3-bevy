@@ -22,7 +22,9 @@ pub struct GuardSpotsPlugin;
 
 impl Plugin for GuardSpotsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnExit(crate::menu::GameState::Loading), load_spots)
+        app.add_message::<AddGuardSpot>()
+            .add_systems(OnExit(crate::menu::GameState::Loading), load_spots)
+            .add_systems(Update, add_spots.before(take_spots).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(Update, (take_spots, leave_spots, spot_test).chain().run_if(in_state(crate::menu::GameState::Playing)));
     }
 }
@@ -35,6 +37,9 @@ struct Spot {
     kind: &'static str,
     at: Vec3,
     yaw: f32,
+    /// A `move` spot's loop clip (its archive path), from the move its own
+    /// smart terrain point names.
+    clip: Option<String>,
 }
 
 #[derive(Resource, Default)]
@@ -53,9 +58,9 @@ pub struct AtSpot {
     unarmed: bool,
 }
 
-/// Looked for a spot once (taken or not).
+/// Looked for a spot once (taken or not; or never to take one).
 #[derive(Component)]
-struct SpotChecked;
+pub(crate) struct SpotChecked;
 
 /// The clips for a spot (under `animations\`), by what's done there; the
 /// stances come in pirate and privateer builds.
@@ -112,21 +117,77 @@ fn kind_of(s: &str) -> Option<&'static str> {
 
 fn load_spots(mut commands: Commands, info: Res<CacheInfo>) {
     let text = std::fs::read_to_string(info.root.join(cache::GUARD_SPOTS_REL)).unwrap_or_default();
+    // A fighters' point playing its own move: its armed loop, from the move
+    // table (as an encounter's).
+    let moves = fc3_formats::moves::from_text(&std::fs::read_to_string(info.root.join(fc3_formats::moves::CA_MOVES_REL)).unwrap_or_default());
     let list: Vec<Spot> = text
         .lines()
         .filter_map(|l| {
             let mut it = l.split_whitespace();
-            let kind = kind_of(it.next()?)?;
+            let token = it.next()?;
+            let (kind, clip) = match token.strip_prefix("move:") {
+                Some(mv) => ("move", Some(fighter_clip(fc3_formats::moves::pick_clip(moves.get(mv)?, true)?)?)),
+                None => (kind_of(token)?, None),
+            };
             let mut v = [0.0f32; 7];
             for c in &mut v {
                 *c = it.next()?.parse().ok()?;
             }
             let yaw = Quat::from_xyzw(v[3], v[4], v[5], v[6]).to_euler(EulerRot::YXZ).0;
-            Some(Spot { kind, at: Vec3::new(v[0], v[1], v[2]), yaw })
+            Some(Spot { kind, at: Vec3::new(v[0], v[1], v[2]), yaw, clip })
         })
         .collect();
     info!("{} guard spots", list.len());
     commands.insert_resource(GuardSpots { list, taken: HashMap::new() });
+}
+
+/// A clip a guard may play at a spot: a fighter's, not a civilian's.
+fn fighter_clip(clip: &str) -> Option<String> {
+    let lower = clip.to_ascii_lowercase();
+    let civilian = lower.contains(r"\civilians\") || lower.rsplit('\\').next().is_some_and(|f| f.starts_with("3rdciv"));
+    (!civilian).then(|| clip.to_string())
+}
+
+/// A spot an encounter sets out with its people (by what is done there).
+#[derive(Message, Clone)]
+pub struct AddGuardSpot {
+    pub kind: String,
+    pub at: Vec3,
+    pub yaw: f32,
+}
+
+/// Encounters' spots join the world's (once: the same spot set out again is
+/// the one already there).
+fn add_spots(mut added: MessageReader<AddGuardSpot>, spots: Option<ResMut<GuardSpots>>, moves: Option<Res<crate::story_actors::CaMoves>>) {
+    let Some(mut spots) = spots else {
+        added.clear();
+        return;
+    };
+    for a in added.read() {
+        // A spot playing its own move (its armed loop) or its part of a
+        // scene's loop (`clip:`); a fighters' one: a mourner's or a
+        // villager's is not for guards.
+        let own = match (a.kind.strip_prefix("move:"), a.kind.strip_prefix("clip:")) {
+            (Some(mv), _) => moves.as_ref().and_then(|m| fc3_formats::moves::pick_clip(m.0.get(mv)?, true).cloned()).map(Some),
+            (_, Some(clip)) => Some(Some(clip.to_string())),
+            _ => Some(None),
+        };
+        let (kind, clip) = match own {
+            Some(Some(clip)) => {
+                let Some(clip) = fighter_clip(&clip) else { continue };
+                ("move", Some(clip))
+            }
+            // (A move without clips.)
+            None => continue,
+            Some(None) => {
+                let Some(kind) = kind_of(&a.kind) else { continue };
+                (kind, None)
+            }
+        };
+        if !spots.list.iter().any(|s| s.at.distance(a.at) < 0.5) {
+            spots.list.push(Spot { kind, at: a.at, yaw: a.yaw, clip });
+        }
+    }
 }
 
 /// Shows or hides what a rig holds in its right hand.
@@ -177,16 +238,23 @@ fn take_spots(
             .enumerate()
             .filter(|(i, s)| !spots.taken.contains_key(i) && Vec2::new(s.at.x - post.x, s.at.z - post.z).length() < REACH && (s.at.y - post.y).abs() < REACH_UP)
             .min_by(|a, b| a.1.at.distance(post).total_cmp(&b.1.at.distance(post)))
-            .map(|(i, s)| (i, s.kind, s.at, s.yaw));
-        let Some((i, kind, at, yaw)) = free else { continue };
-        let options = clips(kind, npc.faction == Faction::Privateer);
-        let Some(path) = options.get(i % options.len().max(1)) else { continue };
-        let clip: Handle<Fc3Clip> = server.load(cache_path(&cache::anim_rel(&format!("{CLIP_ROOT}{path}"))));
+            .map(|(i, s)| (i, s.kind, s.at, s.yaw, s.clip.clone()));
+        let Some((i, kind, at, yaw, own)) = free else { continue };
+        let path = match own {
+            Some(full) => full,
+            None => {
+                let options = clips(kind, npc.faction == Faction::Privateer);
+                let Some(path) = options.get(i % options.len().max(1)) else { continue };
+                format!("{CLIP_ROOT}{path}")
+            }
+        };
+        let clip: Handle<Fc3Clip> = server.load(cache_path(&cache::anim_rel(&path)));
         let base = rig.clips().clone();
         let mut set = ClipSet { skeleton: base.skeleton.clone(), clips: base.clips.clone() };
         set.clips.insert(AnimKind::Idle, clip);
         rig.set_clips(Arc::new(set));
-        let unarmed = kind == "smoke";
+        let lower = path.to_ascii_lowercase();
+        let unarmed = kind == "smoke" || ["nowep", "noweap", "noweapon"].iter().any(|w| lower.contains(w));
         if unarmed {
             hold_weapon(&rig, &mut held, false);
         }

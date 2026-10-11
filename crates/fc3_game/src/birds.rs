@@ -20,8 +20,9 @@ pub struct BirdsPlugin;
 
 impl Plugin for BirdsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnExit(crate::menu::GameState::Loading), load_birds)
-            .add_systems(Update, (spawn_birds, fly_birds, bird_test).chain().run_if(in_state(crate::menu::GameState::Playing)));
+        app.add_message::<CircleOver>()
+            .add_systems(OnExit(crate::menu::GameState::Loading), load_birds)
+            .add_systems(Update, (circle_over, spawn_birds, fly_birds, bird_test).chain().run_if(in_state(crate::menu::GameState::Playing)));
     }
 }
 
@@ -233,6 +234,78 @@ fn spawn_birds(
             commands.entity(r).insert(NotShadowCaster);
         }
         commands.entity(root).insert(Bird { rig, ..bird });
+    }
+}
+
+/// Vultures an encounter sets circling low over it (over its dead), this many.
+#[derive(Message, Clone, Copy)]
+pub struct CircleOver {
+    pub at: Vec3,
+    pub count: usize,
+}
+
+/// Puts encounters' vultures on their circles once the birds are in (given
+/// up after half a minute).
+#[allow(clippy::too_many_arguments)]
+fn circle_over(
+    time: Res<Time>,
+    mut requests: MessageReader<CircleOver>,
+    mut pending: Local<Vec<(CircleOver, f32)>>,
+    assets: Option<Res<BirdAssets>>,
+    models: Res<Assets<Fc3Model>>,
+    server: Res<AssetServer>,
+    heights: Res<crate::terrain::Heightfield>,
+    mut next_flock: Local<u32>,
+    mut rng: ResMut<Rng>,
+    mut commands: Commands,
+) {
+    let now = time.elapsed_secs();
+    pending.extend(requests.read().map(|r| (*r, now)));
+    let Some(assets) = assets else { return };
+    let Some(def) = BIRDS.iter().position(|b| b.kind == Kind::Vulture) else { return };
+    if !crate::cache_assets::usable(&server, assets.models[def].id()) || !assets.sets[def].ready(&server) {
+        pending.retain(|(_, since)| now - since < 30.0);
+        return;
+    }
+    let Some(model) = models.get(&assets.models[def]) else { return };
+    for (r, _) in pending.drain(..) {
+        // (Numbered apart from the wild flocks.)
+        *next_flock += 1;
+        let flock = u32::MAX - *next_flock;
+        let ground = heights.height_at(r.at).unwrap_or(r.at.y);
+        let dir = if rng.f32() < 0.5 { 1.0 } else { -1.0 };
+        for _ in 0..r.count {
+            let radius = rng.range(6.0, 14.0);
+            let angle = rng.f32() * std::f32::consts::TAU;
+            let height = ground + rng.range(12.0, 22.0);
+            let root = commands
+                .spawn((
+                    Transform::from_translation(r.at + Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius) + Vec3::Y * (height - r.at.y)),
+                    Visibility::Visible,
+                    Health::new(15.0),
+                    RigidBody::Kinematic,
+                    Collider::sphere(0.6),
+                    Name::new("vulture"),
+                ))
+                .id();
+            let rig = spawn_rig_with(&mut commands, root, &[model], None, assets.sets[def].clone(), Vec3::ZERO, assets.skins[def].clone());
+            if let Some(r) = rig {
+                commands.entity(r).insert(NotShadowCaster);
+            }
+            commands.entity(root).insert(Bird {
+                def,
+                flock,
+                centre: Vec3::new(r.at.x, 0.0, r.at.z),
+                radius,
+                height,
+                angle,
+                dir,
+                rig,
+                falling: None,
+                grounded: 0.0,
+                call_in: rng.range(4.0, 20.0),
+            });
+        }
     }
 }
 

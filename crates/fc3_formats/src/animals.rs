@@ -13,7 +13,12 @@ use anyhow::{bail, Result};
 use crate::fcb::Object;
 
 pub const ANIMALS_REL: &str = "characters/animals.txt";
-const MAGIC: &str = "fc3-animals 1";
+const MAGIC: &str = "fc3-animals 2";
+
+/// Whether a cached table is in this version's form.
+pub fn is_current(text: &str) -> bool {
+    text.lines().next().map(str::trim) == Some(MAGIC)
+}
 
 /// An animal's temper (`selTemperType`).
 pub const TEMPER_AGGRESSIVE: u8 = 1;
@@ -69,6 +74,11 @@ pub struct Personality {
     /// difference it can strike across.
     pub attack_reach: f32,
     pub attack_height: f32,
+    /// Its paces (`CAnimalAgentFC3`'s speeds, metres a second): walking,
+    /// running and sprinting; 0 where the archetype gives none.
+    pub walk: f32,
+    pub run: f32,
+    pub sprint: f32,
 }
 
 impl Personality {
@@ -188,7 +198,15 @@ pub fn animals(library: &Object, templates: &Object) -> Vec<Personality> {
         });
         let Some((p, s)) = links else { return };
         let Some(base) = personalities.get(&p) else { return };
-        out.push(Personality { name, senses: s.and_then(|s| senses.get(&s).cloned()), ..base.clone() });
+        let mut paces = [0.0f32; 3];
+        e.walk(&mut |o, _| {
+            for (i, n) in ["fSpeedsWalk", "fSpeedsRun", "fSpeedsSprint"].iter().enumerate() {
+                if paces[i] == 0.0 {
+                    paces[i] = float(o, n).unwrap_or(0.0);
+                }
+            }
+        });
+        out.push(Personality { name, senses: s.and_then(|s| senses.get(&s).cloned()), walk: paces[0], run: paces[1], sprint: paces[2], ..base.clone() });
     });
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out.dedup_by(|a, b| a.name == b.name);
@@ -232,7 +250,7 @@ pub fn to_text(all: &[Personality]) -> String {
         let mut n: Vec<String> = p.numbers().iter().map(|v| v.to_string()).collect();
         n.extend([p.attack_delay.0, p.attack_delay.1].map(|v| v.to_string()));
         n.extend([p.attacks_before_pause.0, p.attacks_before_pause.1].map(|v| v.to_string()));
-        n.extend([p.attack_reach, p.attack_height].map(|v| v.to_string()));
+        n.extend([p.attack_reach, p.attack_height, p.walk, p.run, p.sprint].map(|v| v.to_string()));
         s += &format!("{}\t{}\t{}\n", p.name, p.senses.as_deref().unwrap_or("-"), n.join(","));
     }
     s
@@ -250,7 +268,7 @@ pub fn from_text(text: &str) -> Result<Vec<Personality>> {
             continue;
         }
         let v: Vec<f32> = f[2].split(',').map(|x| x.parse().unwrap_or(0.0)).collect();
-        if v.len() < 30 {
+        if v.len() < 33 {
             continue;
         }
         out.push(Personality {
@@ -281,6 +299,9 @@ pub fn from_text(text: &str) -> Result<Vec<Personality>> {
             attacks_before_pause: (v[26] as u32, v[27] as u32),
             attack_reach: v[28],
             attack_height: v[29],
+            walk: v[30],
+            run: v[31],
+            sprint: v[32],
         });
     }
     Ok(out)

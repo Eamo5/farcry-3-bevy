@@ -24,7 +24,8 @@ pub struct LampsPlugin;
 
 impl Plugin for LampsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Lamps>().add_systems(Update, (load_lamps.run_if(resource_exists::<CacheInfo>), assign_lamps, drive_lights, drive_glows).chain());
+        app.init_resource::<Lamps>()
+            .add_systems(Update, (load_lamps.run_if(resource_exists::<CacheInfo>), place_fire_lights, assign_lamps, drive_lights, drive_glows).chain());
     }
 }
 
@@ -182,6 +183,21 @@ fn load_lamps(info: Res<CacheInfo>, mut lamps: ResMut<Lamps>, mut commands: Comm
         .collect();
     // Glows are particle sprites; their slots need no entity.
     lamps.glows = (0..GLOW_SLOTS).map(|_| Slot { entity: Entity::PLACEHOLDER, current: None }).collect();
+}
+
+/// The lights of fires set down with something (an encounter's camp
+/// fire), once per spot.
+fn place_fire_lights(mut fires: MessageReader<crate::world_fx::PlaceFire>, mut lamps: ResMut<Lamps>) {
+    for l in fires.read().filter_map(|f| f.light) {
+        let at = Vec3::from(l.position);
+        let cell = cell_of(at);
+        if lamps.cells.get(&cell).is_some_and(|ids| ids.iter().any(|&i| Vec3::from(lamps.list[i as usize].position).distance(at) < 0.3)) {
+            continue;
+        }
+        let i = lamps.list.len() as u32;
+        lamps.list.push(l);
+        lamps.cells.entry(cell).or_default().push(i);
+    }
 }
 
 /// Gives `slots` to the lights in `wanted` (nearest first), keeping lights

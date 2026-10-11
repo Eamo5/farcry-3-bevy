@@ -97,6 +97,7 @@ pub struct PlayerSpawn;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InputCaptured>()
+            .init_resource::<SceneHeadLook>()
             .init_resource::<PlayerBody>()
             .add_systems(OnExit(crate::menu::GameState::Loading), load_body)
             .add_systems(Startup, spawn_player.in_set(PlayerSpawn))
@@ -128,6 +129,10 @@ impl Default for PlayerBody {
             swim: SWIM_SPEED,
             jump_height: JUMP_SPEED * JUMP_SPEED / (2.0 * GRAVITY),
             gravity: GRAVITY,
+            fall: None,
+            breath_hold: None,
+            oxygen: None,
+            swim_sprint: 1.0,
         })
     }
 }
@@ -245,6 +250,90 @@ fn find_ledge(sq: &SpatialQuery, filter: &SpatialQueryFilter, pos: Vec3, fwd: Ve
     Some((top, h, h < 1.3 && clear_ahead && drop))
 }
 
+/// The wingsuit or parachute in flight, by the game's figures: the suit
+/// flies as its hang glider cousin does (`vehicles::Glide`), the movement
+/// keys banking it and pitching its nose down (it has no nose-up: pulling
+/// back brakes); the canopy drifts on its heading at its own speeds and
+/// sink. The view turns with either, within its look limits.
+#[derive(Default)]
+pub(crate) struct Flight {
+    glide: Option<crate::vehicles::Glide>,
+    mode: AirMode,
+    /// How long the ground has been closer than the auto-parachute's time.
+    close: f32,
+}
+
+impl Flight {
+    /// Flies a frame; false when there is nothing for it to fly (on foot,
+    /// in free fall, or without the game's figures).
+    fn fly(&mut self, p: &mut Player, h: &fc3_formats::handling::Handling, axis: Vec2, clearance: f32, chute_owned: bool, dt: f32) -> bool {
+        let (Some(g), Some(c)) = (h.glider, h.chute) else { return false };
+        if p.air == AirMode::None {
+            *self = Flight::default();
+            return false;
+        }
+        let fresh = self.mode != p.air;
+        self.mode = p.air;
+        let horizontal = Vec2::new(p.velocity.x, p.velocity.z).length();
+        // Into the suit as it falls: its nose down the fall, at the fall's
+        // speed (or its cruising speed).
+        let glide = self.glide.get_or_insert_with(|| {
+            crate::vehicles::Glide::launch(p.yaw, p.velocity.y.atan2(horizontal.max(0.1)).clamp(-g.max_pitch, 0.0), p.velocity.length().max(g.base_speed))
+        });
+        if fresh {
+            glide.flown = 0.0;
+        }
+        let before = glide.yaw;
+        // The stick: left positive, nose down positive.
+        let stick = Vec2::new(-axis.x, axis.y);
+        match p.air {
+            AirMode::Wingsuit => {
+                let nose = if c.pitch_up { stick.y } else { stick.y.max(0.0) };
+                let brake = !c.pitch_up && stick.y < -0.1;
+                let sink = glide.step(&g, Vec2::new(stick.x, nose), brake, clearance, 1.0, dt);
+                p.velocity = glide.velocity(sink);
+                // The canopy opens by itself just short of the ground.
+                let eta = clearance / (-p.velocity.y).max(0.1);
+                self.close = if eta < c.auto_eta { self.close + dt } else { 0.0 };
+                if chute_owned && self.close > c.auto_hold {
+                    p.air = AirMode::Chute;
+                }
+            }
+            AirMode::Chute => {
+                glide.flown += dt;
+                glide.roll += (stick.x * c.max_roll - glide.roll) * (c.side_rate * dt).min(1.0);
+                glide.turn = glide.roll * g.roll_to_turn.abs();
+                glide.yaw += glide.turn * dt;
+                let ahead = (c.base_speed + stick.y * (c.max_speed - c.base_speed)).clamp(0.0, c.max_speed);
+                glide.speed += (ahead - glide.speed) * (c.front_rate * dt).min(1.0);
+                let heading = Quat::from_rotation_y(glide.yaw) * Vec3::NEG_Z * glide.speed;
+                let flat = Vec3::new(p.velocity.x, 0.0, p.velocity.z);
+                let flat = flat + (heading - flat) * (c.front_rate * dt).min(1.0);
+                // Opening, its pull brakes the fall (its impulse over its
+                // time, on the suit's mass); then it settles to its sink.
+                let mut vy = p.velocity.y + (c.sink - p.velocity.y) * (dt * 2.0).min(1.0);
+                if glide.flown < c.deploy_time && p.velocity.y < c.sink && h.mass > 0.0 {
+                    let pull = c.deploy_impulse / h.mass / c.deploy_time.max(0.01);
+                    vy = (p.velocity.y + pull * dt).min(c.sink).max(vy);
+                }
+                p.velocity = Vec3::new(flat.x, vy, flat.z);
+            }
+            AirMode::None => {}
+        }
+        // The view turns with it, and looks about only so far.
+        p.yaw += glide.yaw - before;
+        let [pitch_lo, pitch_hi, yaw_lo, yaw_hi] = h.look;
+        if pitch_hi > pitch_lo {
+            p.pitch = p.pitch.clamp((-pitch_hi.to_radians()).max(-1.5), (-pitch_lo.to_radians()).min(1.5));
+        }
+        if yaw_hi > yaw_lo {
+            let ahead = (p.yaw - glide.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+            p.yaw = glide.yaw + ahead.clamp(-yaw_hi.to_radians(), -yaw_lo.to_radians());
+        }
+        true
+    }
+}
+
 /// Falling with gear (see `freefall`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum AirMode {
@@ -260,6 +349,15 @@ pub struct PlayerCamera;
 /// Whether gameplay input (mouse look, firing) is active.
 #[derive(Resource, Default)]
 pub struct InputCaptured(pub bool);
+
+/// The player's head turned within a first-person scene (radians), and
+/// seconds since he last turned it.
+#[derive(Resource, Default)]
+pub struct SceneHeadLook {
+    pub yaw: f32,
+    pub pitch: f32,
+    idle: f32,
+}
 
 fn spawn_player(mut commands: Commands, args: Res<Args>) {
     let player = commands
@@ -309,24 +407,102 @@ fn spawn_player(mut commands: Commands, args: Res<Args>) {
     ));
 }
 
-fn player_look(
+pub(crate) fn player_look(
     actions: Res<crate::controls::ActionState>,
     state: Res<State<crate::menu::GameState>>,
     cinematic: Res<crate::fp::Cinematic>,
     sway: Res<crate::weapons::ScopeSway>,
     wheel: Res<crate::weapon_wheel::WeaponWheel>,
     shake: Res<crate::shake::ViewShake>,
-    mut player: Query<(&mut Player, &mut Transform), Without<PlayerCamera>>,
+    mut player: Query<(&mut Player, &mut Transform, Option<&crate::weapons::Inventory>), Without<PlayerCamera>>,
     mut camera: Query<&mut Transform, With<PlayerCamera>>,
+    (time, captured, mut next_log): (Res<Time>, Res<InputCaptured>, Local<f32>),
+    (cinema, fp, mut head): (Res<crate::cinema::Cinema>, Res<crate::fp::FpState>, ResMut<SceneHeadLook>),
+    assist: Option<Res<crate::aim_assist::AimAssist>>,
+    mut stuck: Local<LookWatch>,
 ) {
-    let Ok((mut p, mut t)) = player.single_mut() else { return };
-    // A takedown holds the view, and the weapon wheel takes the look input.
-    if *state.get() == crate::menu::GameState::Playing && cinematic.0 <= 0.0 && !wheel.open {
-        p.yaw -= actions.look.x;
-        p.pitch = (p.pitch + actions.look.y).clamp(-1.5, 1.5);
+    // A first-person scene lets the head turn within its clip's limits,
+    // turning back once left alone.
+    match cinema.head_look.filter(|_| cinema.view.is_some() && *state.get() == crate::menu::GameState::Playing) {
+        Some(h) => {
+            let dt = time.delta_secs();
+            let turn = actions.look * h.speed.max(0.1) * 0.5;
+            if turn.length_squared() > 0.0 {
+                head.idle = 0.0;
+                head.yaw = (head.yaw - turn.x).clamp(h.min[2].to_radians(), h.max[2].to_radians());
+                head.pitch = (head.pitch + turn.y).clamp(h.min[0].to_radians(), h.max[0].to_radians());
+            } else {
+                head.idle += dt;
+                if head.idle > h.return_delay {
+                    let back = (dt * h.return_speed.max(0.1)).min(1.0);
+                    head.yaw *= 1.0 - back;
+                    head.pitch *= 1.0 - back;
+                }
+            }
+        }
+        None => *head = SceneHeadLook::default(),
+    }
+    let Ok((mut p, mut t, inv)) = player.single_mut() else { return };
+    // (Where the view was left last frame, after anything else had its say.)
+    let (yaw0, pitch0) = (p.yaw, p.pitch);
+    // FC3_LOOK_DEBUG: what holds the view, twice a second.
+    if std::env::var_os("FC3_LOOK_DEBUG").is_some() && time.elapsed_secs() >= *next_log {
+        *next_log = time.elapsed_secs() + 0.5;
+        info!(
+            "look: state {:?} captured {} look {:.4?} pad {} takedown {:.2} wheel {} yaw {:.3} pitch {:.3} mounted {} cutscene {} scene_view {} fp_takedown {} head {:.2} {:.2} limits {}",
+            state.get(),
+            captured.0,
+            actions.look,
+            actions.gamepad_active,
+            cinematic.0,
+            wheel.open,
+            p.yaw,
+            p.pitch,
+            p.mounted.is_some(),
+            cinema.cutscene(),
+            cinema.view.is_some(),
+            fp.in_takedown(),
+            head.yaw,
+            head.pitch,
+            cinema.head_look.is_some()
+        );
+    }
+    // A takedown or a scene's camera holds the view, and the weapon wheel
+    // takes the look input. A scene playing without a camera of its own
+    // (the player's own view, as when following Grant out of the camp)
+    // leaves the view the player's to turn.
+    let own_view_in_scene = cinema.cutscene() && cinema.view.is_none() && !fp.in_takedown();
+    let held = cinematic.0 > 0.0 && !own_view_in_scene;
+    if *state.get() == crate::menu::GameState::Playing && !held && !wheel.open {
+        let mut look = actions.look * aimed_look(inv, actions.gamepad_active);
+        // (A pad's turn eased over a near target.)
+        if actions.gamepad_active {
+            if let Some(a) = assist.as_ref() {
+                look = a.ease_stick(look);
+            }
+        }
+        p.yaw -= look.x;
+        p.pitch = (p.pitch + look.y).clamp(-1.5, 1.5);
     }
     if let Some(arcs) = p.mounted {
         (p.yaw, p.pitch) = arcs.clamp(p.yaw, p.pitch);
+    }
+    // The mouse moving for a while in play with the view not turning (no
+    // scene camera holding it): say once what holds it.
+    let now = time.elapsed_secs();
+    // (At the wheel the head stops at the vehicle's limits.)
+    let input = actions.look.length() > 1e-4 && *state.get() == crate::menu::GameState::Playing && cinema.view.is_none() && !p.driving;
+    if stuck.note(now, input, yaw0, pitch0) {
+        warn!(
+                "look: the mouse is moving but the view isn't turning (held {held}: scene hold {:.2}, cutscene {}, takedown {}; weapon wheel {}; on a gun {}; input captured {}; pad {})",
+                cinematic.0,
+                cinema.cutscene(),
+                fp.in_takedown(),
+                wheel.open,
+                p.mounted.is_some(),
+                captured.0,
+                actions.gamepad_active
+            );
     }
     t.rotation = Quat::from_rotation_y(p.yaw);
     if let Ok(mut ct) = camera.single_mut() {
@@ -335,6 +511,49 @@ fn player_look(
             Quat::from_rotation_y(sway.offset.x + shake.yaw) * Quat::from_rotation_x(p.pitch + sway.offset.y + shake.pitch) * Quat::from_rotation_z(shake.roll);
         ct.translation.y = p.eye - HALF_HEIGHT;
     }
+}
+
+/// Watching the mouse against the view (see `player_look`): since when the
+/// view has held still under it, from where, and whether that was said.
+#[derive(Default)]
+pub(crate) struct LookWatch {
+    since: f32,
+    yaw: f32,
+    pitch: f32,
+    last_input: f32,
+    warned: bool,
+}
+
+impl LookWatch {
+    /// Notes a frame: whether the mouse (or stick) is turning, and where the
+    /// view stood as the frame began. True once, when the view has held still
+    /// under a turning mouse for two seconds (half a second without input
+    /// starts the watch afresh).
+    fn note(&mut self, now: f32, input: bool, yaw: f32, pitch: f32) -> bool {
+        if !input {
+            return false;
+        }
+        let fresh = now - self.last_input > 0.5 || (yaw - self.yaw).abs() + (pitch - self.pitch).abs() > 0.01;
+        self.last_input = now;
+        if fresh {
+            *self = LookWatch { since: now, yaw, pitch, last_input: now, warned: false };
+            return false;
+        }
+        if now - self.since > 2.0 && !self.warned {
+            self.warned = true;
+            return true;
+        }
+        false
+    }
+}
+
+/// How much slower the view turns down the sights (across, and up and
+/// down): the weapon's own aimed sensitivity, a pad's or the mouse's, as far
+/// as the sights are up.
+fn aimed_look(inv: Option<&crate::weapons::Inventory>, pad: bool) -> Vec2 {
+    let Some((a, blend)) = inv.filter(|i| !i.slots.is_empty()).and_then(|i| i.def().aim.map(|a| (a, i.aim_blend))) else { return Vec2::ONE };
+    let across = 1.0 + ((if pad { a.look_pad } else { a.look_mouse }) - 1.0) * blend;
+    Vec2::new(across, across * (1.0 + (a.look_vertical - 1.0) * blend))
 }
 
 /// Footstep sounds paced by ground speed, on whatever is underfoot (wading
@@ -616,7 +835,7 @@ fn scripted_keys(args: &Args, time: &Time, start: &mut Option<f32>) -> (bool, bo
     (true, t > args.walk_secs * 0.5, (t % 4.0) < 0.05 && t > 1.0)
 }
 
-fn player_move(
+pub(crate) fn player_move(
     time: Res<Time>,
     args: Res<Args>,
     mut script_start: Local<Option<f32>>,
@@ -628,22 +847,25 @@ fn player_move(
     cinematic: Res<crate::fp::Cinematic>,
     move_and_slide: MoveAndSlide,
     heights: Res<Heightfield>,
-    mut player: Query<(Entity, &mut Player, &mut Transform, &Collider)>,
+    mut player: Query<(Entity, &mut Player, &mut Transform, &Collider, Option<&crate::weapons::Inventory>)>,
     progress: Res<crate::progression::Progress>,
     mut actions_out: MessageWriter<crate::fp::FpAction>,
     sway: Res<crate::weapons::ScopeSway>,
-    (scripted, collision_ids, mut next_collision_log, mut commands, body, mut stamina): (
+    (scripted, collision_ids, mut next_collision_log, mut commands, body, mut stamina, mut flight): (
         Res<crate::story::ScriptedPlayer>,
         Query<(Option<&crate::objects::PlacedId>, Option<&Name>, Option<&ChildOf>)>,
         Local<f32>,
         Commands,
         Res<PlayerBody>,
         Local<Option<f32>>,
+        Local<Flight>,
     ),
 ) {
     let body = body.0;
-    let Ok((entity, mut p, mut t, collider)) = player.single_mut() else { return };
+    let Ok((entity, mut p, mut t, collider, inv)) = player.single_mut() else { return };
     let mut collider = collider.clone();
+    // Down the sights, the weapon's slower pace on foot.
+    let aimed_pace = inv.filter(|i| !i.slots.is_empty()).and_then(|i| i.def().aim.map(|a| 1.0 + (a.move_speed - 1.0) * i.aim_blend)).unwrap_or(1.0);
     let dt = time.delta_secs().min(0.05);
     if dt <= 0.0 || p.spawning || p.driving || p.mounted.is_some() {
         return;
@@ -767,7 +989,9 @@ fn player_move(
     let speed = if p.dragging {
         DRAG_SPEED
     } else if p.swimming {
-        body.swim * perks.swim * if boosts.active(crate::syringes::Syringe::SprintBurst) { 1.3 } else { 1.0 }
+        // (The sprint key swims faster, as the game has it.)
+        let stroke = if key(Action::Sprint) { body.swim_sprint.max(1.0) } else { 1.0 };
+        body.swim * stroke * perks.swim * if boosts.active(crate::syringes::Syringe::SprintBurst) { 1.3 } else { 1.0 }
     } else if p.crouching {
         // (`SP_CrouchRun`: the sprint key hurries a crouch along.)
         if perks.crouch_run && key(Action::Sprint) {
@@ -785,6 +1009,7 @@ fn player_move(
     } else {
         body.walk
     };
+    let speed = speed * if p.swimming || p.dragging { 1.0 } else { aimed_pace };
     // Sliding: momentum carries on (friction slows it, a little steering),
     // instead of accelerating toward the wished velocity.
     if was_sliding && p.sliding.is_some() {
@@ -837,7 +1062,13 @@ fn player_move(
                 m => m,
             };
         }
+        // The wingsuit and its parachute fly by the game's figures when it
+        // has them (`Flight::fly`), else by ours below.
+        let clearance = feet - heights.height_at(t.translation).unwrap_or(f32::MIN);
+        let chute_owned = progress.upgrade(crate::freefall::PARACHUTE) > 0;
+        let flown = crate::vehicles::wingsuit().is_some_and(|h| flight.fly(&mut p, h, axis, clearance, chute_owned, dt));
         match p.air {
+            _ if flown => {}
             AirMode::None => p.velocity.y -= body.gravity * dt,
             AirMode::Wingsuit => {
                 // Gliding along the view: diving trades height for speed,
@@ -1011,6 +1242,119 @@ fn step_advances(wanted: Vec3, achieved: Vec3, stepped: Vec3) -> bool {
 #[cfg(test)]
 mod step_tests {
     use super::*;
+
+    /// A wingsuit and parachute with round figures of the kind the game's
+    /// have.
+    fn suit() -> fc3_formats::handling::Handling {
+        let g = fc3_formats::handling::Glider {
+            max_roll: 0.5,
+            roll_rate: 2.0,
+            roll_speed: 6.0,
+            roll_acc: 3.0,
+            max_pitch: 0.8,
+            pitch_rate: 1.5,
+            pitch_speed: 6.0,
+            pitch_acc: 1.5,
+            pitch_to_speed: -8.0,
+            roll_to_turn: -2.0,
+            turn_acc: 1.5,
+            turn_full_speed: 10.0,
+            base_speed: 12.0,
+            sink: -4.0,
+            low_height: 10.0,
+            low_sink: -0.5,
+            braking: 0.5,
+            brake_restore: 2.0,
+            brake_floor: 3.0,
+            max_speed: 50.0,
+            ..default()
+        };
+        let c = fc3_formats::handling::Chute {
+            base_speed: 5.0,
+            max_speed: 8.0,
+            sink: -6.0,
+            max_roll: 0.3,
+            side_rate: 3.0,
+            front_rate: 3.0,
+            deploy_impulse: 2000.0,
+            deploy_time: 0.5,
+            auto_eta: 0.3,
+            auto_hold: 0.1,
+            pitch_up: false,
+        };
+        fc3_formats::handling::Handling { mass: 200.0, glider: Some(g), chute: Some(c), look: [-30.0, 90.0, -80.0, 80.0], ..default() }
+    }
+
+    fn fly(f: &mut Flight, p: &mut Player, h: &fc3_formats::handling::Handling, axis: Vec2, clearance: f32, seconds: f32) {
+        let dt = 1.0 / 60.0;
+        for _ in 0..(seconds / dt) as usize {
+            assert!(f.fly(p, h, axis, clearance, true, dt));
+        }
+    }
+
+    #[test]
+    fn the_wingsuit_flies_on_the_keys_and_the_view_follows_it() {
+        let h = suit();
+        let mut f = Flight::default();
+        let mut p = Player { grounded: false, air: AirMode::Wingsuit, velocity: Vec3::new(0.0, -20.0, 0.0), ..test_player() };
+        // Out of the fall into a glide, settling to cruising.
+        fly(&mut f, &mut p, &h, Vec2::ZERO, 200.0, 8.0);
+        let flat = Vec2::new(p.velocity.x, p.velocity.z).length();
+        assert!((flat - 12.0).abs() < 1.0 && (p.velocity.y + 4.0).abs() < 1.0, "{:?}", p.velocity);
+        // No nose up: pulling back brakes instead.
+        fly(&mut f, &mut p, &h, Vec2::new(0.0, -1.0), 200.0, 3.0);
+        assert!(p.velocity.y < 0.0 && Vec2::new(p.velocity.x, p.velocity.z).length() < 11.0, "{:?}", p.velocity);
+        // Left on the keys turns it left, and the view with it.
+        let yaw = p.yaw;
+        fly(&mut f, &mut p, &h, Vec2::new(-1.0, 0.0), 200.0, 2.0);
+        assert!(p.yaw > yaw + 0.5, "{} -> {}", yaw, p.yaw);
+        // The view looks only so far from its heading, and not far up.
+        p.yaw += 3.0;
+        p.pitch = 1.2;
+        fly(&mut f, &mut p, &h, Vec2::ZERO, 200.0, 0.1);
+        let heading = f.glide.unwrap().yaw;
+        assert!((p.yaw - heading).abs() <= 80f32.to_radians() + 1e-3 && p.pitch <= 30f32.to_radians() + 1e-3);
+    }
+
+    #[test]
+    fn the_parachute_opens_by_itself_short_of_the_ground_and_drifts_down() {
+        let h = suit();
+        let mut f = Flight::default();
+        let mut p = Player { grounded: false, air: AirMode::Wingsuit, velocity: Vec3::new(0.0, -10.0, -12.0), ..test_player() };
+        fly(&mut f, &mut p, &h, Vec2::new(0.0, 1.0), 1.0, 0.5);
+        assert_eq!(p.air, AirMode::Chute);
+        // Opening, it pulls the fall up hard; then it drifts at its speeds.
+        let mut p = Player { grounded: false, air: AirMode::Chute, velocity: Vec3::new(0.0, -30.0, 0.0), ..test_player() };
+        let mut f = Flight::default();
+        fly(&mut f, &mut p, &h, Vec2::ZERO, 200.0, 0.5);
+        assert!(p.velocity.y > -15.0, "{:?}", p.velocity);
+        fly(&mut f, &mut p, &h, Vec2::new(0.0, 1.0), 200.0, 5.0);
+        let flat = Vec2::new(p.velocity.x, p.velocity.z).length();
+        assert!((p.velocity.y + 6.0).abs() < 0.1 && (flat - 8.0).abs() < 0.2, "{:?}", p.velocity);
+    }
+
+    #[test]
+    fn a_view_held_still_under_a_turning_mouse_is_reported_once() {
+        let mut w = LookWatch::default();
+        // Turning freely: never.
+        for i in 0..300 {
+            assert!(!w.note(i as f32 * 0.016, true, i as f32 * 0.01, 0.0));
+        }
+        // Held still while the mouse keeps moving: once, after two seconds.
+        let mut said = 0;
+        for i in 0..300 {
+            if w.note(5.0 + i as f32 * 0.016, true, 1.0, 0.0) {
+                said += 1;
+                assert!(i as f32 * 0.016 > 2.0);
+            }
+        }
+        assert_eq!(said, 1);
+        // No input: nothing, and a pause starts the watch afresh (so it can
+        // be said again).
+        assert!(!w.note(20.0, false, 1.0, 0.0));
+        let again = (0..30).filter(|i| w.note(21.0 + *i as f32 * 0.1, true, 1.0, 0.0)).count();
+        assert_eq!(again, 1);
+    }
 
     #[test]
     fn step_progress_is_consistent_across_frame_rates_and_rejects_sideways_motion() {

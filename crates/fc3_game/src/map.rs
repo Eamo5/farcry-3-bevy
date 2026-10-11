@@ -44,8 +44,25 @@ impl Default for MinimapReach {
     }
 }
 
-fn load_minimap(info: Option<Res<CacheInfo>>, mut reach: ResMut<MinimapReach>) {
+/// The player's HUD numbers from the game (`fc3_formats::body::Hud`): the
+/// camera's tagging range, how near collectibles show on the minimap, and
+/// how often unspent skill points are brought up.
+#[derive(Resource, Clone, Copy)]
+pub struct HudParams(pub fc3_formats::body::Hud);
+
+impl Default for HudParams {
+    fn default() -> Self {
+        HudParams(fc3_formats::body::Hud { tag_range: 180.0, collectibles: 0.0, skill_reminder: 0.0 })
+    }
+}
+
+fn load_minimap(info: Option<Res<CacheInfo>>, mut reach: ResMut<MinimapReach>, mut hud: ResMut<HudParams>) {
     let Some(info) = info else { return };
+    if let Ok(h) =
+        std::fs::read_to_string(info.root.join(fc3_formats::body::HUD_REL)).map_err(anyhow::Error::from).and_then(|t| fc3_formats::body::Hud::from_text(&t))
+    {
+        hud.0 = h;
+    }
     if let Ok(m) = std::fs::read_to_string(info.root.join(fc3_formats::body::MINIMAP_REL))
         .map_err(anyhow::Error::from)
         .and_then(|t| fc3_formats::body::Minimap::from_text(&t))
@@ -82,6 +99,7 @@ impl Plugin for MapPlugin {
             .init_resource::<MapAutomation>()
             .init_resource::<Gps>()
             .init_resource::<MinimapReach>()
+            .init_resource::<HudParams>()
             .add_systems(OnExit(GameState::Loading), load_minimap)
             .add_systems(Update, update_reach.before(update_minimap))
             .add_systems(Startup, setup_fog)
@@ -674,6 +692,7 @@ fn update_minimap_icons(
     mut commands: Commands,
     objectives: Res<crate::story::ObjectiveMarkers>,
     reach: Res<MinimapReach>,
+    (hud, pickups): (Res<HudParams>, Query<(&GlobalTransform, &crate::pickups::Pickup)>),
 ) {
     for e in &dots {
         commands.entity(e).despawn();
@@ -716,6 +735,43 @@ fn update_minimap_icons(
             MinimapDot,
             ChildOf(mini),
         ));
+    }
+    // Collectibles near enough (the game's radius): relics gold, letters
+    // white, memory cards blue.
+    if hud.0.collectibles > 0.0 {
+        for (gt, pk) in &pickups {
+            let colour = match pk.kind {
+                crate::pickups::PickupKind::Relic => Color::srgb(0.95, 0.78, 0.25),
+                crate::pickups::PickupKind::Letter => Color::srgb(0.95, 0.95, 0.9),
+                crate::pickups::PickupKind::MemoryCard => Color::srgb(0.3, 0.6, 1.0),
+                _ => continue,
+            };
+            let d = gt.translation() - t.translation;
+            if Vec2::new(d.x, d.z).length() > hud.0.collectibles {
+                continue;
+            }
+            let local = rot.inverse() * Vec2::new(d.x, d.z) / reach.radius;
+            if local.length() > 0.92 {
+                continue;
+            }
+            let px = (local * 0.5 + Vec2::splat(0.5)) * MINIMAP_SIZE;
+            commands.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(px.x - 4.5),
+                    top: Val::Px(px.y - 4.5),
+                    width: Val::Px(9.0),
+                    height: Val::Px(9.0),
+                    border: UiRect::all(Val::Px(1.0)),
+                    ..default()
+                },
+                BackgroundColor(colour),
+                BorderColor::all(Color::srgb(0.05, 0.05, 0.05)),
+                UiTransform::from_rotation(Rot2::degrees(45.0)),
+                MinimapDot,
+                ChildOf(mini),
+            ));
+        }
     }
     // Radio towers: amber until taken, then green.
     for (i, at) in ways.data.towers.iter().enumerate() {

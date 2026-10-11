@@ -88,9 +88,20 @@ No game data is included in this repository, and none is written into it.
 - **Fire**: molotovs, the flamethrower and explosions set grass alight; fire spreads downwind
   through grass and bushes, burns them away, scorches the ground and burns whatever stands in it.
   Rain damps it down.
-- **Wildlife**: 15 species from the game's animal models, skins and clips: deer, goats, boar,
-  tapirs, chickens, macaques, cassowaries, buffalo, wild dogs, leopards, tigers, bears, komodo
-  dragons, crocodiles at the shore and sharks in deep water, with schools of the game's reef fish (yellow and red reef fish, emperor and French angelfish) cruising the shallows and scattering from a diver. Each behaves by its personality in the game's
+- **Aiming**: each weapon aims with its own FOV, sight time, and slower walk and turn (pad or mouse)
+  from the game's data; with a gamepad the game's aim assist for the difficulty follows a target
+  under the sights, snaps the sights onto it as they come up, and bends shots toward it (an
+  option turns it off).
+- **Enemies' senses**: guards see through the game's view volumes for the player's posture and their
+  state (a narrow one while unaware, wider as they grow alert), find bodies and spot live grenades
+  in the game's times, and run clear of a grenade's blast.
+- **Wildlife**: 28 kinds of animal from the game's models, graphic kits (their skin variants) and clips: deer, goats, boar,
+  wild and kept pigs, tapirs, chickens, macaques, cassowaries, buffalo, wild dogs, thylacines, leopards,
+  tigers, bears, komodo dragons, crocodiles at the shore and sharks in deep water, and the small and
+  the swimming: rats, lizards, crabs, crows (which fly off and glide back down), giant tortoises
+  (which hide in their shells), river fish, sea turtles, jellyfish, moray eels and manta rays, spawned where
+  the game's wildlife regions put them (each region's own mix and distances, within the game's
+  budget of groups) and moving at their archetypes' paces, with schools of the game's reef fish (yellow and red reef fish, emperor and French angelfish) cruising the reefs the game's wildlife regions stock with them and scattering from a diver. Each behaves by its personality in the game's
   data: it notices someone by sight (its sensory system), smell, a moving vehicle or sounds of
   each kind, stops and watches while aware, and then acts: prey keep off or bolt, boar and
   buffalo charge whoever comes too near or hurts them, and predators (cassowaries among them)
@@ -116,10 +127,14 @@ No game data is included in this repository, and none is written into it.
   and stick; fire arrows that set alight where they land and explosive arrows, bought by the five
   and nocked with the reload key), with recoil, spread, reloading, aiming down sights and suppressed variants that
   barely alert anyone. Each weapon fires with its own sounds from the game (suppressed
-  versions, empty clicks), and an automatic burst ends with its tail and echo. Shops sell the game's attachments for the guns you carry: suppressors,
-  reflex and ACOG sights, a high-power sniper scope, and extended magazines. Each mounts on the
+  versions, empty clicks), and an automatic burst ends with its tail and echo. Shops sell the game's attachments for the guns you carry, as each weapon's shop list has them: suppressors,
+  the sights (two reflex sights, optical, ACOG, illuminated iron sights; one fitted at a time, those bought kept to swap back on
+  for nothing), the high-power and illuminated sniper scopes, the bow's barrel extension and larger magazines. Each mounts on the
   weapon's own attachment points and changes how it handles. Sniper rifles aim through a
-  full-screen scope with a duplex reticle. Weapons show their real metal and wood finishes and are held by first-person
+  full-screen scope: the game's own scope mask round the view (the high-power and illuminated
+  scopes' sharper one) with a duplex reticle, lit red in the illuminated scope. The game's screen overlays also
+  put blood on the screen with hits and low health, an animal's claw marks across it when one strikes, and the
+  dark closing in as the air runs out underwater. Weapons show their real metal and wood finishes and are held by first-person
   arms playing each weapon's own clips (breathing idle, sights, every shot, reloads, draw, walk and
   sprint, machete swings, throws); swimming, ladders, zip lines and the driver's seat get their own
   arm animations too. Also grenades and molotovs (in hand through the throw), explosions,
@@ -202,9 +217,13 @@ No game data is included in this repository, and none is written into it.
   world's zip lines (humming faster as you pick up speed), climb its ladders, and see the power lines strung
   between poles. Climb the 18 radio towers and take them over to reveal the map around them and
   free a weapon in every shop. Shops sell a parachute and a wingsuit. Jump while falling from a
-  height to open the wingsuit, then jump again to open the parachute. The wingsuit glides fast
-  (dive to speed up, pull up to stretch the glide; flying into the ground is fatal). The
-  parachute drifts down slowly and can be steered. Both use the game's own first-person clips:
+  height to open the wingsuit, then jump again to open the parachute. Both fly by the game's own
+  wingsuit figures and are steered with the movement keys while the mouse looks about (as far as the
+  suit's look limits). The wingsuit glides at 12 m/s and sinks 4 m/s (barely at all skimming the
+  ground); W noses it down to dive (up to 60 m/s) and S brakes (it can't climb); A and D bank it into
+  turns. Flying into the ground is fatal, but if you own the parachute it opens by itself a moment short
+  of it. The parachute pulls hard as it opens, then drifts at 4.5 m/s (7.5 pushed on) and sinks
+  6 m/s, banking gently into turns. Both use the game's own first-person clips:
   a long fall throws the arms out into a dive, and the wingsuit unfolds along them (the game's
   membrane, rigged to its own skeleton) and the canopy is pulled as each opens. The parachute
   shows its canopy overhead.
@@ -215,8 +234,27 @@ No game data is included in this repository, and none is written into it.
   syringe on hand and holding it injects. Underwater you hold your breath, and drown when it runs out.
 - **Vehicles**: the world's ~400 vehicle spawns: 4x4s, technicals, quad bikes, cars, buggies and
   trucks on raycast suspension (weight carried low at the axles), boats and jet skis that float, and
-  hang gliders. Wheels roll with the ground, the front ones and the steering wheel turn with the
-  steering. Parked vehicles keep their brake on. Vehicles take damage (hulls shrug off rounds but
+  hang gliders. The cars, trucks, buggies and quad bikes drive by their archetypes' own drivetrains (the
+  converter's `vehicles/handling.txt`, in the units the engine's own field notes give): their mass, the
+  engine's horsepower and revs through each gear of its gearbox (shifting at the game's km/h), cut off
+  at the game's speed (the 4x4's 20 m/s, 72 km/h, as in the original), its air drag, steering lock from
+  rest to top speed, and each wheel's grip, springs and dampers (standing on its tyres as modelled),
+  whether the engine drives it (front- and rear-wheel-drive cars as well as four-wheel drive) and whether
+  the handbrake holds it: Space pulls the handbrake, which locks the rear wheels and lets them slide.
+  The chassis is pressed down by its downforce and extra gravity, falls heavier once no wheel touches,
+  and only rights itself in the air if the game gives it a stabiliser. Boats run on their own motor (thrust per unit of mass, its revs
+  coming up at the game's rate), rudder angles and water friction ahead and to the side. Hang gliders
+  fly by the game's paraglider figures: a 2.2 s take-off run off the launch without controls, then the
+  stick banks and pitches the wing at the game's rates and angles, the bank turns it, nose down gains
+  speed (to 30 m/s) and nose up bleeds it until the nose drops back, the brake slows it to its floor and
+  left alone it settles back to cruising at 10 m/s, always sinking (less near the ground, fast when
+  broken), with gentler landing figures below 10 m. Getting off in flight drops you with its momentum
+  while the empty glider glides on until it comes down. At the wheel your head turns only as far as the
+  vehicle's own limits let it (an open 4x4 or quad bike looks far up but not down at your legs, closed
+  cars barely up, the hang glider far down). Every vehicle's
+  driving camera widens with speed by its own angles (the 4x4's 85 to 115 degrees by 55 km/h, as a share
+  of your field of view). Wheels roll with the
+  ground, the front ones and the steering wheel turn with the steering. Parked vehicles keep their brake on. Vehicles take damage (hulls shrug off rounds but
   not rockets, C4 or grenades; enemy fire into a car you're driving gets through to you too):
   they smoke, then catch fire and blow up a few seconds later, leaving a charred, smouldering
   wreck that can't be driven. Hold E at a damaged one (a tap still gets in) to patch it up with
@@ -402,7 +440,9 @@ showed 15 to 30 ms runs, so they are not yet pinned on this game.
 --animal-test clip a row of every animal species playing a clip (idle|walk|run|eat|die); "hunt"
                    releases one tiger 30 m out (try with --npc-test guards)
 --drive-test       drive the nearest car (FC3_DRIVE_KIND=boat|glider for others), logging speed;
-                   try at --pos -982,-205,107 (beside a technical), and it says why if there is none
+                   try at --pos -982,-205,107 (beside a technical), and it says why if there is none;
+                   a glider launches, banks left, dives and pulls up (try --pos -1746.5,-589.3,351.5),
+                   FC3_DRIVE_EXIT=secs gets out that far in and logs the fall
 --patrol-test      start road and boat patrols near the player (even close by), logging their progress
 --open-map         open the full map once playing; --journal / --options likewise
 --shop tab         open the shop once playing on a tab (0 supplies .. 7 bows, 8 attachments)
@@ -419,14 +459,14 @@ looks, `FC3_TRAVERSAL_TEST=zip|ladder|tower` rides, climbs or takes over the nea
 `FC3_PEACEFUL` keeps enemies away, `FC3_GOD` makes the player take no damage (hits are logged),
 `FC3_KIT_DEBUG` logs how each enemy was dressed (`FC3_KIT_PART=text` dresses each slot that has one in the part whose model names the text), `FC3_SHAKE_TEST` sets off a harmless blast 6 m ahead every 3 s and logs the view's peak shake, `FC3_DAMAGE_DEBUG` logs each hit on an enemy or animal (body part, damage taken and what each part has left), `FC3_SKILLS=all` grants every skill,
 `FC3_CLIMB_TEST=boxes` (with `--walk`) sets out a crate, a fence and a wall to climb and vault, `FC3_CONVOY_TEST` sends reinforcements to the nearest outpost (log with `--patrol-test`), `FC3_KILL_TEST=head|body|hit` shoots the `--npc-test` enemy (with `FC3_TD_SHOT` screenshots),
-`FC3_FREEFALL=chute|wingsuit` drops the player from 120 m and opens it (with `FC3_TD_SHOT` screenshots),
+`FC3_FREEFALL=chute|wingsuit` drops the player from 120 m and opens it (with `FC3_TD_SHOT` screenshots; the wingsuit dives, banks left and opens the parachute at `FC3_FREEFALL_HOLD` seconds, 4.5),
 `FC3_BIRD_TEST` looks at the nearest bird (`=close` rides behind one, with `--noclip`), `FC3_WRECK_TEST` logs nearby vehicles' damage (`=rocket` blasts the nearest one 25 s in, with `FC3_TD_SHOT` screenshots), `FC3_VILLAGER_TEST` logs the villagers nearby (`=panic` fires a shot among them 20 s in), `FC3_MELEE_TEST` (with `--npc-test fight:<role>` and `FC3_GOD`) keeps the player at arm's length from an enemy, `FC3_EFFECTS=Low|Medium|High|Ultra` overrides the post effects setting (`FC3_SSAO=0` leaves the ambient occlusion off, `FC3_DOF=0` the depth of field), `FC3_CONCEAL_TEST` logs how hidden the player is in the plants around them, `FC3_SLIDE_TEST` sprints then slides, logging speed and eye height, `FC3_REPAIR_TEST` (try at `--pos -978,-128,102` with `FC3_PEACEFUL`) knocks the nearest vehicle down to 40% and holds E beside it, logging the repair, `FC3_NEAR_DEBUG` logs the placed objects within 15 m (entity, model and material paths) 25 s in, `FC3_TAG_TEST` (with `--npc-test guards`) holds the tag key from 6 s in, `FC3_SPOT_TEST[=kind]` (with `--noclip` near an outpost) looks at the nearest posted guard, `FC3_SPOT_DEBUG` logs the guard spots taken, `FC3_SFX_DEBUG` logs each one-shot sound event and what it resolves to, `FC3_SURFACE_DEBUG` logs the surface under each footstep, `FC3_SURFACE_TEST` probes the ground on a 2 m grid around the player 20 s in and logs the surfaces found per model, `FC3_CLIP_SOUND_DEBUG` logs each clip a rig starts with its number of sound events, `FC3_WHEEL_TEST` holds the weapon wheel open 20 s in and picks the weapon to the right, `FC3_REGION_DEBUG` logs the sound region every two seconds, `FC3_DIFFICULTY=Casual|Adventurer|Warrior|Infamous` overrides the difficulty setting, `FC3_SKY_FILL=2` sets how much the sky's fill light is boosted by day (`FC3_SKY_PROBE_GAIN=0.7` scales the sky-colour light probe; with the game's grade both come from its presets unless set), `FC3_NO_HORIZON` turns off the distant land's horizon-map shadows, `FC3_NO_FOG` the world's haze in clear weather, `FC3_GPS_DEBUG` logs how the road network for the GPS hangs together and each route planned (`FC3_WAYPOINT=x,y` sets a waypoint at Dunia x, y from the start), `FC3_FISH_TEST` puts a school of reef fish just ahead of the player, `FC3_CAGE_TEST` shoots the nearest animal cage open 20 s in and logs the predators near it, `FC3_SHAFTS=strength,threshold` tunes the sun shafts (`0` turns them off) and `FC3_SHAFTS_DEBUG` logs where the sun is on screen and their strength, `FC3_PERF` logs frame times (average, 99th percentile, worst), entity counts and the distinct materials in view (each non-bindless one draws as a batch of its own) every five seconds wherever the player is, `FC3_GPU_TIMING` logs each render pass's CPU and GPU time every ten seconds (building with `--features profile` also logs the time each system takes per frame), `FC3_NO_VEG=all|grass|mesh|tree` leaves out vegetation, `FC3_SHADOW_PROXY=0` makes the original-shader props and terrain cast their own shadows instead of through shared-material proxies, `FC3_SHADOW_LOD=0` keeps small casters casting at any distance, `FC3_NO_VISTA`, `FC3_NO_FAR` and `FC3_NO_CUTOUT` leave out the far tree billboards, the far terrain and the original-shader cut-outs (which then use the standard material), `FC3_NO_BLEND` keeps blended overlays (dirt, blood, foam) on the standard material, `FC3_ORIG_RANGE=metres` sets how near props use the original shaders (150 m), `FC3_RESOLUTION=WxH` sizes the window, `FC3_UPLOAD_MB=megabytes` sets how much texture data goes to the GPU per frame (0: no limit; `FC3_MESH_UPLOAD_MB`, 3, the same for streamed models' and the terrain's mesh data), `FC3_GAME_BLOOM=0` uses Bevy's bloom instead of the game's, `FC3_NO_SSS` leaves out the light through leaves, `FC3_GRADE=0` keeps Bevy's AgX tone mapping (and the exposure set by eye for it, and Bevy's bloom) instead of the game's colour grade (`fc3tool grade` prints the game's tone curve as the converter derives it, `FC3_GRADE_DEBUG` with it each shader variant tried), `FC3_MESH_DEBUG` logs each frame's burst of new meshes (how many, how big, where from, how long Bevy's mesh allocator took) and each growth of its GPU buffers (`FC3_MESH_SLAB_MB=min,max` sets their sizes), `FC3_TOUR_SPEED=m/s` sets the `--tour` flight speed (60), `FC3_HITCH` logs every frame over 25 ms with where the main thread's time went (physics, transforms, visibility and the rest) and what streamed in with it, `FC3_PAINT=Tribal|Urban|Tiger|Desert` paints the starting weapon if it takes that paint, `FC3_ARROWS=fire|explosive` starts with ten of each special arrow and that kind nocked, `FC3_VEHICLE_DEBUG` logs each parked vehicle as it appears (and any still waiting for the ground under it to load), `FC3_TURRET_TEST` gets on the nearest mounted gun, swings it and fires until it overheats (logging the heat,
 `FC3_TD_SHOT` screenshots), `FC3_GUNNER_TEST` sends a pirate onto the nearest gun to fire at the player
 (`=stay` keeps the player at `--pos`), `FC3_ARMED_TEST` parks an armed technical (`FC3_ARMED_KIND=4x4|Boat` for others) ahead and gets on its gun,
 `FC3_EXPLOSIVES` starts with three C4 and three mines, and `FC3_EXPLOSIVES_TEST` (with it and `--npc-test guards`)
 lays a mine, throws a C4 at the guards, sets it off and walks a survivor onto the mine, logging their health
 (`=pad` does it all through a virtual gamepad's D-pad),
-`FC3_AIM` holds aim down the sights, `FC3_ATTACH=all` fits every weapon with all it can take, `FC3_ACTION_TEST=syringe|manual[:bullet|explosion|melee|fire|drown]|body|plant|skin[:large]` plays a
+`FC3_AIM` holds aim down the sights, `FC3_ATTACH=all` fits every weapon with all it can take (its first sight; `=reflexb`, `=acog` and so on fit that one only), `FC3_ACTION_TEST=syringe|manual[:bullet|explosion|melee|fire|drown]|body|plant|skin[:large]` plays a
 first-person action (screenshots via `FC3_TD_SHOT` as below), `FC3_NPC_DIST=metres` brings the single
 `--npc-test` enemy closer, `FC3_TAKEDOWN_MODE=above[_front|_back|_left|_right]|double|front|chain|grenade|pistol|drag|below` varies `--takedown-test` (`grenade` with `--npc-test crowd` and `FC3_SKILLS=all`; `pistol` with `--npc-test crowd` and `FC3_SKILLS=front_takedown,pistol_takedown`, since `FC3_SKILLS` also takes a list; `below` with `FC3_CLIMB_TEST=boxes`, which puts a guard on the course's wall; `below_water` swims out to the nearest deep water under a guard standing just above the surface) (with `FC3_TD_SHOT=0.5,1.2` it also captures `<screenshot>_tdN.png` that long after the strike), `FC3_FP_POSE=idle|iron|shot|reload|draw|sprint|walk`
 (with `FC3_FP_TIME=seconds`) holds a first-person pose, `FC3_NAV_TEST` drives the menus with a virtual

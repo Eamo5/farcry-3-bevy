@@ -11,7 +11,12 @@ use anyhow::{bail, Result};
 use crate::fcb::Object;
 
 pub const BODY_REL: &str = "characters/body.txt";
-const MAGIC: &str = "fc3-body 2";
+const MAGIC: &str = "fc3-body 4";
+
+/// Whether a cached table is in this version's form.
+pub fn is_current(text: &str) -> bool {
+    text.lines().next().map(str::trim) == Some(MAGIC)
+}
 const PLAYER: &str = "player:MainCharacter/PawnPlayer";
 const SERVICE: &str = "countersservice:counters.countersservice";
 
@@ -35,6 +40,63 @@ pub struct Body {
     pub swim: f32,
     pub jump_height: f32,
     pub gravity: f32,
+    /// What a fall does (`CPawn`'s `Falling`).
+    pub fall: Option<Fall>,
+    /// Holding the breath through a scope, and air underwater.
+    pub breath_hold: Option<BreathHold>,
+    pub oxygen: Option<Oxygen>,
+    /// How much faster the sprint key swims (`fSwimSprintMaxMultiplier`).
+    pub swim_sprint: f32,
+}
+
+/// Holding the breath through a scope (`HoldBreathAbility`): the seconds it
+/// takes to steady, the longest hold, the seconds catching it after a full
+/// one, and the sway held and out of breath (times the usual).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BreathHold {
+    pub steady: f32,
+    pub hold: f32,
+    pub catch: f32,
+    pub held_sway: f32,
+    pub out_sway: f32,
+}
+
+/// Air underwater (the counters' `Oxygen`): the most, what a second under
+/// takes and one in the air restores, and the health a second costs once
+/// it is gone (`fDrownHealthDrain`).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Oxygen {
+    pub max: f32,
+    pub drain: f32,
+    pub refill: f32,
+    pub drown: f32,
+}
+
+/// A fall's harm by its height (metres): from each of the first three
+/// heights the share of the body's health it takes (the first is a mere
+/// landing), and from the fourth, death.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Fall {
+    pub heights: [f32; 4],
+    pub shares: [f32; 3],
+}
+
+impl Fall {
+    /// The share of health a fall from this height takes (1 is death).
+    pub fn share(&self, height: f32) -> f32 {
+        let [a, b, c, d] = self.heights;
+        if height >= d {
+            1.0
+        } else if height >= c {
+            self.shares[2]
+        } else if height >= b {
+            self.shares[1]
+        } else if height >= a {
+            self.shares[0]
+        } else {
+            0.0
+        }
+    }
 }
 
 impl Body {
@@ -62,8 +124,26 @@ pub fn body(library: &Object, templates: &Object) -> Option<Body> {
             return;
         }
         let Some(e) = o.child("Entity").filter(|e| e.str("hidName").as_deref() == Some(PLAYER)) else { return };
-        let Some(b) = e.child("Components").and_then(|c| c.child("CPawn")).and_then(|p| p.child("Body")) else { return };
+        let Some(pawn) = e.child("Components").and_then(|c| c.child("CPawn")) else { return };
+        let Some(b) = pawn.child("Body") else { return };
         let f = |n: &str| float(b, n).unwrap_or(0.0);
+        let breath_hold = pawn.child("Procedural_sway").and_then(|s| s.child("HoldBreathAbility")).map(|h| {
+            let f = |n: &str| float(h, n).unwrap_or(0.0);
+            BreathHold {
+                steady: f("fGoingIntoHoldBreathTime"),
+                hold: f("fHoldBreathMaxTime"),
+                catch: f("fCatchingBreathTime"),
+                held_sway: f("fHoldingBreathSpecialSwayModifier"),
+                out_sway: f("fOutOfBreathSpecialSwayModifier"),
+            }
+        });
+        let fall = pawn.child("Falling").map(|l| {
+            let f = |n: &str| float(l, n).unwrap_or(0.0);
+            Fall {
+                heights: [f("fFallDistanceA"), f("fFallDistanceB"), f("fFallDistanceC"), f("fFallDistanceD")],
+                shares: [f("fFallDistancePawnDamagePercentA"), f("fFallDistancePawnDamagePercentB"), f("fFallDistancePawnDamagePercentC")],
+            }
+        });
         found = Some(Body {
             walk: f("fWalkingMaxSpeed"),
             crouch: f("fWalkingMaxSpeedCrouch"),
@@ -78,6 +158,10 @@ pub fn body(library: &Object, templates: &Object) -> Option<Body> {
             swim: f("fSwimmingMaxSpeed"),
             jump_height: f("fJumpHeight"),
             gravity: -f("fGravity"),
+            fall: fall.filter(|l| l.heights[3] > 0.0),
+            breath_hold: breath_hold.filter(|h| h.hold > 0.0),
+            oxygen: None,
+            swim_sprint: 0.0,
         });
     });
     let mut body = found?;
@@ -95,6 +179,13 @@ pub fn body(library: &Object, templates: &Object) -> Option<Body> {
             body.stamina_drain = -f("fSprintDrain");
             body.stamina_regen = f("fRegenRate");
             body.stamina_fast = f("fStaminaMinForFastSprint");
+            body.swim_sprint = f("fSwimSprintMaxMultiplier");
+            let drown = -f("fDrownHealthDrain");
+            if let Some(o) = o.child("StatsAndCounters").and_then(|s| s.child("Oxygen")) {
+                let f = |n: &str| float(o, n).unwrap_or(0.0);
+                body.oxygen =
+                    Some(Oxygen { max: f("fMax"), drain: -f("fOxygenDrain"), refill: f("fOxygenRefill"), drown }).filter(|o| o.max > 0.0 && o.drain > 0.0);
+            }
         }
     });
     (body.walk > 0.0 && body.gravity > 0.0).then_some(body)
@@ -116,7 +207,11 @@ pub fn to_text(b: &Body) -> String {
         b.swim,
         b.jump_height,
         b.gravity
-    )
+    ) + &b.fall.map_or(String::new(), |l| {
+        format!("fall {}\nfall_shares {}\n", l.heights.map(|v| v.to_string()).join(","), l.shares.map(|v| v.to_string()).join(","))
+    }) + &b.breath_hold.map_or(String::new(), |h| format!("breath_hold {},{},{},{},{}\n", h.steady, h.hold, h.catch, h.held_sway, h.out_sway))
+        + &b.oxygen.map_or(String::new(), |o| format!("oxygen {},{},{},{}\n", o.max, o.drain, o.refill, o.drown))
+        + &format!("swim_sprint {}\n", b.swim_sprint)
 }
 
 pub fn from_text(text: &str) -> Result<Body> {
@@ -138,9 +233,23 @@ pub fn from_text(text: &str) -> Result<Body> {
         swim: 0.0,
         jump_height: 0.0,
         gravity: 0.0,
+        fall: None,
+        breath_hold: None,
+        oxygen: None,
+        swim_sprint: 0.0,
     };
     for l in lines {
         let Some((k, v)) = l.split_once(' ') else { continue };
+        let list: Vec<f32> = v.trim().split(',').filter_map(|x| x.parse().ok()).collect();
+        match k {
+            "fall" if list.len() == 4 => b.fall.get_or_insert_with(Fall::default).heights = [list[0], list[1], list[2], list[3]],
+            "fall_shares" if list.len() == 3 => b.fall.get_or_insert_with(Fall::default).shares = [list[0], list[1], list[2]],
+            "breath_hold" if list.len() == 5 => {
+                b.breath_hold = Some(BreathHold { steady: list[0], hold: list[1], catch: list[2], held_sway: list[3], out_sway: list[4] })
+            }
+            "oxygen" if list.len() == 4 => b.oxygen = Some(Oxygen { max: list[0], drain: list[1], refill: list[2], drown: list[3] }),
+            _ => {}
+        }
         let v: f32 = v.trim().parse().unwrap_or(0.0);
         match k {
             "walk" => b.walk = v,
@@ -156,6 +265,7 @@ pub fn from_text(text: &str) -> Result<Body> {
             "swim" => b.swim = v,
             "jump_height" => b.jump_height = v,
             "gravity" => b.gravity = v,
+            "swim_sprint" => b.swim_sprint = v,
             _ => {}
         }
     }
@@ -236,6 +346,65 @@ pub fn minimap(library: &Object) -> Option<Minimap> {
     out
 }
 
+/// The player's HUD (`CFCXPawnHudComponent`, `CFCXTaggingComponentPawn`):
+/// how far the camera tags, how near collectibles show on the minimap, and
+/// how often unspent skill points are brought up (seconds). The cache keeps
+/// it as text ([`HUD_REL`]).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Hud {
+    pub tag_range: f32,
+    pub collectibles: f32,
+    pub skill_reminder: f32,
+}
+
+pub const HUD_REL: &str = "characters/hud.txt";
+const HUD_MAGIC: &str = "fc3-hud 1";
+
+impl Hud {
+    pub fn to_text(&self) -> String {
+        format!("{HUD_MAGIC}\ntag_range {}\ncollectibles {}\nskill_reminder {}\n", self.tag_range, self.collectibles, self.skill_reminder)
+    }
+
+    pub fn from_text(text: &str) -> Result<Hud> {
+        let mut lines = text.lines();
+        if lines.next().map(str::trim) != Some(HUD_MAGIC) {
+            bail!("not a HUD table");
+        }
+        let mut h = Hud::default();
+        for l in lines {
+            let Some((k, v)) = l.split_once(' ') else { continue };
+            let v: f32 = v.trim().parse().unwrap_or(0.0);
+            match k {
+                "tag_range" => h.tag_range = v,
+                "collectibles" => h.collectibles = v,
+                "skill_reminder" => h.skill_reminder = v,
+                _ => {}
+            }
+        }
+        Ok(h)
+    }
+}
+
+/// The player's HUD from the entity library.
+pub fn hud(library: &Object) -> Option<Hud> {
+    let mut out = None;
+    library.walk(&mut |o, _| {
+        if out.is_some() || !o.is("EntityPrototype") {
+            return;
+        }
+        let Some(c) = o.child("Entity").filter(|e| e.str("hidName").as_deref() == Some(PLAYER)).and_then(|e| e.child("Components")) else { return };
+        let hud = c.child("CFCXPawnHudComponent");
+        let f = |o: Option<&std::sync::Arc<Object>>, n: &str| o.and_then(|o| float(o, n)).unwrap_or(0.0);
+        let pickable = hud.and_then(|h| h.child("MiniMap")).and_then(|m| m.child("SinglePlayer")).and_then(|s| s.child("Pickable"));
+        out = Some(Hud {
+            tag_range: f(c.child("CFCXTaggingComponentPawn"), "fTaggingRange"),
+            collectibles: f(pickable, "fCollectibleDisplayRadius"),
+            skill_reminder: f(hud.and_then(|h| h.child("PopupReminder")), "fSkillPointReminderTimer"),
+        });
+    });
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,10 +425,18 @@ mod tests {
             swim: 3.0,
             jump_height: 1.25,
             gravity: 20.0,
+            fall: Some(Fall { heights: [3.0, 4.6, 8.0, 11.9], shares: [0.0, 0.3, 0.6] }),
+            breath_hold: Some(BreathHold { steady: 0.5, hold: 3.0, catch: 3.0, held_sway: 0.0, out_sway: 2.5 }),
+            oxygen: Some(Oxygen { max: 100.0, drain: 3.25, refill: 100.0, drown: 20.0 }),
+            swim_sprint: 1.5,
         };
         assert_eq!(from_text(&to_text(&b)).unwrap(), b);
+        let fall = b.fall.unwrap();
+        assert_eq!((fall.share(2.0), fall.share(4.0), fall.share(5.0), fall.share(9.0), fall.share(12.0)), (0.0, 0.0, 0.3, 0.6, 1.0));
         let m = Minimap { radius: 40.0, vehicle_radius: 100.0, vehicle_from: 10.0, vehicle_to: 15.0, glider_radius: 100.0 };
         assert_eq!(Minimap::from_text(&m.to_text()).unwrap(), m);
+        let h = Hud { tag_range: 300.0, collectibles: 30.0, skill_reminder: 600.0 };
+        assert_eq!(Hud::from_text(&h.to_text()).unwrap(), h);
         assert_eq!(m.radius_at(true, false, 12.5), 70.0);
         assert_eq!(m.radius_at(false, false, 50.0), 40.0);
         let v = b.jump_speed();

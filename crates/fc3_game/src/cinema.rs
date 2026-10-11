@@ -66,6 +66,9 @@ pub struct Cinema {
     pub view: Option<(Transform, f32)>,
     /// A player track owns the body; an establishing shot only owns the view.
     pub view_moves_player: bool,
+    /// How far the player may turn his head within a first-person view (a
+    /// player-camera clip's limits), if at all.
+    pub head_look: Option<fc3_formats::cinema::HeadLook>,
     /// Sequences the game makes itself (a QTE's phases), to start.
     built: Vec<Built>,
     /// Opt-in completion receipts for gameplay-owned scenes. Disappearance
@@ -515,6 +518,7 @@ fn play_scenes(
     let released = std::mem::take(&mut cinema.released);
     let mut view = None;
     let mut view_moves_player = false;
+    let mut head_look = None;
     let cinema = &mut *cinema;
     let mut finished = Vec::new();
     for (i, p) in cinema.playing.iter_mut().enumerate() {
@@ -752,6 +756,16 @@ fn play_scenes(
             }
             view = Some(v);
             view_moves_player = p.seq.groups.iter().any(|g| g.kind == GroupKind::Player);
+            // In his own eyes (no camera shot), a player-camera clip lets
+            // him turn his head within its limits.
+            head_look = if cut.is_some() {
+                None
+            } else {
+                p.seq.groups.iter().flat_map(|g| &g.clips).find_map(|c| match c.kind {
+                    fc3_formats::cinema::ClipKind::PlayerCamera { head } if head.turns() && (c.start..c.start + c.duration).contains(&p.t) => Some(head),
+                    _ => None,
+                })
+            };
         }
         if p.t >= p.seq.duration {
             if p.seq.looping {
@@ -787,6 +801,7 @@ fn play_scenes(
     cinema.released.clear();
     cinema.view = view;
     cinema.view_moves_player = view_moves_player;
+    cinema.head_look = head_look;
 }
 
 /// Player-track scenes carry the body with their camera. Camera-only shots
@@ -800,6 +815,7 @@ pub(crate) fn scene_view(
     mut cams: Query<(&mut Transform, &mut Projection), With<PlayerCamera>>,
     mut view_models: Query<&mut Visibility, With<crate::weapons::ViewModel>>,
     mut held: Local<Option<bool>>,
+    head: Res<crate::player::SceneHeadLook>,
 ) {
     let Ok((mut pt, mut p)) = players.single_mut() else { return };
     let Ok((mut ct, mut proj)) = cams.single_mut() else { return };
@@ -817,6 +833,8 @@ pub(crate) fn scene_view(
                 pt.translation = world.translation - eye;
                 pt.rotation = Quat::from_rotation_y(yaw);
             }
+            // (Turned by the player's head look, within the clip's limits.)
+            let world = Transform { rotation: world.rotation * Quat::from_euler(EulerRot::YXZ, head.yaw, head.pitch, 0.0), ..world };
             *ct = Transform::from_matrix(pt.to_matrix().inverse() * world.to_matrix());
             if let Projection::Perspective(pp) = &mut *proj {
                 pp.fov = fov.clamp(10.0, 120.0).to_radians();
@@ -852,7 +870,7 @@ mod tests {
     #[test]
     fn camera_only_scene_preserves_body_while_player_track_transfers_it() {
         let mut app = App::new();
-        app.init_resource::<Cinema>().init_resource::<crate::settings::Settings>().add_systems(Update, scene_view);
+        app.init_resource::<Cinema>().init_resource::<crate::settings::Settings>().init_resource::<crate::player::SceneHeadLook>().add_systems(Update, scene_view);
         let start = Vec3::new(-110.0, 154.0, -2270.0);
         let player = app.world_mut().spawn((Transform::from_translation(start), Player {
             velocity: Vec3::ZERO, yaw: 0.4, pitch: 0.0, grounded: true, crouching: false, swimming: false, noclip: false,

@@ -234,17 +234,37 @@ pub fn match_moves<'a>(moves: impl IntoIterator<Item = &'a str>, clips: &[&'a st
             }
         }
     }
+    // And by their folders (`guard_camps\pirate_comms`: `piratecomms`, and
+    // `guardcampspiratecomms`), for moves named after them.
+    let mut by_folder: BTreeMap<String, Vec<(Vec<String>, &str)>> = BTreeMap::new();
+    for c in clips {
+        let Some(w) = clip_words(c) else { continue };
+        let folders: Vec<String> = c.rsplit(['\\', '/']).skip(1).take(2).map(|f| f.to_ascii_lowercase().replace('_', "")).collect();
+        if let Some(last) = folders.first() {
+            by_folder.entry(last.clone()).or_default().push((w.clone(), c));
+            if let Some(up) = folders.get(1) {
+                by_folder.entry(format!("{up}{last}")).or_default().push((w, c));
+            }
+        }
+    }
     let mut out = BTreeMap::new();
     for mv in moves {
         let (base, phase) = split_move(mv);
         let base_words: Vec<&str> = base.split('_').collect();
-        let Some(cands) = by_first.get(base_words[0]) else { continue };
         // The move's own build first, then another version of it.
         let mut found = Vec::new();
-        for strict in [true, false] {
-            found = clips_for(cands, &base_words, phase, strict);
-            if !found.is_empty() {
-                break;
+        if let Some(cands) = by_first.get(base_words[0]) {
+            for strict in [true, false] {
+                found = clips_for(cands, &base_words, phase, strict);
+                if !found.is_empty() {
+                    break;
+                }
+            }
+        }
+        // Else the clips in the folder it is named after, for its phase.
+        if found.is_empty() {
+            if let Some(cands) = by_folder.get(&base.replace('_', "")) {
+                found = cands.iter().filter(|(w, _)| w.iter().any(|x| says_phase(x, phase))).map(|(_, c)| c.to_string()).collect();
             }
         }
         if !found.is_empty() {
@@ -285,9 +305,20 @@ pub fn ca_clips<'a>(moves: impl IntoIterator<Item = &'a str>, db: &BTreeMap<Stri
     out
 }
 
+/// The cached table's first line: which version wrote it (the story's
+/// contextual actions' moves, and the encounters' spots').
+const CA_MOVES_MAGIC: &str = "# fc3-ca-moves 4";
+
+/// Whether a cached table is this version's.
+pub fn ca_moves_current(text: &str) -> bool {
+    text.lines().next().map(str::trim) == Some(CA_MOVES_MAGIC)
+}
+
 /// The table as the cache keeps it.
 pub fn to_text(table: &BTreeMap<String, Vec<String>>) -> String {
-    table.iter().map(|(m, c)| format!("{m}\t{}\n", c.join("|"))).collect()
+    let mut s = format!("{CA_MOVES_MAGIC}\n");
+    s.extend(table.iter().map(|(m, c)| format!("{m}\t{}\n", c.join("|"))));
+    s
 }
 
 pub fn from_text(text: &str) -> BTreeMap<String, Vec<String>> {
@@ -320,6 +351,13 @@ mod tests {
         assert_eq!(t["stp_relaxguard_pirate_v04_start"], vec![clips[1].to_string()]);
         assert_eq!(t["stp_smoke_loop"], vec![clips[3].to_string()]);
         assert!(!t.contains_key("stp_nothing_wait"));
+        // A move named after its clips' folders.
+        let folder = [
+            r"a\guard_camps\pirate_comms\3rdge_fulbst_piratecomms_pirate_loop_ak74.mab",
+            r"a\guard_camps\pirate_comms\3rdge_fulbst_piratecomms_pirate_end_ak74.mab",
+        ];
+        let f = match_moves(["stp_guardcampspiratecomms_loop"], &folder);
+        assert_eq!(f["stp_guardcampspiratecomms_loop"], vec![folder[0].to_string()]);
         assert_eq!(split_move("stp_smoke_end"), ("smoke".into(), Phase::End));
         assert_eq!(from_text(&to_text(&t)), t);
     }

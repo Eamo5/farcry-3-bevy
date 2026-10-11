@@ -1435,6 +1435,8 @@ fn main() -> Result<()> {
         "fcb" => {
             let target = args.get(1).context("usage: fcb <path|hash> [depth]")?;
             let bytes = vfs.read_hash(parse_target(&vfs, target)?)?;
+            // (Encounter prefabs are packed: their size, then LZO.)
+            let bytes = fc3_formats::encounters::unpack(&bytes).unwrap_or(bytes);
             let depth: usize = args.get(2).map(|s| s.parse()).transpose()?.unwrap_or(64);
             let start = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
             let root = fc3_formats::fcb::parse(&bytes[start..])?;
@@ -1668,7 +1670,7 @@ fn main() -> Result<()> {
             }
         }
         "find-entities" => {
-            // Prints entities whose name or mesh contains a substring: find-entities <substr> [path filter]
+            // Prints entities whose name, class or mesh contains a substring: find-entities <substr> [path filter]
             let needle = args.get(1).context("usage: find-entities <substr> [path filter]")?.to_ascii_lowercase();
             let filter = args.get(2).cloned().unwrap_or_else(|| "worlds\\fc3_main\\".into());
             let mut n = 0;
@@ -1679,7 +1681,7 @@ fn main() -> Result<()> {
                 let Ok(bytes) = vfs.read_hash(*h) else { continue };
                 let Ok(ents) = fc3_formats::world::parse_all_entities(&bytes) else { continue };
                 for e in ents {
-                    let hay = format!("{} {}", e.name, e.meshes.join(" ")).to_ascii_lowercase();
+                    let hay = format!("{} {} {}", e.name, e.class, e.meshes.join(" ")).to_ascii_lowercase();
                     if hay.contains(&needle) {
                         n += 1;
                         if n <= 400 {
@@ -2347,6 +2349,19 @@ fn main() -> Result<()> {
             let mut out = String::new();
             fc3_formats::fcb::dump(&found.context("no prototype with that id")?, &names, 64, &mut out);
             println!("{out}");
+        }
+        "material-params" => {
+            // A game material's shader, textures and parameters (as floats):
+            // material-params <path>
+            let path = args.get(1).context("usage: material-params <path>")?;
+            let m = fc3_formats::material::parse(&vfs.read(path)?)?;
+            println!("{} ({})", m.name, m.shader);
+            for (h, t) in &m.textures {
+                println!("  tex {h:08x} {t}");
+            }
+            for (h, raw) in &m.params {
+                println!("  {h:08x} {:?}", fc3_formats::original::param_floats(raw));
+            }
         }
         "material-named" => {
             // The materials whose own name contains a text: material-named <text>

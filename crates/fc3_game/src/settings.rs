@@ -112,6 +112,8 @@ pub struct Settings {
     pub invert_y: bool,
     /// The gamepad's rumble.
     pub vibration: bool,
+    /// The game's aim assist with a gamepad.
+    pub aim_assist: bool,
     /// Horizontal-ish field of view in degrees (vertical FOV of the camera).
     pub fov: f32,
     pub master_volume: f32,
@@ -144,6 +146,7 @@ impl Default for Settings {
             gamepad_sensitivity: 1.0,
             invert_y: false,
             vibration: true,
+            aim_assist: true,
             fov: 75.0,
             master_volume: 0.8,
             music_volume: 0.6,
@@ -196,7 +199,7 @@ impl Settings {
         );
         out += &format!("vsync {}\nfullscreen {}\noriginal_shaders {}\nshow_fps {}\n", self.vsync, self.fullscreen, self.original_shaders, self.show_fps);
         out += &format!("subtitles {}\nstory {}\ndifficulty {}\nmusic_volume {}\n", self.subtitles, self.story, self.difficulty.name(), self.music_volume);
-        out += &format!("vibration {}\n", self.vibration);
+        out += &format!("vibration {}\naim_assist {}\n", self.vibration, self.aim_assist);
         for a in Action::ALL {
             if let Some(b) = self.binding(a) {
                 out += &format!("bind {} {}\n", a.id(), b.id());
@@ -217,6 +220,7 @@ impl Settings {
                 "gamepad_sensitivity" => s.gamepad_sensitivity = f(value, 1.0).clamp(0.1, 5.0),
                 "invert_y" => s.invert_y = b(value, false),
                 "vibration" => s.vibration = b(value, true),
+                "aim_assist" => s.aim_assist = b(value, true),
                 "fov" => s.fov = f(value, 75.0).clamp(55.0, 110.0),
                 "master_volume" => s.master_volume = f(value, 0.8).clamp(0.0, 1.0),
                 "music_volume" => s.music_volume = f(value, 0.6).clamp(0.0, 1.0),

@@ -299,10 +299,12 @@ fn binoculars(
     mut commands: Commands,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     perks: Res<crate::progression::Perks>,
-    scripted: Res<crate::story::ScriptedPlayer>,
+    (scripted, hud): (Res<crate::story::ScriptedPlayer>, Res<crate::map::HudParams>),
 ) {
     let dt = time.delta_secs();
     let Ok((pe, p, h)) = players.single() else { return };
+    // The game's tagging range (else ours).
+    let range = if hud.0.tag_range > 0.0 { hud.0.tag_range } else { TAG_RANGE };
     let active = camera_available(&actions, p, h, &scripted);
     bino.held = if active { bino.held + dt } else { 0.0 };
     let target = if bino.held >= CAMERA_RAISE { 1.0 } else { 0.0 };
@@ -322,7 +324,7 @@ fn binoculars(
         let chest = gt.translation() + Vec3::Y * 0.3;
         let to = chest - eye;
         let dist = to.length();
-        if dist > TAG_RANGE * perks.tag_range || to.normalize_or_zero().dot(fwd) < 4f32.to_radians().cos() {
+        if dist > range * perks.tag_range || to.normalize_or_zero().dot(fwd) < 4f32.to_radians().cos() {
             continue;
         }
         let Ok(dir) = Dir3::new(to) else { continue };

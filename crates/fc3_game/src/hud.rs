@@ -365,33 +365,32 @@ fn update_detection(npcs: Query<&crate::npc::Npc>, mut q: Query<(&mut Text, &mut
     }
 }
 
-/// The view through a rifle scope: a round field ringed in black, with a
-/// duplex reticle (thick posts, fine centre).
+/// The view through a rifle scope: the game's mask round the field
+/// (`overlays`), and over it a duplex reticle (thick posts, fine centre),
+/// lit red in an illuminated scope.
 #[derive(Component)]
 struct ScopeOverlay;
+
+#[derive(Component)]
+struct ReticleBar;
 
 fn spawn_scope(commands: &mut Commands) {
     let root = commands
         .spawn((
             Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
-            BackgroundGradient::from(RadialGradient::new(
-                UiPosition::CENTER,
-                RadialGradientShape::ClosestSide,
-                vec![
-                    ColorStop::percent(Color::srgba(0.0, 0.0, 0.0, 0.0), 0.0),
-                    ColorStop::percent(Color::srgba(0.0, 0.0, 0.0, 0.25), 90.0),
-                    ColorStop::percent(Color::srgba(0.0, 0.0, 0.0, 0.85), 97.0),
-                    ColorStop::percent(Color::BLACK, 98.5),
-                ],
-            )),
             Visibility::Hidden,
-            GlobalZIndex(0),
+            GlobalZIndex(1),
             ScopeOverlay,
         ))
         .id();
     let ink = Color::srgba(0.02, 0.02, 0.02, 0.95);
     let bar = |commands: &mut Commands, left: Val, top: Val, width: Val, height: Val| {
-        commands.spawn((Node { position_type: PositionType::Absolute, left, top, width, height, ..default() }, BackgroundColor(ink), ChildOf(root)));
+        commands.spawn((
+            Node { position_type: PositionType::Absolute, left, top, width, height, ..default() },
+            BackgroundColor(ink),
+            ReticleBar,
+            ChildOf(root),
+        ));
     };
     // Fine centre lines.
     bar(commands, Val::Percent(20.0), Val::Percent(50.0), Val::Percent(60.0), Val::Px(1.5));
@@ -402,7 +401,13 @@ fn spawn_scope(commands: &mut Commands) {
     bar(commands, Val::Percent(49.85), Val::Percent(70.0), Val::Px(6.0), Val::Percent(30.0));
 }
 
-fn update_scope(players: Query<&Inventory>, mut overlay: Query<&mut Visibility, With<ScopeOverlay>>, mut spawned: Local<bool>, mut commands: Commands) {
+fn update_scope(
+    players: Query<&Inventory>,
+    mut overlay: Query<&mut Visibility, With<ScopeOverlay>>,
+    mut bars: Query<&mut BackgroundColor, With<ReticleBar>>,
+    mut spawned: Local<bool>,
+    mut commands: Commands,
+) {
     if !*spawned {
         *spawned = true;
         spawn_scope(&mut commands);
@@ -411,6 +416,13 @@ fn update_scope(players: Query<&Inventory>, mut overlay: Query<&mut Visibility, 
     let Ok(inv) = players.single() else { return };
     if let Ok(mut v) = overlay.single_mut() {
         *v = if inv.scoped() { Visibility::Inherited } else { Visibility::Hidden };
+    }
+    let lit = inv.has_attachment(inv.slot().def, crate::weapons::Attachment::IlluminatedScope);
+    let ink = if lit { Color::srgba(1.0, 0.12, 0.05, 0.95) } else { Color::srgba(0.02, 0.02, 0.02, 0.95) };
+    for mut c in &mut bars {
+        if c.0 != ink {
+            c.0 = ink;
+        }
     }
 }
 

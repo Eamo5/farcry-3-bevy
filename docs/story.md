@@ -39,7 +39,19 @@ converter packs the scripts and the world data they need into the cache.
   library archetype, the string id of the shop name), from the entity
   library.
 * `cinema/*.seq`: every cinematic sequence as a timeline, its facial tracks
-  included.
+  included, and its player-camera clips' head look (`HeadLook`: speed,
+  return delay and speed, least and most pitch/roll/yaw). While a scene
+  shows the player's own eyes (no camera shot), the mouse or stick turns
+  his head within those limits (the opening's escape: 20 degrees up or
+  down, 35 either side), easing back once left alone
+  (`player::SceneHeadLook`); a scene holding the player without any view
+  of its own leaves his view his to turn. `FC3_LOOK_DEBUG` logs what holds
+  the view twice a second; `FC3_LOOK_TEST` feeds a steady turn (as a
+  mouse would) for checking it. Without either, a mouse (or stick) turning
+  for two seconds in play while the view stays still (no scene camera
+  holding it) logs one warning naming what may be holding it (a scene
+  hold, cutscene, takedown, the weapon wheel, a mounted gun, cursor capture
+  or the pad), so an unexpected hold shows in an ordinary run's log.
 * `facial/faces.pak`, `facial/definitions.txt`: every face rig and facial
   clip (named ones and spoken lines' lip-sync), and which rig a definition
   key names (`fc3_formats::facial`); `facial/kit_faces.txt`: the face
@@ -400,10 +412,27 @@ is the story's own:
   25 a second back otherwise): the fast sprint lasts while 20 is left, then
   eases to the tired one (6.25 m/s), unless `SP_LongerSprintBurst` is
   learned (its endless burst, the attribute 65 bonus).
+* **Falls** (`combat::fall_damage`, `fc3_formats::body::Fall`): the
+  player's `Falling` heights go into the same table. A landing's height
+  comes from its speed under the table's gravity: from 3 m it is a mere
+  landing, from 4.6 m it takes 30% of his health and from 8 m 60% (less
+  with the fall skill), and from 11.9 m it kills. `FC3_FALL_TEST=metres`
+  lifts the player that high 10 s in and logs the landing.
+* **Breath** (`weapons::scope_sway`, `syringes::breath`): the table also
+  holds the scope's breath hold (`HoldBreathAbility`: steadying over half
+  a second to no sway at all, held at most 3 s, then 3 s catching it with
+  2.5 times the sway), the counters' air underwater (100, 3.25 a second
+  under, back at once in the air) and drowning's 20 health a second, and
+  the 1.5 times faster swim with the sprint key.
 * **Minimap reach** (`map::MinimapReach`): the player's HUD component's
   `MiniMap` (40 m on foot; in a vehicle eased to 100 m between 10 and 15
   km/h; 100 m on the glider), written with the body to
   `characters/minimap.txt`; without it the minimap keeps 160 m.
+* **HUD** (`map::HudParams`, `fc3_formats::body::Hud`): the player's HUD
+  and tagging components give `characters/hud.txt`: the camera tags out to
+  300 m (180 without it), relics, lost letters and memory cards within 30 m
+  show on the minimap (gold, white and blue diamonds), and unspent skill
+  points are brought up every ten minutes.
 * **Enemy fire on the player** (`npc::shoot`, `fc3_formats::aim`): the
   converter writes the shooting preferences (`aishooterprefs:*`: focus
   multipliers, damage lap, damage power and miss distance by difficulty), the
@@ -431,8 +460,282 @@ is the story's own:
   searching aware, fighting focused), nothing beyond the farthest distance,
   and within it a time to notice from the shortest close by to the longest
   far off; anyone within the sixth sense's few metres is noticed whichever
-  way the enemy faces, within its time. Grass, the stealth ability and the
-  difficulty still scale it, and the view cones stay ours.
+  way the enemy faces, within its time. What he can see is the sensory
+  system's view volume for that posture and state (tight, medium or wide:
+  so deep ahead, and so far to each side and up or down at the eye,
+  halfway out and at full depth); an unaware guard's tight one reaches 30 m
+  and narrows to 2 m either side close in, so the player can pass a few
+  metres to his side unseen. A partly filled acquisition drains in the
+  state's cooldown (2, 4 and 10 s from full), and grass within the
+  system's few metres hides no one. Grass, the stealth ability and the
+  difficulty still scale the time. `--npc-test watch` stands guards facing
+  the player 20 m and 40 m off and one with him 14 m to its side;
+  `FC3_SENSE_DEBUG=2` logs each enemy's view of the player twice a second.
+* **Aiming** (`fc3_formats::weapons::Aim`, `weapons::fire`,
+  `player::aimed_look`): each weapon's `IronSight` data sets its aimed FOV,
+  how long the sights take to come up (linearly), and how much slower the
+  player walks (0.4 with the AK) and turns aimed (a pad's factor or the
+  mouse's, and up and down besides). Its `ShootCorrectionHelpers` (from the
+  hip and aimed) feed the aim assist.
+* **Attachments** (`weapons::Attachment::apply`, `fc3_formats::weapons::Gadget`):
+  each weapon's attachment list (its common properties' `Attachments`)
+  links each attachment's key to a gadget prototype, whose modifiers go
+  into the weapons table. The shop sells what the weapon's own list offers
+  (`AttachmentOffer`, at its prices): reflex A and B, the optical sight,
+  ACOG and illuminated iron sights in the sight slot, the high-power and
+  illuminated scopes in a sniper's, the suppressor or the bow's barrel
+  extension, and the larger magazine. One sight is fitted at a time; a
+  sight bought before goes back on for nothing (`Inventory::attach` keeps
+  bought ones in the low half of the weapon's bits and the fitted sight in
+  the high, rebuilding the weapon from its own handling when the sight
+  changes); an old save's sight comes back as the weapon's usual one (a
+  sniper's high-power scope, a rifle's ACOG, else reflex A). A sight narrows its aimed FOV
+  by the gadget's degrees (the AK's ACOG 65 to 35), adds to the sight time
+  and slows the aimed turn; the suppressor hushes the shot to the
+  gadget's share of its noise (2% for rifles) without the damage and range
+  we used to take off; the larger magazine holds the weapon's own size (the
+  AK's 40); each gadget's spread on the move and reload apply too.
+* **Aim assist** (`aim_assist`, `fc3_formats::assist`): with a pad (and the
+  "Aim assist (gamepad)" option on) the player parameters' help for the
+  difficulty applies. The target is the enemy or animal nearest the sights
+  in plain view; while the sights are over its billboards (inner and outer,
+  round its head) the view follows its movement across the view by the
+  data's intensity, as far as the distance allows (full from 3 to 20 m,
+  gone by 30). Raising the sights within its cylinder (wider with distance;
+  animals' scaled) snaps them at the weapon's lock-on speed to its head if
+  aimed within reach of it, else to the body between below the head and
+  above the torso, following a while and fading off by the difficulty's
+  times. Shots passing within the cylinder (scaled by the weapon's and the
+  difficulty's factors) and within the weapon's reach bend toward the body
+  by up to its strength in degrees, hardly at all up or down. The right
+  stick's turns are eased over a target within the difficulty's reach for
+  it (`bUseRightStickAssist`: to its yaw and pitch shares over the inner
+  billboard, less toward the outer one; a pad only). `FC3_ASSIST_TEST`
+  (with `--npc-test watch` and `FC3_AIM`) acts as a pad, turns the view
+  off the nearest guard 10 s in with the sights coming up, and logs how far
+  off the view stays.
+* **Vehicle handling** (`vehicles::tuning`, `fc3_formats::handling`): the
+  converter reads each vehicle archetype's `CVehicleWheeledPhysComponent.
+  WheeledParams`, `BoatParams` or `ParagliderParams` and its driver's
+  camera `FOV`, by
+  descriptor folder, into `vehicles/handling.txt`. The units are the ones
+  the engine's own field notes (in `FC3.dll`) give: engine power in
+  horsepower; each gear's shift range in km/h; `fGearBoxTopSpeed`, the
+  speed the gearing reaches at the top RPM, and the engine cut-off speeds
+  in m/s; the camera's speeds in km/h. A car's pull is the engine's torque
+  (its horsepower at the optimal revs, times the torque factor at the top)
+  through the gear the gearbox holds at that speed and the final drive the
+  gearbox's top speed sets: the 4x4 pulls about 12 kN in first, 7.7 in
+  second and 5.2 in third, and its engine cuts off above 20 m/s (72 km/h;
+  16 m/s in reverse), as in the original. Air drag is the data's
+  coefficient and frontal area; the steering lock runs from the data's lock
+  at rest to its lock at top speed; the tyres' grip is the sideways
+  friction limit, wheel by wheel. Each wheel's spring and dampers are the
+  data's Havok figures, which are per kilogram of the chassis (the notes'
+  N/m and N/(m/s) are Havok's own doc strings; read as plain newtons the
+  4x4's 29 N/m spring could not hold it up): the spring pushes strength x
+  mass per metre pressed in, the dampers compression or relaxation x mass
+  per m/s, and the spring's unloaded reach is set so a quarter of the car
+  rests on each wheel at the model's own ride height. Four of the data's
+  wheels stand for ours (front pair and last pair; a six-wheeler's dummy
+  middle axle has no grip). Only `bDriving` wheels pull, and the player's
+  handbrake (Space) locks only the `bHandBrake` wheels, which then keep
+  `WheelLockFrictionScale` of their grip; AI drivers' and wrecks' brakes
+  hold every wheel. The chassis takes its angular damping, its extra
+  gravity (`fAeroExtraGravity`), its lift coefficient (negative: downforce,
+  with the frontal area, as drag is), gravity's factor with no wheel down
+  (`WheelAirborneGravityModifier`, eased in over its time, above its
+  speed) and the stabiliser's turn rate in the air (`fStabilizerAccel`: 0
+  for most cars, which then land however they come down; ours rights
+  them at 4). A boat's motor pushes at its thrust (an acceleration per
+  unit of mass) times its revs, which come up at the motor's rate; the
+  water damps it ahead and to the side by its friction figures (as a rate:
+  5.45 per unit, which tops the zodiac out at 22 m/s where we had tuned it,
+  as the engine's own friction formula isn't in the data: every boat's
+  `bSquareVelocityForLinearFriction` is 0, so it is linear in the speed,
+  and the notes say only that the frictions are mass-free and that 1.0
+  makes the water as hard to push through in any direction), and the rudder
+  swings from its angle at rest to its angle at its top speed. Throttling
+  against the way it goes, the motor pushes at `fEngineBrakingPower`
+  instead; a boat with a `Brake` (the patrol boat's 5 m/s²) brakes on Space;
+  the hull's angular damping is its `fAngularDamping`. A hang
+  glider flies by its `ParagliderParams` (`vehicles::Glide`), as their
+  field notes describe them: the bank and pitch each ease towards the
+  rate the angle still to go asks for (times the roll or pitch velocity
+  scale, up to its maximum, reached at its acceleration); the bank turns it
+  at the roll-to-turn figure, in full once it has the turn speed; pitch
+  changes its speed (`fPitchSpeedScale` per radian, nose down faster, up to
+  the maximum speed), and climbing with the speed faded the nose drops
+  back; the brake slows it towards its floor at the braking rate, and with
+  the stick left alone it returns to its base speed at the restore rate. It
+  always sinks at the down speed (the low-altitude one under its glide
+  height, the malfunction one below its health threshold), and under the
+  landing altitude its landing figures (base and top speed, bank, pitch,
+  sink) ease in over the transition time. The game's take-off run follows
+  authored displacement curves; ours runs straight out at the launch's
+  height for the take-off time, its collision off (gliders stand on the
+  slope they launch down), and the wing's collision is a thin slab over a
+  narrow frame. Down on the ground or the water, or held back half a second,
+  it has landed until it falls off an edge again. The driving camera
+  widens with speed by the vehicle's own angles, as a share of the
+  player's field of view (`vehicles::SpeedFov`), and in first person the
+  driver's look is held within `CFCXVehicle`'s `vehicleMinLookAngle` and
+  `vehicleMaxLookAngle` (x is pitch and z yaw; the data counts pitch down
+  as positive: open vehicles allow -75 to -80, closed cars -10, the glider
+  and wingsuit +90 and more, and we take yaw the same way round; the only
+  lopsided yaw ranges are the APC's and passengers').
+* **Wingsuit and parachute** (`player::Flight`): the wingsuit's archetype
+  (`FC3_Vehicles:NotInEditor/WingSuit`) carries `WingsuitParams`, the hang
+  glider's flight block under another name (no take-off run, no landing
+  mode, no malfunction), plus `ParachuteControl` (the canopy's base and
+  top speed, sink, bank and how quickly it answers), the parachute's
+  opening impulse, `ParachuteLandingLogic` (it opens by itself when the
+  ground is under `fETAForAutoParachute` seconds away for
+  `fTimeForAutoParachute`) and `PitchUp` (`bAllowPitchUp` 0: the suit
+  can't climb, so pulling back brakes it). The suit flies by the glider's
+  model (`vehicles::Glide`), starting with its nose down the fall at the
+  fall's speed; the canopy turns at its bank times the suit's turn figure
+  and its opening impulse (on the suit's mass, over its time) brakes the
+  fall. Both are flown by the movement keys, the view turning with them
+  within the suit's `CFCXVehicle` look limits.
+* **Bodies and grenades** (`npc::perceive`, `senses::Stim`): the sensory
+  systems' body, grenade and rock sight (`CorpseDetection`,
+  `GrenadeDetection`, `RockDetection`: a view volume, how far, and a time
+  from near to far) go into the same table. A guard finds a body once it
+  has been in that volume, unblocked, for its time (a quarter second close
+  by, a second at 35 m), then searches and calls the others over. A live
+  grenade near enough to hurt him, seen in its time, sends him running
+  clear of its blast and puts him on his guard. `--npc-test body` kills one
+  of two guards in view of the other; `--npc-test grenade` drops a grenade
+  at the feet of the guard facing the player (`FC3_SENSE_DEBUG` logs each
+  sighting).
+* **Where wildlife spawns** (`wildlife::spawn_animals`,
+  `fc3_formats::encounters`): the converter reads the world's wildlife
+  regions (`CWildlifeRegion` shapes, most in the metasectors: 509 of
+  them), the spawn settings each names (`encounterspawnsettings.lib`: how
+  near and far from the player, within what angle, how far apart) and its
+  weighted prefab list (`encounterprefablist.lib`, an empty entry being a
+  chance of nothing), and unpacks each prefab those lists can spawn
+  (`generated\encounters\<id>.fcb`: its size, then LZO, around an FCB) to
+  its animals, their offsets and its budget cost; with the single-player
+  encounter service's wildlife budget (3) and most groups (5), into
+  `world/wildlife.txt`. Every few seconds a nearby region whose spawn ring
+  reaches the player puts a group from its list at a spot inside it that
+  far behind him, clear of other wildlife, so long as the groups out stay
+  within the budget: buffalo herds (and the odd bear or tiger) by the
+  river, komodos and crocodiles on the north island, deer and their
+  leopards in the south. Wild pigs (the pig model on the boar's skeleton and
+  clips, with the archetype's calls) and thylacines (their own clips) were
+  added for the regions that spawn them, and so were the small and the
+  swimming: kept pigs, rats, lizards, crabs on the shore, crows, river fish
+  (each variant its own model), sea turtles, giant tortoises, jellyfish,
+  moray eels and manta rays, on their own clips. Swimmers keep between the
+  water's surface and its bed wherever it is deep enough (rivers and lakes
+  too), rising to a swimmer they go for; the eel keeps to its spot on the
+  bed and strikes at swimmers who come close; the tortoise hides in its
+  shell instead of running; crows take to the air to get away and glide
+  back down, and fall when shot out of it. Every animal is dressed from its
+  graphic kit (`SHA_*` in `characters/all_kits.txt`, kept to the species'
+  model): the skin variant its archetype names (`Pig.Pig_black`, `Crow.Blood`)
+  or else a regular one, never the rare or promotional skins the game only
+  spawns by name. Skinning gives what the game's loot sources say (pig hide,
+  feathers, shells, leather from crocodiles and macaques, the thylacine's
+  skin, with the item's own name) and the critters without loot can't be
+  skinned. The reef-fish schools keep to the regions whose lists stock
+  coral-reef fish, so none swim in the rivers. `fc3tool fcb` unpacks a
+  prefab; `--animal-test <clip>:<names>` poses only the species whose names
+  contain one of the comma-separated words (`FC3_ANIMAL_TEST_NEAR` sets them
+  out about half as far). Each animal moves at its archetype's paces (`CAnimalAgentFC3`:
+  walking while it wanders, running to keep off or hunt a far target,
+  sprinting to flee or close on a near one, from 25 m), in the animals
+  table with its personality.
+* **Encounters at the roadside** (`npc::spawn_from_sectors`,
+  `fc3_formats::encounters::Markers`): the same pass collects the world's
+  encounter markers (`CEncounterMarkerComponent`: roadblocks, small,
+  average and medium camps, the extra staged encounters) with the prefabs
+  each spawns while its area is hostile and once it is friendly, and the
+  people in each prefab (`CPawnEntity`: their archetype, offset and
+  heading), into `world/encounters.txt`. Outside the outposts a marker
+  coming into range now spawns one of its prefabs (the friendly, rebel ones
+  once the nearest outpost within 600 m is liberated; an empty entry is
+  nobody there this time): the prefab's pirates or privateers (side and
+  role from their archetypes) where it puts them about the marker, instead
+  of a lone guard. The vehicles a prefab parks (entities described under
+  `vehicles\`: the 4x4s and technicals at roadblocks) are built where it
+  puts them once their model is in and the ground has its collider
+  (`vehicles::PlaceVehicle`), and its idle points (`SimpleAnimation.*`:
+  smoking, resting, keeping watch, swatting flies) join the guard spots its
+  people take (`guard_spots::AddGuardSpot`): those of a kind we know play
+  our clips for it; the fighters' others (cleaning a gun, the radio,
+  looting, repairing a 4x4, setting up a barricade, and a hostage's escort
+  waiting) play the loop of the move their own smart terrain point names (`move:<name>`, its clips found
+  in the move table the converter now fills from the encounter prefabs as
+  well as the story; a move named after its clips' folders, like
+  `stp_guardcampspiratecomms_loop` in `guard_camps\pirate_comms`, is found
+  by them), leaving out moves whose clips are civilians' (a mourner's). A
+  synced scene's actors (`SyncAnimLeadActor`/`SyncAnimExtraActor`) play
+  their parts of the scene's loop sequence (`clip:<path>`: the lead's names
+  its start, loop, end and wait `.cseq`, and each part is the clip of the
+  track group tagged `leadActor` or `extraActor1`; an extra's comes from
+  the nearest lead's), so a conversation's pair talk and listen with the
+  game's master and slave clips. The encounters' conversations are silent
+  in the original too: their `_Encounter` points set no
+  `conversationTemplate` (the base archetype names `PiratesGenericConvo_
+  MSM_A`, the CRC-32 that `dialog\conversationtable.dat`'s conversations
+  carry as `AnimTemplate`). The scenes' other sequences (start, end; looting
+  a body, skinning an animal, a hostage walked off) are not played. The
+  world's own posts do the same (`world/guard_spots.txt`, versioned by its
+  first line): a fighters' point of no kind we know is kept as
+  `move:<name>` (`world::WorldEntity::stp_moves`, its moves joining the move
+  table), and the game resolves it on load, dropping civilians' clips
+  (under `civilians\` or `3rdciv*`): cleaning or repairing guns, cutting
+  torches, searching debris, looting crates, sleepy snipers. Its props (the entities with a
+  model of their own that are nobody's body: sandbag piles, crates, rice
+  sacks, camp fires, knife-wheel targets, animal cages) are set out as world
+  objects with their models' collision (`objects::PlaceProp`, taken away
+  again beyond 360 m). The effects its props play on themselves burn as the
+  world's own camp fires do: the converter places each at the bone it plays
+  at with the flames the game draws for it and its light from the particle
+  library (`encounters::Fire`), and the spawn sets them down
+  (`world_fx::PlaceFire`, which `lamps` lights too). The animals it brings stand where it puts them
+  (`wildlife::PlaceAnimal`): attack dogs with their handlers go for the
+  player and never the handlers, who don't shoot them; an animal in a cage
+  (a bear or tiger the pirates are hauling) is held there until its door is
+  shot open, then hunts whoever is nearest. The bodies an aftermath leaves
+  (`Corpses/Corpse.*`) lie where it puts them, dead as they appear
+  (`combat::DieOnSpawn`, so they fall and can be looted like anyone killed):
+  pirates and privateers by their side and role, rebels, civilians (as
+  villagers, `villagers::PlaceVillager`) and animals' carcasses, which can be
+  skinned, with the prefab's vultures circling low over them
+  (`birds::CircleOver`). `FC3_ENCOUNTER_PREFAB=<id>` makes every marker
+  spawn that prefab. Its civilians (`Outsider_Non-Hostile*`) come as
+  villagers; its hostages, prisoners and victims kneel cowering while any
+  armed pirate or privateer is within 25 m and alive, then get up and run
+  (`villagers::Hostage`; `FC3_CLEAR_TEST=<s>` downs every hostile near the
+  player then). A rescue the encounter rewards (the prefabs with
+  `STP_CivCallPlayerReward*` points: those whose Domino script runs the
+  encounter library's `GivePlayerReward`) pays as that graph does: its
+  first civilian, once no armed enemy is within 50 m, comes to the player
+  (round whatever is in the way), calls him over with an
+  `inform_callplayer` line in an encounter civilian's voice, and on the
+  interact key thanks him (`salutation`) and pays `Cash_Base_Reward` (read
+  from the script at conversion) for each of the encounter's civilians
+  still alive, as the scripts pass their survivors (`VictimsAlive`) as the
+  reward's multiplier (`villagers::Grateful`; `FC3_REWARD_TEST` takes it
+  when they come). A hostage is held while any of their own captors lives
+  (within 120 m, wherever they have gone to look) or any other armed
+  enemy is within 25 m. Executions (`encounters::Execution`: the
+  executioner's and the firing squad's prefabs, by their shooters'
+  archetypes) run as their scripts time them: once the player is within the
+  proximity listener's `nearZone` (30 m) of the encounter, each shooter
+  kills the nearest of its captives every script delay (the longest: 3 s
+  for the executioner, 5 s for the squad) while he lives, walking first to
+  the prefab's attack point by them (`AttackTarget_*`) and facing them (in
+  a fight, from where he stands; he takes no guard spot); a shooter killed
+  first leaves the rest to be freed (`villagers::Executioner`;
+  `FC3_EXECUTION_TEST` starts them from twice as far). The rest of their
+  scripts (chases, a captive escaping in a car) and their dialogue are not
+  run.
 * **Animals' senses and behaviour** (`wildlife::animal_ai`,
   `fc3_formats::animals`): the converter writes each animal archetype's AI
   personality (`tmplPersonalityType`) and sensory system (`tmplSettings`)
@@ -441,14 +744,16 @@ is the story's own:
   state, ahead of it with a clear line), by smell (nearer for a crouched
   player; some ignore it while idle), at once within its immediate radius,
   a vehicle out to its radius scaled by speed, nothing beyond its height
-  limit; and hears each kind of sound (`npc::NoiseKind`: interesting,
+  limit, sight through the same view volumes as the enemies'; and hears
+  each kind of sound (`npc::NoiseKind`: interesting,
   threatening, explosion) only so far. Aware, it stops and watches; after
   its aware-to-active time with them still sensed it acts, and it relaxes
   once nothing has been sensed for its cooldown. Prey move off to the avoid
   distance, or flee to the flee distance when pressed (hurt, too near,
   gunfire or an explosion); defensive animals charge when pressed and stop
   after their unprovoked time; predators hunt and strike in bursts of the
-  personality's size, with its delay between strikes, then pause to look.
+  personality's size, each strike its attack clip's length (it stands
+  between them) and its delay between strikes, then pause to look.
   Wandering uses the idle chance and radii. `--animal-test herd` puts the
   prey and defensive animals 18 m out and fires a shot 15 s in;
   `FC3_ANIMAL_DEBUG` logs each change of mood with what was sensed.

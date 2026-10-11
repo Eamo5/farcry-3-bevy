@@ -71,7 +71,7 @@ fn note_dressed(host: Option<NonSend<StoryHost>>, mut dressed: ResMut<DressedEnt
 
 /// The clips contextual actions' moves play (`fc3_formats::moves`).
 #[derive(Resource, Default)]
-struct CaMoves(std::collections::BTreeMap<String, Vec<String>>);
+pub(crate) struct CaMoves(pub(crate) std::collections::BTreeMap<String, Vec<String>>);
 
 fn load_ca_moves(info: Res<CacheInfo>, mut moves: ResMut<CaMoves>) {
     let text = std::fs::read_to_string(info.root.join(fc3_formats::moves::CA_MOVES_REL)).unwrap_or_default();

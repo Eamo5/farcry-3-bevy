@@ -1431,6 +1431,11 @@ pub struct FpState {
 }
 
 impl FpState {
+    /// A takedown is playing (it moves the view itself).
+    pub fn in_takedown(&self) -> bool {
+        self.takedown.is_some()
+    }
+
     /// The first-person arms rig, once spawned.
     pub fn rig(&self) -> Option<Entity> {
         self.rig

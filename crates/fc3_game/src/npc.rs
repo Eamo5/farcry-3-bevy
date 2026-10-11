@@ -29,7 +29,8 @@ impl Plugin for NpcPlugin {
             .init_resource::<SenseTable>()
             .init_resource::<AimTable>()
             .add_systems(Startup, (setup_npc_assets, load_melee_clips))
-            .add_systems(OnExit(crate::menu::GameState::Loading), (load_injury_clips, load_senses, load_aim))
+            .init_resource::<EncounterMarkers>()
+            .add_systems(OnExit(crate::menu::GameState::Loading), (load_injury_clips, load_senses, load_aim, load_encounter_markers))
             .add_systems(
                 Update,
                 (
@@ -44,7 +45,11 @@ impl Plugin for NpcPlugin {
                 )
                     .chain(),
             )
-            .add_systems(Update, (npc_test_spawn, npc_test_pose, npc_test_log, npc_test_stealth, kill_test.before(crate::pickups::loot_bodies), melee_test).after(sink_corpses))
+            .add_systems(
+                Update,
+                (npc_test_spawn, npc_test_pose, npc_test_log, npc_test_stealth, kill_test.before(crate::pickups::loot_bodies), melee_test, clear_test)
+                    .after(sink_corpses),
+            )
             .add_systems(PreUpdate, outpost_fire_test.after(crate::controls::update_actions).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(PostUpdate, track_heads.after(TransformSystems::Propagate));
     }
@@ -309,6 +314,89 @@ impl Role {
 }
 
 /// The role a guard post's marker asks for, if it names one.
+/// The world's encounter markers and the people their prefabs place
+/// (`fc3_formats::encounters::Markers`), once read from the cache.
+#[derive(Resource, Default)]
+pub struct EncounterMarkers(Option<fc3_formats::encounters::Markers>);
+
+fn load_encounter_markers(info: Option<Res<crate::data::CacheInfo>>, mut table: ResMut<EncounterMarkers>) {
+    let Some(info) = info else { return };
+    match std::fs::read_to_string(info.root.join(fc3_formats::encounters::MARKERS_REL))
+        .map_err(anyhow::Error::from)
+        .and_then(|t| fc3_formats::encounters::Markers::from_text(&t))
+    {
+        Ok(m) => {
+            info!("encounters: {} markers, {} prefabs", m.markers.len(), m.prefabs.len());
+            table.0 = Some(m);
+        }
+        Err(e) => warn!("encounters: no markers table ({e:#}); re-run the converter"),
+    }
+}
+
+/// A prefab pawn's side and role from its archetype
+/// (`Merc/BaseMerc_FC3.Privateer_Defender_23`); others (civilians, named
+/// characters) are none.
+fn pawn_identity(name: &str) -> Option<(Faction, Role)> {
+    let n = name.to_ascii_lowercase();
+    let base = n.split("basemerc_fc3.").nth(1)?.split('.').next()?.to_string();
+    let faction = if base.starts_with("privateer") {
+        Faction::Privateer
+    } else if base.starts_with("rebel") {
+        Faction::Rebel
+    } else if base.starts_with("pirate") {
+        Faction::Pirate
+    } else {
+        return None;
+    };
+    let role = if base.contains("sniper") {
+        Role::Sniper
+    } else if base.contains("heavygunner") {
+        Role::Heavy
+    } else if base.contains("flam") {
+        Role::Flamer
+    } else if base.contains("rocket") || base.contains("rpg") {
+        Role::Rocket
+    } else if base.contains("molotov") {
+        Role::Molotov
+    } else if base.contains("defender") {
+        Role::Shotgunner
+    } else {
+        Role::Assault
+    };
+    Some((faction, role))
+}
+
+/// Whose body an encounter's corpse is (`Corpses/Corpse.LootableCorpses.
+/// CorpsePirateBerserker`): a side and role, a civilian (whether a woman),
+/// or neither (an animal's carcass).
+fn corpse_identity(name: &str) -> Option<Result<(Faction, Role), bool>> {
+    let n = name.to_ascii_lowercase();
+    if n.contains("civilian") {
+        return Some(Err(n.contains("female")));
+    }
+    let faction = if n.contains("privateer") || n.contains("merc") {
+        Faction::Privateer
+    } else if n.contains("rebel") {
+        Faction::Rebel
+    } else if n.contains("pirate") {
+        Faction::Pirate
+    } else {
+        return None;
+    };
+    let role = if n.contains("berserker") || n.contains("heavy") {
+        Role::Heavy
+    } else if n.contains("defender") {
+        Role::Shotgunner
+    } else if n.contains("molotov") {
+        Role::Molotov
+    } else if n.contains("sniper") {
+        Role::Sniper
+    } else {
+        Role::Assault
+    };
+    Some(Ok((faction, role)))
+}
+
 fn post_role(name: &str, faction: Faction) -> Option<Role> {
     let n = name.to_ascii_lowercase();
     if n.contains("molotov") {
@@ -401,6 +489,9 @@ pub struct Npc {
     pub engaged: f32,
     /// Running to this alarm box to raise the alarm.
     pub alarm_target: Option<Vec3>,
+    /// Running clear of a grenade it has seen: to here, for so many seconds
+    /// more at most.
+    pub dodge: Option<(Vec3, f32)>,
     /// Seconds until the next thrown grenade or firebomb.
     pub throw_cooldown: f32,
     /// Seconds spent trying to move without getting anywhere.
@@ -836,7 +927,17 @@ fn spawn_from_sectors(
     models: Res<Assets<Fc3Model>>,
     server: Res<AssetServer>,
     mut outposts: ResMut<crate::outposts::Outposts>,
-    area: Res<crate::story::MissionArea>,
+    (area, encounters, mut park, mut set_out, mut props, mut beasts, mut civilians, mut circling, mut fires): (
+        Res<crate::story::MissionArea>,
+        Res<EncounterMarkers>,
+        MessageWriter<crate::vehicles::PlaceVehicle>,
+        MessageWriter<crate::guard_spots::AddGuardSpot>,
+        MessageWriter<crate::objects::PlaceProp>,
+        MessageWriter<crate::wildlife::PlaceAnimal>,
+        MessageWriter<crate::villagers::PlaceVillager>,
+        MessageWriter<crate::birds::CircleOver>,
+        MessageWriter<crate::world_fx::PlaceFire>,
+    ),
 ) {
     // FC3_PEACEFUL (tests): no enemies.
     if std::env::var("FC3_PEACEFUL").is_ok() {
@@ -888,17 +989,180 @@ fn spawn_from_sectors(
             if d > SPAWN_RANGE || d < 35.0 {
                 continue;
             }
-            candidates.push((d, id, faction, pos, Quat::from_array(e.rotation), outpost, post_role(&e.name, faction)));
+            candidates.push((d, id, faction, pos, Quat::from_array(e.rotation), outpost, post_role(&e.name, faction), e.id));
         }
     }
     candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
-    for (_, id, faction, pos, rot, outpost, role) in candidates {
+    for (_, id, faction, pos, rot, outpost, role, marker) in candidates {
         // Outposts are manned in full, past the cap that patrols and
         // roadside posts keep to.
         if alive >= MAX_ALIVE + if outpost.is_some() { GARRISON_EXTRA } else { 0 } {
             continue;
         }
         director.occupied.insert(id);
+        // An encounter marker outside the outposts: one of its prefabs, the
+        // friendly ones once the nearest outpost is liberated (an empty pick
+        // is nobody there this time), placed about the marker.
+        if let (None, Some((hostile, friendly)), Some(table)) = (outpost, encounters.0.as_ref().and_then(|t| t.markers.get(&marker)), encounters.0.as_ref()) {
+            let liberated = outposts
+                .list
+                .iter()
+                .filter(|o| o.centre.distance(pos) < 600.0)
+                .min_by(|a, b| a.centre.distance(pos).total_cmp(&b.centre.distance(pos)))
+                .is_some_and(|o| o.liberated);
+            let list = if liberated && !friendly.is_empty() { friendly } else { hostile };
+            let Some(&pick) = list.get((rng.f32() * list.len() as f32) as usize % list.len().max(1)) else { continue };
+            // FC3_ENCOUNTER_PREFAB=<id> (tests): every marker spawns that prefab.
+            let pick = std::env::var("FC3_ENCOUNTER_PREFAB").ok().and_then(|p| p.parse().ok()).unwrap_or(pick);
+            let Some(pawns) = table.prefabs.get(&pick) else { continue };
+            let (yaw0, _, _) = rot.to_euler(EulerRot::YXZ);
+            if std::env::var_os("FC3_ENCOUNTER_DEBUG").is_some() {
+                let who: Vec<String> = pawns.iter().filter_map(|p| pawn_identity(&p.archetype)).map(|(f, r)| format!("{f:?} {r:?}")).collect();
+                info!("encounter at {pos:.0?} ({}): {who:?}", if liberated { "friendly" } else { "hostile" });
+            }
+            // A rescue this prefab rewards: its first civilian calls the
+            // player over and pays for each of its civilians still alive.
+            let mut reward = if table.rewards.contains(&pick) { table.reward_cash } else { 0 };
+            // Its shooters execute its captives once the player comes near.
+            let execution = table.executions.get(&pick).cloned();
+            for p in pawns {
+                let at = pos + Quat::from_rotation_y(yaw0) * Vec3::new(p.offset[0], p.offset[2], -p.offset[1]);
+                let ground = heights.height_at(at).unwrap_or(at.y);
+                let feet = Vec3::new(at.x, at.y.max(ground), at.z);
+                let Some((faction, role)) = pawn_identity(&p.archetype) else {
+                    // Its civilians: hostages (prisoners, victims) and passers-by.
+                    if p.archetype.contains("Outsider") {
+                        let n = p.archetype.to_ascii_lowercase();
+                        let hostage = ["hostage", "prisoner", "victim"].iter().any(|w| n.contains(w));
+                        let yaw = yaw0 + p.yaw.to_radians();
+                        civilians.write(crate::villagers::PlaceVillager {
+                            at: feet,
+                            yaw,
+                            female: n.contains("female"),
+                            dead: false,
+                            hostage,
+                            reward,
+                            group: id,
+                        });
+                        reward = 0;
+                    }
+                    continue;
+                };
+                let npc = spawn_npc(&mut commands, &assets, chars.as_deref(), &models, faction, role, feet, yaw0 + p.yaw.to_radians(), id, &mut rng, None);
+                if let Some(x) = execution.as_ref().filter(|_| fc3_formats::encounters::is_shooter(&p.archetype)) {
+                    // (His points, placed as the prefab is; he keeps to them
+                    // rather than taking a guard spot.)
+                    let points = x.points.iter().map(|o| pos + Quat::from_rotation_y(yaw0) * Vec3::new(o[0], o[2], -o[1])).collect();
+                    commands.entity(npc).insert((crate::villagers::Executioner::new(id, pos, x, points), crate::guard_spots::SpotChecked));
+                }
+                alive += 1;
+            }
+            // Its props (sandbags, crates, fires) and the animals it brings
+            // (dogs with their handlers, predators).
+            let place = |o: &fc3_formats::encounters::Animal| {
+                let at = pos + Quat::from_rotation_y(yaw0) * Vec3::new(o.offset[0], o.offset[2], -o.offset[1]);
+                let ground = heights.height_at(at).unwrap_or(at.y);
+                (Vec3::new(at.x, at.y.max(ground), at.z), yaw0 + o.yaw.to_radians())
+            };
+            // (An animal in a cage is held there until its door is shot open.)
+            let near = |a: &fc3_formats::encounters::Animal, b: &fc3_formats::encounters::Animal, r: f32| {
+                (a.offset[0] - b.offset[0]).hypot(a.offset[1] - b.offset[1]) < r
+            };
+            let laid = table.props.get(&pick).map(Vec::as_slice).unwrap_or_default();
+            let cages: Vec<&fc3_formats::encounters::Animal> = laid.iter().filter(|o| o.archetype.to_ascii_lowercase().contains("animalcage_")).collect();
+            let brought = table.beasts.get(&pick).map(Vec::as_slice).unwrap_or_default();
+            let caged = |b: &fc3_formats::encounters::Animal| cages.iter().any(|c| near(b, c, 2.5));
+            // Each caged animal's door (the prop's id).
+            let mut doors: std::collections::HashMap<usize, u64> = std::collections::HashMap::new();
+            for (i, o) in laid.iter().enumerate() {
+                let (at, yaw) = place(o);
+                let prop = id ^ ((i as u64 + 1) << 48);
+                let door = o.archetype.to_ascii_lowercase().contains("cagedoor");
+                let behind = brought.iter().enumerate().filter(|(_, b)| door && caged(b)).min_by(|(_, a), (_, b)| {
+                    let d = |x: &fc3_formats::encounters::Animal| (x.offset[0] - o.offset[0]).hypot(x.offset[1] - o.offset[1]);
+                    d(a).total_cmp(&d(b))
+                });
+                if let Some((bi, _)) = behind {
+                    doors.insert(bi, prop);
+                }
+                props.write(crate::objects::PlaceProp {
+                    model: o.archetype.clone(),
+                    at,
+                    rotation: Quat::from_rotation_y(yaw),
+                    id: prop,
+                    caged: behind.map(|(_, b)| b.archetype.clone()),
+                });
+            }
+            // Its camp fires burn, and light the ground about them.
+            for f in table.fires.get(&pick).map(Vec::as_slice).unwrap_or_default() {
+                let turn = Quat::from_rotation_y(yaw0);
+                let mut at = pos + turn * Vec3::from(f.offset);
+                // (On the ground, as its prop is set down.)
+                let lift = heights.height_at(at).map_or(0.0, |g| (g + f.offset[1] - at.y).max(0.0));
+                at.y += lift;
+                let light = f.light.map(|mut l| {
+                    let p = pos + turn * Vec3::from(l.position);
+                    l.position = [p.x, p.y + lift, p.z];
+                    l
+                });
+                fires.write(crate::world_fx::PlaceFire { kind: f.kind.clone(), at, light });
+            }
+            let handled = pawns.iter().any(|p| pawn_identity(&p.archetype).is_some());
+            // (Vultures circle over it.)
+            let vultures = brought.iter().filter(|b| b.archetype.to_ascii_lowercase().contains("vulture")).count();
+            if vultures > 0 {
+                circling.write(crate::birds::CircleOver { at: pos, count: vultures });
+            }
+            for (bi, o) in brought.iter().enumerate().filter(|(_, b)| !b.archetype.to_ascii_lowercase().contains("vulture")) {
+                let (at, yaw) = place(o);
+                let cage = doors.get(&bi).copied();
+                beasts.write(crate::wildlife::PlaceAnimal { archetype: o.archetype.clone(), at, yaw, handled: handled && cage.is_none(), cage, dead: false });
+            }
+            // The bodies it leaves: pirates, privateers and rebels fall as if
+            // killed (lootable, those the player fights), civilians lie dead,
+            // animals are carcasses.
+            for (ci, o) in table.corpses.get(&pick).into_iter().flatten().enumerate() {
+                let (at, yaw) = place(o);
+                match corpse_identity(&o.archetype) {
+                    Some(Ok((faction, role))) => {
+                        let body =
+                            spawn_npc(&mut commands, &assets, chars.as_deref(), &models, faction, role, at, yaw, id ^ ((ci as u64 + 1) << 40), &mut rng, None);
+                        commands.entity(body).insert(crate::combat::DieOnSpawn);
+                    }
+                    Some(Err(female)) => {
+                        civilians.write(crate::villagers::PlaceVillager { at, yaw, female, dead: true, hostage: false, reward: 0, group: id });
+                    }
+                    // (`Corpses/Corpse.STP_Boar`: a boar's.)
+                    None => {
+                        let kind = o.archetype.split_once('.').map_or("", |(_, k)| k).trim_start_matches("STP_");
+                        let archetype = format!("Corpses/{kind}");
+                        beasts.write(crate::wildlife::PlaceAnimal { archetype, at, yaw, handled: false, cage: None, dead: true });
+                    }
+                }
+            }
+            // Its guard spots (for its people to take), and the vehicles it
+            // parks there.
+            for s in table.spots.get(&pick).into_iter().flatten() {
+                let at = pos + Quat::from_rotation_y(yaw0) * Vec3::new(s.offset[0], s.offset[2], -s.offset[1]);
+                let ground = heights.height_at(at).unwrap_or(at.y);
+                set_out.write(crate::guard_spots::AddGuardSpot {
+                    kind: s.archetype.clone(),
+                    at: Vec3::new(at.x, at.y.max(ground), at.z),
+                    yaw: yaw0 + s.yaw.to_radians(),
+                });
+            }
+            for (i, v) in table.vehicles.get(&pick).into_iter().flatten().enumerate() {
+                let at = pos + Quat::from_rotation_y(yaw0) * Vec3::new(v.offset[0], v.offset[2], -v.offset[1]);
+                let ground = heights.height_at(at).unwrap_or(at.y);
+                park.write(crate::vehicles::PlaceVehicle {
+                    descriptor: v.archetype.clone(),
+                    at: Vec3::new(at.x, at.y.max(ground), at.z),
+                    rotation: Quat::from_rotation_y(yaw0 + v.yaw.to_radians()),
+                    id: id ^ ((i as u64 + 1) << 56),
+                });
+            }
+            continue;
+        }
         // Only some roadside posts are manned at any given time; outposts are full.
         if outpost.is_none() && rng.f32() > 0.55 {
             continue;
@@ -1084,6 +1348,7 @@ pub(crate) fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker
         step_timer: 0.0,
         engaged: 0.0,
         alarm_target: None,
+        dodge: None,
         throw_cooldown: rng.range(4.0, 12.0),
         stuck: 0.0,
         path: Vec::new(),
@@ -1226,12 +1491,18 @@ fn perceive(
     (perks, settings, sense_table): (Res<crate::progression::Perks>, Res<crate::settings::Settings>, Res<SenseTable>),
     spatial: SpatialQuery,
     mut bodies: Query<(Entity, &Transform, &mut Corpse)>,
-    (mut shouts, mut sensing): (Local<Vec<Noise>>, Local<std::collections::HashMap<Entity, f32>>),
+    (mut shouts, mut sensing, mut glimpses, mut grenade_glimpses): (
+        Local<Vec<Noise>>,
+        Local<std::collections::HashMap<Entity, f32>>,
+        Local<std::collections::HashMap<Entity, (Entity, f32)>>,
+        Local<std::collections::HashMap<Entity, f32>>,
+    ),
+    grenades: Query<(&Transform, &crate::weapons::Projectile)>,
     mut noises: MessageReader<Noise>,
     mut damage: MessageReader<DamageEvent>,
     players: Query<(Entity, &Transform, &Player, &Health, Option<&crate::weapons::Inventory>)>,
     mut npcs: Query<(Entity, &Transform, &mut Npc, &Health), (Without<Corpse>, Without<Frozen>, Without<Riding>)>,
-    beasts: Query<(Entity, &Transform, &Health, &crate::wildlife::WildAnimal), Without<Npc>>,
+    beasts: Query<(Entity, &Transform, &Health, &crate::wildlife::WildAnimal, Has<crate::wildlife::Handled>), Without<Npc>>,
     (cover, cinema): (Res<crate::vegetation::Concealment>, Res<crate::cinema::Cinema>),
 ) {
     let dt = time.delta_secs();
@@ -1248,7 +1519,9 @@ fn perceive(
     // Everyone alive, for picking fights between factions.
     let roster: Vec<(Entity, Vec3, Faction)> = npcs.iter().filter(|(_, _, _, h)| !h.dead).map(|(e, t, n, _)| (e, t.translation, n.faction)).collect();
     // Live animals: predators are shot when they come close, any animal once it bites.
-    let animals: Vec<(Entity, Vec3, bool)> = beasts.iter().filter(|(_, _, h, _)| !h.dead).map(|(e, t, _, a)| (e, t.translation, a.dangerous())).collect();
+    // (Not the dogs they keep.)
+    let animals: Vec<(Entity, Vec3, bool)> =
+        beasts.iter().filter(|(_, _, h, _, _)| !h.dead).map(|(e, t, _, a, handled)| (e, t.translation, a.dangerous() && !handled)).collect();
     for (e, t, mut npc, h) in &mut npcs {
         if h.dead {
             continue;
@@ -1275,8 +1548,17 @@ fn perceive(
             Some(s) => (sense.map_or(range, |t| t.max_dist), s.sixth_sense),
             None => (range, (4.0, 0.0)),
         };
+        // In view: the sensory system's volume for this posture and state
+        // (else a cone).
+        let in_view = match senses {
+            Some(s) => {
+                let flat = Vec3::new(to.x, 0.0, to.z);
+                s.view(posture, level).contains(facing.dot(flat), facing.cross(Vec3::Y).dot(flat), to.y)
+            }
+            None => cos > fov_cos,
+        };
         let mut visible = false;
-        if !friendly && !ph.dead && !unseen && dist < reach && (cos > fov_cos || dist < sixth.0) {
+        if !friendly && !ph.dead && !unseen && dist < reach && (in_view || dist < sixth.0) {
             if let Ok(dir) = Dir3::new(to) {
                 let filter = SpatialQueryFilter::from_excluded_entities([e]);
                 visible = match spatial.cast_ray(eye, dir, dist, true, &filter) {
@@ -1290,6 +1572,10 @@ fn perceive(
             visible = false;
         }
         npc.sees_player = visible;
+        if std::env::var("FC3_SENSE_DEBUG").as_deref() == Ok("2") && (time.elapsed_secs() * 2.0).fract() < dt * 2.0 {
+            let flat = Vec3::new(to.x, 0.0, to.z);
+            info!("sense2: dist {dist:.1} reach {reach:.1} in_view {in_view} ahead {:.1} side {:.1} up {:.1} visible {visible} unseen {unseen} friendly {friendly} posture {posture} level {level} aw {:.2}", facing.dot(flat), facing.cross(Vec3::Y).dot(flat), to.y, npc.awareness);
+        }
         // Foes: the nearest hostile NPC in view, checked a few times a second.
         npc.scan -= dt;
         if npc.foe.is_some_and(|f| !roster.iter().any(|(r, _, _)| *r == f) && !animals.iter().any(|(a, _, _)| *a == f)) {
@@ -1331,7 +1617,46 @@ fn perceive(
                 npc.awareness = (npc.awareness + if friendly { 1.0 } else { 0.5 }).min(1.0);
             }
         }
-        // A body in view: search the area and call nearby guards over.
+        // A live grenade near enough to hurt him, seen in his sensory
+        // system's time for one that far (else at once, ahead and near):
+        // he runs clear of its blast and is on his guard.
+        let grenade_glimpse = grenade_glimpses.remove(&e).unwrap_or(0.0);
+        if npc.dodge.is_none() {
+            let live = grenades
+                .iter()
+                .filter(|(gt, p)| p.fuse.is_some() && !p.arrow && !p.incendiary && p.owner != e && gt.translation.distance(t.translation) < p.radius + 2.0);
+            for (gt, p) in live {
+                let to_grenade = gt.translation - eye;
+                let flat = Vec3::new(to_grenade.x, 0.0, to_grenade.z);
+                let need = match senses {
+                    Some(s) => s.sees(fc3_formats::senses::GRENADE, facing.dot(flat), facing.cross(Vec3::Y).dot(flat), to_grenade.y),
+                    None => (facing.dot(flat.normalize_or_zero()) > fov_cos).then_some(0.3),
+                };
+                let Some(need) = need else { continue };
+                let Ok(dir) = Dir3::new(to_grenade) else { continue };
+                let d = to_grenade.length();
+                if spatial.cast_ray(eye, dir, d, true, &SpatialQueryFilter::from_excluded_entities([e])).is_some_and(|h| h.distance < d - 0.5) {
+                    continue;
+                }
+                let seen = grenade_glimpse + dt;
+                if seen < need {
+                    grenade_glimpses.insert(e, seen);
+                    break;
+                }
+                let away = Vec3::new(t.translation.x - gt.translation.x, 0.0, t.translation.z - gt.translation.z).normalize_or(-facing);
+                npc.dodge = Some((gt.translation + away * (p.radius + 3.0), 4.0));
+                npc.awareness = npc.awareness.max(0.8);
+                npc.last_known = Some(gt.translation);
+                if std::env::var_os("FC3_SENSE_DEBUG").is_some() {
+                    info!("sense: grenade seen at {d:.0} m after {seen:.2} s, running");
+                }
+                break;
+            }
+        }
+        // A body in view: search the area and call nearby guards over. He
+        // sees one in his sensory system's time for a body that far, in its
+        // view volume (else at once, ahead of him and near).
+        let glimpse = glimpses.remove(&e);
         if npc.state != NpcState::Combat {
             for (be, bt, mut corpse) in &mut bodies {
                 if corpse.found || be == e {
@@ -1339,13 +1664,24 @@ fn perceive(
                 }
                 let to_body = bt.translation + Vec3::Y * 0.3 - eye;
                 let d = to_body.length();
-                if d > BODY_SIGHT || facing.dot(Vec3::new(to_body.x, 0.0, to_body.z).normalize_or_zero()) < 0.2 {
-                    continue;
-                }
+                let flat = Vec3::new(to_body.x, 0.0, to_body.z);
+                let need = match senses {
+                    Some(s) => s.sees(fc3_formats::senses::CORPSE, facing.dot(flat), facing.cross(Vec3::Y).dot(flat), to_body.y),
+                    None => (d <= BODY_SIGHT && facing.dot(flat.normalize_or_zero()) >= 0.2).then_some(0.0),
+                };
+                let Some(need) = need else { continue };
                 let Ok(dir) = Dir3::new(to_body) else { continue };
                 let filter = SpatialQueryFilter::from_excluded_entities([e, be]);
                 if spatial.cast_ray(eye, dir, d, true, &filter).is_some_and(|h| h.distance < d - 0.8) {
                     continue;
+                }
+                let seen = glimpse.filter(|(b, _)| *b == be).map_or(0.0, |(_, t)| t) + dt;
+                if seen < need {
+                    glimpses.insert(e, (be, seen));
+                    break;
+                }
+                if std::env::var_os("FC3_SENSE_DEBUG").is_some() {
+                    info!("sense: body seen at {d:.0} m after {seen:.2} s");
                 }
                 corpse.found = true;
                 npc.state = NpcState::Search;
@@ -1361,7 +1697,12 @@ fn perceive(
             // bushes round the player slow it down (most for a still,
             // crouched player, and only up close do they give him away).
             let hidden = cover.level * if player.crouching { 1.0 } else { 0.6 } * if player.velocity.length() > 4.0 { 0.5 } else { 1.0 };
-            let concealed = 1.0 - 0.85 * hidden * (dist / 8.0).min(1.0);
+            // (The sensory system sees through grass close by.)
+            let screened = match senses {
+                Some(s) => f32::from(dist >= s.grass_ignored),
+                None => (dist / 8.0).min(1.0),
+            };
+            let concealed = 1.0 - 0.85 * hidden * screened;
             let rate = match sense.and_then(|t| t.time(dist)) {
                 // The game's time to notice him at this distance (the sixth
                 // sense's at most, close by).
@@ -1391,7 +1732,13 @@ fn perceive(
             }
         } else {
             sensing.remove(&e);
-            npc.awareness = (npc.awareness - dt * if alert { 0.05 } else { 0.12 }).max(0.0);
+            // A partly filled acquisition drains in the state's cooldown.
+            let drain = match senses.map(|s| s.cooldown[level]).filter(|c| *c > 0.0) {
+                Some(c) => 1.0 / c,
+                None if alert => 0.05,
+                None => 0.12,
+            };
+            npc.awareness = (npc.awareness - dt * drain).max(0.0);
         }
         // Steps heard out of sight: a sprint carries farthest, a crouch
         // hardly at all (`SP_SilentRun` quietens them).
@@ -1541,8 +1888,13 @@ fn act(
         });
         // Desired movement and facing for this frame.
         let (mut goal, mut speed, mut face) = (None, 0.0, None);
+        // Clear of a grenade first: running until there (or it has gone off).
+        if let Some((to, left)) = npc.dodge {
+            npc.dodge = (left > dt && flat_distance(pos, to) > 1.0).then_some((to, left - dt));
+        }
+        let dodging = npc.dodge.map(|(to, _)| to);
         // A guard running for the alarm ignores everything else.
-        let running_to = npc.alarm_target.filter(|_| npc.state != NpcState::Idle);
+        let running_to = npc.alarm_target.filter(|_| npc.state != NpcState::Idle && dodging.is_none());
         if let Some(target) = running_to {
             if Vec2::new(target.x - pos.x, target.z - pos.z).length() < 1.8 {
                 npc.alarm_target = None;
@@ -1554,8 +1906,12 @@ fn act(
                 speed = 4.2;
             }
         }
+        if let Some(to) = dodging {
+            goal = Some(to);
+            speed = 4.2;
+        }
         match npc.state {
-            _ if running_to.is_some() => {}
+            _ if running_to.is_some() || dodging.is_some() => {}
             NpcState::Idle if npc.patrols => {
                 // Walk between spots around the post, pausing at each.
                 match npc.wander {
@@ -2552,6 +2908,21 @@ fn npc_test_spawn(
         info!("npc-test: two idle guards");
         return;
     }
+    // "watch": guards facing the player 20 m and 40 m off, and one 20 m off
+    // with the player 14 m to its side (the view volumes' test).
+    if matches!(args.npc_test.as_deref(), Some("watch" | "grenade")) {
+        let facing = yaw_to(-forward);
+        for (i, (ahead, side)) in [(20.0, 0.0), (40.0, 6.0), (20.0, -14.0)].into_iter().enumerate() {
+            let mut at = t.translation + forward * ahead + right * side;
+            at.y = heights.height_at(at).unwrap_or(at.y - HALF_HEIGHT);
+            let e =
+                spawn_npc(&mut commands, &assets, Some(&chars), &models, Faction::Pirate, Role::Assault, at, facing, u64::MAX - 1 - i as u64, &mut rng, None);
+            commands.entity(e).entry::<Npc>().and_modify(|mut n| n.patrols = false);
+        }
+        *done = true;
+        info!("npc-test: three watching guards");
+        return;
+    }
     // "crowd": a guard with three more a few metres beyond him, all facing
     // away (the grenade takedown's test).
     if args.npc_test.as_deref() == Some("crowd") {
@@ -2712,6 +3083,39 @@ fn outpost_fire_test(
     }
 }
 
+/// `FC3_CLEAR_TEST=<seconds>`: that long in, every hostile within 250 m of
+/// the player dies at his hand (an encounter cleared: its hostages go free).
+fn clear_test(
+    time: Res<Time>,
+    mut done: Local<bool>,
+    npcs: Query<(Entity, &Npc, &Transform, &Health)>,
+    players: Query<(Entity, &Transform), With<Player>>,
+    mut damage: MessageWriter<DamageEvent>,
+) {
+    let Some(at) = std::env::var("FC3_CLEAR_TEST").ok().and_then(|s| s.parse::<f32>().ok()) else { return };
+    if *done || time.elapsed_secs() < at {
+        return;
+    }
+    *done = true;
+    let Ok((pe, pt)) = players.single() else { return };
+    let mut n = 0;
+    for (e, npc, t, h) in &npcs {
+        if npc.faction.hostile_to_player() && !h.dead && t.translation.distance(pt.translation) < 250.0 {
+            damage.write(DamageEvent {
+                target: e,
+                amount: 10_000.0,
+                kind: DamageKind::Bullet,
+                source: Some(pt.translation),
+                instigator: Some(pe),
+                headshot: false,
+                hit: crate::combat::Hit::Whole,
+            });
+            n += 1;
+        }
+    }
+    info!("clear-test: {n} hostiles down");
+}
+
 fn kill_test(
     args: Res<crate::Args>,
     time: Res<Time>,
@@ -2788,19 +3192,23 @@ fn npc_test_log(
     info!("fight: player {:.0}hp | {}", ph.current, list.join(" | "));
 }
 
-/// Stealth checks: a noise beside the guards ("distract") or one guard killed
-/// in view of the other ("body"), then the guards' states every second.
+/// Stealth checks: a noise beside the guards ("distract"), one guard killed
+/// in view of the other ("body") or a grenade between the player and the
+/// guard facing him ("grenade"), then the guards' states every second.
+#[allow(clippy::too_many_arguments)]
 fn npc_test_stealth(
     args: Res<crate::Args>,
     time: Res<Time>,
     mut clock: Local<(f32, f32, bool)>,
     npcs: Query<(Entity, &Npc, &Transform, &Health)>,
+    players: Query<Entity, With<Player>>,
     mut noise: MessageWriter<Noise>,
     mut damage: MessageWriter<DamageEvent>,
+    mut commands: Commands,
 ) {
-    let Some(mode) = args.npc_test.as_deref().filter(|m| matches!(*m, "distract" | "body" | "guards")) else { return };
+    let Some(mode) = args.npc_test.as_deref().filter(|m| matches!(*m, "distract" | "body" | "guards" | "watch" | "grenade")) else { return };
     let mut guards: Vec<(Entity, &Npc, &Transform, &Health)> =
-        npcs.iter().filter(|(_, n, _, _)| n.marker_id >= u64::MAX - 2 && n.marker_id < u64::MAX).collect();
+        npcs.iter().filter(|(_, n, _, _)| n.marker_id >= u64::MAX - 3 && n.marker_id < u64::MAX).collect();
     if guards.len() < 2 {
         return;
     }
@@ -2810,7 +3218,31 @@ fn npc_test_stealth(
         *start = time.elapsed_secs();
     }
     let t = time.elapsed_secs() - *start;
-    if t > 8.0 && !*fired && mode != "guards" {
+    if t > 8.0 && !*fired && mode == "grenade" {
+        *fired = true;
+        // (The guards sort last to first: the one facing him 20 m off is last.)
+        let (Some((_, _, gt, _)), Ok(owner)) = (guards.last(), players.single()) else { return };
+        let at = gt.translation + gt.rotation * Vec3::NEG_Z * 2.5 + Vec3::Y * 0.2;
+        info!("stealth-test: a grenade at {at:.1?}");
+        commands.spawn((
+            crate::weapons::Projectile {
+                incendiary: false,
+                arrow: false,
+                velocity: Vec3::ZERO,
+                gravity: 9.81,
+                fuse: Some(3.0),
+                explode_on_impact: false,
+                radius: 8.0,
+                damage: 180.0,
+                owner,
+                age: 0.0,
+                travelled: 0.0,
+            },
+            Transform::from_translation(at),
+            Visibility::Visible,
+        ));
+    }
+    if t > 8.0 && !*fired && !matches!(mode, "guards" | "watch" | "grenade") {
         *fired = true;
         let (a, b) = (guards[0].2.translation, guards[1].2.translation);
         if mode == "distract" {
@@ -2878,6 +3310,20 @@ pub fn player_noise(writer: &mut MessageWriter<Noise>, at: Vec3, radius: f32, ki
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encounter_pawns_take_their_archetypes_side_and_role() {
+        for (name, want) in [
+            ("Merc/BaseMerc_FC3.Privateer_Defender_23", Some((Faction::Privateer, Role::Shotgunner))),
+            ("Merc/BaseMerc_FC3.Pirate_Assaulter.Pirate_Assaulter_Talker_2", Some((Faction::Pirate, Role::Assault))),
+            ("Merc/BaseMerc_FC3.Privateer_Assaulter.Pirate_Assaulter_Merc1_5", Some((Faction::Privateer, Role::Assault))),
+            ("Merc/BaseMerc_FC3.Pirate_HeavyGunner_1", Some((Faction::Pirate, Role::Heavy))),
+            ("Merc/BaseMerc_FC3.Rebel_Sniper_0", Some((Faction::Rebel, Role::Sniper))),
+            ("Civilian/Civilian_Male_3", None),
+        ] {
+            assert_eq!(pawn_identity(name), want, "{name}");
+        }
+    }
 
     #[test]
     fn injury_clip_names() {

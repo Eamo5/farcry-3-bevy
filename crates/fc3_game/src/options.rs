@@ -33,6 +33,7 @@ enum Opt {
     GamepadSensitivity,
     InvertY,
     Vibration,
+    AimAssist,
     Fov,
     Volume,
     MusicVolume,
@@ -49,13 +50,14 @@ enum Opt {
 }
 
 impl Opt {
-    const ALL: [Opt; 17] = [
+    const ALL: [Opt; 18] = [
         Opt::Difficulty,
         Opt::Story,
         Opt::Sensitivity,
         Opt::GamepadSensitivity,
         Opt::InvertY,
         Opt::Vibration,
+        Opt::AimAssist,
         Opt::Fov,
         Opt::Volume,
         Opt::MusicVolume,
@@ -75,6 +77,7 @@ impl Opt {
             Opt::GamepadSensitivity => "Gamepad sensitivity",
             Opt::InvertY => "Invert look",
             Opt::Vibration => "Vibration",
+            Opt::AimAssist => "Aim assist (gamepad)",
             Opt::Fov => "Field of view",
             Opt::Volume => "Volume",
             Opt::MusicVolume => "Music volume",
@@ -98,6 +101,7 @@ impl Opt {
             Opt::GamepadSensitivity => format!("{:.1}", s.gamepad_sensitivity),
             Opt::InvertY => on(s.invert_y),
             Opt::Vibration => on(s.vibration),
+            Opt::AimAssist => on(s.aim_assist),
             Opt::Fov => format!("{:.0}", s.fov),
             Opt::Volume => format!("{:.0}%", s.master_volume * 100.0),
             Opt::MusicVolume => format!("{:.0}%", s.music_volume * 100.0),
@@ -125,6 +129,7 @@ impl Opt {
             Opt::GamepadSensitivity => s.gamepad_sensitivity = (s.gamepad_sensitivity + d * 0.1).clamp(0.1, 5.0),
             Opt::InvertY => s.invert_y = !s.invert_y,
             Opt::Vibration => s.vibration = !s.vibration,
+            Opt::AimAssist => s.aim_assist = !s.aim_assist,
             Opt::Fov => s.fov = (s.fov + d * 5.0).clamp(55.0, 110.0),
             Opt::Volume => s.master_volume = (s.master_volume + d * 0.1).clamp(0.0, 1.0),
             Opt::MusicVolume => s.music_volume = (s.music_volume + d * 0.1).clamp(0.0, 1.0),

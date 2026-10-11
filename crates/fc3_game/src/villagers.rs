@@ -22,9 +22,12 @@ pub struct VillagersPlugin;
 
 impl Plugin for VillagersPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnExit(crate::menu::GameState::Loading), load_spots).add_systems(
+        app.add_message::<PlaceVillager>().add_systems(OnExit(crate::menu::GameState::Loading), load_spots).add_systems(
             Update,
-            (spawn_villagers, despawn_villagers, villager_ai, spot_clips, villager_log).chain().run_if(in_state(crate::menu::GameState::Playing)),
+            (place_villagers, spawn_villagers, despawn_villagers, execute, thank_player, villager_ai, spot_clips, villager_log)
+                .chain()
+                .before(crate::hud::HudSet)
+                .run_if(in_state(crate::menu::GameState::Playing)),
         );
     }
 }
@@ -53,6 +56,8 @@ enum State {
     Flee,
     Cower,
     Dead,
+    /// Going to the player who saved them (where he is), to thank him.
+    Thank(Vec3),
 }
 
 /// A villager goes to a free spot this near their patch (m), now and then
@@ -276,6 +281,12 @@ fn spawn_one(
     let Some(y) = ground(nav, heights, p) else { return };
     p.y = y;
     let yaw = rng.range(-3.1, 3.1);
+    spawn_at(commands, chars, models, rng, zone, p, yaw, female);
+}
+
+/// Spawns a villager standing at `p` (feet), facing `yaw`.
+#[allow(clippy::too_many_arguments)]
+fn spawn_at(commands: &mut Commands, chars: &CharacterAssets, models: &Assets<Fc3Model>, rng: &mut Rng, zone: u64, p: Vec3, yaw: f32, female: bool) -> Entity {
     let root = commands
         .spawn((
             Transform::from_translation(p + Vec3::Y * HALF_HEIGHT).with_rotation(Quat::from_rotation_y(yaw)),
@@ -289,7 +300,7 @@ fn spawn_one(
     let rig = crate::characters::spawn_villager(commands, root, chars, models, female, rng, Vec3::new(0.0, -HALF_HEIGHT, 0.0));
     commands.entity(root).insert(Villager {
         zone,
-        home: at,
+        home: p,
         state: State::Idle,
         timer: rng.range(1.0, 6.0),
         yaw,
@@ -300,6 +311,260 @@ fn spawn_one(
         base: None,
         prop: None,
     });
+    root
+}
+
+/// A civilian an encounter puts somewhere (dead: a body it leaves).
+#[derive(Message, Clone, Copy)]
+pub struct PlaceVillager {
+    pub at: Vec3,
+    pub yaw: f32,
+    pub female: bool,
+    pub dead: bool,
+    /// Held by the encounter's pirates (a hostage, prisoner or victim).
+    pub hostage: bool,
+    /// The cash they pay the player for their rescue, per survivor (0:
+    /// none).
+    pub reward: u32,
+    /// The encounter they belong to.
+    pub group: u64,
+}
+
+/// A civilian of an encounter (by its id).
+#[derive(Component)]
+pub struct EncounterCivilian(pub u64);
+
+/// An encounter's executioner (or one of its firing squad): once the
+/// player comes within the script's radius of the encounter, he kills one
+/// of its captives every interval while he lives.
+#[derive(Component)]
+pub struct Executioner {
+    group: u64,
+    at: Vec3,
+    near: f32,
+    interval: f32,
+    /// The points he fires from (by each captive).
+    points: Vec<Vec3>,
+    timer: Option<f32>,
+}
+
+impl Executioner {
+    pub fn new(group: u64, at: Vec3, x: &fc3_formats::encounters::Execution, points: Vec<Vec3>) -> Executioner {
+        Executioner { group, at, near: x.near, interval: x.interval, points, timer: None }
+    }
+}
+
+/// An executioner this near (m) his firing point fires.
+const AT_POINT: f32 = 1.6;
+
+/// Executioners at work: a shot (the flash, the rifle) into the nearest
+/// captive of theirs still alive. (Their own comrades take it for what it
+/// is: no alarm.)
+#[allow(clippy::too_many_arguments)]
+fn execute(
+    time: Res<Time>,
+    mut shooters: Query<(Entity, &mut Executioner, &mut crate::npc::Npc, &Transform, &Health)>,
+    victims: Query<(Entity, &EncounterCivilian, &Transform, &Health), With<Hostage>>,
+    players: Query<&Transform, With<Player>>,
+    mut damage: MessageWriter<crate::combat::DamageEvent>,
+    mut loops: MessageWriter<crate::sound::LoopSfx>,
+    mut particles: ResMut<crate::particles::Particles>,
+    mut rng: ResMut<Rng>,
+) {
+    let Ok(pt) = players.single() else { return };
+    let dt = time.delta_secs();
+    for (e, mut x, mut npc, t, h) in &mut shooters {
+        if h.dead {
+            continue;
+        }
+        let Some(timer) = x.timer.as_mut() else {
+            // Waiting for the player to come near. (FC3_EXECUTION_TEST: from
+            // twice as far, as encounters appear 35 m off or more.)
+            let near = if std::env::var_os("FC3_EXECUTION_TEST").is_some() { x.near * 2.0 } else { x.near };
+            if pt.translation.distance(x.at) < near {
+                x.timer = Some(x.interval);
+                if std::env::var_os("FC3_ENCOUNTER_DEBUG").is_some() {
+                    info!("encounter: the execution at {:.0?} begins", x.at);
+                }
+            }
+            continue;
+        };
+        *timer -= dt;
+        let pos = t.translation;
+        let group = x.group;
+        let Some((victim, at)) = victims
+            .iter()
+            .filter(|(_, c, _, vh)| c.0 == group && !vh.dead)
+            .map(|(v, _, vt, _)| (v, vt.translation))
+            .min_by(|a, b| a.1.distance(pos).total_cmp(&b.1.distance(pos)))
+        else {
+            continue;
+        };
+        // To the point by them, facing them (left to himself: in a fight he
+        // fires from where he stands).
+        let point = x.points.iter().copied().min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)));
+        if let Some(p) = point.filter(|_| npc.state == crate::npc::NpcState::Idle) {
+            npc.post = p;
+            npc.at_spot = true;
+            npc.post_yaw = (-(at.x - p.x)).atan2(-(at.z - p.z));
+            if Vec2::new(pos.x - p.x, pos.z - p.z).length() > AT_POINT {
+                continue;
+            }
+        }
+        if x.timer.is_some_and(|t| t > 0.0) {
+            continue;
+        }
+        x.timer = Some(x.interval);
+        // Turned on them, a burst into them.
+        let to = at - pos;
+        npc.yaw = (-to.x).atan2(-to.z);
+        let dir = to.normalize_or(Vec3::NEG_Z);
+        let muzzle = pos + Vec3::Y * 0.35 + Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero() * 0.7;
+        crate::particles::fx::muzzle_flash(&mut particles, &mut rng, muzzle, dir, 1.1);
+        loops.write(crate::sound::LoopSfx { key: e.to_bits(), event: crate::sound::ev::RIFLE_3P, at: Some(muzzle), volume: 1.0, ..default() });
+        damage.write(crate::combat::DamageEvent {
+            target: victim,
+            amount: 10_000.0,
+            kind: crate::combat::DamageKind::Bullet,
+            source: Some(muzzle),
+            instigator: Some(e),
+            headshot: false,
+            hit: crate::combat::Hit::Whole,
+        });
+        if std::env::var_os("FC3_ENCOUNTER_DEBUG").is_some() {
+            info!("encounter: a captive executed at {at:.0?}, from {pos:.1?}");
+        }
+    }
+}
+
+/// A civilian an encounter rewards the rescue of: once no armed enemy is
+/// near, they call the player over, and pay when he comes to them.
+#[derive(Component)]
+pub struct Grateful {
+    cash: u32,
+    group: u64,
+    called: bool,
+}
+
+/// No living enemy this near (m) and the player this near: a rescued
+/// civilian goes to him; this near him, they pay.
+const RESCUED: f32 = 50.0;
+const THANK_REACH: f32 = 45.0;
+const THANK_NEAR: f32 = 2.2;
+
+/// Rescued civilians go to the player, call him over, and pay on the
+/// interact key (the encounter library's reward: a thank-you, then the
+/// cash).
+#[allow(clippy::too_many_arguments)]
+fn thank_player(
+    mut villagers: Query<(Entity, &mut Villager, &Transform, &Health, &mut Grateful), Without<Hostage>>,
+    civilians: Query<(&EncounterCivilian, &Health)>,
+    enemies: Query<(&Transform, &Health, &crate::npc::Npc), Without<Villager>>,
+    players: Query<&Transform, (With<Player>, Without<Villager>)>,
+    mut actions: ResMut<crate::controls::ActionState>,
+    settings: Res<crate::settings::Settings>,
+    mut hud: ResMut<crate::hud::HudState>,
+    mut progress: ResMut<crate::progression::Progress>,
+    barks: Res<crate::barks::BarkTable>,
+    mut sfx: MessageWriter<crate::sound::PlaySfx>,
+    mut rng: ResMut<Rng>,
+    mut commands: Commands,
+) {
+    let Ok(pt) = players.single() else { return };
+    let me = pt.translation;
+    for (e, mut v, t, h, mut g) in &mut villagers {
+        let pos = t.translation;
+        if h.dead || matches!(v.state, State::Flee | State::Dead) {
+            continue;
+        }
+        let threat = enemies.iter().any(|(c, ch, n)| n.faction.hostile_to_player() && !ch.dead && c.translation.distance(pos) < RESCUED);
+        if threat || pos.distance(me) > THANK_REACH {
+            if matches!(v.state, State::Thank(_)) {
+                v.state = State::Idle;
+                v.timer = 1.0;
+            }
+            continue;
+        }
+        v.state = State::Thank(me);
+        // Their voice: an encounter civilian's (by the entity, for a steady one).
+        let voice = format!("outsider_nh_{}_0{}", if v.female { "female" } else { "male" }, e.to_bits() % 3 + 1);
+        let say = |stimulus: &str, rng: &mut Rng, sfx: &mut MessageWriter<crate::sound::PlaySfx>| {
+            if let Some((sound, _)) = barks.line(&voice, stimulus, rng.f32()) {
+                sfx.write(crate::sound::PlaySfx { event: sound, at: Some(pos + Vec3::Y * 0.7), volume: 1.0 });
+            }
+        };
+        if !g.called {
+            g.called = true;
+            say("inform_callplayer", &mut rng, &mut sfx);
+        }
+        if pos.distance(me) > THANK_NEAR + 0.6 {
+            continue;
+        }
+        if hud.prompt.is_none() {
+            hud.prompt = Some(format!("{}  take the reward", actions.label(crate::controls::Action::Interact, &settings)));
+        }
+        // FC3_REWARD_TEST (with FC3_CLEAR_TEST): take it when they come.
+        let test = std::env::var_os("FC3_REWARD_TEST").is_some();
+        if actions.just_pressed(crate::controls::Action::Interact) || test {
+            actions.consume(crate::controls::Action::Interact);
+            if test {
+                info!("reward-test: a rescued civilian pays ${} a survivor (had ${})", g.cash, progress.money);
+            }
+            // (For each of the encounter's civilians still alive.)
+            let survivors = civilians.iter().filter(|(c, ch)| c.0 == g.group && !ch.dead).count().max(1) as u32;
+            let paid = progress.add_money(g.cash * survivors);
+            hud.notify(format!("Rescued: ${paid}"));
+            say("salutation", &mut rng, &mut sfx);
+            commands.entity(e).remove::<Grateful>();
+            v.state = State::Idle;
+            v.timer = rng.range(4.0, 8.0);
+        }
+    }
+}
+
+/// A civilian held by armed men: they kneel, cowering, while any are near
+/// and alive, then get up and run.
+#[derive(Component)]
+pub struct Hostage;
+
+/// Captors this near (m) hold a hostage; their own, even this far.
+const HOSTAGE_GUARD: f32 = 25.0;
+const HOSTAGE_HOLD: f32 = 120.0;
+
+/// Encounters' civilians belong to no village zone.
+const NO_ZONE: u64 = u64::MAX;
+
+/// Puts encounters' civilians where they stand once the villagers' looks are
+/// in (given up after half a minute).
+fn place_villagers(
+    time: Res<Time>,
+    mut requests: MessageReader<PlaceVillager>,
+    mut pending: Local<Vec<(PlaceVillager, f32)>>,
+    chars: Option<Res<CharacterAssets>>,
+    server: Res<AssetServer>,
+    models: Res<Assets<Fc3Model>>,
+    mut rng: ResMut<Rng>,
+    mut commands: Commands,
+) {
+    let now = time.elapsed_secs();
+    pending.extend(requests.read().map(|r| (*r, now)));
+    let Some(chars) = chars.filter(|c| c.ready(&server)) else {
+        pending.retain(|(_, since)| now - since < 30.0);
+        return;
+    };
+    for (r, _) in pending.drain(..) {
+        let e = spawn_at(&mut commands, &chars, &models, &mut rng, NO_ZONE, r.at, r.yaw, r.female);
+        if r.dead {
+            commands.entity(e).insert(crate::combat::DieOnSpawn);
+        }
+        if r.hostage {
+            commands.entity(e).insert(Hostage);
+        }
+        commands.entity(e).insert(EncounterCivilian(r.group));
+        if r.reward > 0 && !r.dead {
+            commands.entity(e).insert(Grateful { cash: r.reward, group: r.group, called: false });
+        }
+    }
 }
 
 fn despawn_villagers(players: Query<&Transform, With<Player>>, villagers: Query<(Entity, &Villager, &Transform)>, mut commands: Commands) {
@@ -320,17 +585,18 @@ fn villager_ai(
     mut damage: MessageReader<crate::combat::DamageEvent>,
     (nav, heights): (Res<crate::nav::NavMesh>, Res<crate::terrain::Heightfield>),
     mut rng: ResMut<Rng>,
-    mut villagers: Query<(Entity, &mut Villager, &mut Transform, &Health)>,
+    mut villagers: Query<(Entity, &mut Villager, &mut Transform, &Health, Has<Hostage>, Has<Grateful>, Option<&EncounterCivilian>)>,
     mut anims: Query<&mut AnimRequest>,
     mut commands: Commands,
     spots: Option<ResMut<VillagerSpots>>,
+    captors: Query<(&Transform, &Health, &crate::npc::Npc), Without<Villager>>,
 ) {
     let dt = time.delta_secs();
     let Some(mut spots) = spots else { return };
     spots.taken.retain(|_, e| villagers.contains(*e));
     let noises: Vec<crate::npc::Noise> = noises.read().copied().collect();
     let hurt: Vec<(Entity, Option<Vec3>)> = damage.read().map(|d| (d.target, d.source)).collect();
-    for (e, mut v, mut t, h) in &mut villagers {
+    for (e, mut v, mut t, h, held, grateful, group) in &mut villagers {
         v.timer += if v.state == State::Dead { dt } else { 0.0 };
         if h.dead {
             if v.state != State::Dead {
@@ -347,6 +613,45 @@ fn villager_ai(
             continue;
         }
         let pos = t.translation;
+        // A hostage kneels while their captors are near; once they're dead or
+        // gone, up and away from where they were.
+        if held {
+            // (Their own captors hold them while any live, wherever they have
+            // gone to look; others only while near.)
+            let own = |n: &crate::npc::Npc| group.is_some_and(|g| g.0 == n.marker_id);
+            let near = |(c, ch, n): &(&Transform, &Health, &crate::npc::Npc)| {
+                n.faction.hostile_to_player()
+                    && !ch.dead
+                    && (own(n) && c.translation.distance(pos) < HOSTAGE_HOLD || c.translation.distance(pos) < HOSTAGE_GUARD)
+            };
+            if captors.iter().any(|c| near(&c)) {
+                v.state = State::Cower;
+                v.timer = 1.0;
+                t.rotation = Quat::from_rotation_y(v.yaw);
+                if let Some(mut a) = v.rig.and_then(|r| anims.get_mut(r).ok()) {
+                    *a = AnimRequest { kind: AnimKind::Cover, rate: 1.0 };
+                }
+                continue;
+            }
+            commands.entity(e).remove::<Hostage>();
+            let last = captors
+                .iter()
+                .filter(|(c, _, n)| n.faction.hostile_to_player() && c.translation.distance(pos) < HOSTAGE_GUARD * 2.0)
+                .map(|(c, _, _)| c.translation)
+                .next();
+            // (One the encounter rewards stays, to thank the player.)
+            if grateful {
+                v.state = State::Idle;
+                v.timer = 2.0;
+            } else {
+                v.state = State::Flee;
+                v.timer = FLEE_TIME;
+                v.fear = last.unwrap_or(pos - Vec3::new(-v.yaw.sin(), 0.0, -v.yaw.cos()));
+            }
+            if std::env::var_os("FC3_ENCOUNTER_DEBUG").is_some() {
+                info!("encounter: a hostage at {pos:.0?} is free");
+            }
+        }
         // Gunfire, an explosion or being hit: run from it.
         let scare = hurt
             .iter()
@@ -445,14 +750,35 @@ fn villager_ai(
                 (AnimKind::Cover, 1.0)
             }
             State::Dead => (AnimKind::Death, 1.0),
+            // To the player, then facing him.
+            State::Thank(to) => {
+                let flat = Vec3::new(to.x - pos.x, 0.0, to.z - pos.z);
+                if flat.length() > THANK_NEAR {
+                    let far = flat.length() > 12.0;
+                    step = flat.normalize() * if far { RUN_SPEED } else { WALK_SPEED } * dt;
+                    (if far { AnimKind::Run } else { AnimKind::Walk }, 1.0)
+                } else {
+                    v.yaw = (-flat.x).atan2(-flat.z);
+                    (AnimKind::Idle, 1.0)
+                }
+            }
         };
         if step != Vec3::ZERO {
-            let next = pos + step;
             // Stay on walkable ground (the mesh, where it's loaded); blocked:
             // turn aside, or give up on the walk.
-            let on_mesh = !nav.ready()
-                || nav.height_at(next - Vec3::Y * HALF_HEIGHT).is_some()
-                || heights.height_at(next).is_some_and(|g| (g - (pos.y - HALF_HEIGHT)).abs() < 0.6);
+            let walkable = |next: Vec3| {
+                !nav.ready()
+                    || nav.height_at(next - Vec3::Y * HALF_HEIGHT).is_some()
+                    || heights.height_at(next).is_some_and(|g| (g - (pos.y - HALF_HEIGHT)).abs() < 0.6)
+            };
+            // (Going to the player, round whatever is in the way.)
+            if matches!(v.state, State::Thank(_)) && !walkable(pos + step) {
+                if let Some(aside) = [0.6f32, -0.6, 1.2, -1.2, 1.8, -1.8].into_iter().map(|a| Quat::from_rotation_y(a) * step).find(|s| walkable(pos + *s)) {
+                    step = aside;
+                }
+            }
+            let next = pos + step;
+            let on_mesh = walkable(next);
             if on_mesh {
                 if let Some(g) = ground(&nav, &heights, next - Vec3::Y * HALF_HEIGHT) {
                     t.translation = Vec3::new(next.x, g + HALF_HEIGHT, next.z);

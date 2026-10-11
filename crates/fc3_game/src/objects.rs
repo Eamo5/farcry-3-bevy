@@ -30,7 +30,9 @@ impl Plugin for ObjectsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ObjectStreamer>()
             .add_systems(Update, (request_objects, spawn_objects).chain().in_set(ObjectStreaming).run_if(resource_exists::<CacheInfo>))
-            .add_systems(Update, near_debug);
+            .add_systems(Update, near_debug)
+            .add_message::<PlaceProp>()
+            .add_systems(Update, place_props.run_if(in_state(crate::menu::GameState::Playing)));
     }
 }
 
@@ -270,6 +272,104 @@ fn spawn_objects(
         }
         slot.root = Some(root);
     }
+}
+
+/// A prop an encounter sets out (its model, by path), under an id of its own.
+#[derive(Message, Clone)]
+pub struct PlaceProp {
+    pub model: String,
+    pub at: Vec3,
+    pub rotation: Quat,
+    pub id: u64,
+    /// For a cage's door: the animal kept behind it (by archetype).
+    pub caged: Option<String>,
+}
+
+/// A prop set out by an encounter (its id).
+#[derive(Component)]
+pub struct EncounterProp(pub u64);
+
+/// Encounter props are taken away beyond this (m): the encounter sets them out
+/// anew when it next spawns.
+const PROP_KEEP: f32 = 360.0;
+
+/// Sets out the props encounters ask for once their models are in (each id
+/// once; given up after half a minute), as world objects (they take their
+/// models' collision like any placed object), and takes far ones away.
+fn place_props(
+    time: Res<Time>,
+    mut requests: MessageReader<PlaceProp>,
+    mut pending: Local<Vec<(PlaceProp, Handle<Fc3Model>, f32)>>,
+    server: Res<AssetServer>,
+    models: Res<Assets<Fc3Model>>,
+    existing: Query<(Entity, &EncounterProp, &Transform)>,
+    players: Query<&Transform, With<crate::player::Player>>,
+    mut commands: Commands,
+) {
+    let now = time.elapsed_secs();
+    let live: std::collections::HashSet<u64> = existing.iter().map(|(_, p, _)| p.0).collect();
+    for r in requests.read() {
+        if !live.contains(&r.id) && !pending.iter().any(|(p, _, _)| p.id == r.id) {
+            pending.push((r.clone(), server.load(cache_path(&cache::model_rel(&r.model))), now));
+        }
+    }
+    pending.retain(|(r, handle, since)| {
+        if !crate::cache_assets::done(&server, handle.id()) {
+            return now - since < 30.0;
+        }
+        let Some(model) = models.get(handle).filter(|m| !m.lods.is_empty()) else { return false };
+        let obj = spawn_model(&mut commands, handle, model, Transform::from_translation(r.at).with_rotation(r.rotation));
+        commands.entity(obj).insert((EncounterProp(r.id), Name::new("encounter prop")));
+        if std::env::var_os("FC3_ENCOUNTER_DEBUG").is_some() {
+            info!("encounter: prop {} at {:.1?}", r.model, r.at);
+        }
+        // (An animal cage's door gives way like any other.)
+        if r.model.to_ascii_lowercase().contains("cagedoor") {
+            commands.entity(obj).insert((crate::wildlife::CageDoor { id: r.id }, crate::combat::Health::new(crate::wildlife::CAGE_DOOR_HEALTH)));
+            if let Some(a) = &r.caged {
+                commands.entity(obj).insert(crate::wildlife::Caged(a.clone()));
+            }
+        }
+        false
+    });
+    if let Ok(pt) = players.single() {
+        for (e, _, t) in &existing {
+            if t.translation.distance(pt.translation) > PROP_KEEP {
+                commands.entity(e).despawn();
+            }
+        }
+    }
+}
+
+/// Spawns a model on its own (not from a sector), in its own materials,
+/// as a world object at `transform`.
+fn spawn_model(commands: &mut Commands, handle: &Handle<Fc3Model>, model: &Fc3Model, transform: Transform) -> Entity {
+    let obj = commands.spawn((transform, Visibility::Visible, WorldObject { model: handle.clone(), entity_index: u32::MAX })).id();
+    let small = model.radius() < 1.5;
+    for (li, lod) in model.lods.iter().enumerate() {
+        let range = lod_range(model, li);
+        let fade = (range.end * 0.1).clamp(0.5, 8.0);
+        let vis = VisibilityRange {
+            start_margin: if li == 0 { 0.0..0.0 } else { (range.start - fade * 0.5)..(range.start + fade * 0.5) },
+            end_margin: (range.end - fade * 0.5)..(range.end + fade * 0.5),
+            use_aabb: false,
+        };
+        for part in &lod.parts {
+            let mut e = commands.spawn((
+                Mesh3d(part.mesh.clone()),
+                MeshMaterial3d(part.material.clone()),
+                vis.clone(),
+                crate::original_shaders::PropPart,
+                ChildOf(obj),
+            ));
+            if small || li > 1 {
+                e.insert(NotShadowCaster);
+            } else {
+                e.insert(crate::shadow_lod::ShadowSize(model.radius()));
+            }
+        }
+    }
+    obj
 }
 
 /// Whether an entity class is a character (a pawn), whose placed model is

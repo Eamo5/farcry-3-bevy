@@ -473,6 +473,11 @@ pub fn update_actions(
         state.movement = Vec2::new(axis(Action::Right, Action::Left), axis(Action::Forward, Action::Back));
     }
 
+    // FC3_LOOK_TEST (tests): a steady turn to the right, as a mouse would.
+    if std::env::var_os("FC3_LOOK_TEST").is_some() {
+        state.look += Vec2::new(0.01, 0.0);
+    }
+
     // Gamepad: works whenever play has focus (no cursor capture needed).
     if let Some(pad) = gamepads.iter().next() {
         let dead = |v: Vec2, zone: f32| {

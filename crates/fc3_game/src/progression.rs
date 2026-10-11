@@ -44,6 +44,7 @@ impl Plugin for ProgressionPlugin {
             .init_resource::<PauseMenu>()
             .add_systems(OnExit(GameState::Loading), (load_shop_catalog, load_loot_catalog))
             .add_systems(Update, find_shops)
+            .add_systems(Update, remind_skill_points.run_if(in_state(GameState::Playing)))
             .add_systems(Startup, (setup_journal, setup_shop, setup_popups))
             .add_systems(
                 Update,
@@ -87,10 +88,25 @@ pub enum Animal {
     Shark,
     Macaque,
     Chicken,
+    WildPig,
+    Thylacine,
+    // The small and the swimming: rats, lizards, crabs, crows, fish and the
+    // rest the wildlife regions spawn.
+    Pig,
+    Rat,
+    Lizard,
+    Crab,
+    Crow,
+    RiverFish,
+    SeaTurtle,
+    Tortoise,
+    JellyFish,
+    Moray,
+    MantaRay,
 }
 
 impl Animal {
-    pub const ALL: [Animal; 15] = [
+    pub const ALL: [Animal; 28] = [
         Animal::Boar,
         Animal::Deer,
         Animal::Goat,
@@ -106,6 +122,19 @@ impl Animal {
         Animal::Shark,
         Animal::Macaque,
         Animal::Chicken,
+        Animal::WildPig,
+        Animal::Thylacine,
+        Animal::Pig,
+        Animal::Rat,
+        Animal::Lizard,
+        Animal::Crab,
+        Animal::Crow,
+        Animal::RiverFish,
+        Animal::SeaTurtle,
+        Animal::Tortoise,
+        Animal::JellyFish,
+        Animal::Moray,
+        Animal::MantaRay,
     ];
 
     /// The game's animal archetype (its counters: health and what harms
@@ -127,6 +156,19 @@ impl Animal {
             Animal::Shark => "BullShark",
             Animal::Macaque => "Macaque",
             Animal::Chicken => "Chicken",
+            Animal::WildPig => "Pig_Wild",
+            Animal::Thylacine => "Thylacine",
+            Animal::Pig => "Pig",
+            Animal::Rat => "Rat",
+            Animal::Lizard => "Lizard",
+            Animal::Crab => "Crab",
+            Animal::Crow => "Crow",
+            Animal::RiverFish => "RiverFish",
+            Animal::SeaTurtle => "SeaTurtle",
+            Animal::Tortoise => "GTortoise",
+            Animal::JellyFish => "JellyFish",
+            Animal::Moray => "Moray",
+            Animal::MantaRay => "MantaRay",
         }
     }
 
@@ -147,6 +189,19 @@ impl Animal {
             Animal::Shark => "Bull Shark",
             Animal::Macaque => "Macaque",
             Animal::Chicken => "Chicken",
+            Animal::WildPig => "Wild Pig",
+            Animal::Thylacine => "Thylacine",
+            Animal::Pig => "Pig",
+            Animal::Rat => "Rat",
+            Animal::Lizard => "Lizard",
+            Animal::Crab => "Crab",
+            Animal::Crow => "Crow",
+            Animal::RiverFish => "Fish",
+            Animal::SeaTurtle => "Sea Turtle",
+            Animal::Tortoise => "Tortoise",
+            Animal::JellyFish => "Jellyfish",
+            Animal::Moray => "Moray Eel",
+            Animal::MantaRay => "Manta Ray",
         }
     }
 
@@ -167,6 +222,19 @@ impl Animal {
             Animal::Shark => "shark",
             Animal::Macaque => "macaque",
             Animal::Chicken => "chicken",
+            Animal::WildPig => "wildpig",
+            Animal::Thylacine => "thylacine",
+            Animal::Pig => "pig",
+            Animal::Rat => "rat",
+            Animal::Lizard => "lizard",
+            Animal::Crab => "crab",
+            Animal::Crow => "crow",
+            Animal::RiverFish => "riverfish",
+            Animal::SeaTurtle => "seaturtle",
+            Animal::Tortoise => "tortoise",
+            Animal::JellyFish => "jellyfish",
+            Animal::Moray => "moray",
+            Animal::MantaRay => "mantaray",
         }
     }
 
@@ -860,8 +928,23 @@ pub(crate) fn animal_prototype(animal: Animal) -> Option<&'static str> {
         Animal::Cassowary => "FC3_Quadrupeds/Cassowary",
         Animal::Buffalo => "FC3_Quadrupeds/Buffalo",
         Animal::Shark => "FC3_Aquatic/BullShark",
+        Animal::Crocodile => "FC3_Quadrupeds/Crocodile",
+        Animal::Macaque => "FC3_Quadrupeds/Macaque",
+        Animal::WildPig => "FC3_Quadrupeds/Pig_Wild",
+        Animal::Thylacine => "FC3_Quadrupeds/Thylacine",
+        Animal::Pig => "FC3_Domestic/Pig",
+        Animal::Rat => "FC3_Quadrupeds/Rat",
+        Animal::Lizard => "FC3_Quadrupeds/Lizard",
+        Animal::Crab => "SimpleAnimal/Crab",
+        Animal::Crow => "Winged/Crow",
+        Animal::RiverFish => "FC3_Aquatic/RiverFish",
+        Animal::SeaTurtle => "FC3_Aquatic/SeaTurtle",
+        Animal::Tortoise => "FC3_Quadrupeds/GTortoise",
+        Animal::JellyFish => "FC3_Aquatic/JellyFish",
+        Animal::Moray => "FC3_Aquatic/Moray",
+        Animal::MantaRay => "FC3_Aquatic/MantaRay",
         // No authored identity in the catalog.
-        Animal::Crocodile | Animal::Macaque | Animal::Chicken => return None,
+        Animal::Chicken => return None,
     })
 }
 
@@ -895,6 +978,11 @@ impl LootCatalog {
 
     pub fn item(&self, kind: LootKind) -> Option<&fc3_formats::progression::Item> {
         self.0.get(&kind)
+    }
+
+    /// Nothing read from the game (no cache).
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     /// Several plants yield the same leaf item; scripts see the combined
@@ -2329,6 +2417,8 @@ impl ShopItem {
             ShopItem::Mine => 200,
             ShopItem::Gear(crate::freefall::WINGSUIT) => 1200,
             ShopItem::Gear(_) => 300,
+            // (A sight bought before goes back on for nothing.)
+            ShopItem::Attachment(d, a) if inv.owns(d, a) => 0,
             ShopItem::Attachment(d, a) => inv.defs.get(d).map(|d| a.price(d)).unwrap_or(0),
             ShopItem::Paint(..) => PAINT_PRICE,
             ShopItem::Arrows(1) => 150,
@@ -2648,6 +2738,28 @@ pub struct ItemBought {
 pub struct Shops(pub Vec<Vec3>);
 
 /// Shopkeepers as their sectors load.
+/// Unspent skill points brought up now and then, as often as the game's
+/// HUD reminds of them.
+fn remind_skill_points(
+    time: Res<Time>,
+    mut waited: Local<f32>,
+    params: Res<crate::map::HudParams>,
+    progress: Res<Progress>,
+    mut hud: ResMut<crate::hud::HudState>,
+) {
+    let every = params.0.skill_reminder;
+    if every <= 0.0 || progress.skill_points == 0 {
+        *waited = 0.0;
+        return;
+    }
+    *waited += time.delta_secs();
+    if *waited >= every {
+        *waited = 0.0;
+        let n = progress.skill_points;
+        hud.notify(format!("{n} skill point{} to spend (Tab)", if n == 1 { "" } else { "s" }));
+    }
+}
+
 fn find_shops(
     sectors: Res<Assets<crate::cache_assets::Fc3Sector>>,
     added: Query<&crate::objects::SectorObjects, Added<crate::objects::SectorObjects>>,
@@ -2971,7 +3083,14 @@ fn refresh_shop(
             continue;
         }
         let price = item.price(inv, progress.towers.len(), &catalog);
-        t.0 = if owned { "owned".into() } else { format!("${price}") };
+        let swap = matches!(item, ShopItem::Attachment(d, a) if inv.owns(d, a));
+        t.0 = if owned {
+            "fitted".into()
+        } else if swap {
+            "fit".into()
+        } else {
+            format!("${price}")
+        };
         c.0 = if owned || progress.money < price { Color::srgba(0.8, 0.8, 0.8, 0.5) } else { ACCENT };
     }
 }

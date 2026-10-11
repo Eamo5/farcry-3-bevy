@@ -317,7 +317,7 @@ fn load_character_assets(mut commands: Commands, server: Res<AssetServer>, info:
 }
 
 /// Weighted pick of an index (uniform when every weight is zero).
-fn weighted(weights: impl Iterator<Item = f32> + Clone, rng: &mut Rng) -> Option<usize> {
+pub(crate) fn weighted(weights: impl Iterator<Item = f32> + Clone, rng: &mut Rng) -> Option<usize> {
     let total: f32 = weights.clone().map(|w| w.max(0.0)).sum();
     let n = weights.clone().count();
     if n == 0 {
@@ -585,7 +585,7 @@ pub struct Dressed<'a> {
     pub swaps: Vec<(AssetId<StandardMaterial>, Handle<StandardMaterial>)>,
 }
 
-fn spawn_dressed_rig(
+pub(crate) fn spawn_dressed_rig(
     commands: &mut Commands,
     parent: Entity,
     parts: &[Dressed],

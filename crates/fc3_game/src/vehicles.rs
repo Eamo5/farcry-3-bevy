@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use fc3_formats::cache;
+use fc3_formats::handling::Glider;
 
 use crate::cache_assets::{cache_path, Fc3Model, Fc3Sector};
 use crate::combat::{DamageEvent, DamageKind, Health};
@@ -28,7 +29,9 @@ impl Plugin for VehiclesPlugin {
             .init_resource::<crate::vehicle_paths::StoryVehiclePaths>()
             .add_systems(PreUpdate, (story_board_test, story_exit_test).chain().after(crate::controls::update_actions).after(crate::story::story_interactions)
                 .run_if(in_state(crate::menu::GameState::Playing)))
-            .add_systems(OnExit(crate::menu::GameState::Loading), load_vehicles)
+            .add_systems(OnExit(crate::menu::GameState::Loading), (load_vehicles, load_handling))
+            .init_resource::<SpeedFov>()
+            .add_systems(Update, speed_fov)
             .add_systems(
                 Update,
                 (
@@ -39,13 +42,15 @@ impl Plugin for VehiclesPlugin {
                     run_over,
                     vehicle_sounds.after(crate::cinema::CinemaSet),
                     vehicle_hud.before(crate::hud::HudSet),
-                    drive_test,
+                    drive_test.before(enter_exit),
                     crate::vehicle_paths::story_paths.after(crate::story::StorySet).before(crate::cinema::CinemaSet),
                 )
                     .run_if(in_state(crate::menu::GameState::Playing)),
             )
             .add_systems(FixedUpdate, (crate::vehicle_paths::drive_paths, drive).chain())
             .add_message::<StrayHit>()
+            .add_message::<PlaceVehicle>()
+            .add_systems(Update, place_vehicles.run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(Update, (turn_wheels, wreck_rocket, stray_hits, vehicle_damage, wreck_test).chain().after(crate::cinema::CinemaSet).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(PostUpdate, (sync_vehicle_motion, seat_player, seat_story_actors).chain().before(TransformSystems::Propagate));
     }
@@ -73,6 +78,438 @@ struct Def {
 }
 
 const VEHICLES: &str = r"graphics\__fc3_graphics\_common\vehicles\";
+
+/// The game's handling for its land vehicles (`fc3_formats::handling`),
+/// once read from the cache.
+static HANDLING: std::sync::OnceLock<Vec<fc3_formats::handling::Handling>> = std::sync::OnceLock::new();
+
+fn load_handling(info: Option<Res<crate::data::CacheInfo>>) {
+    let Some(info) = info else { return };
+    match std::fs::read_to_string(info.root.join(fc3_formats::handling::HANDLING_REL))
+        .map_err(anyhow::Error::from)
+        .and_then(|t| fc3_formats::handling::from_text(&t))
+    {
+        Ok(list) => {
+            info!("vehicles: the game's handling for {} kinds", list.len());
+            let _ = HANDLING.set(list);
+        }
+        Err(e) => warn!("vehicles: no handling table ({e:#}); re-run the converter"),
+    }
+}
+
+const KMH: f32 = 1.0 / 3.6;
+const HORSEPOWER: f32 = 745.7;
+const AIR_DENSITY: f32 = 1.225;
+/// The boats' water friction (mass-free figures, as their data has them) as
+/// a damping rate per second: the zodiac's thrust and friction then top out
+/// at 22 m/s, where we had tuned it.
+const WATER_DRAG: f32 = 5.45;
+/// The steering angle the boats' rudder force was tuned to (the engine's
+/// default high-speed angle, degrees).
+const RUDDER_REFERENCE: f32 = 30.0;
+
+/// How a definition drives: the game's figures where its archetype has them,
+/// else ours.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Tuning {
+    mass: f32,
+    /// The speeds the engine cuts off above (m/s), ahead and astern.
+    top_speed: f32,
+    reverse_speed: f32,
+    /// Steering lock (radians) at rest and at top speed (`ours`: easing off
+    /// from the first with speed).
+    lock_low: f32,
+    lock_high: f32,
+    ours: bool,
+    grip: f32,
+    /// Air drag (N per (m/s)²).
+    drag: f32,
+    /// A car's pull: each gear's ratio and the speed (m/s) it holds to, the
+    /// pull per unit of ratio, and astern; without a gearbox, `engine`.
+    gears: [(f32, f32); 6],
+    gear_count: usize,
+    pull: f32,
+    reverse_pull: f32,
+    engine: f32,
+    /// A boat's motor and hull, if from the game's data.
+    boat: Option<BoatTune>,
+    /// A hang glider's flight, likewise.
+    glider: Option<Glider>,
+    /// A car's wheels: front left, front right, rear left, rear right; and
+    /// the share of its grip a locked wheel keeps.
+    wheels: [WheelTune; 4],
+    lock_friction: f32,
+    /// The chassis: lift (N per (m/s)², negative pressing it down), extra
+    /// gravity (m/s²), gravity's factor in the air (eased in over seconds,
+    /// above a speed), angular damping, and the stabiliser in the air.
+    lift: f32,
+    extra_gravity: f32,
+    airborne_gravity: f32,
+    airborne_fade: f32,
+    airborne_min_speed: f32,
+    angular_damping: f32,
+    stabilizer: f32,
+}
+
+/// How high (m) over the bottom of its tyres a car's wheel is mounted.
+const WHEEL_MOUNT: f32 = 0.6;
+
+/// A car wheel's suspension (per kilogram of the car, as Havok counts it)
+/// and grip.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct WheelTune {
+    /// The spring's push per metre pressed in; the dampers' per m/s going in
+    /// and coming back out.
+    strength: f32,
+    compression: f32,
+    relaxation: f32,
+    /// From the mount to the ground with the spring unloaded.
+    reach: f32,
+    grip: f32,
+    /// Held by the handbrake; driven by the engine.
+    handbrake: bool,
+    driving: bool,
+}
+
+impl WheelTune {
+    /// Ours: soft, standing a little high, every wheel braked and driven.
+    const OURS: WheelTune =
+        WheelTune { strength: 9.81 / (4.0 * 0.22), compression: 1.5, relaxation: 1.5, reach: 0.97, grip: 1.3, handbrake: true, driving: true };
+
+    /// The game's: at rest the spring carries a quarter of the car, so it
+    /// stands as modelled (its wheels on the ground).
+    fn game(w: &fc3_formats::handling::Wheel) -> WheelTune {
+        WheelTune {
+            strength: w.strength,
+            compression: w.compression,
+            relaxation: w.relaxation,
+            reach: WHEEL_MOUNT + 9.81 / (4.0 * w.strength),
+            grip: w.friction,
+            handbrake: w.handbrake,
+            driving: w.driving,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BoatTune {
+    /// Thrust ahead and astern (m/s² at full revs), seconds to full revs.
+    thrust: f32,
+    reverse: f32,
+    rev_time: f32,
+    /// The water's damping ahead and to the side (per second).
+    forward_drag: f32,
+    side_drag: f32,
+    /// Rudder angle (degrees) at rest and at its top speed (m/s).
+    rudder_low: f32,
+    rudder_high: f32,
+    rudder_top: f32,
+    /// The motor's push against the way it goes (m/s² at full revs), and
+    /// the brake (m/s²).
+    braking: f32,
+    brake: f32,
+}
+
+/// The wingsuit's flight, parachute and look limits (the game's data for
+/// its descriptor folder).
+pub(crate) fn wingsuit() -> Option<&'static fc3_formats::handling::Handling> {
+    HANDLING.get()?.iter().find(|h| h.folder == r"air\wingsuit")
+}
+
+/// The game's handling for a definition, by its model's folder.
+fn handling_of(def: usize) -> Option<&'static fc3_formats::handling::Handling> {
+    let folder = DEFS[def].model.rsplit_once('\\').map(|(f, _)| f.to_ascii_lowercase())?;
+    HANDLING.get()?.iter().find(|h| h.folder == folder)
+}
+
+/// How much wider than the player's own the view is while driving (1: as
+/// is): the vehicle's driving camera widens with speed, from its angle at
+/// the low speed to its angle at the high one (km/h).
+#[derive(Resource)]
+pub struct SpeedFov(pub f32);
+
+impl Default for SpeedFov {
+    fn default() -> Self {
+        SpeedFov(1.0)
+    }
+}
+
+fn speed_fov(time: Res<Time>, driving: Res<Driving>, vehicles: Query<(&Vehicle, &LinearVelocity)>, mut fov: ResMut<SpeedFov>) {
+    let want = driving
+        .vehicle
+        .and_then(|e| vehicles.get(e).ok())
+        .and_then(|(v, lv)| {
+            let [low, high, at_low, at_high] = handling_of(v.def)?.fov;
+            (high > low && at_low > 0.0).then(|| {
+                let t = ((lv.0.length() / KMH - low) / (high - low)).clamp(0.0, 1.0);
+                (at_low + (at_high - at_low) * t) / at_low
+            })
+        })
+        .unwrap_or(1.0);
+    fov.0 += (want - fov.0) * (time.delta_secs() * 2.0).min(1.0);
+}
+
+fn tuning(def: usize) -> Tuning {
+    let d = &DEFS[def];
+    let mut t = Tuning {
+        mass: d.mass,
+        top_speed: d.top_speed,
+        reverse_speed: d.top_speed,
+        lock_low: 0.55,
+        lock_high: 0.55,
+        ours: true,
+        grip: 1.3,
+        drag: 0.9,
+        gears: [(0.0, 0.0); 6],
+        gear_count: 0,
+        pull: 0.0,
+        reverse_pull: 0.0,
+        engine: d.engine,
+        boat: None,
+        glider: None,
+        wheels: [WheelTune::OURS; 4],
+        lock_friction: 1.0,
+        lift: 0.0,
+        extra_gravity: 0.0,
+        airborne_gravity: 1.0,
+        airborne_fade: 0.0,
+        airborne_min_speed: 0.0,
+        angular_damping: 0.6,
+        stabilizer: 4.0,
+    };
+    let Some(h) = handling_of(def) else { return t };
+    match (d.kind, &h.car, &h.boat) {
+        // The engine's torque from its horsepower at the optimal revs, through
+        // each gear and the final drive the gearbox's top speed sets.
+        (Kind::Car, Some(c), _) => {
+            let rad = |rpm: f32| rpm * std::f32::consts::TAU / 60.0;
+            let torque = c.power * HORSEPOWER / rad(c.optimal_rpm) * c.torque_factor.max(0.1);
+            let top_ratio = c.gears.iter().map(|g| g.0).fold(f32::MAX, f32::min);
+            t.mass = h.mass;
+            t.pull = torque * rad(c.max_rpm) / (c.gearbox_top * top_ratio);
+            t.reverse_pull = t.pull * c.reverse_ratio;
+            for (i, (ratio, kmh)) in c.gears.iter().take(6).enumerate() {
+                t.gears[i] = (*ratio, kmh * KMH);
+            }
+            t.gear_count = c.gears.len().min(6);
+            t.top_speed = c.cutoff;
+            t.reverse_speed = c.reverse_cutoff.min(c.cutoff);
+            t.lock_low = c.steer_low.to_radians();
+            t.lock_high = c.steer_high.to_radians();
+            t.ours = false;
+            t.grip = c.friction;
+            t.drag = 0.5 * AIR_DENSITY * c.drag * c.area;
+            // Our four wheels from the data's (front first): a two-wheeler's
+            // front and back, a six-wheeler's front and last pair.
+            let n = c.wheels.len();
+            let pick = match n {
+                0 | 1 => None,
+                2 => Some([0, 0, 1, 1]),
+                3 => Some([0, 0, 1, 2]),
+                _ => Some([0, 1, n - 2, n - 1]),
+            };
+            if let Some(pick) = pick.filter(|_| c.wheels.iter().all(|w| w.strength > 0.0)) {
+                t.wheels = pick.map(|i| WheelTune::game(&c.wheels[i]));
+                // (A car with none driven or none on the handbrake: all.)
+                if !t.wheels.iter().any(|w| w.driving) {
+                    t.wheels.iter_mut().for_each(|w| w.driving = true);
+                }
+                if !t.wheels.iter().any(|w| w.handbrake) {
+                    t.wheels.iter_mut().for_each(|w| w.handbrake = true);
+                }
+            }
+            t.lock_friction = c.lock_friction;
+            t.lift = 0.5 * AIR_DENSITY * c.lift * c.area;
+            t.extra_gravity = c.extra_gravity;
+            t.airborne_gravity = c.airborne_gravity;
+            t.airborne_fade = c.airborne_fade;
+            t.airborne_min_speed = c.airborne_min_speed;
+            t.angular_damping = c.angular_damping;
+            t.stabilizer = c.stabilizer;
+        }
+        (Kind::Boat, _, Some(b)) => {
+            let forward_drag = b.forward_friction * WATER_DRAG;
+            t.mass = h.mass;
+            t.top_speed = b.forward / forward_drag;
+            t.reverse_speed = b.reverse / forward_drag;
+            t.boat = Some(BoatTune {
+                thrust: b.forward,
+                reverse: b.reverse,
+                rev_time: if b.rev_up > 0.0 { b.max_rpm / b.rev_up } else { 0.0 },
+                forward_drag,
+                side_drag: b.side_friction * WATER_DRAG,
+                rudder_low: b.steer_low,
+                rudder_high: b.steer_high,
+                rudder_top: b.steer_top.max(1.0),
+                braking: b.engine_braking,
+                brake: b.brake,
+            });
+            t.angular_damping = b.angular_damping;
+        }
+        (Kind::Glider, ..) if h.glider.is_some() => {
+            let g = h.glider.unwrap();
+            t.mass = h.mass;
+            t.top_speed = g.max_speed;
+            t.reverse_speed = 0.0;
+            t.glider = Some(g);
+        }
+        _ => {}
+    }
+    t
+}
+
+/// A hang glider in flight: its bank and pitch (radians, bank left and nose
+/// up positive) and how fast they change, its heading and turn rate, its
+/// airspeed, how far into landing mode it is (0 to 1), how long it has
+/// flown, how long something has held it back, and whether it has come down.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Glide {
+    held: f32,
+    down: bool,
+    pub(crate) roll: f32,
+    roll_rate: f32,
+    pub(crate) pitch: f32,
+    pitch_rate: f32,
+    pub(crate) yaw: f32,
+    pub(crate) turn: f32,
+    pub(crate) speed: f32,
+    landing: f32,
+    pub(crate) flown: f32,
+}
+
+/// Getting off a hang glider higher than this above the ground drops the
+/// player from it rather than setting them down beside it.
+const GLIDER_DROP: f32 = 3.0;
+
+/// A hang glider's collision: the width of its frame and pilot (m), and the
+/// thickness of its wing.
+const GLIDER_KEEL: f32 = 1.0;
+const GLIDER_WING: f32 = 0.3;
+
+/// A hang glider this close over the ground, held back by it, has landed.
+const GLIDER_LANDED: f32 = 1.2;
+
+/// A hang glider held back to a crawl this long (s) has crashed, wherever
+/// it touched; one falling this fast (m/s) off an edge flies again.
+const GLIDER_HELD: f32 = 0.5;
+const GLIDER_RELAUNCH: f32 = 3.0;
+
+/// A hang glider this close over the water is down in it.
+const GLIDER_WATER: f32 = 0.3;
+
+/// How fast (per second) a hang glider's body is turned to its attitude.
+const GLIDER_SETTLE: f32 = 12.0;
+
+/// The stick's pitch below which it is left alone (the glider eases back to
+/// its cruising speed).
+const GLIDE_DEADZONE: f32 = 0.05;
+
+impl Glide {
+    /// Setting off on a heading, nose pitched (up positive), at a speed.
+    pub(crate) fn launch(yaw: f32, pitch: f32, speed: f32) -> Glide {
+        Glide { yaw, pitch, speed, ..default() }
+    }
+
+    /// One step of flight, as the game's paraglider figures describe it. The
+    /// stick (`x` bank left, `y` nose down) banks and pitches it, each easing
+    /// to the rate the angle still to go asks for; the bank turns it, in full
+    /// once it has its turn speed. Nose down gains speed and nose up bleeds
+    /// it, until with the speed gone the nose drops back; the brake slows it
+    /// to its floor; left alone it eases back to cruising. Near the ground
+    /// its landing figures take over. Returns its sink (m/s, negative down)
+    /// for its height above the ground and share of health.
+    pub(crate) fn step(&mut self, g: &Glider, stick: Vec2, brake: bool, height: f32, health: f32, dt: f32) -> f32 {
+        let lerp = |a: f32, b: f32, k: f32| a + (b - a) * k;
+        let ease = |rate: f32| (rate * dt).clamp(0.0, 1.0);
+        let into = height < g.landing_height;
+        let time = if into { g.to_landing } else { g.from_landing };
+        let step = if time > 0.0 { dt / time } else { 1.0 };
+        self.landing = (self.landing + if into { step } else { -step }).clamp(0.0, 1.0);
+        let k = self.landing;
+        let max_roll = lerp(g.max_roll, g.landing_roll, k);
+        let max_pitch = lerp(g.max_pitch, g.landing_pitch, k);
+        let base = lerp(g.base_speed, g.landing_speed, k);
+        let top = lerp(g.max_speed, g.landing_max_speed, k);
+        // The take-off run takes no controls.
+        self.flown += dt;
+        let (stick, brake) = if self.flown < g.takeoff { (Vec2::ZERO, false) } else { (stick.clamp(Vec2::NEG_ONE, Vec2::ONE), brake) };
+        let want = ((stick.x * max_roll - self.roll) * g.roll_rate).clamp(-g.roll_speed, g.roll_speed);
+        self.roll_rate += (want - self.roll_rate) * ease(g.roll_acc);
+        self.roll += self.roll_rate * dt;
+        let mut nose = -stick.y * max_pitch;
+        if nose > 0.0 && self.speed <= g.stall_speed {
+            nose = 0.0;
+        }
+        let want = ((nose - self.pitch) * g.pitch_rate).clamp(-g.pitch_speed, g.pitch_speed);
+        self.pitch_rate += (want - self.pitch_rate) * ease(g.pitch_acc);
+        self.pitch += self.pitch_rate * dt;
+        self.speed += self.pitch * g.pitch_to_speed * dt;
+        if brake {
+            self.speed += (g.brake_floor - self.speed).min(0.0) * ease(g.braking);
+        } else if stick.y.abs() < GLIDE_DEADZONE {
+            self.speed += (base - self.speed) * ease(g.brake_restore);
+        }
+        self.speed = self.speed.clamp(0.0, top.max(0.0));
+        let full = if g.turn_full_speed > 0.0 { (self.speed / g.turn_full_speed).min(1.0) } else { 1.0 };
+        self.turn += (self.roll * g.roll_to_turn.abs() * full - self.turn) * ease(g.turn_acc);
+        self.yaw += self.turn * dt;
+        if health < g.broken_health {
+            g.broken_sink
+        } else if height < g.low_height {
+            g.low_sink
+        } else {
+            lerp(g.sink, g.landing_sink, k)
+        }
+    }
+
+    /// Its attitude: heading, then pitch, then bank (the model's front is -Z).
+    fn attitude(&self) -> Quat {
+        Quat::from_rotation_y(self.yaw) * Quat::from_rotation_x(self.pitch) * Quat::from_rotation_z(self.roll)
+    }
+
+    /// Its velocity: along its nose at its airspeed, plus the sink.
+    pub(crate) fn velocity(&self, sink: f32) -> Vec3 {
+        Quat::from_rotation_y(self.yaw) * Quat::from_rotation_x(self.pitch) * Vec3::NEG_Z * self.speed + Vec3::Y * sink
+    }
+}
+
+impl Tuning {
+    /// The front wheels' lock at a speed: from the game's lock at rest to its
+    /// lock at top speed (ours: easing off with speed).
+    fn lock(&self, speed: f32) -> f32 {
+        let s = speed.abs();
+        if self.ours {
+            self.lock_low / (1.0 + s * 0.06)
+        } else {
+            let k = (s / self.top_speed.max(1.0)).min(1.0);
+            self.lock_low + (self.lock_high - self.lock_low) * k
+        }
+    }
+
+    /// The engine's pull (N, the whole car's) at a speed for the throttle:
+    /// through the gear the gearbox holds at that speed, nothing above the
+    /// cut-off (ours: a steady pull to the top speed).
+    fn pull(&self, speed: f32, throttle: f32) -> f32 {
+        if throttle == 0.0 {
+            return 0.0;
+        }
+        let ahead = throttle > 0.0;
+        if (ahead && speed > self.top_speed) || (!ahead && -speed > self.reverse_speed) {
+            return 0.0;
+        }
+        if self.gear_count == 0 {
+            return throttle * self.engine;
+        }
+        let force = if ahead {
+            let gears = &self.gears[..self.gear_count];
+            let ratio = gears.iter().find(|(_, top)| speed < *top).unwrap_or(&gears[gears.len() - 1]).0;
+            self.pull * ratio
+        } else {
+            self.reverse_pull
+        };
+        throttle * force
+    }
+}
 
 const DEFS: &[Def] = &[
     Def {
@@ -315,7 +752,10 @@ pub struct Vehicle {
     spawn_id: u64,
     throttle: f32,
     steer: f32,
+    /// The brakes on every wheel (an AI driver's, a wreck's), and the
+    /// player's handbrake on the wheels the game puts it on.
     brake: bool,
+    handbrake: bool,
     /// Local-space bounds of the model.
     min: Vec3,
     max: Vec3,
@@ -329,6 +769,10 @@ pub struct Vehicle {
     authored_seats: bool,
     /// Wheel/engine presentation for a recorded scene (physics velocity is zero).
     recorded_speed: Option<f32>,
+    /// A boat motor's revs (a share of its top).
+    revs: f32,
+    /// A hang glider's flight while someone flies it.
+    glide: Glide,
 }
 
 #[derive(Clone)]
@@ -351,7 +795,7 @@ impl Vehicle {
 
     /// Its top speed (m/s).
     pub fn top_speed(&self) -> f32 {
-        DEFS[self.def].top_speed
+        tuning(self.def).top_speed
     }
 
     pub fn name(&self) -> &'static str {
@@ -411,7 +855,7 @@ impl Vehicle {
 
     fn wheels(&self) -> [Vec3; 4] {
         let inset = Vec3::new(0.3, 0.0, 0.8);
-        let y = self.min.y + 0.6;
+        let y = self.min.y + WHEEL_MOUNT;
         [
             Vec3::new(self.min.x + inset.x, y, self.min.z + inset.z),
             Vec3::new(self.max.x - inset.x, y, self.min.z + inset.z),
@@ -704,6 +1148,57 @@ fn spawn_vehicles(
     }
 }
 
+/// A vehicle to park (an encounter's): by its descriptor's path, at a pose,
+/// under an id of its own.
+#[derive(Message, Clone)]
+pub struct PlaceVehicle {
+    pub descriptor: String,
+    pub at: Vec3,
+    pub rotation: Quat,
+    pub id: u64,
+}
+
+/// The definition whose model lives in the folder a descriptor names.
+fn def_for_descriptor(path: &str) -> Option<usize> {
+    let p = path.to_ascii_lowercase();
+    DEFS.iter().position(|d| d.model.rsplit_once('\\').is_some_and(|(folder, _)| p.contains(&format!("\\vehicles\\{folder}\\"))))
+}
+
+/// Parks the vehicles encounters ask for once their model is in and the
+/// ground under them has its collider (given up after half a minute).
+fn place_vehicles(
+    time: Res<Time>,
+    mut requests: MessageReader<PlaceVehicle>,
+    mut pending: Local<Vec<(PlaceVehicle, f32)>>,
+    assets: Option<Res<VehicleAssets>>,
+    server: Res<AssetServer>,
+    models: Res<Assets<Fc3Model>>,
+    existing: Query<&Vehicle>,
+    spatial: SpatialQuery,
+    mut commands: Commands,
+) {
+    let now = time.elapsed_secs();
+    pending.extend(requests.read().map(|r| (r.clone(), now)));
+    let Some(assets) = assets else { return };
+    let live: HashSet<u64> = existing.iter().map(|v| v.spawn_id).collect();
+    pending.retain(|(r, since)| {
+        let Some(def) = def_for_descriptor(&r.descriptor) else { return false };
+        if live.contains(&r.id) || now - since > 30.0 {
+            return false;
+        }
+        let handle = &assets.models[def];
+        let Some(model) = models.get(handle).filter(|m| !m.lods.is_empty() && crate::cache_assets::usable(&server, handle.id())) else { return true };
+        if DEFS[def].kind != Kind::Boat && spatial.cast_ray(r.at + Vec3::Y * 1.5, Dir3::NEG_Y, 6.0, true, &SpatialQueryFilter::default()).is_none() {
+            return true;
+        }
+        if std::env::var("FC3_VEHICLE_DEBUG").is_ok() {
+            info!("vehicle: parking {} for an encounter at {:.1?}", DEFS[def].name, r.at);
+        }
+        build_vehicle(&mut commands, def, model, r.at + Vec3::Y * 0.4, r.rotation, r.id);
+        false
+    });
+}
+
 /// Spawns a drivable vehicle of a definition at a pose; returns its root.
 pub fn build_vehicle(commands: &mut Commands, def: usize, model: &Fc3Model, at: Vec3, rotation: Quat, spawn_id: u64) -> Entity {
     build_vehicle_inner(commands, def, model, at, rotation, spawn_id, None)
@@ -727,24 +1222,52 @@ fn build_vehicle_inner(commands: &mut Commands, def: usize, model: &Fc3Model, at
         .spawn((
             RigidBody::Dynamic,
             LinearDamping(0.05),
-            AngularDamping(0.6),
+            AngularDamping(if d.kind == Kind::Glider { 0.6 } else { tuning(def).angular_damping }),
             Transform::from_translation(at).with_rotation(rotation),
             Visibility::Visible,
             Name::new(d.name),
         ))
         .id();
-    let body = commands
-        .spawn((
-            Collider::cuboid(half.x * 2.0, half.y * 2.0, half.z * 2.0),
-            ColliderDensity(d.mass / volume),
-            Transform::from_translation(centre),
-            ChildOf(root),
-        ))
-        .id();
+    // A hang glider is a wide wing high over a narrow frame and pilot: a box
+    // the wing's span at the pilot's feet would wedge it in any slope.
+    let (shape, volume) = match d.kind {
+        Kind::Glider => {
+            let keel = Vec3::new(GLIDER_KEEL, half.y * 2.0, size.z * 0.5);
+            let wing = Vec3::new(size.x * 0.96, GLIDER_WING, size.z * 0.8);
+            let wing_at = Vec3::new(0.0, max.y - GLIDER_WING * 0.5 - centre.y, 0.0);
+            let shape = Collider::compound(vec![
+                (Vec3::ZERO, Quat::IDENTITY, Collider::cuboid(keel.x, keel.y, keel.z)),
+                (wing_at, Quat::IDENTITY, Collider::cuboid(wing.x, wing.y, wing.z)),
+            ]);
+            (shape, (keel.x * keel.y * keel.z + wing.x * wing.y * wing.z).max(0.1))
+        }
+        _ => (Collider::cuboid(half.x * 2.0, half.y * 2.0, half.z * 2.0), volume),
+    };
+    let body = commands.spawn((shape, ColliderDensity(tuning(def).mass / volume), Transform::from_translation(centre), ChildOf(root))).id();
     commands.entity(root).insert((
-        Vehicle { def, spawn_id, throttle: 0.0, steer: 0.0, brake: false, min, max, occupied: false, parked: true, body,
+        Vehicle {
+            def,
+            spawn_id,
+            throttle: 0.0,
+            steer: 0.0,
+            brake: false,
+            handbrake: false,
+            min,
+            max,
+            occupied: false,
+            parked: true,
+            body,
             seats: vec![SeatSlot { kind: 1, index: 0, pose: Transform::IDENTITY, pawn: None }],
-            vehicle_type: match d.kind { Kind::Car => 0, Kind::Boat => 1, Kind::Glider => 2 }, authored_seats: false, recorded_speed: None },
+            vehicle_type: match d.kind {
+                Kind::Car => 0,
+                Kind::Boat => 1,
+                Kind::Glider => 2,
+            },
+            authored_seats: false,
+            recorded_speed: None,
+            revs: 0.0,
+            glide: Glide::default(),
+        },
         Health::new(d.armour),
         Wear::default(),
         crate::combat::DamageScale { bullet: 0.45, explosion: 1.8 },
@@ -828,11 +1351,193 @@ fn seat_bone_pose(bones: &[cache::CachedBone], hash: u32) -> Option<Transform> {
 mod story_vehicle_tests {
     use super::*;
 
+    fn car() -> Tuning {
+        // Round figures of the kind the game's have, worked through as
+        // `tuning` does.
+        let rad = |rpm: f32| rpm * std::f32::consts::TAU / 60.0;
+        let pull = 300.0 * HORSEPOWER / rad(3000.0) * 0.5 * rad(6500.0) / 60.0;
+        let mut gears = [(0.0, 0.0); 6];
+        gears[..3].copy_from_slice(&[(2.5, 40.0 * KMH), (1.5, 60.0 * KMH), (1.0, 80.0 * KMH)]);
+        Tuning {
+            mass: 1500.0,
+            top_speed: 22.0,
+            reverse_speed: 15.0,
+            lock_low: 0.7,
+            lock_high: 0.5,
+            ours: false,
+            grip: 1.2,
+            drag: 0.6,
+            gears,
+            gear_count: 3,
+            pull,
+            reverse_pull: pull * 2.5,
+            engine: 0.0,
+            boat: None,
+            glider: None,
+            wheels: [WheelTune::OURS; 4],
+            lock_friction: 0.8,
+            lift: 0.0,
+            extra_gravity: 0.0,
+            airborne_gravity: 1.0,
+            airborne_fade: 0.0,
+            airborne_min_speed: 0.0,
+            angular_damping: 0.6,
+            stabilizer: 4.0,
+        }
+    }
+
+    #[test]
+    fn steering_lock_runs_from_rest_to_top_speed() {
+        let game = car();
+        assert_eq!(game.lock(0.0), 0.7);
+        assert!((game.lock(-11.0) - 0.6).abs() < 1e-6);
+        assert!((game.lock(40.0) - 0.5).abs() < 1e-6);
+        // Without the game's figures: ours, easing off with speed.
+        let ours = Tuning { ours: true, lock_low: 0.55, ..game };
+        assert!((ours.lock(10.0) - 0.55 / 1.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_gearbox_pulls_hardest_in_first_and_the_engine_cuts_off() {
+        let c = car();
+        // About 10 kN in first, through second and third, none past 22 m/s.
+        assert!((c.pull(1.0, 1.0) - 10_100.0).abs() < 100.0, "{}", c.pull(1.0, 1.0));
+        assert!(c.pull(12.0, 1.0) < c.pull(5.0, 1.0));
+        assert!(c.pull(19.0, 1.0) < c.pull(12.0, 1.0));
+        assert_eq!(c.pull(22.5, 1.0), 0.0);
+        assert!(c.pull(-5.0, -1.0) < 0.0);
+        assert_eq!(c.pull(-15.5, -1.0), 0.0);
+        assert_eq!(c.pull(5.0, 0.0), 0.0);
+    }
+
+    /// A glider with round figures of the kind the game's have.
+    fn wing() -> Glider {
+        Glider {
+            max_roll: 0.6,
+            roll_rate: 2.0,
+            roll_speed: 3.0,
+            roll_acc: 3.0,
+            max_pitch: 0.9,
+            pitch_rate: 2.0,
+            pitch_speed: 10.0,
+            pitch_acc: 5.0,
+            pitch_to_speed: -8.0,
+            roll_to_turn: -2.0,
+            turn_acc: 2.0,
+            turn_full_speed: 10.0,
+            stall_speed: 0.0,
+            base_speed: 10.0,
+            sink: -1.0,
+            broken_health: 0.2,
+            broken_sink: -8.0,
+            low_height: 10.0,
+            low_sink: -0.5,
+            braking: 1.0,
+            brake_restore: 2.0,
+            brake_floor: 3.0,
+            max_speed: 30.0,
+            takeoff: 2.0,
+            landing_height: 10.0,
+            landing_speed: 10.0,
+            landing_roll: 0.5,
+            landing_pitch: 0.5,
+            landing_max_speed: 10.0,
+            landing_sink: -0.5,
+            to_landing: 3.0,
+            from_landing: 0.5,
+        }
+    }
+
+    fn fly(g: &Glider, s: &mut Glide, stick: Vec2, brake: bool, height: f32, seconds: f32) -> f32 {
+        let dt = 1.0 / 64.0;
+        let mut sink = 0.0;
+        for _ in 0..(seconds / dt) as usize {
+            sink = s.step(g, stick, brake, height, 1.0, dt);
+        }
+        sink
+    }
+
+    #[test]
+    fn a_glider_left_alone_cruises_level_and_sinks() {
+        let g = wing();
+        let mut s = Glide { speed: 25.0, ..default() };
+        let sink = fly(&g, &mut s, Vec2::ZERO, false, 100.0, 6.0);
+        assert!((s.speed - g.base_speed).abs() < 0.1, "{s:?}");
+        assert_eq!(sink, g.sink);
+        assert!(s.pitch.abs() < 1e-3 && s.roll.abs() < 1e-3 && s.turn.abs() < 1e-3, "{s:?}");
+        let v = s.velocity(sink);
+        assert!((v.z + g.base_speed).abs() < 0.1 && (v.y - g.sink).abs() < 0.01, "{v:?}");
+        // Broken, it drops; low, it floats.
+        assert_eq!(s.step(&g, Vec2::ZERO, false, 100.0, 0.1, 0.01), g.broken_sink);
+        assert_eq!(s.step(&g, Vec2::ZERO, false, 5.0, 1.0, 0.01), g.low_sink);
+    }
+
+    #[test]
+    fn a_glider_dives_for_speed_and_stalls_out_of_a_climb() {
+        let g = wing();
+        let mut s = Glide { speed: g.base_speed, flown: g.takeoff, ..default() };
+        // Nose down: its pitch, then faster, to its top.
+        fly(&g, &mut s, Vec2::new(0.0, 1.0), false, 100.0, 1.0);
+        assert!(s.pitch < -0.8 && s.speed > g.base_speed + 3.0, "{s:?}");
+        fly(&g, &mut s, Vec2::new(0.0, 1.0), false, 100.0, 5.0);
+        assert_eq!(s.speed, g.max_speed);
+        assert!(s.velocity(g.sink).y < -15.0);
+        // Pulled up, it climbs and bleeds speed until the nose drops back.
+        fly(&g, &mut s, Vec2::new(0.0, -1.0), false, 100.0, 1.0);
+        assert!(s.pitch > 0.5 && s.velocity(g.sink).y > 5.0, "{s:?}");
+        fly(&g, &mut s, Vec2::new(0.0, -1.0), false, 100.0, 6.0);
+        assert!(s.pitch < 0.1, "{s:?}");
+        // The brake holds it to its floor.
+        let mut s = Glide { speed: g.base_speed, flown: g.takeoff, ..default() };
+        fly(&g, &mut s, Vec2::ZERO, true, 100.0, 8.0);
+        assert!((s.speed - g.brake_floor).abs() < 0.1, "{s:?}");
+        fly(&g, &mut s, Vec2::ZERO, false, 100.0, 4.0);
+        assert!((s.speed - g.base_speed).abs() < 0.1, "{s:?}");
+    }
+
+    #[test]
+    fn a_glider_banks_into_its_turns_and_lands_gently() {
+        let g = wing();
+        let mut s = Glide { speed: g.base_speed, ..default() };
+        // The take-off run ignores the stick.
+        fly(&g, &mut s, Vec2::new(1.0, 0.0), false, 100.0, 1.0);
+        assert_eq!((s.roll, s.yaw), (0.0, 0.0));
+        // Then banking left turns it left, up to the bank's turn rate.
+        fly(&g, &mut s, Vec2::new(1.0, 0.0), false, 100.0, 5.0);
+        assert!((s.roll - g.max_roll).abs() < 0.01, "{s:?}");
+        assert!((s.turn - g.max_roll * 2.0).abs() < 0.05 && s.yaw > 1.0, "{s:?}");
+        let left = s.attitude() * Vec3::X;
+        assert!(left.y > 0.5, "the right wing rises banking left: {left:?}");
+        // Near the ground its landing figures take over.
+        let mut s = Glide { speed: g.max_speed, flown: g.takeoff, ..default() };
+        fly(&g, &mut s, Vec2::new(0.0, 1.0), false, 5.0, 4.0);
+        assert_eq!(s.landing, 1.0);
+        assert!(s.speed <= g.landing_max_speed && s.pitch > -g.landing_pitch - 0.05, "{s:?}");
+    }
+
     fn vehicle() -> Vehicle {
-        Vehicle { def: 1, spawn_id: 100, throttle: 0.0, steer: 0.0, brake: false, min: Vec3::splat(-1.0), max: Vec3::ONE,
-            occupied: false, parked: true, body: Entity::PLACEHOLDER, vehicle_type: 0, authored_seats: true, recorded_speed: None,
-            seats: vec![SeatSlot { kind: 1, index: 0, pose: Transform::from_xyz(-0.6, 0.8, 0.0), pawn: None },
-                SeatSlot { kind: 3, index: 0, pose: Transform::from_xyz(0.6, 0.8, 0.0), pawn: None }] }
+        Vehicle {
+            def: 1,
+            spawn_id: 100,
+            throttle: 0.0,
+            steer: 0.0,
+            brake: false,
+            handbrake: false,
+            min: Vec3::splat(-1.0),
+            max: Vec3::ONE,
+            occupied: false,
+            parked: true,
+            body: Entity::PLACEHOLDER,
+            vehicle_type: 0,
+            authored_seats: true,
+            recorded_speed: None,
+            revs: 0.0,
+            glide: Glide::default(),
+            seats: vec![
+                SeatSlot { kind: 1, index: 0, pose: Transform::from_xyz(-0.6, 0.8, 0.0), pawn: None },
+                SeatSlot { kind: 3, index: 0, pose: Transform::from_xyz(0.6, 0.8, 0.0), pawn: None },
+            ],
+        }
     }
 
     fn player() -> Player {
@@ -957,13 +1662,13 @@ mod story_vehicle_tests {
         }
         app.update();
         let v = app.world().get::<Vehicle>(ve).unwrap();
-        assert_eq!((v.throttle, v.steer, v.brake), (0.4, 0.2, false));
+        assert_eq!((v.throttle, v.steer, v.handbrake), (0.4, 0.2, false));
         let eye = app.world().get::<Transform>(player).unwrap().translation + Vec3::Y * (crate::player::EYE_HEIGHT - HALF_HEIGHT);
         assert!(eye.abs_diff_eq(Vec3::new(0.6, 1.52, 0.0), 1e-5));
         app.world_mut().resource_mut::<Driving>().seat = 0;
         app.update();
         let v = app.world().get::<Vehicle>(ve).unwrap();
-        assert_eq!((v.throttle, v.steer, v.brake), (1.0, -1.0, true));
+        assert_eq!((v.throttle, v.steer, v.handbrake), (1.0, -1.0, true));
         let before = *app.world().get::<Transform>(player).unwrap();
         app.world_mut().resource_mut::<crate::cinema::Cinema>().view = Some((Transform::from_xyz(100.0, 200.0, 300.0), 70.0));
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyV);
@@ -1322,6 +2027,7 @@ fn enter_exit(
     heights: Res<crate::terrain::Heightfield>,
     mut players: Query<(Entity, &mut Transform, &mut Player, &Health), Without<Vehicle>>,
     mut vehicles: Query<(Entity, &Transform, &mut Vehicle), Without<Player>>,
+    velocities: Query<&LinearVelocity, With<Vehicle>>,
     wear: Query<&Wear>,
     crewed: Query<(), With<crate::patrols::PatrolDriver>>,
     host: Option<NonSend<crate::story::StoryHost>>,
@@ -1339,11 +2045,17 @@ fn enter_exit(
             return;
         }
         actions.consume(Action::Interact);
+        let mut carried = Vec3::ZERO;
         if let Ok((_, vt, mut v)) = vehicles.get_mut(ve) {
             let driver = v.seats.get(driving.seat).is_some_and(|s| s.kind == 1);
             if let Some(s) = v.seats.get_mut(driving.seat) { s.pawn = None; }
             v.occupied = v.seats.iter().any(|s| s.pawn.is_some());
-            if driver { v.parked = true; v.throttle = 0.0; v.steer = 0.0; }
+            if driver {
+                v.parked = true;
+                v.throttle = 0.0;
+                v.steer = 0.0;
+                v.handbrake = false;
+            }
             // Authored passengers leave on their own side, not through the
             // driver. Ordinary bounds-based seats keep the existing left exit.
             let seat = v.seats.get(driving.seat);
@@ -1353,10 +2065,16 @@ fn enter_exit(
             let mut at = vt.translation + Vec3::new(side.x, 0.0, side.z);
             let ground = heights.height_at(at).unwrap_or(at.y).max(crate::water::surface_at(at, &heights) - 1.0);
             at.y = ground + HALF_HEIGHT + 0.3;
+            // Off a hang glider in flight: dropped from under its wing, still
+            // moving with it.
+            if v.kind() == Kind::Glider && vt.translation.y - ground > GLIDER_DROP {
+                at = vt.translation - Vec3::Y * (HALF_HEIGHT + 1.0);
+                carried = velocities.get(ve).map_or(Vec3::ZERO, |lv| lv.0);
+            }
             pt.translation = at;
         }
         p.driving = false;
-        p.velocity = Vec3::ZERO;
+        p.velocity = carried;
         driving.vehicle = None;
         commands.entity(pe).remove::<ColliderDisabled>();
         return;
@@ -1450,6 +2168,18 @@ fn seat_player(
     let turn = (yaw - driving.last_yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
     driving.last_yaw = yaw;
     p.yaw += turn;
+    // At the wheel the head turns only as far as the game lets it (its
+    // angles count down and right positive, ours up and left).
+    let driver = v.seats.get(driving.seat).is_some_and(|s| s.kind == 1);
+    if let Some([pitch_lo, pitch_hi, yaw_lo, yaw_hi]) = handling_of(v.def).map(|h| h.look).filter(|_| driving.first_person && driver) {
+        if pitch_hi > pitch_lo {
+            p.pitch = p.pitch.clamp(-pitch_hi.to_radians(), -pitch_lo.to_radians());
+        }
+        if yaw_hi > yaw_lo {
+            let ahead = (p.yaw - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+            p.yaw = yaw + ahead.clamp(-yaw_hi.to_radians(), -yaw_lo.to_radians());
+        }
+    }
     let eye = if driving.first_person {
         vt.transform_point(if !v.authored_seats { v.seat() } else {
             v.first_person_clip(driving.seat).and_then(|clip| cameras.as_ref()?.0.get(clip).copied())
@@ -1476,7 +2206,7 @@ fn seat_player(
     if v.seats.get(driving.seat).is_some_and(|s| s.kind == 1) && paths.as_ref().is_none_or(|p| !p.owns_controls(v.spawn_id)) {
         v.throttle = actions.movement.y;
         v.steer = -actions.movement.x;
-        v.brake = actions.pressed(Action::Jump);
+        v.handbrake = actions.pressed(Action::Jump);
     }
 }
 
@@ -1491,12 +2221,17 @@ fn drive(
     time: Res<Time>,
     spatial: SpatialQuery,
     heights: Res<crate::terrain::Heightfield>,
-    mut vehicles: Query<(Entity, &Transform, &Vehicle, &RigidBody, Forces, &ComputedMass, Has<crate::patrols::PatrolDriver>)>,
+    mut vehicles: Query<(Entity, &Transform, &mut Vehicle, &RigidBody, Forces, &ComputedMass, Has<crate::patrols::PatrolDriver>)>,
+    healths: Query<&Health, With<Vehicle>>,
+    mut commands: Commands,
+    mut aloft: Local<std::collections::HashMap<Entity, f32>>,
 ) {
     let dt = time.delta_secs().max(1e-4);
-    for (e, t, v, body, mut f, mass, patrol) in &mut vehicles {
+    aloft.retain(|e, _| vehicles.contains(*e));
+    for (e, t, mut v, body, mut f, mass, patrol) in &mut vehicles {
         if *body != RigidBody::Dynamic { continue; }
         let d = &DEFS[v.def];
+        let tune = tuning(v.def);
         let m = mass.value();
         let up = t.rotation * Vec3::Y;
         // Model front is local -Z.
@@ -1506,10 +2241,7 @@ fn drive(
         let speed = vel.dot(fwd);
         match d.kind {
             Kind::Car => {
-                let rest = 0.55;
-                let radius = 0.42;
-                let k = m * 9.81 / 4.0 / 0.22;
-                let c = 2.0 * (k * m / 4.0).sqrt() * 0.45;
+                let driven = tune.wheels.iter().filter(|w| w.driving).count().max(1) as f32;
                 let filter = SpatialQueryFilter::from_excluded_entities([e, v.body]);
                 // Deep water (the sea, a river) drowns the engine and drags at
                 // the body; fords are fine. (Patrols keep to their routes,
@@ -1521,44 +2253,57 @@ fn drive(
                 }
                 let mut grounded = 0;
                 for (i, w) in v.wheels().into_iter().enumerate() {
+                    let wheel = tune.wheels[i];
                     let mount = t.transform_point(w);
                     let Ok(down) = Dir3::new(-up) else { continue };
-                    let Some(hit) = spatial.cast_ray(mount, down, rest + radius, true, &filter) else { continue };
+                    let Some(hit) = spatial.cast_ray(mount, down, wheel.reach, true, &filter) else { continue };
                     grounded += 1;
-                    let compression = (rest + radius - hit.distance).max(0.0);
+                    let compression = (wheel.reach - hit.distance).max(0.0);
                     let point_vel = f.velocity_at_point(mount);
-                    let spring = k * compression - c * point_vel.dot(up);
+                    // The spring, and the damper going in or coming out.
+                    let rate = point_vel.dot(up);
+                    let damping = if rate < 0.0 { wheel.compression } else { wheel.relaxation };
+                    let spring = m * (wheel.strength * compression - damping * rate);
                     f.apply_force_at_point(up * spring.max(0.0), mount);
                     // Front wheels steer (less at speed).
                     let front = i < 2;
-                    let steer = if front { v.steer * 0.55 / (1.0 + speed.abs() * 0.06) } else { 0.0 };
+                    let steer = if front { v.steer * tune.lock(speed) } else { 0.0 };
                     let wheel_fwd = Quat::from_axis_angle(up, steer) * fwd;
                     let wheel_right = Quat::from_axis_angle(up, steer) * right;
                     let normal = spring.max(0.0);
+                    // The handbrake locks its wheels (the rear ones), which
+                    // then hold less of their grip.
+                    let locked = v.handbrake && wheel.handbrake;
+                    let limit = normal * wheel.grip * if locked { tune.lock_friction } else { 1.0 };
                     // Lateral grip: cancel sideways slip, up to the friction limit.
                     let lat = point_vel.dot(wheel_right);
-                    let grip = (-lat * m / 4.0 / dt * 0.35).clamp(-normal * 1.3, normal * 1.3);
+                    let grip = (-lat * m / 4.0 / dt * 0.35).clamp(-limit, limit);
                     f.apply_force_at_point(wheel_right * grip, mount);
-                    // Drive on all wheels; braking and rolling resistance.
+                    // Drive on the driven wheels; braking and rolling resistance.
                     let along = point_vel.dot(wheel_fwd);
-                    let mut drive = if flooded { 0.0 } else { v.throttle * d.engine / 4.0 };
-                    if speed.abs() > d.top_speed && drive * speed > 0.0 {
-                        drive = 0.0;
-                    }
+                    let mut drive = if flooded || !wheel.driving { 0.0 } else { tune.pull(speed, v.throttle) / driven };
                     let parking = v.parked && !v.seats.iter().any(|s| s.kind == 1 && s.pawn.is_some());
-                    if v.brake || parking || (v.throttle * speed < -0.5 && v.throttle.abs() > 0.1) {
-                        drive = (-along * m / 4.0 / dt * 0.25).clamp(-normal, normal);
+                    if v.brake || locked || parking || (v.throttle * speed < -0.5 && v.throttle.abs() > 0.1) {
+                        drive = (-along * m / 4.0 / dt * 0.25).clamp(-limit, limit);
                     }
                     let rolling = -along * 30.0;
                     f.apply_force_at_point(wheel_fwd * (drive + rolling), mount);
                 }
+                // In the air: heavier (eased in, above a speed), and the
+                // stabiliser (if it has one) turns it to land on its wheels.
+                let air = aloft.entry(e).or_default();
+                *air = if grounded == 0 { *air + dt } else { 0.0 };
                 if grounded == 0 {
-                    // Airborne: a little self-righting so cars land on their wheels.
+                    let ease = if tune.airborne_fade > 0.0 { (*air / tune.airborne_fade).min(1.0) } else { 1.0 };
+                    if vel.length() >= tune.airborne_min_speed {
+                        f.apply_force(Vec3::NEG_Y * m * 9.81 * (tune.airborne_gravity - 1.0) * ease);
+                    }
                     let tilt = up.cross(Vec3::Y);
-                    f.apply_torque(tilt * m * 4.0);
+                    f.apply_torque(tilt * m * tune.stabilizer);
                 }
-                // Air drag.
-                f.apply_force(-vel * vel.length() * 0.9);
+                // Extra gravity, lift (or downforce) and air drag.
+                f.apply_force(Vec3::NEG_Y * m * tune.extra_gravity + up * vel.length_squared() * tune.lift);
+                f.apply_force(-vel * vel.length() * tune.drag);
             }
             Kind::Boat => {
                 let hull = [
@@ -1580,21 +2325,120 @@ fn drive(
                         f.apply_force_at_point(Vec3::Y * lift.max(0.0), p);
                     }
                 }
+                // The motor's revs come up with the throttle (the game's rate),
+                // and fall away without it.
+                let revs_to = v.throttle.abs();
+                let rate = tune.boat.map_or(0.0, |b| b.rev_time);
+                v.revs = if rate > 0.0 { v.revs + (revs_to - v.revs).clamp(-dt / rate, dt / rate) } else { revs_to };
                 if wet > 0 {
                     let flat_fwd = Vec3::new(fwd.x, 0.0, fwd.z).normalize_or_zero();
-                    if speed.abs() < d.top_speed || v.throttle * speed < 0.0 {
-                        f.apply_force(flat_fwd * v.throttle * d.engine);
-                    }
-                    // Rudder works with way on.
-                    f.apply_torque(Vec3::Y * v.steer * m * 1.6 * (0.3 + speed.abs() / d.top_speed).min(1.3));
-                    // Water drag: strong sideways, light lengthways.
                     let lat = vel.dot(right);
-                    f.apply_force(-right * lat * m * 1.5 - flat_fwd * speed * m * 0.08);
+                    match tune.boat {
+                        // The game's motor (thrust per unit of mass at full
+                        // revs), rudder (its angle for the speed) and water
+                        // friction ahead and to the side.
+                        Some(b) => {
+                            // Against the way it goes, the motor brakes at
+                            // its braking power; and the brake, if it has one.
+                            let against = v.throttle * speed < 0.0 && speed.abs() > 0.5;
+                            let thrust = if against {
+                                b.braking
+                            } else if v.throttle >= 0.0 {
+                                b.thrust
+                            } else {
+                                b.reverse
+                            };
+                            f.apply_force(flat_fwd * v.throttle.signum() * thrust * v.revs * m);
+                            if (v.brake || v.handbrake) && b.brake > 0.0 && speed.abs() > 0.1 {
+                                f.apply_force(-flat_fwd * speed.signum() * b.brake * m);
+                            }
+                            let k = (speed.abs() / b.rudder_top).min(1.0);
+                            let rudder = (b.rudder_low + (b.rudder_high - b.rudder_low) * k) / RUDDER_REFERENCE;
+                            f.apply_torque(Vec3::Y * v.steer * m * 1.6 * rudder * (0.3 + k).min(1.3));
+                            f.apply_force(-right * lat * m * b.side_drag - flat_fwd * speed * m * b.forward_drag);
+                        }
+                        None => {
+                            if speed.abs() < d.top_speed || v.throttle * speed < 0.0 {
+                                f.apply_force(flat_fwd * v.throttle * d.engine);
+                            }
+                            // Rudder works with way on.
+                            f.apply_torque(Vec3::Y * v.steer * m * 1.6 * (0.3 + speed.abs() / d.top_speed).min(1.3));
+                            // Water drag: strong sideways, light lengthways.
+                            f.apply_force(-right * lat * m * 1.5 - flat_fwd * speed * m * 0.08);
+                        }
+                    }
                     let tilt = up.cross(Vec3::Y);
                     f.apply_torque(tilt * m * 6.0);
                 }
             }
             Kind::Glider => {
+                // Left in flight (the pilot let go), it glides on by itself
+                // until it comes down.
+                if !v.occupied && v.glide.flown == 0.0 {
+                    continue;
+                }
+                if let Some(g) = tune.glider {
+                    // Off the ground (or the water) below.
+                    let filter = SpatialQueryFilter::from_excluded_entities([e, v.body]);
+                    let over_water = t.translation.y - crate::water::surface_at(t.translation, &heights);
+                    let below = (t.translation.y - heights.height_at(t.translation).unwrap_or(f32::MIN)).min(over_water);
+                    let height = spatial.cast_ray(t.translation, Dir3::NEG_Y, below.clamp(0.0, 200.0) + 1.0, true, &filter).map_or(below, |hit| hit.distance);
+                    let health = healths.get(e).map_or(1.0, Health::fraction);
+                    // The take-off run is the game's set move off the launch
+                    // (it hangs off the slope it stands on): straight out at
+                    // its height, through whatever it brushes.
+                    let running = v.glide.flown < g.takeoff;
+                    if v.glide.flown == 0.0 {
+                        // Launched as it faces, at its cruising speed or faster.
+                        v.glide.yaw = t.rotation.to_euler(EulerRot::YXZ).0;
+                        v.glide.speed = vel.length().max(g.base_speed);
+                        commands.entity(v.body).insert(ColliderDisabled);
+                    }
+                    // Down on the ground after its take-off run (held back to
+                    // a crawl), or on the water, it has landed: it stops
+                    // flying, levels out and settles, until it goes over an
+                    // edge again. Left to itself, it is done.
+                    let wet = over_water < GLIDER_WATER;
+                    let flying = v.glide.flown > g.takeoff;
+                    let held = flying && vel.length() < v.glide.speed * 0.5;
+                    v.glide.held = if held { v.glide.held + dt } else { 0.0 };
+                    if flying && (wet || v.glide.held > GLIDER_HELD || (held && height < GLIDER_LANDED)) {
+                        v.glide.down = true;
+                    } else if v.glide.down && vel.y < -GLIDER_RELAUNCH && height > GLIDER_LANDED * 2.0 && !wet {
+                        // Over an edge: flying again, at the speed it fell at.
+                        v.glide.down = false;
+                        v.glide.speed = vel.length();
+                    }
+                    let landed = v.glide.down;
+                    if landed && !v.occupied {
+                        commands.entity(v.body).remove::<ColliderDisabled>();
+                        v.glide = Glide::default();
+                        continue;
+                    }
+                    if landed {
+                        v.glide.speed = 0.0;
+                        v.glide.roll = 0.0;
+                        v.glide.pitch = 0.0;
+                        v.glide.roll_rate = 0.0;
+                        v.glide.pitch_rate = 0.0;
+                        v.glide.turn = 0.0;
+                    } else {
+                        let (stick, brake) = if v.occupied { (Vec2::new(v.steer, v.throttle), v.brake || v.handbrake) } else { (Vec2::ZERO, false) };
+                        let sink = v.glide.step(&g, stick, brake, height, health, dt);
+                        *f.linear_velocity_mut() = v.glide.velocity(if running { 0.0 } else { sink });
+                        if running && v.glide.flown >= g.takeoff {
+                            commands.entity(v.body).remove::<ColliderDisabled>();
+                        }
+                    }
+                    // Turn the body to its attitude: the turn rate ahead, and
+                    // a steady pull the rest of the way.
+                    let mut to = v.glide.attitude() * t.rotation.inverse();
+                    if to.w < 0.0 {
+                        to = -to;
+                    }
+                    *f.angular_velocity_mut() = Vec3::Y * v.glide.turn + to.to_scaled_axis() * GLIDER_SETTLE;
+                    continue;
+                }
                 if !v.occupied {
                     continue;
                 }
@@ -1887,7 +2731,7 @@ fn vehicle_sounds(
             }
             let surface = st.surface;
             let sideways = lv.0.dot(*t.right()).abs();
-            let slip = (sideways / 3.0 + if v.brake && speed > 5.0 { 1.2 } else { 0.0 }).min(2.0);
+            let slip = (sideways / 3.0 + if (v.brake || v.handbrake) && speed > 5.0 { 1.2 } else { 0.0 }).min(2.0);
             let roll = if mine || d < 30.0 { snd::ROLL_SURFACE } else { snd::ROLL_SIMPLE };
             loops.write(LoopSfx {
                 key: e.to_bits() ^ 0x70,
@@ -1912,8 +2756,9 @@ fn vehicle_sounds(
             st.fall = 0.0;
         }
         st.fall = if below.is_none() { st.fall.max(-vy) } else { 0.0 };
-        // Brakes squealing at speed.
-        let braking = v.brake && speed > 8.0 && mine;
+        // Brakes (or the handbrake: the game names no sound of its own for
+        // it) squealing at speed.
+        let braking = (v.brake || v.handbrake) && speed > 8.0 && mine;
         if braking && !st.braking {
             sfx.write(PlaySfx { event: snd::BRAKE, at, volume: 0.6 });
         }
@@ -2008,10 +2853,31 @@ fn drive_test(
             commands.entity(pe).insert(ColliderDisabled);
             *start = Some(now);
             info!("drive-test: in {} at {:?}", DEFS[v.def].name, vt.translation);
+            // The ground ahead of the nose and behind the tail.
+            let ground = |d: f32| heights.height_at(vt.translation + vt.rotation * Vec3::NEG_Z * d).map_or(f32::NAN, |h| h - vt.translation.y);
+            info!(
+                "drive-test: ground ahead {:.1} {:.1} {:.1}, behind {:.1} {:.1} {:.1}",
+                ground(10.0),
+                ground(20.0),
+                ground(40.0),
+                ground(-10.0),
+                ground(-20.0),
+                ground(-40.0)
+            );
         }
         Some(ve) => {
             let t = now - start.unwrap_or(now);
-            actions.movement = if t < 1.0 {
+            let glider = vehicles.get(ve).is_ok_and(|(_, _, v, _)| v.kind() == Kind::Glider);
+            // A glider: off its launch, a bank to the left, a dive, a pull up.
+            actions.movement = if glider {
+                match t {
+                    t if t < 4.0 => Vec2::ZERO,
+                    t if t < 7.0 => Vec2::new(-1.0, 0.0),
+                    t if t < 9.0 => Vec2::new(0.0, 1.0),
+                    t if t < 11.0 => Vec2::new(0.0, -1.0),
+                    _ => Vec2::ZERO,
+                }
+            } else if t < 1.0 {
                 Vec2::ZERO
             } else if t < 6.0 {
                 Vec2::new(0.0, 1.0)
@@ -2020,6 +2886,16 @@ fn drive_test(
             } else {
                 Vec2::ZERO
             };
+            // FC3_DRIVE_HANDBRAKE=secs: pull the handbrake for a second and a
+            // half from then.
+            if std::env::var("FC3_DRIVE_HANDBRAKE").ok().and_then(|s| s.parse::<f32>().ok()).is_some_and(|at| (at..at + 1.5).contains(&t)) {
+                actions.press(Action::Jump);
+            }
+            // FC3_DRIVE_EXIT=secs: get out that long into the drive.
+            if std::env::var("FC3_DRIVE_EXIT").ok().and_then(|s| s.parse::<f32>().ok()).is_some_and(|at| t >= at) {
+                info!("drive-test: getting out at t={t:.1}");
+                actions.press(Action::Interact);
+            }
             // FC3_TD_SHOT=2,4: screenshots that long into the drive.
             let at: Vec<f32> = std::env::var("FC3_TD_SHOT").unwrap_or_default().split(',').filter_map(|s| s.parse().ok()).collect();
             if let (Some(&when), Some(path)) = (at.get(*shots), args.screenshot.as_ref()) {
@@ -2044,10 +2920,36 @@ fn drive_test(
                         lv.0.x,
                         lv.0.z
                     );
+                    let v = vehicles.get(ve).map(|(_, _, v, _)| v.glide).unwrap_or_default();
+                    if v.flown > 0.0 {
+                        let ground = heights.height_at(vt.translation).unwrap_or(0.0);
+                        info!(
+                            "drive-test glide: airspeed={:.1} roll={:.2} pitch={:.2} turn={:.2} landing={:.2} vy={:.1} above terrain={:.1}",
+                            v.speed,
+                            v.roll,
+                            v.pitch,
+                            v.turn,
+                            v.landing,
+                            lv.0.y,
+                            vt.translation.y - ground
+                        );
+                    }
                 }
             }
         }
-        _ => {}
+        // Out again: where the player and the vehicles left are going.
+        None if start.is_some() => {
+            let t = now - start.unwrap_or(now);
+            if now - *last_log >= 1.0 && t < 30.0 {
+                *last_log = now;
+                let ground = heights.height_at(pt.translation).unwrap_or(0.0);
+                info!("drive-test out t={t:.1} player y={:.1} ({:.1} above terrain) vel={:.1}", pt.translation.y, pt.translation.y - ground, p.velocity);
+                for (_, vt, v, lv) in vehicles.iter().filter(|(_, vt, v, _)| v.glide.flown > 0.0 && vt.translation.distance(pt.translation) < 300.0) {
+                    info!("drive-test out: {} at {:.1} speed {:.1} landed {}", DEFS[v.def].name, vt.translation, lv.0.length(), v.glide.down);
+                }
+            }
+        }
+        None => {}
     }
 }
 

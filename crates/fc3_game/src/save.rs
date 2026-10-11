@@ -69,8 +69,9 @@ pub struct SaveGame {
     pub waypoint: Option<Vec3>,
     /// Liberated outposts (indices into the outpost table).
     pub liberated: Vec<u32>,
-    /// Weapon attachments: weapon name and attachment bits.
-    pub attachments: Vec<(String, u8)>,
+    /// Weapon attachments: weapon name and attachment bits (bought, and the
+    /// fitted sight's in the high half).
+    pub attachments: Vec<(String, u32)>,
     /// Weapon paint jobs: weapon name and paint name.
     pub paints: Vec<(String, String)>,
     pub progress: crate::progression::Progress,
@@ -474,10 +475,15 @@ pub(crate) fn restore_inventory(inv: &mut Inventory, save: &SaveGame) {
     }
     for (name, bits) in &save.attachments {
         let Some(d) = inv.defs.iter().position(|w| w.name == name) else { continue };
-        for a in crate::weapons::Attachment::ALL {
+        // (An old save's sight bit comes back as the weapon's usual sight.)
+        for a in crate::weapons::Attachment::ALL.into_iter().chain([crate::weapons::Attachment::Optic]) {
             if bits & a.bit() != 0 {
                 inv.attach(d, a);
             }
+        }
+        // Then the sight that was fitted.
+        if let Some(a) = crate::weapons::Attachment::ALL.into_iter().find(|a| a.is_sight() && (bits >> 16) & a.bit() != 0) {
+            inv.attach(d, a);
         }
     }
     inv.reloading = 0.0;

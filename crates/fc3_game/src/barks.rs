@@ -31,6 +31,12 @@ pub struct BarkTable {
 }
 
 impl BarkTable {
+    /// One of a voice's lines for a stimulus (by a roll in 0..1): its sound
+    /// and how long it lasts.
+    pub(crate) fn line(&self, voice: &str, stimulus: &str, roll: f32) -> Option<(u32, f32)> {
+        self.pick(voice, stimulus, roll)
+    }
+
     fn pick(&self, voice: &str, stimulus: &str, roll: f32) -> Option<(u32, f32)> {
         let lines = self.lines.get(&(voice.to_string(), stimulus.to_string()))?;
         lines.get((roll * lines.len() as f32) as usize % lines.len().max(1)).copied()

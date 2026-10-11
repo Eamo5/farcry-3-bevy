@@ -28,22 +28,27 @@ pub struct WildlifePlugin;
 
 impl Plugin for WildlifePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<AnimalTable>().add_systems(OnExit(crate::menu::GameState::Loading), (load_animals, load_animal_table)).add_systems(
-            Update,
-            (
-                animal_test,
-                spawn_animals,
-                release_caged,
-                cage_test,
-                animal_ai,
-                animal_deaths,
-                skin_animals.before(crate::hud::HudSet).after(crate::turrets::man_turrets),
-                despawn_animals,
-            )
-                .chain()
-                .after(crate::story_actors::ActorSet)
-                .run_if(in_state(crate::menu::GameState::Playing)),
-        );
+        app.init_resource::<AnimalTable>()
+            .init_resource::<WildlifeRegions>()
+            .add_systems(OnExit(crate::menu::GameState::Loading), (load_animals, load_animal_table, load_wildlife_regions))
+            .add_message::<PlaceAnimal>()
+            .add_systems(Update, place_animals.run_if(in_state(crate::menu::GameState::Playing)))
+            .add_systems(
+                Update,
+                (
+                    animal_test,
+                    spawn_animals,
+                    release_caged,
+                    cage_test,
+                    animal_ai,
+                    animal_deaths,
+                    skin_animals.before(crate::hud::HudSet).after(crate::turrets::man_turrets),
+                    despawn_animals,
+                )
+                    .chain()
+                    .after(crate::story_actors::ActorSet)
+                    .run_if(in_state(crate::menu::GameState::Playing)),
+            );
     }
 }
 
@@ -69,10 +74,33 @@ enum Habitat {
     Shore,
     /// Swims in deep water.
     Sea,
+    /// Swims in any water deep enough (the sea's shallows, rivers, lakes),
+    /// between its surface and its bed.
+    Water,
 }
 
 /// Swimming depth of sea animals below the surface.
 const SWIM_DEPTH: f32 = 1.6;
+/// The least water a swimmer keeps to (m).
+const MIN_SWIM_DEPTH: f32 = 0.7;
+/// How high crows fly off (m above the ground).
+const FLIGHT_HEIGHT: f32 = 9.0;
+
+/// The water a swimmer can keep to here: its bed and its surface.
+fn water_band(at: Vec3, ground: f32) -> Option<(f32, f32)> {
+    let surface = crate::water::surface(at, Some(ground));
+    (surface - ground > MIN_SWIM_DEPTH).then_some((ground, surface))
+}
+
+/// Where a swimmer keeps in that water: halfway down (no deeper than the
+/// swimming depth), or on the bed for one that keeps to its spot.
+fn swim_height(bed: f32, surface: f32, on_bed: bool) -> f32 {
+    if on_bed {
+        bed + 0.15
+    } else {
+        surface - ((surface - bed) * 0.5).clamp(0.3, SWIM_DEPTH)
+    }
+}
 const SPAWN_MIN: f32 = 90.0;
 const SPAWN_MAX: f32 = 200.0;
 const DESPAWN: f32 = 300.0;
@@ -423,13 +451,370 @@ const SPECIES: &[Species] = &[
         weight: 0.5,
         skin: Some("yanzhou-m-1908201167678161"),
     },
+    // (Spawned only by the game's wildlife regions: no weight of their own.)
+    Species {
+        animal: Animal::WildPig,
+        model: r"pig\pig01.xbg",
+        skeleton: r"boar\hips_ref.skeleton",
+        clips: r"boar\",
+        idle: "boar_fulb_idlecycle_+000fw_nowep.mab",
+        walk: "boar_fulb_walkcycle_+000fw_nowep.mab",
+        run: "boar_fulb_runcycle_+000fw_nowep.mab",
+        die: "boar_fulb_die_+000fw_nowep.mab",
+        eat: Some("boar_fulb_eat_+000fw_nowep.mab"),
+        attack: None,
+        health: 60.0,
+        walk_speed: 0.7,
+        run_speed: 6.9,
+        size: (0.3, 0.38),
+        behaviour: Behaviour::Prey,
+        habitat: Habitat::Land,
+        damage: 0.0,
+        weight: 0.0,
+        skin: Some("yanzhou-m-2906201162787162"),
+    },
+    Species {
+        animal: Animal::Thylacine,
+        model: r"thylacine\thylacine.xbg",
+        skeleton: r"thylacine\hips_ref.skeleton",
+        clips: r"thylacine\",
+        idle: "thylacine_fulb_idlecycle_+000fw_nowep.mab",
+        walk: "thylacine_fulb_walkcycle_+000fw_nowep.mab",
+        run: "thylacine_fulb_runcycle_+000fw_nowep.mab",
+        die: "thylacine_fulb_die_+000fw_nowep.mab",
+        eat: Some("thylacine_fulb_eat_+000fw_nowep.mab"),
+        attack: Some("thylacine_fulb_attack_success_+000fw_nowep.mab"),
+        health: 80.0,
+        walk_speed: 0.85,
+        run_speed: 6.5,
+        size: (0.25, 0.42),
+        behaviour: Behaviour::Defensive,
+        habitat: Habitat::Land,
+        damage: 15.0,
+        weight: 0.0,
+        skin: None,
+    },
+    Species {
+        animal: Animal::Pig,
+        model: r"pig\pig01.xbg",
+        skeleton: r"boar\hips_ref.skeleton",
+        clips: r"boar\",
+        idle: "boar_fulb_idlecycle_+000fw_nowep.mab",
+        walk: "boar_fulb_walkcycle_+000fw_nowep.mab",
+        run: "boar_fulb_runcycle_+000fw_nowep.mab",
+        die: "boar_fulb_die_+000fw_nowep.mab",
+        eat: Some("boar_fulb_eat_+000fw_nowep.mab"),
+        attack: None,
+        health: 60.0,
+        walk_speed: 0.7,
+        run_speed: 6.0,
+        size: (0.3, 0.38),
+        behaviour: Behaviour::Prey,
+        habitat: Habitat::Land,
+        damage: 0.0,
+        weight: 0.0,
+        skin: Some("yanzhou-m-2906201162787162"),
+    },
+    Species {
+        animal: Animal::Rat,
+        model: r"rat\rat01.xbg",
+        skeleton: r"rat\hips_ref.skeleton",
+        clips: r"rat\",
+        idle: "rat_fulb_idlecycle_+000fw_nowep.mab",
+        walk: "rat_fulb_runcycle_+000fw_nowep.mab",
+        run: "rat_fulb_sprintcycle_+000fw_nowep.mab",
+        die: "rat_fulb_die_+000fw_nowep.mab",
+        eat: Some("rat_fulb_eat_+000fw_nowep.mab"),
+        attack: None,
+        health: 5.0,
+        walk_speed: 1.0,
+        run_speed: 2.5,
+        size: (0.06, 0.08),
+        behaviour: Behaviour::Prey,
+        habitat: Habitat::Land,
+        damage: 0.0,
+        weight: 0.0,
+        skin: None,
+    },
+    Species {
+        animal: Animal::Lizard,
+        model: r"lizard\lizard_01.xbg",
+        skeleton: r"lizard\hips_ref.skeleton",
+        clips: r"lizard\",
+        idle: "lizard_fulb_idlecycle_+000fw_nowep.mab",
+        walk: "lizard_fulb_walkcycle_+000fw_nowep.mab",
+        run: "lizard_fulb_runcycle_+000fw_nowep.mab",
+        die: "lizard_fulb_die_+000fw_nowep.mab",
+        eat: Some("lizard_fulb_lookaround_+000fw_nowep.mab"),
+        attack: None,
+        health: 5.0,
+        walk_speed: 0.2,
+        run_speed: 1.0,
+        size: (0.05, 0.1),
+        behaviour: Behaviour::Prey,
+        habitat: Habitat::Land,
+        damage: 0.0,
+        weight: 0.0,
+        skin: None,
+    },
+    Species {
+        animal: Animal::Crab,
+        model: r"crab\crab.xbg",
+        skeleton: r"crab\pelvis_ref.skeleton",
+        clips: r"crab\",
+        idle: "crab_fulb_idlecycle_+000fw_nowep.mab",
+        walk: "crab_fulb_walkfwcycle_+000fw_nowep.mab",
+        run: "crab_fulb_walkfwcycle_+000fw_nowep.mab",
+        die: "crab_fulb_die_+000fw_nowep.mab",
+        eat: None,
+        attack: None,
+        health: 5.0,
+        walk_speed: 0.3,
+        run_speed: 0.8,
+        size: (0.05, 0.1),
+        behaviour: Behaviour::Prey,
+        habitat: Habitat::Shore,
+        damage: 0.0,
+        weight: 0.0,
+        skin: None,
+    },
+    Species {
+        animal: Animal::Crow,
+        model: r"crow\crow.xbg",
+        skeleton: r"crow\hips_ref.skeleton",
+        clips: r"bird_crow\",
+        idle: "crow_fulb_idle01_+000fw_nowep.mab",
+        walk: "crow_fulb_hopcycle_+000fw_nowep.mab",
+        run: "crow_fulb_flyingcycle_new_+000fw_nowep.mab",
+        die: "crow_fulb_die02_ground_+000fw_nowep.mab",
+        eat: Some("crow_fulb_eat_+000fw_nowep.mab"),
+        attack: None,
+        health: 5.0,
+        walk_speed: 0.2,
+        run_speed: 7.0,
+        size: (0.08, 0.1),
+        behaviour: Behaviour::Prey,
+        habitat: Habitat::Land,
+        damage: 0.0,
+        weight: 0.0,
+        skin: None,
+    },
+    Species {
+        animal: Animal::RiverFish,
+        model: r"fish\river_fish01.xbg",
+        skeleton: r"fish\spine_ref.skeleton",
+        clips: r"fish\",
+        idle: "fish_fulb_idle_+000fw_nowep.mab",
+        walk: "fish_fulb_swim_+000fw_nowep.mab",
+        run: "fish_fulb_swim_+000fw_nowep.mab",
+        die: "fish_fulb_die_+000fw_nowep.mab",
+        eat: None,
+        attack: None,
+        health: 5.0,
+        walk_speed: 1.0,
+        run_speed: 5.0,
+        size: (0.08, 0.15),
+        behaviour: Behaviour::Prey,
+        habitat: Habitat::Water,
+        damage: 0.0,
+        weight: 0.0,
+        skin: None,
+    },
+    Species {
+        animal: Animal::RiverFish,
+        model: r"fish\river_fish02.xbg",
+        skeleton: r"fish\spine_ref.skeleton",
+        clips: r"fish\",
+        idle: "fish_fulb_idle_+000fw_nowep.mab",
+        walk: "fish_fulb_swim_+000fw_nowep.mab",
+        run: "fish_fulb_swim_+000fw_nowep.mab",
+        die: "fish_fulb_die_+000fw_nowep.mab",
+        eat: None,
+        attack: None,
+        health: 5.0,
+        walk_speed: 1.0,
+        run_speed: 5.0,
+        size: (0.08, 0.15),
+        behaviour: Behaviour::Prey,
+        habitat: Habitat::Water,
+        damage: 0.0,
+        weight: 0.0,
+        skin: None,
+    },
+    Species {
+        animal: Animal::RiverFish,
+        model: r"fish\river_fish03.xbg",
+        skeleton: r"fish\spine_ref.skeleton",
+        clips: r"fish\",
+        idle: "fish_fulb_idle_+000fw_nowep.mab",
+        walk: "fish_fulb_swim_+000fw_nowep.mab",
+        run: "fish_fulb_swim_+000fw_nowep.mab",
+        die: "fish_fulb_die_+000fw_nowep.mab",
+        eat: None,
+        attack: None,
+        health: 5.0,
+        walk_speed: 1.0,
+        run_speed: 5.0,
+        size: (0.08, 0.15),
+        behaviour: Behaviour::Prey,
+        habitat: Habitat::Water,
+        damage: 0.0,
+        weight: 0.0,
+        skin: None,
+    },
+    Species {
+        animal: Animal::RiverFish,
+        model: r"fish\river_fish_04.xbg",
+        skeleton: r"fish\spine_ref.skeleton",
+        clips: r"fish\",
+        idle: "fish_fulb_idle_+000fw_nowep.mab",
+        walk: "fish_fulb_swim_+000fw_nowep.mab",
+        run: "fish_fulb_swim_+000fw_nowep.mab",
+        die: "fish_fulb_die_+000fw_nowep.mab",
+        eat: None,
+        attack: None,
+        health: 5.0,
+        walk_speed: 1.0,
+        run_speed: 5.0,
+        size: (0.08, 0.15),
+        behaviour: Behaviour::Prey,
+        habitat: Habitat::Water,
+        damage: 0.0,
+        weight: 0.0,
+        skin: None,
+    },
+    Species {
+        animal: Animal::SeaTurtle,
+        model: r"gsturtle\gsturtle.xbg",
+        skeleton: r"gsturtle\pelvis_ref.skeleton",
+        clips: r"gsturtle\",
+        idle: "gsturtle_fulb_swimwandercycle_+000fw_nowep.mab",
+        walk: "gsturtle_fulb_swimwandercycle_+000fw_nowep.mab",
+        run: "gsturtle_fulb_swimwandercycle_+000fw_nowep.mab",
+        die: "gsturtle_fulb_dieinwater_+000fw_nowep.mab",
+        eat: None,
+        attack: None,
+        health: 60.0,
+        walk_speed: 0.8,
+        run_speed: 0.8,
+        size: (0.35, 0.4),
+        behaviour: Behaviour::Prey,
+        habitat: Habitat::Water,
+        damage: 0.0,
+        weight: 0.0,
+        skin: None,
+    },
+    Species {
+        animal: Animal::Tortoise,
+        model: r"gtortoise\gtortoise.xbg",
+        skeleton: r"gtortoise\pelvis_ref.skeleton",
+        clips: r"gtortoise\",
+        idle: "gtortoise_fulb_idle_+000fw_nowep.mab",
+        walk: "gtortoise_fulb_walkcycle_+000fw_nowep.mab",
+        run: "gtortoise_fulb_hurtshrinkcycle_+000fw_nowep.mab",
+        die: "gtortoise_fulb_die_+000fw_nowep.mab",
+        eat: Some("gtortoise_fulb_eat_stp.mab"),
+        attack: None,
+        health: 100.0,
+        walk_speed: 0.1,
+        run_speed: 0.15,
+        size: (0.35, 0.3),
+        behaviour: Behaviour::Prey,
+        habitat: Habitat::Land,
+        damage: 0.0,
+        weight: 0.0,
+        skin: None,
+    },
+    Species {
+        animal: Animal::JellyFish,
+        model: r"jelly_fish\jellyfish.xbg",
+        skeleton: r"jelly_fish\spine_ref.skeleton",
+        clips: r"jelly_fish\",
+        idle: "jellyfish_fulb_idle_+000fw_nowep.mab",
+        walk: "jellyfish_fulb_swimcycle_+000fw_nowep.mab",
+        run: "jellyfish_fulb_swimcycle_+000fw_nowep.mab",
+        die: "jellyfish_fulb_falldown_+000fw_nowep.mab",
+        eat: None,
+        attack: None,
+        health: 5.0,
+        walk_speed: 0.3,
+        run_speed: 0.8,
+        size: (0.3, 0.15),
+        behaviour: Behaviour::Predator,
+        habitat: Habitat::Water,
+        damage: 10.0,
+        weight: 0.0,
+        skin: None,
+    },
+    Species {
+        animal: Animal::Moray,
+        model: r"moray_eel\moray_eel.xbg",
+        skeleton: r"moray_eel\hips_ref.skeleton",
+        clips: r"moray_eel\",
+        idle: "moray_fulb_idlecycle_+000fw_nowep.mab",
+        walk: "moray_fulb_idlecycle_+000fw_nowep.mab",
+        run: "moray_fulb_idlecycle_+000fw_nowep.mab",
+        die: "morayeel_jason_bite_qte_death.mab",
+        eat: None,
+        attack: Some("morayeel_jason_bite_qte_start.mab"),
+        health: 30.0,
+        walk_speed: 0.0,
+        run_speed: 0.0,
+        size: (0.15, 0.45),
+        behaviour: Behaviour::Predator,
+        habitat: Habitat::Water,
+        damage: 20.0,
+        weight: 0.0,
+        skin: None,
+    },
+    Species {
+        animal: Animal::MantaRay,
+        model: r"manta_ray\manta_ray.xbg",
+        skeleton: r"manta_ray\pelvis_ref.skeleton",
+        clips: r"manta_ray\",
+        idle: "mray_fulb_swimcycle_+000fw_nowep.mab",
+        walk: "mray_fulb_swimcycle_+000fw_nowep.mab",
+        run: "mray_fulb_swimcycle_+000fw_nowep.mab",
+        die: "mray_fulb_die_+000fw_nowep.mab",
+        eat: None,
+        attack: None,
+        health: 100.0,
+        walk_speed: 4.0,
+        run_speed: 5.0,
+        size: (1.0, 0.3),
+        behaviour: Behaviour::Prey,
+        habitat: Habitat::Water,
+        damage: 0.0,
+        weight: 0.0,
+        skin: None,
+    },
 ];
+
+impl Species {
+    /// Keeps to its spot (the moray in its hole).
+    fn stationary(&self) -> bool {
+        self.run_speed <= 0.0
+    }
+
+    /// Hides in its shell instead of running (the tortoise).
+    fn hides(&self) -> bool {
+        self.animal == Animal::Tortoise
+    }
+
+    /// Takes to the air to get away (the crow).
+    fn flies(&self) -> bool {
+        self.animal == Animal::Crow
+    }
+}
 
 #[derive(Resource)]
 pub(crate) struct AnimalAssets {
     models: Vec<Handle<Fc3Model>>,
     sets: Vec<Arc<ClipSet>>,
     skins: Vec<Option<Handle<StandardMaterial>>>,
+    /// The species' graphic kit (its skins and their variants), kept to the
+    /// species' own model.
+    kits: Vec<Option<crate::characters::LoadedKit>>,
 }
 
 /// Supported normal story animals. Use the authored family, not the shared
@@ -441,19 +826,57 @@ pub(crate) fn story_species(name: &str) -> Option<usize> {
     let family = family.rsplit_once('_').filter(|(_, suffix)| !suffix.is_empty() && suffix.bytes().all(|c| c.is_ascii_digit()))
         .map_or(family, |(family, _)| family);
     let animal = match family {
-        "boar" => Animal::Boar, "deerfc3" => Animal::Deer, "goat" => Animal::Goat,
-        "dogs_rapid" | "attackdog_fc3" => Animal::Dog, "asiantapir" => Animal::Tapir,
-        "leopard" => Animal::Leopard, "asianblackbear" | "bear_young" | "bear_huge" => Animal::Bear,
-        "tiger" => Animal::Tiger, "komododragon" => Animal::Komodo, "cassowary" => Animal::Cassowary,
-        "buffalo" => Animal::Buffalo, "crocodile" => Animal::Crocodile, "bullshark" => Animal::Shark,
+        "boar" => Animal::Boar,
+        "deerfc3" => Animal::Deer,
+        "goat" | "goatfc3" => Animal::Goat,
+        "dogs_rapid" | "dogs_dingo" | "attackdog_fc3" => Animal::Dog,
+        "asiantapir" => Animal::Tapir,
+        "leopard" | "leopard_ulc" => Animal::Leopard,
+        "asianblackbear" | "bear_young" | "bear_huge" => Animal::Bear,
+        "tiger" | "tiger_ulc" => Animal::Tiger,
+        "komododragon" => Animal::Komodo,
+        "cassowary" => Animal::Cassowary,
+        "buffalo" => Animal::Buffalo,
+        "crocodile" => Animal::Crocodile,
+        "bullshark" => Animal::Shark,
+        "macaque" => Animal::Macaque,
+        "chicken" => Animal::Chicken,
+        "pig_wild" => Animal::WildPig,
+        "thylacine" => Animal::Thylacine,
+        "pig" | "pigfc3" => Animal::Pig,
+        "rat" => Animal::Rat,
+        "lizard" => Animal::Lizard,
+        "crab" => Animal::Crab,
+        "crow" => Animal::Crow,
+        "riverfish" | "riverfish_carp" => Animal::RiverFish,
+        "seaturtle" => Animal::SeaTurtle,
+        "gtortoise" => Animal::Tortoise,
+        "jellyfish" => Animal::JellyFish,
+        "moray" => Animal::Moray,
+        "mantaray" => Animal::MantaRay,
         _ => return None,
     };
-    SPECIES.iter().position(|s| s.animal == animal)
+    // River fish come in several models (by their archetype's variant).
+    let model = match animal {
+        Animal::RiverFish if family == "riverfish_carp" => Some("river_fish_04"),
+        Animal::RiverFish if name.contains("catfish") => Some("river_fish03"),
+        Animal::RiverFish if name.contains("saury") => Some("river_fish02"),
+        Animal::RiverFish => Some("river_fish01"),
+        _ => None,
+    };
+    SPECIES.iter().position(|s| s.animal == animal && model.is_none_or(|m| s.model.contains(m)))
 }
 
 impl AnimalAssets {
     pub(crate) fn ready_for_story(&self, species: usize, server: &AssetServer) -> bool {
         self.sets[species].ready(server)
+    }
+
+    /// Its model, clips and kit are in.
+    fn ready(&self, species: usize, server: &AssetServer) -> bool {
+        crate::cache_assets::usable(server, self.models[species].id())
+            && self.sets[species].ready(server)
+            && self.kits[species].as_ref().is_none_or(|k| k.settled(server))
     }
 
     /// Keep the authored graphic kit and story id, but give this root actual
@@ -473,11 +896,27 @@ impl AnimalAssets {
     }
 }
 
-fn load_animals(mut commands: Commands, server: Res<AssetServer>) {
+fn load_animals(mut commands: Commands, server: Res<AssetServer>, info: Option<Res<crate::data::CacheInfo>>) {
     let mut models = Vec::new();
     let mut sets = Vec::new();
     let mut skins = Vec::new();
+    // The animals' graphic kits (`SHA_*`, by the model they dress).
+    let defs = info.and_then(|i| std::fs::read_to_string(i.root.join(cache::ALL_KITS_REL)).ok()).map(|t| fc3_formats::kits::from_text(&t)).unwrap_or_default();
+    let mut kits = Vec::new();
     for s in SPECIES {
+        let model = format!(r"characters\animals\{}", s.model).to_ascii_lowercase();
+        let ours = |p: &fc3_formats::kits::KitPart| p.model.to_ascii_lowercase().ends_with(&model);
+        let kit =
+            defs.iter().filter(|k| k.name.to_ascii_lowercase().starts_with("sha_")).find(|k| k.slots.iter().flat_map(|sl| &sl.parts).any(ours)).map(|k| {
+                let mut k = k.clone();
+                for slot in &mut k.slots {
+                    if slot.parts.iter().any(ours) {
+                        slot.parts.retain(ours);
+                    }
+                }
+                crate::characters::load_kit(&server, k)
+            });
+        kits.push(kit);
         skins.push(s.skin.map(|stem| server.load(cache_path(&cache::material_rel(&cache::animal_skin_path(stem))))));
         models.push(
             server
@@ -499,7 +938,7 @@ fn load_animals(mut commands: Commands, server: Res<AssetServer>) {
         }
         sets.push(Arc::new(ClipSet { skeleton: server.load(cache_path(&cache::skeleton_rel(&format!("{MODELS}{}", s.skeleton)))), clips }));
     }
-    commands.insert_resource(AnimalAssets { models, sets, skins });
+    commands.insert_resource(AnimalAssets { models, sets, skins, kits });
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -531,6 +970,8 @@ struct Sensing {
     /// look (0 until it picks).
     strikes: u32,
     burst: u32,
+    /// Seconds left of the strike's swing (it stands between strikes).
+    swing: f32,
 }
 
 /// The animals' personalities by species: the game's (`fc3_formats::animals`)
@@ -577,6 +1018,129 @@ fn fallback(s: &Species) -> Personality {
     }
 }
 
+/// A group the game's wildlife regions spawned (one prefab), and what it
+/// costs of the wildlife budget.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct WildGroup {
+    id: u32,
+    cost: f32,
+}
+
+/// The game's wildlife regions (`fc3_formats::encounters`), once read from
+/// the cache: where each kind of animal spawns.
+#[derive(Resource, Default)]
+pub(crate) struct WildlifeRegions(Option<fc3_formats::encounters::Wildlife>);
+
+impl WildlifeRegions {
+    /// Whether the game's regions say where reef fish swim: `None` without
+    /// them, else whether `p` lies in a region whose prefabs hold coral-reef
+    /// fish (the reefs, not the rivers).
+    pub(crate) fn reef_at(&self, p: Vec3) -> Option<bool> {
+        let w = self.0.as_ref()?;
+        let q = crate::data::to_dunia(p);
+        let reef = |list: &u64| {
+            w.lists.get(list).is_some_and(|l| {
+                l.iter().any(|(id, _)| w.prefabs.get(id).is_some_and(|ps| ps.iter().any(|a| a.archetype.to_ascii_lowercase().contains("coral_reef_fish"))))
+            })
+        };
+        Some(w.regions.iter().any(|r| r.contains(q[0], q[1]) && reef(&r.list)))
+    }
+}
+
+fn load_wildlife_regions(info: Option<Res<crate::data::CacheInfo>>, mut table: ResMut<WildlifeRegions>) {
+    let Some(info) = info else { return };
+    match std::fs::read_to_string(info.root.join(fc3_formats::encounters::WILDLIFE_REL))
+        .map_err(anyhow::Error::from)
+        .and_then(|t| fc3_formats::encounters::from_text(&t))
+    {
+        Ok(w) => {
+            info!("wildlife: {} regions, {} prefabs", w.regions.len(), w.prefabs.len());
+            table.0 = Some(w);
+        }
+        Err(e) => warn!("wildlife: no regions table ({e:#}); re-run the converter"),
+    }
+}
+
+/// A place and a group from the game's wildlife regions near the player:
+/// a region whose spawn ring reaches into it, a spot inside it that ring's
+/// distance behind him (within its spawn angle), clear of other wildlife by
+/// its separation, and a prefab from its list by weight (`None` when it
+/// rolls nothing). The group: species and offset from the spot (Bevy).
+fn region_spawn(
+    w: &fc3_formats::encounters::Wildlife,
+    rng: &mut Rng,
+    at: Vec3,
+    behind: Vec3,
+    heights: &Heightfield,
+    others: &[Vec3],
+) -> Option<(Vec3, Vec<(usize, Vec3, f32, String)>, f32)> {
+    let p = crate::data::to_dunia(at);
+    let near: Vec<&fc3_formats::encounters::Region> = w
+        .regions
+        .iter()
+        .filter(|r| {
+            let Some(s) = w.settings.get(&r.settings) else { return false };
+            let b = r.bounds();
+            p[0] > b[0] - s.max && p[0] < b[2] + s.max && p[1] > b[1] - s.max && p[1] < b[3] + s.max
+        })
+        .collect();
+    // Nearby regions in a random order, a few tries each.
+    let mut order: Vec<usize> = (0..near.len()).collect();
+    for i in (1..order.len()).rev() {
+        order.swap(i, (rng.f32() * (i + 1) as f32) as usize % (i + 1));
+    }
+    order.into_iter().take(6).find_map(|i| region_try(w, near[i], rng, at, behind, heights, others))
+}
+
+fn region_try(
+    w: &fc3_formats::encounters::Wildlife,
+    r: &fc3_formats::encounters::Region,
+    rng: &mut Rng,
+    at: Vec3,
+    behind: Vec3,
+    heights: &Heightfield,
+    others: &[Vec3],
+) -> Option<(Vec3, Vec<(usize, Vec3, f32, String)>, f32)> {
+    let s = w.settings.get(&r.settings)?;
+    let back = (-behind.x).atan2(-behind.z);
+    for _ in 0..4 {
+        let a = back + rng.range(-0.5, 0.5) * s.angle.to_radians();
+        let d = rng.range(s.min, s.max.max(s.min));
+        let spot = at + Vec3::new(-a.sin(), 0.0, -a.cos()) * d;
+        let q = crate::data::to_dunia(spot);
+        if !r.contains(q[0], q[1]) || others.iter().any(|o| o.distance(spot) < s.separation) {
+            continue;
+        }
+        let ground = heights.height_at(spot)?;
+        let wet = ground < crate::water::surface(spot, Some(ground)) - 1.0;
+        if (r.land && !r.water && wet) || (r.water && !r.land && !wet) {
+            continue;
+        }
+        // The list's pick, by weight.
+        let list = w.lists.get(&r.list)?;
+        let total: f32 = list.iter().map(|(_, wt)| wt).sum();
+        let mut roll = rng.f32() * total;
+        let id = list.iter().find(|(_, wt)| {
+            roll -= wt;
+            roll < 0.0
+        })?;
+        let turn = Quat::from_rotation_y(rng.f32() * std::f32::consts::TAU);
+        let group: Vec<(usize, Vec3, f32, String)> = w
+            .prefabs
+            .get(&id.0)?
+            .iter()
+            .filter_map(|a| {
+                let species = story_species(&a.archetype)?;
+                let offset = turn * Vec3::new(a.offset[0], 0.0, -a.offset[1]);
+                Some((species, offset, a.yaw.to_radians(), a.archetype.clone()))
+            })
+            .collect();
+        let cost = w.costs.get(&id.0).copied().unwrap_or(0.0);
+        return (!group.is_empty()).then_some((Vec3::new(spot.x, ground, spot.z), group, cost));
+    }
+    None
+}
+
 fn load_animal_table(info: Option<Res<crate::data::CacheInfo>>, mut table: ResMut<AnimalTable>) {
     let Some(info) = info else { return };
     match std::fs::read_to_string(info.root.join(fc3_formats::animals::ANIMALS_REL))
@@ -608,11 +1172,12 @@ fn behaviour(p: &Personality) -> Behaviour {
     }
 }
 
-/// The swing of an attack (seconds), before the personality's wait between
-/// attacks.
+/// Hunting animals sprint at their target from this near (m).
+const HUNT_SPRINT: f32 = 25.0;
+
+/// The swing of an attack (seconds) until the species' attack clip has
+/// loaded (then its length), before the personality's wait between attacks.
 const ATTACK_SWING: f32 = 0.8;
-/// Animals see ahead and to the sides (the cosine of half their view).
-const SIGHT_COS: f32 = 0.0;
 
 /// A species' calls: sound events from its archetype's sound component in
 /// the entity library (`sndIdleSound`, `sndHurtSound`, `sndDeathSound`, and
@@ -643,7 +1208,20 @@ fn calls(animal: Animal) -> Calls {
         Animal::Crocodile => c(0x001A_3F43, 0x001A_3F44, 0x001A_3F47, 0),
         Animal::Macaque => c(0x001A_A483, 0x001A_4197, 0x001A_4197, 0x001A_4196),
         Animal::Chicken => c(0, 0, 0x001B_085F, 0),
-        Animal::Shark => Calls::default(),
+        Animal::WildPig => c(0x0013_DF7D, 0x000A_4772, 0x000A_46DA, 0x0013_DFA1),
+        Animal::Pig => c(0x0013_DF7D, 0x0013_DF7C, 0x0013_DF7C, 0x0013_DFA1),
+        Animal::Rat => c(0x001A_A4D4, 0, 0, 0x001A_A4D4),
+        Animal::Crow => c(0x001A_3F74, 0x001A_3F74, 0x001A_3F73, 0x001A_3F74),
+        Animal::Tortoise => c(0, 0x001A_A604, 0x001A_A604, 0),
+        Animal::Thylacine
+        | Animal::Shark
+        | Animal::Lizard
+        | Animal::Crab
+        | Animal::RiverFish
+        | Animal::SeaTurtle
+        | Animal::JellyFish
+        | Animal::Moray
+        | Animal::MantaRay => Calls::default(),
     }
 }
 
@@ -681,10 +1259,88 @@ impl WildAnimal {
         SPECIES[self.species].animal
     }
 
+    /// Its body's radius (it lies along its capsule).
+    pub(crate) fn body_radius(&self) -> f32 {
+        SPECIES[self.species].size.0
+    }
+
     /// Predators: soldiers shoot these on sight when they come close.
     pub fn dangerous(&self) -> bool {
         SPECIES[self.species].behaviour == Behaviour::Predator
     }
+}
+
+/// An animal an encounter brings, by its archetype's name; `handled`: it
+/// came with people (an attack dog with its pirates).
+#[derive(Message, Clone)]
+pub struct PlaceAnimal {
+    pub archetype: String,
+    pub at: Vec3,
+    pub yaw: f32,
+    pub handled: bool,
+    /// The door (its id) of the cage it is held in.
+    pub cage: Option<u64>,
+    /// A carcass the encounter leaves.
+    pub dead: bool,
+}
+
+/// An animal held in a cage (by its door's id) until the door is broken.
+#[derive(Component)]
+pub struct InCage(pub u64);
+
+/// An animal with its handlers: it goes for the player, never them, and
+/// they don't shoot it.
+#[derive(Component)]
+pub struct Handled;
+
+/// Puts the animals encounters bring where they stand, once their species is
+/// in (given up after half a minute, or at once for one we don't model).
+#[allow(clippy::too_many_arguments)]
+fn place_animals(
+    time: Res<Time>,
+    mut requests: MessageReader<PlaceAnimal>,
+    mut pending: Local<Vec<(PlaceAnimal, f32)>>,
+    assets: Option<Res<AnimalAssets>>,
+    server: Res<AssetServer>,
+    models: Res<Assets<Fc3Model>>,
+    heights: Res<Heightfield>,
+    mut rng: ResMut<Rng>,
+    mut commands: Commands,
+) {
+    let now = time.elapsed_secs();
+    pending.extend(requests.read().map(|r| (r.clone(), now)));
+    let Some(assets) = assets else { return };
+    pending.retain(|(r, since)| {
+        let Some(species) = story_species(&r.archetype) else { return false };
+        if !assets.ready(species, &server) {
+            return now - since < 30.0;
+        }
+        let Some(model) = models.get(&assets.models[species]) else { return false };
+        let ground = heights.height_at(r.at).unwrap_or(r.at.y);
+        let feet = match SPECIES[species].habitat {
+            Habitat::Sea => Vec3::new(r.at.x, crate::sky::SEA_LEVEL - SWIM_DEPTH, r.at.z),
+            Habitat::Water => {
+                let Some((bed, surface)) = water_band(r.at, ground) else { return false };
+                Vec3::new(r.at.x, swim_height(bed, surface, SPECIES[species].stationary()), r.at.z)
+            }
+            _ => Vec3::new(r.at.x, ground, r.at.z),
+        };
+        let e = spawn_animal(&mut commands, &assets, &models, model, species, feet, r.yaw, Mood::Graze, Some(&r.archetype), &mut rng);
+        if r.handled {
+            commands.entity(e).insert(Handled);
+        }
+        if r.dead {
+            commands.entity(e).insert(crate::combat::DieOnSpawn);
+        }
+        // (Held where it stands, pacing on the spot, until let out.)
+        if let Some(door) = r.cage {
+            commands.entity(e).insert(InCage(door)).entry::<WildAnimal>().and_modify(|mut a| a.frozen = Some(AnimKind::Idle));
+        }
+        if std::env::var_os("FC3_ENCOUNTER_DEBUG").is_some() {
+            info!("encounter: brings {} at {feet:.0?}{}", r.archetype, if r.handled { " (handled)" } else { "" });
+        }
+        false
+    });
 }
 
 /// An animal cage's door (in outposts): shot or blown open, it lets out a
@@ -695,6 +1351,11 @@ pub struct CageDoor {
 }
 
 pub const CAGE_DOOR_HEALTH: f32 = 40.0;
+
+/// The animal behind a cage's door (an encounter's, by archetype); without
+/// one, a big cat comes out (a bear on the southern island).
+#[derive(Component)]
+pub struct Caged(pub String);
 
 /// A dead animal that can be skinned.
 #[derive(Component)]
@@ -747,9 +1408,10 @@ fn spawn_animals(
     heights: Res<Heightfield>,
     outposts: Res<crate::outposts::Outposts>,
     players: Query<&Transform, With<Player>>,
-    animals: Query<(), With<WildAnimal>>,
+    animals: Query<(&Transform, Option<&WildGroup>), With<WildAnimal>>,
     mut rng: ResMut<Rng>,
     mut commands: Commands,
+    (regions, mut next_group): (Res<WildlifeRegions>, Local<u32>),
 ) {
     *timer -= time.delta_secs();
     if *timer > 0.0 || args.animal_test.is_some() {
@@ -758,6 +1420,57 @@ fn spawn_animals(
     *timer = 3.0;
     let Some(assets) = assets else { return };
     let Ok(pt) = players.single() else { return };
+    // The game's wildlife regions decide what spawns where.
+    if let Some(w) = regions.0.as_ref() {
+        let others: Vec<Vec3> = animals.iter().map(|(t, _)| t.translation).collect();
+        if others.len() >= MAX_ANIMALS {
+            return;
+        }
+        // The service's budget: the groups out, and what they cost.
+        let mut groups: Vec<WildGroup> = animals.iter().filter_map(|(_, g)| g.copied()).collect();
+        groups.sort_by_key(|g| g.id);
+        groups.dedup_by_key(|g| g.id);
+        let spent: f32 = groups.iter().map(|g| g.cost).sum();
+        if w.max_groups > 0 && groups.len() as u32 >= w.max_groups {
+            return;
+        }
+        let Some((spot, group, cost)) = region_spawn(w, &mut rng, pt.translation, pt.forward().as_vec3(), &heights, &others) else { return };
+        if w.budget > 0.0 && spent + cost > w.budget {
+            return;
+        }
+        *next_group += 1;
+        let tag = WildGroup { id: *next_group, cost };
+        if std::env::var_os("FC3_ANIMAL_DEBUG").is_some() {
+            let names: Vec<&str> = group.iter().map(|(_, _, _, archetype)| archetype.as_str()).collect();
+            info!(
+                "wildlife: spawns {names:?} {:.0} m off (budget {:.2} + {cost:.2} of {}, group {} of {})",
+                spot.distance(pt.translation),
+                spent,
+                w.budget,
+                groups.len() + 1,
+                w.max_groups
+            );
+        }
+        for (species, offset, yaw, archetype) in group.into_iter().take(MAX_ANIMALS - others.len()) {
+            let Some(model) = models.get(&assets.models[species]) else { continue };
+            if !assets.ready(species, &server) {
+                continue;
+            }
+            let at = spot + offset;
+            let ground = heights.height_at(at).unwrap_or(spot.y);
+            let feet = match SPECIES[species].habitat {
+                Habitat::Sea => Vec3::new(at.x, crate::sky::SEA_LEVEL - SWIM_DEPTH, at.z),
+                Habitat::Water => {
+                    let Some((bed, surface)) = water_band(at, ground) else { continue };
+                    Vec3::new(at.x, swim_height(bed, surface, SPECIES[species].stationary()), at.z)
+                }
+                _ => Vec3::new(at.x, ground, at.z),
+            };
+            let e = spawn_animal(&mut commands, &assets, &models, model, species, feet, yaw, Mood::Graze, Some(&archetype), &mut rng);
+            commands.entity(e).insert(tag);
+        }
+        return;
+    }
     if animals.iter().count() >= MAX_ANIMALS {
         return;
     }
@@ -778,7 +1491,7 @@ fn spawn_animals(
         return;
     }
     let Some(model) = models.get(&assets.models[species]) else { return };
-    if !crate::cache_assets::usable(&server, assets.models[species].id()) || !assets.sets[species].ready(&server) {
+    if !assets.ready(species, &server) {
         return;
     }
     let Some(centre) = random_ground(&mut rng, pt.translation, &heights, &outposts, s.habitat) else { return };
@@ -792,11 +1505,89 @@ fn spawn_animals(
         let ground = if s.habitat == Habitat::Sea { centre.y } else { heights.height_at(at).unwrap_or(centre.y) };
         let feet = Vec3::new(at.x, ground, at.z);
         let yaw = rng.f32() * std::f32::consts::TAU;
-        spawn_animal(&mut commands, &assets, model, species, feet, yaw, Mood::Graze, &mut rng);
+        spawn_animal(&mut commands, &assets, &models, model, species, feet, yaw, Mood::Graze, None, &mut rng);
     }
 }
 
-fn spawn_animal(commands: &mut Commands, assets: &AnimalAssets, model: &Fc3Model, species: usize, feet: Vec3, yaw: f32, mood: Mood, rng: &mut Rng) -> Entity {
+/// Kit tags that mark a variant the game spawns only by name (rare and
+/// promotional skins, the bloodied crows, the painted goat).
+const NAMED_ONLY_TAGS: [&str; 5] = ["rare", "ulc", "golden", "blood", "painted"];
+
+/// Dresses an animal from its kit: the skin variant its archetype names
+/// (`Pig.Pig_black` a black pig, `Crow.Blood` a bloodied crow), else a
+/// regular one. Without a kit, its model in its skin.
+#[allow(clippy::too_many_arguments)]
+fn dress_animal(
+    commands: &mut Commands,
+    assets: &AnimalAssets,
+    models: &Assets<Fc3Model>,
+    model: &Fc3Model,
+    species: usize,
+    root: Entity,
+    offset: Vec3,
+    archetype: Option<&str>,
+    rng: &mut Rng,
+) -> Option<Entity> {
+    let set = assets.sets[species].clone();
+    let Some(kit) = assets.kits[species].as_ref() else { return spawn_rig_with(commands, root, &[model], None, set, offset, assets.skins[species].clone()) };
+    let mentioned: Vec<&str> =
+        kit.slots.iter().flatten().flat_map(|p| &p.def.swaps).flat_map(|s| &s.choices).flat_map(|c| &c.tags).map(|(n, _)| n.as_str()).collect();
+    // The archetype's variant (after its family) names the tags it wears.
+    let name = archetype.unwrap_or_default().to_ascii_lowercase();
+    let family = name.rsplit('/').next().unwrap_or_default().split('.').next().unwrap_or_default().to_string();
+    let variant = name.rsplit('/').next().unwrap_or_default().split_once('.').map(|(_, v)| v.to_string()).unwrap_or_default();
+    let mut want: Vec<String> = mentioned.iter().filter(|t| variant.contains(**t) && !family.contains(**t)).map(|t| t.to_string()).collect();
+    if want.is_empty() && mentioned.contains(&"regular") {
+        want.push("regular".into());
+    }
+    want.dedup();
+    let mut tags = fc3_formats::kits::Tags(want.clone());
+    let mut parts = Vec::new();
+    for slot in &kit.slots {
+        let Some(i) = crate::characters::weighted(slot.iter().map(|p| p.weight), rng) else { continue };
+        let part = &slot[i];
+        let Some(m) = models.get(&part.model) else { continue };
+        let mut swaps = Vec::new();
+        for ((default, choices), def) in part.swaps.iter().zip(&part.def.swaps) {
+            let allowed = tags.allowed(def);
+            let ordinary: Vec<usize> = allowed
+                .iter()
+                .copied()
+                .filter(|&j| {
+                    !def.choices[j]
+                        .tags
+                        .iter()
+                        .any(|(n, r)| *r == fc3_formats::kits::TagRule::Has && NAMED_ONLY_TAGS.contains(&n.as_str()) && !want.contains(n))
+                })
+                .collect();
+            let pool = if ordinary.is_empty() { allowed } else { ordinary };
+            let Some(j) = crate::characters::weighted(pool.iter().map(|&j| def.choices[j].weight), rng).map(|k| pool[k]) else { continue };
+            tags.take(&def.choices[j]);
+            swaps.push((default.id(), choices[j].clone()));
+        }
+        parts.push(crate::characters::Dressed { model: m, swaps });
+    }
+    if parts.is_empty() {
+        return spawn_rig_with(commands, root, &[model], None, set, offset, assets.skins[species].clone());
+    }
+    // (A kit without swaps leaves the placeholder to the species' skin.)
+    let skin = parts.iter().all(|p| p.swaps.is_empty()).then(|| assets.skins[species].clone()).flatten();
+    crate::characters::spawn_dressed_rig(commands, root, &parts, None, set, offset, skin)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_animal(
+    commands: &mut Commands,
+    assets: &AnimalAssets,
+    models: &Assets<Fc3Model>,
+    model: &Fc3Model,
+    species: usize,
+    feet: Vec3,
+    yaw: f32,
+    mood: Mood,
+    archetype: Option<&str>,
+    rng: &mut Rng,
+) -> Entity {
     let s = &SPECIES[species];
     let (radius, half) = s.size;
     let root = commands
@@ -825,9 +1616,7 @@ fn spawn_animal(commands: &mut Commands, assets: &AnimalAssets, model: &Fc3Model
             Name::new(s.animal.name()),
         ))
         .id();
-    if let Some(rig) =
-        spawn_rig_with(commands, root, &[model], None, assets.sets[species].clone(), Vec3::new(0.0, -(radius + 0.25), 0.0), assets.skins[species].clone())
-    {
+    if let Some(rig) = dress_animal(commands, assets, models, model, species, root, Vec3::new(0.0, -(radius + 0.25), 0.0), archetype, rng) {
         commands.entity(root).entry::<WildAnimal>().and_modify(move |mut a| a.rig = Some(rig));
     }
     root
@@ -875,7 +1664,8 @@ fn cage_test(
 #[allow(clippy::too_many_arguments)]
 fn release_caged(
     mut died: MessageReader<crate::combat::Died>,
-    doors: Query<(&CageDoor, &GlobalTransform)>,
+    doors: Query<(&CageDoor, &GlobalTransform, Option<&Caged>)>,
+    mut held: Query<(Entity, &InCage, &mut WildAnimal)>,
     mut world: ResMut<crate::pickups::WorldState>,
     assets: Option<Res<AnimalAssets>>,
     models: Res<Assets<Fc3Model>>,
@@ -885,19 +1675,39 @@ fn release_caged(
     mut commands: Commands,
 ) {
     for d in died.read() {
-        let Ok((door, gt)) = doors.get(d.entity) else { continue };
+        let Ok((door, gt, caged)) = doors.get(d.entity) else { continue };
         world.removed.insert(door.id);
         commands.entity(d.entity).despawn();
+        // An encounter's animal behind it comes out, on the hunt.
+        let mut freed = false;
+        for (e, cage, mut a) in &mut held {
+            if cage.0 == door.id {
+                a.frozen = None;
+                a.mood = Mood::Hunt;
+                a.timer = 20.0;
+                commands.entity(e).remove::<InCage>();
+                let voice = calls(a.animal());
+                if voice.alarm != 0 {
+                    sfx.write(crate::sound::PlaySfx { event: voice.alarm, at: Some(gt.translation()), volume: 1.0 });
+                }
+                info!("cage opened at {:.0?}: {}", gt.translation(), a.animal().name());
+                freed = true;
+            }
+        }
+        if freed {
+            continue;
+        }
         let Some(assets) = assets.as_ref() else { continue };
         let at = gt.translation();
         let animal = if at.z > 600.0 { Animal::Bear } else { Animal::Tiger };
-        let Some(species) = SPECIES.iter().position(|s| s.animal == animal) else { continue };
+        let Some(species) = caged.and_then(|c| story_species(&c.0)).or_else(|| SPECIES.iter().position(|s| s.animal == animal)) else { continue };
+        let animal = SPECIES[species].animal;
         let Some(model) = models.get(&assets.models[species]) else { continue };
         // Out through the doorway, from just inside it.
         let out = gt.rotation() * Vec3::Z;
         let inside = at - Vec3::new(out.x, 0.0, out.z).normalize_or(Vec3::X) * 1.2;
         let feet = Vec3::new(inside.x, heights.height_at(inside).unwrap_or(at.y), inside.z);
-        let e = spawn_animal(&mut commands, assets, model, species, feet, yaw_to(out), Mood::Hunt, &mut rng);
+        let e = spawn_animal(&mut commands, assets, &models, model, species, feet, yaw_to(out), Mood::Hunt, caged.map(|c| c.0.as_str()), &mut rng);
         commands.entity(e).entry::<WildAnimal>().and_modify(|mut a| a.timer = 20.0);
         let voice = calls(animal);
         if voice.alarm != 0 {
@@ -943,14 +1753,19 @@ fn animal_ai(
     players: Query<(Entity, &Transform, &Player, &Health, Option<&crate::weapons::Inventory>), Without<WildAnimal>>,
     people: Query<(Entity, &Transform, &Health), (With<crate::npc::Npc>, Without<WildAnimal>, Without<Player>)>,
     mut animals: Query<
-        (Entity, &mut Transform, &mut WildAnimal, &Health, Option<&crate::story_actors::StoryActor>, Option<&crate::combat::Counters>),
+        (Entity, &mut Transform, &mut WildAnimal, &Health, Option<&crate::story_actors::StoryActor>, Option<&crate::combat::Counters>, Has<Handled>),
         Without<Carcass>,
     >,
     mut anims: Query<&mut AnimRequest>,
     mut damage: MessageWriter<DamageEvent>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     (boosts, table, sense_table): (Option<Res<crate::syringes::Boosts>>, Res<AnimalTable>, Res<crate::npc::SenseTable>),
-    (driving, vehicles): (Res<crate::vehicles::Driving>, Query<(&crate::vehicles::Vehicle, &LinearVelocity)>),
+    (driving, vehicles, assets, clips): (
+        Res<crate::vehicles::Driving>,
+        Query<(&crate::vehicles::Vehicle, &LinearVelocity)>,
+        Option<Res<AnimalAssets>>,
+        Res<Assets<crate::cache_assets::Fc3Clip>>,
+    ),
 ) {
     let dt = time.delta_secs();
     let Ok((pe, pt, player, ph, inventory)) = players.single() else { return };
@@ -970,7 +1785,7 @@ fn animal_ai(
     // speed against its top speed).
     let player_posture = crate::npc::posture(player, inventory);
     let ride = driving.vehicle.and_then(|v| vehicles.get(v).ok()).map(|(v, lv)| (lv.0.length() / v.top_speed().max(1.0)).min(1.0));
-    for (e, mut t, mut a, h, story, counters) in &mut animals {
+    for (e, mut t, mut a, h, story, counters, handled) in &mut animals {
         if h.dead || story.is_some_and(|s| s.script_driven()) {
             continue;
         }
@@ -1009,7 +1824,9 @@ fn animal_ai(
         let player_dist = pt.translation.distance(pos);
         let player_available = !ph.dead && !player.noclip && !player.spawning && !repellent && cinema.as_ref().is_none_or(|c| c.view.is_none());
         let mut target = player_available.then_some((pe, pt.translation, player_dist));
-        if s.habitat != Habitat::Sea {
+        let swimmer = matches!(s.habitat, Habitat::Sea | Habitat::Water);
+        // (A dog with its handlers goes for the player only.)
+        if !swimmer && !handled {
             for (ne, np) in &npcs {
                 let d = np.distance(pos);
                 if target.is_none_or(|t| d < t.2) {
@@ -1023,7 +1840,7 @@ fn animal_ai(
         a.timer -= dt;
         a.attack_cooldown -= dt;
         // Sharks only go for someone in the water.
-        let reachable = target.is_some() && (s.habitat != Habitat::Sea || player.swimming);
+        let reachable = target.is_some() && (!swimmer || player.swimming);
         let ph_dead = is_player && ph.dead;
         // What it senses of them: nothing too far above or below; by smell
         // (nearer for a stealthy player, and ignored while idle by some), at
@@ -1041,10 +1858,13 @@ fn animal_ai(
         let driven = if is_player && player.driving { ride } else { None };
         let vehicle = near && driven.is_some_and(|speed| p.vehicle < 0.0 || dist < p.vehicle * speed);
         let mut seen = false;
-        match sight.and_then(|v| v.get(posture, level).time(dist).map(|need| (need, v.sixth_sense.0))) {
-            Some((need, sixth)) if near => {
+        match sight.and_then(|v| v.get(posture, level).time(dist).map(|need| (need, v))) {
+            Some((need, v)) if near => {
+                // Within its view volume for their posture and its state (or
+                // its sixth sense).
                 let facing = Vec3::new(-a.yaw.sin(), 0.0, -a.yaw.cos());
-                let ahead = facing.dot(Vec3::new(to_target.x, 0.0, to_target.z).normalize_or_zero()) > SIGHT_COS || dist < sixth;
+                let flat = Vec3::new(to_target.x, 0.0, to_target.z);
+                let ahead = v.view(posture, level).contains(facing.dot(flat), facing.cross(Vec3::Y).dot(flat), to_target.y) || dist < v.sixth_sense.0;
                 let eye = pos + Vec3::Y * 0.3;
                 let filter = SpatialQueryFilter::from_excluded_entities([e, target_e]);
                 let clear = ahead && Dir3::new(target_pos - eye).is_ok_and(|d| spatial.cast_ray(eye, d, dist, true, &filter).is_none());
@@ -1179,10 +1999,28 @@ fn animal_ai(
                         .cast_ray(pos, Dir3::new(to_target).unwrap_or(Dir3::X), dist, true, &SpatialQueryFilter::from_excluded_entities([e, target_e]))
                         .is_none()
                 {
-                    a.attack_cooldown = ATTACK_SWING + rng.range(p.attack_delay.0, p.attack_delay.1.max(p.attack_delay.0));
+                    // The swing is the species' attack clip.
+                    let swing = assets
+                        .as_ref()
+                        .and_then(|x| x.sets[a.species].clips.get(&AnimKind::Attack))
+                        .and_then(|h| clips.get(h))
+                        .map(|c| c.0.duration)
+                        .filter(|d| *d > 0.1)
+                        .unwrap_or(ATTACK_SWING);
+                    a.sense.swing = swing;
+                    a.attack_cooldown = swing + rng.range(p.attack_delay.0, p.attack_delay.1.max(p.attack_delay.0));
                     a.sense.strikes += 1;
                     if a.sense.strikes >= a.sense.burst {
-                        a.attack_cooldown = ATTACK_SWING;
+                        a.attack_cooldown = swing;
+                    }
+                    if debug {
+                        info!(
+                            "animal: {} strikes {}/{} (swing {swing:.2} s, next in {:.2} s)",
+                            s.animal.name(),
+                            a.sense.strikes,
+                            a.sense.burst,
+                            a.attack_cooldown
+                        );
                     }
                     // The game's attack: a share of the player's health (less
                     // for each health bar gained), else within its range.
@@ -1219,12 +2057,13 @@ fn animal_ai(
         // FC3_ANIMAL_DEBUG: each change of mood and what it sensed.
         if debug && a.mood != mood_before {
             info!(
-                "animal: {} {mood_before:?} -> {:?} at {dist:.1} m (seen {seen}, smelled {smelled}, immediate {immediate}, vehicle {vehicle}, hurt {hurt_now}, sounds {}/{}/{})",
+                "animal: {} {mood_before:?} -> {:?} at {dist:.1} m (seen {seen}, smelled {smelled}, immediate {immediate}, vehicle {vehicle}, hurt {hurt_now}, sounds {}/{}/{}, {:.1} m up)",
                 s.animal.name(),
                 a.mood,
                 interest.is_some(),
                 threat.is_some(),
-                blast.is_some()
+                blast.is_some(),
+                heights.height_at(pos).map_or(0.0, |g| pos.y - g - a.body_lift)
             );
         }
         let (mut speed, mut anim) = (0.0, AnimKind::Idle);
@@ -1242,8 +2081,9 @@ fn animal_ai(
                 }
             }
             Mood::Graze => anim = AnimKind::Eat,
+            // (At the archetype's own paces: walking, running, sprinting.)
             Mood::Wander => {
-                speed = s.walk_speed;
+                speed = if p.walk > 0.0 { p.walk } else { s.walk_speed };
                 anim = AnimKind::Walk;
             }
             Mood::Watch => {
@@ -1252,17 +2092,40 @@ fn animal_ai(
                     a.yaw = turn_toward(a.yaw, yaw_to(look), dt * 3.0);
                 }
             }
-            Mood::Avoid | Mood::Flee => {
-                speed = s.run_speed;
+            // (A tortoise hides in its shell where it is.)
+            Mood::Avoid | Mood::Flee if s.hides() => anim = AnimKind::Run,
+            Mood::Avoid => {
+                speed = if p.run > 0.0 { p.run } else { s.run_speed };
                 anim = AnimKind::Run;
             }
+            Mood::Flee => {
+                speed = if p.sprint > 0.0 { p.sprint } else { s.run_speed };
+                anim = AnimKind::Run;
+            }
+            // Running down a far target, sprinting in on a near one.
             Mood::Hunt => {
-                speed = s.run_speed * 0.85;
+                let pace = if dist < HUNT_SPRINT { p.sprint } else { p.run };
+                speed = if pace > 0.0 { pace } else { s.run_speed * 0.85 };
                 anim = AnimKind::Run;
             }
             Mood::Attack => {
-                anim = AnimKind::Attack;
+                // (Standing between swings, so each strike plays its own.)
+                anim = if a.sense.swing > 0.0 { AnimKind::Attack } else { AnimKind::Idle };
                 a.yaw = yaw_to(Vec3::new(to_target.x, 0.0, to_target.z));
+            }
+        }
+        a.sense.swing -= dt;
+        // (One that keeps to its spot only turns to face them.)
+        if s.stationary() {
+            if speed > 0.0 {
+                let look = Vec3::new(a.goal.x - pos.x, 0.0, a.goal.z - pos.z);
+                if look.length() > 0.3 {
+                    a.yaw = turn_toward(a.yaw, yaw_to(look), dt * 3.0);
+                }
+            }
+            speed = 0.0;
+            if anim != AnimKind::Attack {
+                anim = AnimKind::Idle;
             }
         }
         // Steer toward the goal over the ground.
@@ -1297,6 +2160,23 @@ fn animal_ai(
                 a.goal = pos - (a.goal - pos);
             }
             (Habitat::Sea, _) => next.y = if a.mood == Mood::Attack { pt.translation.y.min(sea - 0.5) } else { sea - SWIM_DEPTH },
+            // Fish, turtles, rays and the rest keep within the water (the eel
+            // on its bed), rising to whoever they go for.
+            (Habitat::Water, Some(g)) => match water_band(next, g) {
+                Some((bed, surface)) => {
+                    let y = if matches!(a.mood, Mood::Hunt | Mood::Attack) && !s.stationary() {
+                        (target_pos.y - 0.3).clamp(bed + 0.2, surface - 0.3)
+                    } else {
+                        swim_height(bed, surface, s.stationary())
+                    };
+                    next.y = pos.y + (y + lift - pos.y).clamp(-dt * 1.5, dt * 1.5);
+                }
+                None => {
+                    next = pos;
+                    a.velocity = Vec3::ZERO;
+                    a.goal = pos - (a.goal - pos);
+                }
+            },
             // Crocodiles wade into the shallows; nothing else enters the sea.
             (Habitat::Shore, Some(g)) if g < water - 3.0 => {
                 next = pos;
@@ -1308,6 +2188,16 @@ fn animal_ai(
                 next = pos;
                 a.velocity = Vec3::ZERO;
                 a.goal = pos - (a.goal - pos);
+            }
+            // A crow takes to the air to get away, and glides back down.
+            (_, Some(g)) if s.flies() => {
+                let flying = anim == AnimKind::Run;
+                let goal = g + lift + if flying { FLIGHT_HEIGHT } else { 0.0 };
+                let rate = if flying { 3.0 } else { 2.0 } * dt;
+                next.y = (pos.y + (goal - pos.y).clamp(-rate, rate)).max(g + lift);
+                if next.y > g + lift + 0.1 {
+                    anim = AnimKind::Run;
+                }
             }
             (_, Some(g)) => next.y = g + lift,
             (_, None) => {}
@@ -1374,14 +2264,17 @@ fn skin_animals(
     (busy, mut gestures, scripted): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>, Res<crate::story::ScriptedPlayer>),
     crafting: Option<Res<crate::crafting::CraftCatalog>>,
     perks: Option<Res<crate::progression::Perks>>,
+    loot: Option<Res<crate::progression::LootCatalog>>,
 ) {
     let Ok((pt, h)) = players.single() else { return };
+    // (Only what the game gives loot for; everything without its data.)
+    let item = |species: usize| loot.as_ref().filter(|l| !l.is_empty()).map(|l| l.item(crate::progression::LootKind::Skin(SPECIES[species].animal)));
     if h.dead || hud.prompt.is_some() || busy.busy() || !scripted.animal_looting {
         return;
     }
     let Some((_, _, mut c)) = carcasses
         .iter_mut()
-        .filter(|(_, gt, c)| !c.skinned && gt.translation().distance(pt.translation) < 2.8)
+        .filter(|(_, gt, c)| !c.skinned && item(c.species).is_none_or(|i| i.is_some()) && gt.translation().distance(pt.translation) < 2.8)
         .min_by(|a, b| a.1.translation().distance(pt.translation).total_cmp(&b.1.translation().distance(pt.translation)))
     else {
         return;
@@ -1399,7 +2292,8 @@ fn skin_animals(
         *progress.skins.entry(animal).or_insert(0) += n;
         looted.write(crate::progression::ItemLooted(crate::progression::LootKind::Skin(animal)));
         actions.consume(crate::controls::Action::Interact);
-        hud.notify(format!("+{n} {} skin", animal.name()));
+        let what = item(c.species).flatten().map_or_else(|| format!("{} skin", animal.name()), |i| i.name.clone());
+        hud.notify(format!("+{n} {what}"));
         // The skinning plays out with the machete; the carcass stays.
         c.skinned = true;
         gestures.write(crate::fp::FpAction::Skin { large: SPECIES[c.species].size.0 >= 0.5 });
@@ -1409,14 +2303,22 @@ fn skin_animals(
 fn despawn_animals(
     time: Res<Time>,
     players: Query<&Transform, With<Player>>,
-    mut animals: Query<(Entity, &Transform, Option<&mut Carcass>), (With<WildAnimal>, Without<crate::story_actors::StoryActor>)>,
+    mut animals: Query<(Entity, &mut Transform, Option<&mut Carcass>), (With<WildAnimal>, Without<crate::story_actors::StoryActor>, Without<Player>)>,
+    heights: Res<Heightfield>,
     mut commands: Commands,
 ) {
     let Ok(pt) = players.single() else { return };
-    for (e, t, carcass) in &mut animals {
+    let dt = time.delta_secs();
+    for (e, mut t, carcass) in &mut animals {
         let far = t.translation.distance(pt.translation) > DESPAWN;
         let rotten = carcass.is_some_and(|mut c| {
-            c.age += time.delta_secs();
+            c.age += dt;
+            // (Shot out of the air, a crow falls.)
+            let s = &SPECIES[c.species];
+            if s.flies() {
+                let floor = heights.height_at(t.translation).map_or(t.translation.y, |g| g + s.size.0 + 0.25);
+                t.translation.y = (t.translation.y - 9.8 * c.age * dt).max(floor);
+            }
             c.age > 180.0
         });
         if far || rotten {
@@ -1451,11 +2353,25 @@ mod tests {
             ("FC3_Quadrupeds/AsianBlackBear.Bear_Jas_020_0", Animal::Bear),
             ("FC3_Quadrupeds/Dogs_Rapid.Black_0", Animal::Dog),
             ("FC3_Aquatic/BullShark_0", Animal::Shark),
+            // (As the wildlife regions' prefabs name them.)
+            ("FC3_Quadrupeds/Tiger_ULC.Tiger_Normal_0", Animal::Tiger),
+            ("FC3_Quadrupeds/AsianBlackBear_3", Animal::Bear),
+            ("FC3_Quadrupeds/GoatFC3_10", Animal::Goat),
+            ("FC3_Quadrupeds/Dogs_Dingo_1", Animal::Dog),
+            ("FC3_Quadrupeds/Leopard_ULC.Leopard_0", Animal::Leopard),
+            ("FC3_Quadrupeds/Pig_Wild_0", Animal::WildPig),
+            ("FC3_Quadrupeds/Thylacine_3", Animal::Thylacine),
+            ("FC3_Domestic/Pig_0", Animal::Pig),
+            ("FC3_Quadrupeds/Rat.Rat_01_2", Animal::Rat),
+            ("Winged/Crow_1", Animal::Crow),
+            ("SimpleAnimal/Crab_0", Animal::Crab),
+            ("FC3_Aquatic/RiverFish.Fish_Catfish_1", Animal::RiverFish),
+            ("FC3_Aquatic/MantaRay_0", Animal::MantaRay),
+            ("FC3_Quadrupeds/GTortoise_4", Animal::Tortoise),
         ] {
             assert_eq!(SPECIES[story_species(name).unwrap()].animal, animal, "{name}");
         }
-        for name in ["FC3_Domestic/Pig_0", "FC3_Quadrupeds/Pig_Wild_0", "FC3_Quadrupeds/Boar.Boar_boss_rare_1",
-            "FC3_Quadrupeds/Leopard.Panther_rare_0", "Merc/UniqueMerc_FC3.Grant_0", "BoarDecoration_0"] {
+        for name in ["FC3_Quadrupeds/Boar.Boar_boss_rare_1", "FC3_Quadrupeds/Leopard.Panther_rare_0", "Merc/UniqueMerc_FC3.Grant_0", "BoarDecoration_0"] {
             assert!(story_species(name).is_none(), "{name}");
         }
     }
@@ -1469,21 +2385,39 @@ mod tests {
             }
         }
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default(), bevy::mesh::MeshPlugin,
-            bevy::transform::TransformPlugin, PhysicsPlugins::default()))
-            .init_resource::<ActionState>().init_resource::<crate::settings::Settings>()
-            .init_resource::<Progress>().init_resource::<crate::hud::HudState>()
-            .init_resource::<crate::fp::HandsBusy>().init_resource::<crate::story::ScriptedPlayer>()
-            .init_resource::<Heightfield>()
-            .init_resource::<AnimalTable>().init_resource::<crate::npc::SenseTable>().init_resource::<crate::vehicles::Driving>()
-            .insert_resource(Rng::seeded(1)).insert_resource(AnimalAssets {
-                models: Vec::new(), skins: Vec::new(),
-                sets: SPECIES.iter().map(|_| Arc::new(ClipSet { skeleton: Handle::default(), clips: std::collections::HashMap::new() })).collect(),
-            })
-            .add_message::<ItemLooted>().add_message::<crate::fp::FpAction>().add_message::<Died>()
-            .add_message::<crate::progression::XpGain>().add_message::<crate::sound::PlaySfx>()
-            .add_message::<crate::npc::Noise>().add_message::<DamageEvent>()
-            .add_systems(Update, (bind, animal_ai, animal_deaths, skin_animals, despawn_animals).chain());
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::asset::AssetPlugin::default(),
+            bevy::mesh::MeshPlugin,
+            bevy::transform::TransformPlugin,
+            PhysicsPlugins::default(),
+        ))
+        .init_resource::<ActionState>()
+        .init_resource::<crate::settings::Settings>()
+        .init_resource::<Progress>()
+        .init_resource::<crate::hud::HudState>()
+        .init_resource::<crate::fp::HandsBusy>()
+        .init_resource::<crate::story::ScriptedPlayer>()
+        .init_resource::<Heightfield>()
+        .init_resource::<AnimalTable>()
+        .init_resource::<crate::npc::SenseTable>()
+        .init_resource::<crate::vehicles::Driving>()
+        .init_asset::<crate::cache_assets::Fc3Clip>()
+        .insert_resource(Rng::seeded(1))
+        .insert_resource(AnimalAssets {
+            models: Vec::new(),
+            skins: Vec::new(),
+            sets: SPECIES.iter().map(|_| Arc::new(ClipSet { skeleton: Handle::default(), clips: std::collections::HashMap::new() })).collect(),
+            kits: SPECIES.iter().map(|_| None).collect(),
+        })
+        .add_message::<ItemLooted>()
+        .add_message::<crate::fp::FpAction>()
+        .add_message::<Died>()
+        .add_message::<crate::progression::XpGain>()
+        .add_message::<crate::sound::PlaySfx>()
+        .add_message::<crate::npc::Noise>()
+        .add_message::<DamageEvent>()
+        .add_systems(Update, (bind, animal_ai, animal_deaths, skin_animals, despawn_animals).chain());
         let player = app.world_mut().spawn((player(), Transform::from_xyz(0.0, crate::player::HALF_HEIGHT, 0.0), Health::new(100.0))).id();
         let position = Transform::from_xyz(1.0, crate::player::HALF_HEIGHT, 0.0);
         let mut actor = StoryActor::new(42, None, false);
@@ -1632,8 +2566,10 @@ fn animal_test(
     players: Query<(&Transform, &Player)>,
     mut noise: MessageWriter<crate::npc::Noise>,
     mut commands: Commands,
+    mut rng: ResMut<Rng>,
 ) {
-    let Some(clip) = args.animal_test.as_deref() else { return };
+    let Some(test) = args.animal_test.as_deref() else { return };
+    let (clip, only) = test.split_once(':').map_or((test, None), |(c, o)| (c, Some(o.to_ascii_lowercase())));
     let Some(assets) = assets else { return };
     let Ok((pt, p)) = players.single() else { return };
     // "herd": a shot by the player 15 s after they appear.
@@ -1645,7 +2581,7 @@ fn animal_test(
     if *done || p.spawning {
         return;
     }
-    if !assets.models.iter().all(|m| crate::cache_assets::usable(&server, m.id())) || !assets.sets.iter().all(|s| s.ready(&server)) {
+    if !(0..SPECIES.len()).all(|i| assets.ready(i, &server)) {
         return;
     }
     *done = true;
@@ -1668,6 +2604,7 @@ fn animal_test(
         *shot_at = Some(time.elapsed_secs() + 15.0);
     }
     let mut placed = 0.0;
+    let mut shown = 0usize;
     for (i, s) in SPECIES.iter().enumerate() {
         if hunt && s.animal != Animal::Tiger {
             continue;
@@ -1675,16 +2612,23 @@ fn animal_test(
         if herd && (s.behaviour == Behaviour::Predator || s.habitat != Habitat::Land) {
             continue;
         }
+        if only.as_ref().is_some_and(|o| !o.split(',').any(|w| s.animal.name().to_ascii_lowercase().contains(w))) {
+            continue;
+        }
         let Some(model) = models.get(&assets.models[i]) else { continue };
         // A grid of five across, rows further out.
-        let (col, row) = ((i % 5) as f32, (i / 5) as f32);
+        let k = shown;
+        shown += 1;
+        let (col, row) = ((k % 5) as f32, (k / 5) as f32);
         let at = if herd {
             placed += 1.0;
             pt.translation + fwd * 18.0 + right * ((placed - 4.0) * 4.0)
         } else if hunt {
             pt.translation + fwd * 22.0
         } else {
-            pt.translation + fwd * (9.0 + row * 5.0) + right * ((col - 2.0) * (3.2 + row * 1.2))
+            // (FC3_ANIMAL_TEST_NEAR: about half as far, for the small ones.)
+            let scale = if std::env::var_os("FC3_ANIMAL_TEST_NEAR").is_some() { 0.55 } else { 1.0 };
+            pt.translation + (fwd * (9.0 + row * 5.0) + right * ((col - 2.0) * (3.2 + row * 1.2))) * scale
         };
         let ground = heights.height_at(at).unwrap_or(at.y);
         let (radius, half) = s.size;
@@ -1714,9 +2658,7 @@ fn animal_test(
                 Visibility::Visible,
             ))
             .id();
-        if let Some(rig) =
-            spawn_rig_with(&mut commands, root, &[model], None, assets.sets[i].clone(), Vec3::new(0.0, -(radius + 0.25), 0.0), assets.skins[i].clone())
-        {
+        if let Some(rig) = dress_animal(&mut commands, &assets, &models, model, i, root, Vec3::new(0.0, -(radius + 0.25), 0.0), None, &mut rng) {
             commands.entity(root).entry::<WildAnimal>().and_modify(move |mut a| a.rig = Some(rig));
         }
     }

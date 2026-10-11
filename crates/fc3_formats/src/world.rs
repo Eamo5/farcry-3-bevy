@@ -100,6 +100,8 @@ pub struct WorldEntity {
     pub mission_layer: u64,
     /// A road or river laid along a spline.
     pub spline: Option<crate::splines::SplinePrimitive>,
+    /// A smart terrain point's moves (its contextual action's parameters).
+    pub stp_moves: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -130,6 +132,9 @@ pub fn parse_entity(e: &Object) -> WorldEntity {
     out.cable = crate::traversal::parse_anchor(components);
     out.ladder_animation_package = components.child("CLadder").and_then(|c| c.u64("sAnimationPackage")).unwrap_or(0);
     out.spline = crate::splines::parse(components);
+    if let Some(params) = components.child("CAIContextualActionComponent").and_then(|c| c.child("Parameters")) {
+        out.stp_moves = crate::moves::move_names(params);
+    }
     for c in &components.children {
         match c.name_hash {
             h::EFFECT_COMPONENT => {

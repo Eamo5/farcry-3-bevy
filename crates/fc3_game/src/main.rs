@@ -35,6 +35,7 @@ mod nav;
 mod npc;
 mod objects;
 mod options;
+mod overlays;
 mod original_shaders;
 mod outposts;
 mod particles;
@@ -49,6 +50,7 @@ mod faces;
 mod tattoo;
 mod barks;
 mod shake;
+mod aim_assist;
 mod qte;
 mod vine;
 mod screen_blur;
@@ -412,6 +414,8 @@ fn main() {
         .add_plugins(tattoo::TattooPlugin)
         .add_plugins(barks::BarksPlugin)
         .add_plugins(shake::ShakePlugin)
+        .add_plugins(aim_assist::AimAssistPlugin)
+        .add_plugins(overlays::OverlaysPlugin)
         .add_plugins((
             lamps::LampsPlugin,
             particles::ParticlesPlugin,

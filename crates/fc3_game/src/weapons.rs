@@ -101,6 +101,14 @@ pub struct WeaponDef {
     pub ranges: Vec<[f32; 4]>,
     /// The game's spread by stance (else `spread` and its bloom).
     pub spread_table: Option<fc3_formats::weapons::Spread>,
+    /// The game's aiming down the sights: its FOV (put in `ads_fov`), how
+    /// long the sights take to come up, and how much slower the player moves
+    /// and turns aimed.
+    pub aim: Option<fc3_formats::weapons::Aim>,
+    /// The game's attachments for it (their gadgets' modifiers), and how
+    /// far a suppressed shot is heard (times the open one's).
+    pub gadgets: Vec<fc3_formats::weapons::Gadget>,
+    pub noise: f32,
 }
 
 const MODEL_ROOT: &str = r"graphics\__fc3_graphics\_common\weapons\";
@@ -176,6 +184,11 @@ pub fn apply_stats(defs: &mut [WeaponDef], stats: &[fc3_formats::weapons::Weapon
         }
         d.ranges = s.ranges.clone();
         d.spread_table = s.spread;
+        d.aim = s.aim;
+        if let Some(a) = s.aim {
+            d.ads_fov = a.fov;
+        }
+        d.gadgets = s.gadgets.clone();
         if s.fire_rate > 0.0 {
             d.interval = 60.0 / s.fire_rate;
         }
@@ -231,6 +244,9 @@ fn base_weapon_defs() -> Vec<WeaponDef> {
         draw: 0.25,
         ranges: Vec::new(),
         spread_table: None,
+        aim: None,
+        gadgets: Vec::new(),
+        noise: 1.0,
     };
     // Hand positions by kind of weapon.
     let pistol = Vec3::new(0.16, -0.17, -0.42);
@@ -357,8 +373,9 @@ pub struct Inventory {
     pub since_shot: f32,
     /// Reserve ammo capacity multiplier (ammo pouch upgrades).
     pub reserve_scale: f32,
-    /// Attachments bought for each weapon kind (`Attachment` bits, by def).
-    pub attachments: Vec<u8>,
+    /// Attachments for each weapon kind (by def): the bought ones'
+    /// `Attachment` bits in the low half, the fitted sight's in the high.
+    pub attachments: Vec<u32>,
     /// Attachment models (suppressors and sights), by `Attachment::model`.
     pub attachment_models: Vec<Handle<Fc3Model>>,
     /// On a mounted gun (the last slot while on it): the slot to go back to.
@@ -465,28 +482,79 @@ fn find_paint_options(server: Res<AssetServer>, table: Res<PaintTable>, models: 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Attachment {
     Suppressor,
+    /// The sight a weapon showed as before the shop's own sights (old
+    /// saves): its class's usual one.
     Optic,
     ExtendedMag,
+    // The sights the game's shop sells (one fitted at a time; the others
+    // bought stay in hand to swap back to), and the bow's longer barrel.
+    ReflexA,
+    ReflexB,
+    Optical,
+    Acog,
+    IronSight,
+    Scope,
+    IlluminatedScope,
+    Barrel,
 }
 
 /// Attachment models under the weapons folder.
 const ATTACHMENT_MODELS: [&str; 5] =
     [r"_shared\silencer_handgun.xbg", r"_shared\silencer_smg.xbg", r"_shared\silencer_sniper.xbg", r"_shared\reflex_a.xbg", r"_shared\acog.xbg"];
 const OPTICAL_MODEL: &str = r"_shared\optical.xbg";
+const REFLEX_B_MODEL: &str = r"_shared\reflex_b.xbg";
 
 /// Weapons whose models have no mount for a sight or suppressor.
 const NO_OPTIC: [&str; 3] = ["mk23", "6p9", "1887"];
 const NO_SUPPRESSOR: [&str; 1] = ["mk23"];
 
 impl Attachment {
-    pub const ALL: [Attachment; 3] = [Attachment::Suppressor, Attachment::Optic, Attachment::ExtendedMag];
+    /// What the shop can sell (the old `Optic` only comes from saves).
+    pub const ALL: [Attachment; 10] = [
+        Attachment::Suppressor,
+        Attachment::Barrel,
+        Attachment::ExtendedMag,
+        Attachment::ReflexA,
+        Attachment::ReflexB,
+        Attachment::Optical,
+        Attachment::Acog,
+        Attachment::IronSight,
+        Attachment::Scope,
+        Attachment::IlluminatedScope,
+    ];
 
-    pub fn bit(self) -> u8 {
+    /// Its bit among a weapon's attachments (bought ones in the low half; the
+    /// sight fitted in the high half, see `Inventory::attachments`).
+    pub fn bit(self) -> u32 {
         match self {
             Attachment::Suppressor => 1,
             Attachment::Optic => 2,
             Attachment::ExtendedMag => 4,
+            Attachment::ReflexA => 8,
+            Attachment::ReflexB => 16,
+            Attachment::Optical => 32,
+            Attachment::Acog => 64,
+            Attachment::IronSight => 128,
+            Attachment::Scope => 256,
+            Attachment::IlluminatedScope => 512,
+            Attachment::Barrel => 1024,
         }
+    }
+
+    /// A sight (one fitted at a time).
+    pub fn is_sight(self) -> bool {
+        !matches!(self, Attachment::Suppressor | Attachment::ExtendedMag | Attachment::Barrel)
+    }
+
+    /// The sight an old save's `Optic` stands for on this weapon: a sniper's
+    /// high-power scope, a rifle's ACOG (or optical sight), else reflex A.
+    fn usual_sight(d: &WeaponDef) -> Attachment {
+        let candidates: &[Attachment] = match d.class {
+            WeaponClass::Sniper => &[Attachment::Scope],
+            WeaponClass::Rifle => &[Attachment::Acog, Attachment::Optical, Attachment::ReflexA],
+            _ => &[Attachment::ReflexA],
+        };
+        candidates.iter().copied().find(|a| a.fits(d)).unwrap_or(candidates[0])
     }
 
     /// Whether a weapon takes this attachment (as in the game: suppressors on
@@ -502,20 +570,32 @@ impl Attachment {
             }
         }
         let folder = d.model.split('\\').next().unwrap_or("");
+        let sight = matches!(d.class, Pistol | Smg | Rifle | Shotgun | Sniper | Lmg) && !NO_OPTIC.contains(&folder);
         match self {
             Attachment::Suppressor => matches!(d.class, Pistol | Smg | Rifle | Sniper) && !d.silenced && !NO_SUPPRESSOR.contains(&folder),
-            Attachment::Optic => matches!(d.class, Pistol | Smg | Rifle | Shotgun | Sniper | Lmg) && !NO_OPTIC.contains(&folder),
+            Attachment::Optic => sight,
             Attachment::ExtendedMag => matches!(d.class, Pistol | Smg | Rifle | Shotgun | Sniper | Lmg) && d.magazine > 1,
+            // (Without the shop's list, its class's usual sight only.)
+            Attachment::Scope => sight && d.class == Sniper,
+            Attachment::Acog => sight && d.class == Rifle,
+            Attachment::ReflexA => sight && !matches!(d.class, Sniper | Rifle),
+            _ => false,
         }
     }
 
     pub fn name(self, d: &WeaponDef) -> &'static str {
-        match (self, d.class) {
-            (Attachment::Suppressor, _) => "Suppressor",
-            (Attachment::Optic, WeaponClass::Sniper) => "High-power scope",
-            (Attachment::Optic, WeaponClass::Rifle) => "ACOG sight",
-            (Attachment::Optic, _) => "Reflex sight",
-            (Attachment::ExtendedMag, _) => "Extended magazine",
+        match self {
+            Attachment::Suppressor => "Suppressor",
+            Attachment::Optic => Attachment::usual_sight(d).name(d),
+            Attachment::ExtendedMag => "Extended magazine",
+            Attachment::ReflexA => "Reflex sight",
+            Attachment::ReflexB => "Red-dot sight",
+            Attachment::Optical => "Optical sight",
+            Attachment::Acog => "ACOG sight",
+            Attachment::IronSight => "Illuminated iron sights",
+            Attachment::Scope => "High-power scope",
+            Attachment::IlluminatedScope => "Illuminated scope",
+            Attachment::Barrel => "Barrel extension",
         }
     }
 
@@ -529,9 +609,9 @@ impl Attachment {
         match (self, d.class) {
             (Attachment::Suppressor, WeaponClass::Sniper) => 450,
             (Attachment::Suppressor, _) => 300,
-            (Attachment::Optic, WeaponClass::Sniper | WeaponClass::Rifle) => 350,
-            (Attachment::Optic, _) => 200,
             (Attachment::ExtendedMag, _) => 250,
+            (_, WeaponClass::Sniper | WeaponClass::Rifle) => 350,
+            _ => 200,
         }
     }
 
@@ -540,12 +620,18 @@ impl Attachment {
         let key = fc3_formats::weapons::model_key(&d.model_path());
         let offers = &stats.iter().find(|s| fc3_formats::weapons::model_key(&s.model) == key)?.attachments;
         let named = |kind: u32, word: &str| offers.iter().filter(|o| o.kind == kind && o.name.to_ascii_lowercase().contains(word)).map(|o| o.cost).min();
-        match (self, d.class) {
-            (Attachment::Suppressor, _) => named(ATTACH_BARREL, "suppress"),
-            (Attachment::ExtendedMag, _) => named(ATTACH_MAGAZINE, ""),
-            (Attachment::Optic, WeaponClass::Sniper) => named(ATTACH_SCOPE, ""),
-            (Attachment::Optic, WeaponClass::Rifle) => named(ATTACH_SIGHT, "acog").or_else(|| named(ATTACH_SIGHT, "reflex")),
-            (Attachment::Optic, _) => named(ATTACH_SIGHT, "reflex"),
+        match self {
+            Attachment::Suppressor => named(ATTACH_BARREL, "suppress"),
+            Attachment::Barrel => named(ATTACH_BARREL, "barrel"),
+            Attachment::ExtendedMag => named(ATTACH_MAGAZINE, ""),
+            Attachment::Optic => named(ATTACH_SCOPE, "").or_else(|| named(ATTACH_SIGHT, "acog")).or_else(|| named(ATTACH_SIGHT, "reflex")),
+            Attachment::ReflexA => named(ATTACH_SIGHT, "reflex a"),
+            Attachment::ReflexB => named(ATTACH_SIGHT, "reflex b"),
+            Attachment::Optical => named(ATTACH_SIGHT, "optical sight"),
+            Attachment::Acog => named(ATTACH_SIGHT, "acog"),
+            Attachment::IronSight => named(ATTACH_SIGHT, "iron"),
+            Attachment::Scope => named(ATTACH_SCOPE, "high power"),
+            Attachment::IlluminatedScope => named(ATTACH_SCOPE, "illuminated"),
         }
     }
 
@@ -557,33 +643,86 @@ impl Attachment {
             (Attachment::Suppressor, Pistol) => Some((0, "ATTACH_SILENCER")),
             (Attachment::Suppressor, Smg | Rifle) => Some((1, "ATTACH_SILENCER")),
             (Attachment::Suppressor, Sniper) => Some((2, "ATTACH_SILENCER")),
-            (Attachment::Optic, Sniper) => Some((5, "ATTACH_UPGRADE")),
-            (Attachment::Optic, Rifle) => Some((4, "ATTACH_SCOPE")),
-            (Attachment::Optic, _) => Some((3, "ATTACH_SCOPE")),
-            (Attachment::ExtendedMag, _) | (Attachment::Suppressor, _) => None,
+            (Attachment::Optic, _) => Attachment::usual_sight(d).model(d),
+            (Attachment::Scope | Attachment::IlluminatedScope, _) => Some((5, "ATTACH_UPGRADE")),
+            (Attachment::Acog, _) => Some((4, "ATTACH_SCOPE")),
+            (Attachment::Optical, _) => Some((5, "ATTACH_SCOPE")),
+            (Attachment::ReflexA, _) => Some((3, "ATTACH_SCOPE")),
+            (Attachment::ReflexB, _) => Some((6, "ATTACH_SCOPE")),
+            _ => None,
         }
     }
 
-    /// What it does to the weapon.
-    fn apply(self, d: &mut WeaponDef) {
+    /// The game's attachment this one is for the weapon (the sight it shows
+    /// as: a sniper's high-power scope, a rifle's ACOG, else reflex A).
+    fn gadget(self, d: &WeaponDef) -> Option<fc3_formats::weapons::Gadget> {
+        let key = |k: &str| d.gadgets.iter().find(|g| g.key.starts_with(k)).cloned();
         match self {
-            Attachment::Suppressor => {
+            Attachment::Suppressor => key("silencer"),
+            Attachment::ExtendedMag => key("magupgrade"),
+            Attachment::Barrel => key("barrel"),
+            Attachment::Optic => Attachment::usual_sight(d).gadget(d),
+            Attachment::ReflexA => key("reflexa"),
+            Attachment::ReflexB => key("reflexb"),
+            Attachment::Optical => key("optical"),
+            Attachment::Acog => key("acog"),
+            Attachment::IronSight => key("ironsightupgrade"),
+            Attachment::Scope => key("highpowerscope"),
+            Attachment::IlluminatedScope => key("illuminatedscope"),
+        }
+    }
+
+    /// What it does to the weapon: the game's gadget where it has one (a
+    /// sight's narrower aimed view, slower aimed turn and longer sight time;
+    /// a suppressor's hush; the larger magazine's size; the spread on the
+    /// move and the reload), else ours.
+    fn apply(self, d: &mut WeaponDef) {
+        let gadget = self.gadget(d);
+        match (self, &gadget) {
+            (Attachment::Suppressor, Some(g)) => {
+                d.silenced = true;
+                d.damage *= g.damage;
+                d.noise = g.noise;
+            }
+            (Attachment::Suppressor, None) => {
                 d.silenced = true;
                 d.damage *= 0.9;
                 d.range *= 0.85;
             }
-            Attachment::Optic => {
+            (a, Some(g)) if a.is_sight() => {
+                d.ads_fov = (d.ads_fov + g.fov).max(5.0);
+                if let Some(a) = d.aim.as_mut() {
+                    a.transition += g.sight_time;
+                    a.look_pad *= g.look[0];
+                    a.look_vertical *= g.look[1];
+                    a.look_mouse *= g.look[2];
+                }
+            }
+            (a, None) if a.is_sight() => {
                 d.ads_fov = match d.class {
                     WeaponClass::Sniper => d.ads_fov * 0.6,
                     WeaponClass::Rifle => d.ads_fov.min(32.0),
                     _ => d.ads_fov.min(52.0),
                 };
             }
-            Attachment::ExtendedMag => {
+            (Attachment::ExtendedMag, Some(g)) if g.magazine > d.magazine => {
+                let extra = g.magazine - d.magazine;
+                d.magazine = g.magazine;
+                d.max_reserve += extra * 2;
+            }
+            (Attachment::ExtendedMag, _) => {
                 let extra = (d.magazine / 2).max(1);
                 d.magazine += extra;
                 d.max_reserve += extra * 2;
             }
+            (Attachment::Barrel, Some(g)) => d.damage *= g.damage,
+            _ => {}
+        }
+        if let Some(g) = gadget {
+            if let Some(s) = d.spread_table.as_mut() {
+                s.moving *= g.moving_spread;
+            }
+            d.reload_time *= g.reload;
         }
     }
 }
@@ -617,11 +756,16 @@ fn scope_sway(
     time: Res<Time>,
     actions: Res<crate::controls::ActionState>,
     perks: Res<crate::progression::Perks>,
+    body: Res<crate::player::PlayerBody>,
     players: Query<&Inventory, With<Player>>,
     mut sway: ResMut<ScopeSway>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
 ) {
     let dt = time.delta_secs();
+    // The game's hold (else ours): how long, the catch after, how still it
+    // gets (over how long) and how much worse out of breath.
+    let hold =
+        body.0.breath_hold.unwrap_or(fc3_formats::body::BreathHold { steady: 0.0, hold: BREATH_HOLD, catch: BREATH_RECOVER, held_sway: 0.06, out_sway: 1.8 });
     sway.scoped = players.single().is_ok_and(|inv| inv.scoped());
     sway.recover = (sway.recover - dt).max(0.0);
     let want = sway.scoped && actions.pressed(crate::controls::Action::Sprint) && sway.recover <= 0.0;
@@ -632,10 +776,10 @@ fn scope_sway(
     }
     if sway.holding {
         sway.held += dt;
-        let out = sway.held > BREATH_HOLD * perks.scope_breath;
+        let out = sway.held > hold.hold * perks.scope_breath;
         if out || !want {
             sway.holding = false;
-            sway.recover = if out { BREATH_RECOVER } else { 0.6 };
+            sway.recover = if out { hold.catch } else { 0.6 };
             sfx.write(crate::sound::PlaySfx { event: EXHALE, at: None, volume: if out { 0.8 } else { 0.5 } });
         }
     }
@@ -648,9 +792,11 @@ fn scope_sway(
     let amp = SWAY
         * perks.recoil
         * if sway.holding {
-            0.06
+            // Steadying over the first moments of the hold.
+            let settled = if hold.steady > 0.0 { (sway.held / hold.steady).min(1.0) } else { 1.0 };
+            1.0 + (hold.held_sway - 1.0) * settled
         } else if sway.recover > 0.6 {
-            1.8
+            hold.out_sway
         } else {
             1.0
         };
@@ -668,21 +814,59 @@ impl Inventory {
         &self.slots[self.current]
     }
 
+    /// Fitted to the weapon kind (a sight: the one fitted).
     pub fn has_attachment(&self, def: usize, a: Attachment) -> bool {
+        let bits = self.attachments.get(def).copied().unwrap_or(0);
+        if a.is_sight() {
+            (bits >> 16) & a.bit() != 0
+        } else {
+            bits & a.bit() != 0
+        }
+    }
+
+    /// Bought for the weapon kind (a sight perhaps not the one fitted).
+    pub fn owns(&self, def: usize, a: Attachment) -> bool {
         self.attachments.get(def).is_some_and(|bits| bits & a.bit() != 0)
     }
 
-    /// Fits an attachment to a weapon kind (once); returns whether it was new.
+    /// Fits an attachment to a weapon kind: buys it, and a sight goes on in
+    /// place of the one fitted (a bought one swapping back on); returns
+    /// whether anything changed.
     pub fn attach(&mut self, def: usize, a: Attachment) -> bool {
-        if def >= self.defs.len() || self.has_attachment(def, a) || !a.fits(&self.defs[def]) {
+        if def >= self.defs.len() {
+            return false;
+        }
+        let a = if a == Attachment::Optic { Attachment::usual_sight(&self.defs[def]) } else { a };
+        if self.has_attachment(def, a) || !a.fits(&self.defs[def]) {
             return false;
         }
         if self.attachments.len() < self.defs.len() {
             self.attachments.resize(self.defs.len(), 0);
         }
         self.attachments[def] |= a.bit();
-        a.apply(&mut self.defs[def]);
+        if a.is_sight() {
+            self.attachments[def] = (self.attachments[def] & 0xFFFF) | (a.bit() << 16);
+        }
+        self.refit(def, a);
         true
+    }
+
+    /// The weapon kind as its fitted attachments make it: from its own
+    /// handling again where the defs are the game's (a sight swapped off
+    /// takes its changes with it), else with `added` put on.
+    fn refit(&mut self, def: usize, added: Attachment) {
+        let base = weapon_defs();
+        match base.get(def).filter(|b| b.name == self.defs[def].name) {
+            Some(b) => {
+                self.defs[def] = b.clone();
+                for a in Attachment::ALL.into_iter().filter(|a| !a.is_sight()).chain(Attachment::ALL.into_iter().filter(|a| a.is_sight())) {
+                    if self.has_attachment(def, a) {
+                        a.apply(&mut self.defs[def]);
+                    }
+                }
+            }
+            None => added.apply(&mut self.defs[def]),
+        }
     }
 
     pub fn def(&self) -> &WeaponDef {
@@ -712,7 +896,7 @@ pub struct ViewModel {
     /// Which slot's model is currently attached, and with which attachments
     /// and paint.
     shown: Option<usize>,
-    shown_attachments: u8,
+    shown_attachments: u32,
     shown_paint: Option<u8>,
     bob_phase: f32,
     sway: Vec2,
@@ -844,7 +1028,7 @@ fn give_player_loadout(
     let defs = weapon_defs();
     let models = defs.iter().map(|d| if d.model.is_empty() { Handle::default() } else { model_handle(&server, &format!("{MODEL_ROOT}{}", d.model)) }).collect();
     let attachment_models: Vec<Handle<Fc3Model>> =
-        ATTACHMENT_MODELS.iter().chain([&OPTICAL_MODEL]).map(|m| model_handle(&server, &format!("{MODEL_ROOT}{m}"))).collect();
+        ATTACHMENT_MODELS.iter().chain([&OPTICAL_MODEL, &REFLEX_B_MODEL]).map(|m| model_handle(&server, &format!("{MODEL_ROOT}{m}"))).collect();
     // Start with the machete, pistol and rifle; the rest are found in the world.
     let starting = ["Machete", "MK23 Pistol", "AK-74M Rifle", "870 Shotgun"];
     let wanted = args.start_weapon.as_deref();
@@ -856,13 +1040,19 @@ fn give_player_loadout(
         .collect();
     let current = wanted.and_then(|w| slots.iter().position(|s| defs[s.def].name.eq_ignore_ascii_case(w))).unwrap_or(2);
     // FC3_ATTACH=all (tests): every weapon starts with everything it takes.
-    let mut fitted = vec![0u8; defs.len()];
+    // (Its first sight fitted; FC3_ATTACH=<name>, e.g. `reflexb`: that one.)
+    let mut fitted = vec![0u32; defs.len()];
     let mut defs = defs;
-    if std::env::var("FC3_ATTACH").as_deref() == Ok("all") {
+    if let Ok(which) = std::env::var("FC3_ATTACH") {
+        let which = which.to_ascii_lowercase();
+        let wanted = |a: Attachment| which == "all" || format!("{a:?}").to_ascii_lowercase() == which;
         for (d, bits) in fitted.iter_mut().enumerate() {
             for a in Attachment::ALL {
-                if a.fits(&defs[d]) {
+                if wanted(a) && a.fits(&defs[d]) && (!a.is_sight() || *bits >> 16 == 0) {
                     *bits |= a.bit();
+                    if a.is_sight() {
+                        *bits |= a.bit() << 16;
+                    }
                     a.apply(&mut defs[d]);
                 }
             }
@@ -1222,6 +1412,7 @@ fn fire(
         Res<crate::fp::HandsBusy>,
         Query<&crate::npc::HeadPos>,
         Res<crate::weapon_wheel::WeaponWheel>,
+        Res<crate::aim_assist::AimAssist>,
     ),
     args: Res<crate::Args>,
     script: Res<TestScript>,
@@ -1241,7 +1432,7 @@ fn fire(
 ) {
     use crate::controls::Action;
     use crate::particles::fx;
-    let (bino, actions, captured, perks, busy, heads, wheel) = inputs;
+    let (bino, actions, captured, perks, busy, heads, wheel, assist) = inputs;
     // (The steady-aim syringe: far less kick.)
     let steady = if boosts.as_ref().is_some_and(|b| b.active(crate::syringes::Syringe::Steady)) { 0.3 } else { 1.0 };
     let (mut damage, mut markers, mut noise) = writers;
@@ -1291,7 +1482,11 @@ fn fire(
         && (inv.reloading <= 0.0 || aimed_reload(&perks, inv.def().class))
         && inv.def().class != WeaponClass::Melee;
     let target_aim = if inv.aiming { 1.0 } else { 0.0 };
-    inv.aim_blend += (target_aim - inv.aim_blend) * (dt * 12.0).min(1.0);
+    // The sights come up (and go down) in the weapon's transition time.
+    match inv.def().aim.map(|a| a.transition).filter(|t| *t > 0.0) {
+        Some(t) => inv.aim_blend += (target_aim - inv.aim_blend).clamp(-dt / t, dt / t),
+        None => inv.aim_blend += (target_aim - inv.aim_blend) * (dt * 12.0).min(1.0),
+    }
     if (scripted || story_input) && std::env::var("FC3_FIRE_DEBUG").is_ok() && (time.elapsed_secs() * 4.0) as u32 != ((time.elapsed_secs() - dt) * 4.0) as u32 {
         info!(
             "fire gate: can_act {can_act} dead {} swimming {} driving {} noclip {} captured {} bino {:.2} reloading {:.2} switching {:.2} cooldown {:.2} mag {}",
@@ -1333,7 +1528,8 @@ fn fire(
         inv.slots[cur].mag -= 1;
     }
     let origin = cam.translation();
-    let forward = cam.forward().as_vec3();
+    // (With a pad, the game's correction bends the shot toward a target.)
+    let forward = assist.correct(origin, cam.forward().as_vec3(), inv.aim_blend > 0.5, d.aim.as_ref());
     let right = cam.right().as_vec3();
     let up = cam.up().as_vec3();
     let filter = SpatialQueryFilter::from_excluded_entities([player_e]);
@@ -1537,8 +1733,10 @@ fn fire(
         markers.write(HitMarker { kill: false, headshot });
     }
     if d.class != WeaponClass::Melee && d.silenced {
-        // Suppressed: a faint flash and little noise.
-        crate::npc::player_noise(&mut noise, origin, 18.0, crate::npc::NoiseKind::Threatening);
+        // Suppressed: a faint flash and little noise (as little as the
+        // game's suppressor makes).
+        let heard = if d.noise < 1.0 { 120.0 * d.noise } else { 18.0 };
+        crate::npc::player_noise(&mut noise, origin, heard, crate::npc::NoiseKind::Threatening);
         fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, 0.35);
         inv.spread_bloom = match d.spread_steps() {
             Some((step, _)) => (inv.spread_bloom + step).min(1.0),
@@ -2023,6 +2221,7 @@ fn update_view_model(
     mut vm: Query<(&mut ViewModel, &mut Transform, &mut Visibility)>,
     mut cams: Query<&mut Projection, With<PlayerCamera>>,
     fp: Res<crate::fp::FpState>,
+    speed_fov: Option<Res<crate::vehicles::SpeedFov>>,
 ) {
     let Ok((inv, player, health)) = players.single() else { return };
     let Ok((mut v, mut t, mut vis)) = vm.single_mut() else { return };
@@ -2079,8 +2278,10 @@ fn update_view_model(
             // Aiming narrows from the player's FOV toward the weapon's.
             let base = settings.fov;
             let fov = base + (d.ads_fov.min(base) - base) * inv.aim_blend;
-            // Binoculars zoom further still.
-            let fov = (fov + (18.0 - fov) * bino.blend).to_radians();
+            // Binoculars zoom further still; a vehicle's camera widens with
+            // speed.
+            let fov = (fov + (18.0 - fov) * bino.blend) * speed_fov.as_ref().map_or(1.0, |s| s.0);
+            let fov = fov.min(120.0).to_radians();
             p.fov = fov;
         }
     }
@@ -2253,5 +2454,41 @@ mod stats_tests {
         // Launchers keep their own (blast) damage.
         let rpg = defs.iter().find(|d| d.name == "RPG-7").unwrap();
         assert!(rpg.damage > 5.0);
+    }
+
+    #[test]
+    fn attachments_take_the_games_gadgets() {
+        use fc3_formats::weapons::{Aim, Gadget};
+        let plain = |key: &str| Gadget { key: key.into(), damage: 1.0, noise: 1.0, moving_spread: 1.0, reload: 1.0, look: [1.0; 3], ..Default::default() };
+        let stats = vec![fc3_formats::weapons::WeaponStats {
+            name: "AK47".into(),
+            model: r"graphics\__fc3_graphics\_common\weapons\ak74m\ak74m_tp.xbg".into(),
+            magazine: 30,
+            aim: Some(Aim { fov: 65.0, transition: 0.35, look_pad: 0.3, look_mouse: 0.7, look_vertical: 1.0, ..Default::default() }),
+            gadgets: vec![
+                Gadget { fov: -30.0, sight_time: 0.1, look: [0.6, 1.0, 0.7], ..plain("acog") },
+                Gadget { noise: 0.02, ..plain("silencerassault") },
+                Gadget { magazine: 40, ..plain("magupgrade") },
+            ],
+            ..Default::default()
+        }];
+        let mut defs = base_weapon_defs();
+        apply_stats(&mut defs, &stats);
+        let ak = defs.iter().find(|d| d.name == "AK-74M Rifle").unwrap().clone();
+        assert_eq!(ak.ads_fov, 65.0);
+        // The rifle's sight is the ACOG: 30 degrees narrower, slower aimed.
+        let mut sighted = ak.clone();
+        Attachment::Optic.apply(&mut sighted);
+        let a = sighted.aim.unwrap();
+        assert_eq!(sighted.ads_fov, 35.0);
+        assert!((a.transition - 0.45).abs() < 1e-6 && (a.look_pad - 0.18).abs() < 1e-6 && (a.look_mouse - 0.49).abs() < 1e-6);
+        // The suppressor hushes it without weakening it; the larger
+        // magazine holds the game's 40.
+        let mut quiet = ak.clone();
+        Attachment::Suppressor.apply(&mut quiet);
+        assert!(quiet.silenced && quiet.noise == 0.02 && quiet.damage == ak.damage && quiet.range == ak.range);
+        let mut mag = ak.clone();
+        Attachment::ExtendedMag.apply(&mut mag);
+        assert_eq!(mag.magazine, 40);
     }
 }

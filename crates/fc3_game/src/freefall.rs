@@ -15,8 +15,11 @@ pub struct FreefallPlugin;
 
 impl Plugin for FreefallPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, load_canopy)
-            .add_systems(Update, (canopy, freefall_prompt.before(crate::hud::HudSet), freefall_test).run_if(in_state(crate::menu::GameState::Playing)));
+        app.add_systems(Startup, load_canopy).add_systems(
+            Update,
+            (canopy, freefall_prompt.before(crate::hud::HudSet), freefall_test.before(crate::player::player_move))
+                .run_if(in_state(crate::menu::GameState::Playing)),
+        );
     }
 }
 
@@ -91,10 +94,13 @@ fn freefall_prompt(
 }
 
 /// `FC3_FREEFALL=chute|wingsuit` (tests): drops the player from 120 m with the
-/// gear and opens it, logging the flight each second.
+/// gear and opens it, logging the flight each second. The wingsuit dives
+/// for a second and a half, banks left for a second, then hands over to the
+/// parachute (`FC3_FREEFALL_HOLD=secs` after the drop: 4.5).
 fn freefall_test(
     time: Res<Time>,
     args: Res<crate::Args>,
+    mut actions: ResMut<crate::controls::ActionState>,
     mut state: Local<(bool, f32, f32, usize)>,
     mut progress: ResMut<crate::progression::Progress>,
     mut players: Query<(&mut Player, &mut Transform)>,
@@ -121,9 +127,17 @@ fn freefall_test(
     if p.air == AirMode::None && !p.grounded && *clock > 1.0 && *clock < 2.0 {
         p.air = if mode == "wingsuit" { AirMode::Wingsuit } else { AirMode::Chute };
     }
-    // The wingsuit hands over to the parachute after a few seconds.
-    if mode == "wingsuit" && p.air == AirMode::Wingsuit && *clock > 4.5 {
-        p.air = AirMode::Chute;
+    // The wingsuit dives, banks, and hands over to the parachute.
+    let hold = std::env::var("FC3_FREEFALL_HOLD").ok().and_then(|s| s.parse::<f32>().ok()).unwrap_or(4.5);
+    if mode == "wingsuit" && p.air == AirMode::Wingsuit {
+        actions.movement = match *clock {
+            c if (2.0..3.5).contains(&c) => Vec2::new(0.0, 1.0),
+            c if (3.5..4.5).contains(&c) => Vec2::new(-1.0, 0.0),
+            _ => Vec2::ZERO,
+        };
+        if *clock > hold {
+            p.air = AirMode::Chute;
+        }
     }
     // FC3_TD_SHOT=2,6: screenshots that long after the drop.
     let at: Vec<f32> = std::env::var("FC3_TD_SHOT").unwrap_or_default().split(',').filter_map(|s| s.parse().ok()).collect();
@@ -138,8 +152,13 @@ fn freefall_test(
         *last = *clock;
         let h = Vec2::new(p.velocity.x, p.velocity.z).length();
         info!(
-            "freefall-test t={:.0} {:?} y={:.1} horizontal {h:.1} m/s vertical {:.1} m/s grounded {}",
-            *clock, p.air, t.translation.y, p.velocity.y, p.grounded
+            "freefall-test t={:.0} {:?} y={:.1} horizontal {h:.1} m/s vertical {:.1} m/s heading {:.0} grounded {}",
+            *clock,
+            p.air,
+            t.translation.y,
+            p.velocity.y,
+            p.velocity.x.atan2(-p.velocity.z).to_degrees() * -1.0,
+            p.grounded
         );
     }
 }

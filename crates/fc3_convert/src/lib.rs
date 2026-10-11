@@ -566,13 +566,15 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     let mut traversal = fc3_formats::traversal::Traversal::default();
     let mut sound_points: Vec<(u32, [f32; 3])> = Vec::new();
     let mut effects: Vec<(&'static str, [f32; 3])> = Vec::new();
-    let mut guard_spots: Vec<(&'static str, [f32; 3], [f32; 4])> = Vec::new();
+    let mut guard_spots: Vec<(String, [f32; 3], [f32; 4])> = Vec::new();
+    let mut world_moves: BTreeSet<String> = BTreeSet::new();
     let mut villager_spots: Vec<(&'static str, [f32; 3], [f32; 4])> = Vec::new();
     let mut splines: Vec<(u32, fc3_formats::splines::SplinePrimitive)> = Vec::new();
     for r in sector_results {
         material_paths.extend(r.splines.iter().map(|s| s.material.clone()));
         splines.extend(r.splines.into_iter().map(|s| (r.id, s)));
-        guard_spots.extend(r.guard_spots.iter().copied());
+        guard_spots.extend(r.guard_spots.iter().cloned());
+        world_moves.extend(r.stp_moves.iter().cloned());
         villager_spots.extend(r.villager_spots.iter().copied());
         sound_points.extend(r.sound_points.iter().copied());
         effects.extend(r.effects.iter().copied());
@@ -628,9 +630,11 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             job.error(format!("traversal: {e:#}"));
         }
     }
-    if opts.only_sectors.is_none() && job.should_write(cache::GUARD_SPOTS_REL) {
+    let spots_current = std::fs::read_to_string(job.root().join(cache::GUARD_SPOTS_REL)).is_ok_and(|t| t.lines().next() == Some(cache::GUARD_SPOTS_HEADER));
+    if opts.only_sectors.is_none() && (job.should_write(cache::GUARD_SPOTS_REL) || !spots_current) {
         guard_spots.retain(|(_, p, _)| !fc3_formats::worldmap::in_test_area(p[0], -p[2]));
-        let text: String = guard_spots.iter().map(|(k, p, q)| format!("{k} {} {} {} {} {} {} {}\n", p[0], p[1], p[2], q[0], q[1], q[2], q[3])).collect();
+        let mut text = format!("{}\n", cache::GUARD_SPOTS_HEADER);
+        text.extend(guard_spots.iter().map(|(k, p, q)| format!("{k} {} {} {} {} {} {} {}\n", p[0], p[1], p[2], q[0], q[1], q[2], q[3])));
         if let Err(e) = write_atomic(job.root(), cache::GUARD_SPOTS_REL, text.as_bytes(), job.ctx) {
             job.error(format!("guard spots: {e:#}"));
         }
@@ -910,6 +914,17 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
+    // ---- where wildlife spawns: the regions, their settings and prefabs
+    let markers_current =
+        std::fs::read_to_string(job.root().join(fc3_formats::encounters::MARKERS_REL)).is_ok_and(|t| fc3_formats::encounters::markers_current(&t));
+    if opts.only_sectors.is_none()
+        && (job.should_write(fc3_formats::encounters::WILDLIFE_REL) || job.should_write(fc3_formats::encounters::MARKERS_REL) || !markers_current)
+    {
+        if let Err(e) = convert_wildlife(&job) {
+            job.error(format!("wildlife regions: {e:#}"));
+        }
+    }
+
     // ---- what the enemies say, by voice and situation
     if opts.only_sectors.is_none() && job.should_write(fc3_formats::barks::BARKS_REL) {
         let result = (|| -> Result<()> {
@@ -944,8 +959,10 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
-    // ---- the player's weapons' handling
-    if opts.only_sectors.is_none() && job.should_write(fc3_formats::weapons::STATS_REL) {
+    // ---- the player's weapons' handling (written again when an older table
+    // lacks the aiming)
+    let current = std::fs::read_to_string(job.root().join(fc3_formats::weapons::STATS_REL)).is_ok_and(|t| fc3_formats::weapons::is_current(&t));
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::weapons::STATS_REL) || !current) {
         let result = (|| -> Result<()> {
             let bytes = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
             let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
@@ -985,8 +1002,10 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
-    // ---- how the player moves
-    if opts.only_sectors.is_none() && job.should_write(fc3_formats::body::BODY_REL) {
+    // ---- how the player moves (written again when an older table lacks
+    // the falls)
+    let current = std::fs::read_to_string(job.root().join(fc3_formats::body::BODY_REL)).is_ok_and(|t| fc3_formats::body::is_current(&t));
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::body::BODY_REL) || !current) {
         let result = (|| -> Result<()> {
             let templates = job.vfs.read(fc3_formats::progression::TEMPLATES)?;
             let at = templates.windows(4).position(|w| w == b"nbCF").context("no templates FCB header")?;
@@ -1026,7 +1045,9 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     }
 
     // ---- how the AI notices the player
-    if opts.only_sectors.is_none() && job.should_write(fc3_formats::senses::SENSES_REL) {
+    // (Written again when an older table lacks the view volumes.)
+    let current = std::fs::read_to_string(job.root().join(fc3_formats::senses::SENSES_REL)).is_ok_and(|t| fc3_formats::senses::is_current(&t));
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::senses::SENSES_REL) || !current) {
         let result = (|| -> Result<()> {
             let templates = job.vfs.read(fc3_formats::progression::TEMPLATES)?;
             let at = templates.windows(4).position(|w| w == b"nbCF").context("no templates FCB header")?;
@@ -1062,8 +1083,55 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
+    // ---- the player's HUD: tagging, collectibles on the minimap, reminders
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::body::HUD_REL) {
+        let result = (|| -> Result<()> {
+            let bytes = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
+            let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+            let library = fc3_formats::fcb::parse(&bytes[at..])?;
+            let hud = fc3_formats::body::hud(&library).context("no player HUD")?;
+            write_atomic(job.root(), fc3_formats::body::HUD_REL, hud.to_text().as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("player HUD: {e:#}"));
+        }
+    }
+
+    // ---- the help a pad gets aiming
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::assist::ASSIST_REL) {
+        let result = (|| -> Result<()> {
+            let templates = job.vfs.read(fc3_formats::progression::TEMPLATES)?;
+            let at = templates.windows(4).position(|w| w == b"nbCF").context("no templates FCB header")?;
+            let templates = fc3_formats::fcb::parse(&templates[at..])?;
+            let assist = fc3_formats::assist::assist(&templates).context("no player parameters")?;
+            write_atomic(job.root(), fc3_formats::assist::ASSIST_REL, fc3_formats::assist::to_text(&assist).as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("aiming help: {e:#}"));
+        }
+    }
+
+    // ---- how the land vehicles handle
+    let current = std::fs::read_to_string(job.root().join(fc3_formats::handling::HANDLING_REL)).is_ok_and(|t| fc3_formats::handling::is_current(&t));
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::handling::HANDLING_REL) || !current) {
+        let result = (|| -> Result<()> {
+            let bytes = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
+            let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+            let library = fc3_formats::fcb::parse(&bytes[at..])?;
+            let list = fc3_formats::handling::handling(&library);
+            if list.is_empty() {
+                bail!("no wheeled vehicles");
+            }
+            write_atomic(job.root(), fc3_formats::handling::HANDLING_REL, fc3_formats::handling::to_text(&list).as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("vehicle handling: {e:#}"));
+        }
+    }
+
     // ---- how animals notice threats and behave
-    if opts.only_sectors.is_none() && job.should_write(fc3_formats::animals::ANIMALS_REL) {
+    let current = std::fs::read_to_string(job.root().join(fc3_formats::animals::ANIMALS_REL)).is_ok_and(|t| fc3_formats::animals::is_current(&t));
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::animals::ANIMALS_REL) || !current) {
         let result = (|| -> Result<()> {
             let bytes = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
             let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
@@ -1110,8 +1178,11 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     }
 
     // ---- the clips the story's contextual actions play
-    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::moves::CA_MOVES_REL) || job.should_write(fc3_formats::moves::MOVES_REL)) {
-        if let Err(e) = convert_ca_moves(&job) {
+    let ca_moves_current = std::fs::read_to_string(job.root().join(fc3_formats::moves::CA_MOVES_REL)).is_ok_and(|t| fc3_formats::moves::ca_moves_current(&t));
+    if opts.only_sectors.is_none()
+        && (job.should_write(fc3_formats::moves::CA_MOVES_REL) || job.should_write(fc3_formats::moves::MOVES_REL) || !ca_moves_current)
+    {
+        if let Err(e) = convert_ca_moves(&job, &world_moves) {
             job.error(format!("contextual action moves: {e:#}"));
         }
     }
@@ -1251,6 +1322,9 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             Ok(masks) => textures.extend(masks),
             Err(e) => job.error(format!("post-effect masks: {e:#}")),
         }
+        // The screen overlays the HUD draws (the sniper scopes, blood on the
+        // screen, an animal's slash, the drowning vignette).
+        textures.extend(vfs.names.values().filter(|n| n.starts_with(cache::SCREEN_OVERLAYS) && n.ends_with(".xbt") && !n.contains("_mip0")).cloned());
     }
     let textures: Vec<String> = textures.into_iter().collect();
 
@@ -1879,6 +1953,169 @@ fn convert_story(job: &Job) -> Result<()> {
     write_atomic(job.root(), story::ENTITIES_REL, &story::to_bytes(&entities), job.ctx)
 }
 
+/// The fires a prefab's props burn, as the world's own camp fires are
+/// placed: each effect a prop plays on itself, at the bone it plays at,
+/// with the flames the game draws for it (`cache::world_fx_kind`) and its
+/// first light from the particle library.
+fn prefab_fires(job: &Job, effects: &[fc3_formats::encounters::PropEffect]) -> Vec<fc3_formats::encounters::Fire> {
+    use fc3_formats::lights::{LightKind, WorldLight};
+    let mut out = Vec::new();
+    for fx in effects {
+        let rotation = fw::angles_to_bevy_quat(fx.angles);
+        let origin = fw::pos_to_bevy(fx.offset);
+        let at = match (fx.bone.is_empty(), fx.mesh.is_empty()) {
+            (false, false) => job.node_positions(&fx.mesh.to_ascii_lowercase()).get(&fx.bone.to_ascii_lowercase()).copied().unwrap_or([0.0; 3]),
+            _ => [0.0; 3],
+        };
+        let place = |local: [f32; 3]| {
+            let w = quat_rotate(rotation, local);
+            [origin[0] + w[0], origin[1] + w[1], origin[2] + w[2]]
+        };
+        let kind = cache::world_fx_kind(&fx.name).unwrap_or("");
+        let light = job.effect_lights().get(&fx.name).and_then(|ls| ls.first()).map(|l| {
+            let o = fmesh::to_bevy(l.offset);
+            let mut params = l.params;
+            params.radius *= fx.scale;
+            params.inner_radius *= fx.scale;
+            WorldLight {
+                kind: if fx.name.contains("camp_fire") { LightKind::Fire } else { LightKind::Effect },
+                position: place([at[0] + o[0] * fx.scale, at[1] + o[1] * fx.scale, at[2] + o[2] * fx.scale]),
+                direction: [0.0, -1.0, 0.0],
+                params,
+            }
+        });
+        if !kind.is_empty() || light.is_some() {
+            out.push(fc3_formats::encounters::Fire { kind: kind.to_string(), offset: place(at), light });
+        }
+    }
+    out
+}
+
+/// The wildlife regions in the world's sectors, the spawn settings and
+/// prefab lists they name, and the animals of each prefab they can spawn.
+fn convert_wildlife(job: &Job) -> Result<()> {
+    use fc3_formats::encounters as enc;
+    let lib = |path: &str| -> Result<std::sync::Arc<fc3_formats::fcb::Object>> {
+        let bytes = job.vfs.read(path)?;
+        let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+        fc3_formats::fcb::parse(&bytes[at..])
+    };
+    let (settings, lists) = (lib(enc::SPAWN_SETTINGS_LIB)?, lib(enc::PREFAB_LIST_LIB)?);
+    let mut wildlife = enc::Wildlife { settings: enc::spawn_settings(&settings), lists: enc::prefab_lists(&lists), ..Default::default() };
+    let prefix = format!(r"worlds\{}\levels\", job.opts.world);
+    let mut files: Vec<String> = job
+        .vfs
+        .names
+        .values()
+        .filter(|n| n.starts_with(&prefix) && n.ends_with(".data.fcb") && (n.contains(r"\worldsectors\") || n.contains(r"\metasectors\")))
+        .cloned()
+        .collect();
+    files.sort();
+    let found = job.run(Stage::Story, &files, |path| {
+        let bytes = job.vfs.read(path).ok()?;
+        let root = fc3_formats::fcb::parse(&bytes).ok()?;
+        // (Regions sit at any depth of a sector's entity tree.)
+        let (mut regions, mut markers) = (Vec::new(), Vec::new());
+        root.walk(&mut |o, _| {
+            if o.is("Entity") {
+                if let Some(r) = enc::region(o) {
+                    regions.push(r);
+                } else if let Some(m) = enc::marker(o) {
+                    markers.push(m);
+                }
+            }
+        });
+        Some((regions, markers))
+    })?;
+    let mut encounter_markers = enc::Markers::default();
+    let mut regions = Vec::new();
+    for (r, m) in found {
+        regions.extend(r);
+        for (id, hostile, friendly) in m {
+            encounter_markers.markers.insert(id, (hostile, friendly));
+        }
+    }
+    // The people each marker's prefabs place.
+    let mut people: Vec<u64> = encounter_markers.markers.values().flat_map(|(h, f)| h.iter().chain(f)).copied().filter(|id| *id != 0).collect();
+    people.sort();
+    people.dedup();
+    // (The scripts the prefabs run, for their executions and rewards.)
+    let pack = std::fs::read(job.root().join(fc3_formats::scripts::DOMINO_PACK_REL)).ok().and_then(|b| fc3_formats::scripts::ScriptPack::from_bytes(&b).ok());
+    for id in people {
+        let Ok(bytes) = job.vfs.read(&enc::prefab_path(id)) else { continue };
+        if let Ok(root) = enc::parse(&bytes) {
+            let pawns = enc::prefab_pawns(&root);
+            if let Some(mut x) = enc::prefab_script(&root).and_then(|p| pack.as_ref()?.get(&p)).and_then(|text| enc::execution(&text, &pawns)) {
+                x.points = enc::prefab_attack_points(&root);
+                encounter_markers.executions.insert(id, x);
+            }
+            encounter_markers.prefabs.insert(id, pawns);
+            let parked = enc::prefab_vehicles(&root);
+            if !parked.is_empty() {
+                encounter_markers.vehicles.insert(id, parked);
+            }
+            // (A synced scene's actors play their parts of its loop.)
+            let role_clip = |seq: &str, role: &str| job.vfs.read(seq).ok().and_then(|b| enc::role_clip(&String::from_utf8_lossy(&b), role));
+            let spots = enc::prefab_spots(&root, &role_clip);
+            if !spots.is_empty() {
+                encounter_markers.spots.insert(id, spots);
+            }
+            let props = enc::prefab_props(&root);
+            if !props.is_empty() {
+                encounter_markers.props.insert(id, props);
+            }
+            let beasts = enc::prefab_animals(&root);
+            if !beasts.is_empty() {
+                encounter_markers.beasts.insert(id, beasts);
+            }
+            let corpses = enc::prefab_corpses(&root);
+            if !corpses.is_empty() {
+                encounter_markers.corpses.insert(id, corpses);
+            }
+            let fires = prefab_fires(job, &enc::prefab_effects(&root));
+            if !fires.is_empty() {
+                encounter_markers.fires.insert(id, fires);
+            }
+            if enc::prefab_rewards(&root) {
+                encounter_markers.rewards.insert(id);
+            }
+        }
+    }
+    // A rescue's cash, from the encounter library's reward graph.
+    encounter_markers.reward_cash = pack.as_ref().and_then(|pack| pack.get(enc::REWARD_SCRIPT)).and_then(|text| enc::reward_cash(&text)).unwrap_or(0);
+    write_atomic(job.root(), enc::MARKERS_REL, encounter_markers.to_text().as_bytes(), job.ctx)?;
+    wildlife.regions = regions;
+    wildlife.regions.sort_by(|a, b| a.name.cmp(&b.name).then(a.points[0][0].total_cmp(&b.points[0][0])));
+    // The prefabs the regions' lists can spawn, reduced to their animals.
+    let mut ids: Vec<u64> = wildlife.regions.iter().filter_map(|r| wildlife.lists.get(&r.list)).flatten().map(|(id, _)| *id).filter(|id| *id != 0).collect();
+    ids.sort();
+    ids.dedup();
+    for id in ids {
+        let Ok(bytes) = job.vfs.read(&enc::prefab_path(id)) else { continue };
+        match enc::parse(&bytes) {
+            Ok(root) => {
+                wildlife.prefabs.insert(id, enc::prefab_animals(&root));
+                wildlife.costs.insert(id, enc::prefab_cost(&root));
+            }
+            Err(e) => job.error(format!("encounter prefab {id}: {e:#}")),
+        }
+    }
+    // The service's budget for wildlife groups.
+    let templates = job.vfs.read(fc3_formats::progression::TEMPLATES)?;
+    let at = templates.windows(4).position(|w| w == b"nbCF").context("no templates FCB header")?;
+    let templates = fc3_formats::fcb::parse(&templates[at..])?;
+    (wildlife.budget, wildlife.max_groups) = enc::service_budget(&templates).unwrap_or((0.0, 0));
+    // Only the lists and settings the regions use.
+    let used_lists: HashSet<u64> = wildlife.regions.iter().map(|r| r.list).collect();
+    let used_settings: HashSet<u64> = wildlife.regions.iter().map(|r| r.settings).collect();
+    wildlife.lists.retain(|k, _| used_lists.contains(k));
+    wildlife.settings.retain(|k, _| used_settings.contains(k));
+    if wildlife.regions.is_empty() {
+        bail!("no wildlife regions");
+    }
+    write_atomic(job.root(), enc::WILDLIFE_REL, enc::to_text(&wildlife).as_bytes(), job.ctx)
+}
+
 /// Crafting ingredients, their authored loot sources and localized ids.
 fn convert_crafting(job: &Job) -> Result<()> {
     use fc3_formats::{fcb, oasis, progression as p};
@@ -1935,16 +2172,24 @@ fn convert_skills(job: &Job) -> Result<()> {
     write_atomic(job.root(), p::SKILLS_REL, tree.to_text().as_bytes(), job.ctx)
 }
 
-/// The moves the story's contextual actions name, with the clips found for
-/// them by name (`fc3_formats::moves`).
-fn convert_ca_moves(job: &Job) -> Result<()> {
-    use fc3_formats::{moves, story};
+/// The moves the story's contextual actions, the encounters' spots and the
+/// world's fighters' points name,
+/// with the clips found for them by name (`fc3_formats::moves`).
+fn convert_ca_moves(job: &Job, world_moves: &BTreeSet<String>) -> Result<()> {
+    use fc3_formats::{encounters as enc, moves, story};
     let entities = story::from_bytes(&std::fs::read(job.root().join(story::ENTITIES_REL)).context("the story entities")?)?;
-    let mut names: BTreeSet<String> = BTreeSet::new();
+    let mut names: BTreeSet<String> = world_moves.clone();
     for e in &entities {
         let Some(ca) = e.components.children.iter().find(|c| c.is("CAIContextualActionComponent")) else { continue };
         if let Some(params) = ca.children.iter().find(|c| c.is("Parameters")) {
             names.extend(moves::move_names(params));
+        }
+    }
+    if let Ok(markers) = std::fs::read_to_string(job.root().join(enc::MARKERS_REL)).map_err(anyhow::Error::from).and_then(|t| enc::Markers::from_text(&t)) {
+        for id in markers.prefabs.keys() {
+            if let Ok(root) = job.vfs.read(&enc::prefab_path(*id)).and_then(|b| enc::parse(&b)) {
+                names.extend(enc::prefab_moves(&root));
+            }
         }
     }
     let clips: Vec<&str> = job.vfs.names.values().filter(|n| n.ends_with(".mab")).map(String::as_str).collect();
@@ -2028,11 +2273,11 @@ fn convert_cinema(job: &Job) -> Result<()> {
         }
         Some(())
     })?;
-    write_atomic(job.root(), CINEMA_STAMP, b"vehicle/prop movement, clip anchors and Bezier FOV\n", job.ctx)
+    write_atomic(job.root(), CINEMA_STAMP, b"vehicle/prop movement, clip anchors, Bezier FOV and head look\n", job.ctx)
 }
 
 /// Marks the current sequence conversion schema.
-const CINEMA_STAMP: &str = "cinema/stamp-blur-tracks.txt";
+const CINEMA_STAMP: &str = "cinema/stamp-head-look.txt";
 
 /// Packs every Domino script the file lists name, and the ones they refer to
 /// that the lists don't.
@@ -2148,6 +2393,8 @@ pub fn validate_wgsl(src: &str) -> Result<()> {
 
 struct SectorResult {
     id: u32,
+    /// The world's fighters' points' moves (for the move table).
+    stp_moves: Vec<String>,
     models: Vec<String>,
     override_materials: Vec<String>,
     /// Alarm and rebel-post markers (for outposts), Bevy space.
@@ -2162,7 +2409,7 @@ struct SectorResult {
     /// Placed effects the game plays: kind and position.
     effects: Vec<(&'static str, [f32; 3])>,
     /// Guard spots: kind, position and orientation.
-    guard_spots: Vec<(&'static str, [f32; 3], [f32; 4])>,
+    guard_spots: Vec<(String, [f32; 3], [f32; 4])>,
     villager_spots: Vec<(&'static str, [f32; 3], [f32; 4])>,
     /// Roads and rivers.
     splines: Vec<fc3_formats::splines::SplinePrimitive>,
@@ -2210,6 +2457,7 @@ fn convert_sector(job: &Job, id: u32) -> Result<Option<SectorResult>> {
     let mut sound_points = Vec::new();
     let mut effects = Vec::new();
     let mut guard_spots = Vec::new();
+    let mut stp_moves = Vec::new();
     let mut villager_spots = Vec::new();
     let mut splines = Vec::new();
     for e in &data.entities {
@@ -2230,7 +2478,11 @@ fn convert_sector(job: &Job, id: u32) -> Result<Option<SectorResult>> {
                 effects.push((kind, translation));
             }
             if let Some(kind) = cache::guard_spot_kind(&e.name) {
-                guard_spots.push((kind, translation, rotation));
+                guard_spots.push((kind.to_string(), translation, rotation));
+            } else if let Some(mv) = fc3_formats::encounters::fighter_spot_move(&e.name, &e.stp_moves) {
+                // The fighters' others play the loop their own move names.
+                guard_spots.push((format!("move:{mv}"), translation, rotation));
+                stp_moves.extend(e.stp_moves.iter().cloned());
             }
             if let Some(kind) = cache::villager_spot_kind(&e.name) {
                 villager_spots.push((kind, translation, rotation));
@@ -2375,6 +2627,7 @@ fn convert_sector(job: &Job, id: u32) -> Result<Option<SectorResult>> {
         sound_points,
         effects,
         guard_spots,
+        stp_moves,
         villager_spots,
         splines,
     }))
