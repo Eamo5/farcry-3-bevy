@@ -48,6 +48,7 @@ mod progression;
 mod faces;
 mod tattoo;
 mod barks;
+mod shake;
 mod qte;
 mod vine;
 mod screen_blur;
@@ -410,6 +411,7 @@ fn main() {
         ))
         .add_plugins(tattoo::TattooPlugin)
         .add_plugins(barks::BarksPlugin)
+        .add_plugins(shake::ShakePlugin)
         .add_plugins((
             lamps::LampsPlugin,
             particles::ParticlesPlugin,

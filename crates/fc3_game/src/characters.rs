@@ -524,8 +524,12 @@ pub fn spawn_character(
     let kit = &assets.kits[*look.kits.get((rng.f32() * look.kits.len() as f32) as usize % look.kits.len().max(1))?];
     let mut tags = kits::Tags::default();
     let mut parts: Vec<Dressed> = Vec::new();
+    // FC3_KIT_PART=<text> (debug): a slot with a part whose model names the
+    // text wears that part.
+    let forced = std::env::var("FC3_KIT_PART").ok().map(|s| s.to_ascii_lowercase());
     for slot in &kit.slots {
-        let Some(i) = weighted(slot.iter().map(|p| p.weight), rng) else { continue };
+        let pick = forced.as_ref().and_then(|f| slot.iter().position(|p| p.def.model.to_ascii_lowercase().contains(f.as_str())));
+        let Some(i) = pick.or_else(|| weighted(slot.iter().map(|p| p.weight), rng)) else { continue };
         let part = &slot[i];
         // Parts that failed to load are left off.
         let Some(model) = models.get(&part.model) else { continue };

@@ -48,6 +48,48 @@ pub const RECIPES_REL: &str = "progression/recipes.txt";
 
 /// The engine's object templates (the ability and bonus services).
 pub const TEMPLATES: &str = r"generated\nomadobjecttemplates.fcb";
+/// The outposts' flag controller (the script that hands out a taken
+/// outpost's bonus XP), in the script pack.
+pub const FLAG_CONTROLLER: &str = "domino/library/sp/lib_common.flag_controler.lua";
+
+/// A taken outpost's bonus XP from its flag controller: what it sets when
+/// the engine says the outpost was taken undetected, and with no alarm
+/// raised, as XP rewards (`Outpost/Undetected`, `Outpost/NoAlarm`). Each
+/// message's listener goes to a handler whose next step sets the bonus.
+pub fn outpost_bonuses(script: &str) -> Vec<(String, f32)> {
+    // The body of `function export:<name>()`.
+    let body = |name: &str| -> Option<&str> {
+        let start = script.find(&format!("function export:{name}()"))?;
+        let rest = &script[start..];
+        Some(&rest[..rest.find("\nend;").unwrap_or(rest.len())])
+    };
+    // `<field> = self.<handler>;` in a text, the handler's name.
+    let handler = |text: &str, field: &str| -> Option<String> {
+        let at = text.find(&format!("{field} = self."))? + field.len() + " = self.".len();
+        Some(text[at..].split(';').next()?.trim().to_string())
+    };
+    let bonus = |message: &str| -> Option<f32> {
+        // The listener box the message is given to: `l0 = self[N];` before it.
+        let at = script.find(&format!("l0.message = \"{message}\";"))?;
+        let before = &script[..at];
+        let open = before.rfind("l0 = self[")? + "l0 = self[".len();
+        let index = &before[open..open + before[open..].find(']')?];
+        // That box's creation, its handler for the message.
+        let created = script.find(&format!("self[{index}] = cbox:CreateBox("))?;
+        let setup = &script[created..];
+        let setup = &setup[..setup[1..].find("\nself[").map_or(setup.len(), |e| e + 1)];
+        let received = handler(setup, "l0.Received")?;
+        // The handler's next step sets the bonus.
+        let next = handler(body(&received)?, "l0.Out")?;
+        let set = body(&next)?;
+        let at = set.find("l0.Integer = ")? + "l0.Integer = ".len();
+        set[at..].split(';').next()?.trim().parse().ok()
+    };
+    [("Outpost/Undetected", "OutpostUndetected"), ("Outpost/NoAlarm", "OutpostNoAlarmsTriggered")]
+        .iter()
+        .filter_map(|(name, message)| Some((name.to_string(), bonus(message)?)))
+        .collect()
+}
 pub const RECIPE_LIB: &str = r"generated\databases\generic\craftingrecipe.lib";
 pub const RECIPE_TYPE_LIB: &str = r"generated\databases\generic\craftingrecipetype.lib";
 pub const RECIPE_SUBTYPE_LIB: &str = r"generated\databases\generic\craftingrecipesubtype.lib";
@@ -1414,6 +1456,38 @@ mod tests {
         );
         let ability_service = obj("Service", vec![("Name", V::S("AbilityService"))], vec![obj("Template", vec![], vec![sp])]);
         obj("Root", vec![], vec![ability_service, bonus_service()])
+    }
+
+    #[test]
+    fn reads_outpost_bonuses_from_the_flag_controller() {
+        let script = "function export:Init(cbox)
+self[50] = cbox:CreateBox(\"Domino/System/MessageListener_v3.lua\");
+l0 = self[50];
+l0.Received = self.f_50_Received;
+self[52] = cbox:CreateBox(\"Domino/System/MessageListener_v3.lua\");
+l0 = self[52];
+l0.Received = self.f_52_Received;
+end;
+function export:f_1()
+l0 = self[50];
+l0.message = \"OutpostUndetected\";
+l0 = self[52];
+l0.message = \"OutpostNoAlarmsTriggered\";
+end;
+function export:f_50_Received()
+l0.Out = self.f_55_Out;
+end;
+function export:f_52_Received()
+l0.Out = self.f_45_Out;
+end;
+function export:f_55_Out()
+l0.Integer = 1000;
+end;
+function export:f_45_Out()
+l0.Integer = 50;
+end;
+";
+        assert_eq!(outpost_bonuses(script), vec![("Outpost/Undetected".to_string(), 1000.0), ("Outpost/NoAlarm".to_string(), 50.0)]);
     }
 
     #[test]

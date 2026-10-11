@@ -1146,11 +1146,12 @@ fn drive_takedown(
             source: Some(eye),
             instigator: Some(pe),
             headshot: true,
+            hit: crate::combat::Hit::Whole,
         });
         crate::particles::fx::muzzle_flash(&mut particles, &mut rng, muzzle, dir, 1.0);
         crate::particles::fx::blood(&mut particles, &mut rng, at, dir);
         sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::PISTOL, at: Some(muzzle), volume: 1.0 });
-        crate::npc::player_noise(&mut noise, muzzle, 120.0);
+        crate::npc::player_noise(&mut noise, muzzle, 120.0, crate::npc::NoiseKind::Threatening);
     }
     // The kick: the grenade on him is live from here.
     if td.grenade.is_some() && td.stage == 2 && !td.thrown {
@@ -1171,6 +1172,7 @@ fn drive_takedown(
                 source: Some(pt.translation),
                 instigator: Some(pe),
                 headshot: false,
+                hit: crate::combat::Hit::Whole,
             });
             let dir = (at - pt.translation).normalize_or_zero();
             crate::particles::fx::blood(&mut particles, &mut rng, at, dir);

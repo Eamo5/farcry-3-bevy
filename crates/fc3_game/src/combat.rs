@@ -10,8 +10,10 @@ impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<DamageEvent>()
             .add_message::<Died>()
+            .init_resource::<DamageTable>()
+            .add_systems(OnExit(crate::menu::GameState::Loading), load_damage_table)
             .add_systems(Startup, add_player_health.after(crate::player::PlayerSpawn))
-            .add_systems(Update, (apply_damage, player_regen, fall_damage, use_medkit, respawn_player).chain());
+            .add_systems(Update, (attach_counters, apply_damage, player_regen, fall_damage, use_medkit, respawn_player).chain());
     }
 }
 
@@ -90,6 +92,147 @@ pub struct DamageEvent {
     pub source: Option<Vec3>,
     pub instigator: Option<Entity>,
     pub headshot: bool,
+    /// The body part a round struck, and what kind of round.
+    pub hit: Hit,
+}
+
+/// A body part.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Zone {
+    Head,
+    Torso,
+    Legs,
+}
+
+/// Where a round struck (characters take bullets and arrows differently,
+/// and each body part only so much).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Hit {
+    /// No one part: blasts, fire, blows, falls (and shots not traced to one).
+    #[default]
+    Whole,
+    Bullet(Zone),
+    Arrow(Zone),
+}
+
+/// A head shot's multiplier on targets without the game's counters.
+const HEADSHOT: f32 = 2.5;
+
+/// The game's health table and each enemy archetype's and animal's counters
+/// (`fc3_formats::counters`), once read from the cache.
+#[derive(Resource, Default)]
+pub struct DamageTable(pub Option<fc3_formats::counters::Damage>);
+
+impl DamageTable {
+    /// An archetype's counters ("Pirate_HeavyGunner"), and its health.
+    pub fn archetype(&self, name: &str) -> Option<(Counters, f32)> {
+        let d = self.0.as_ref()?;
+        Some(self.counters(d.get(name)?.clone()))
+    }
+
+    /// Counters from an archetype's (or a placed character's own) values,
+    /// and its health: a character's the table's (or its override), each
+    /// body part's share scaled with it; an animal its own, no parts.
+    pub fn counters(&self, v: fc3_formats::counters::Vulnerability) -> (Counters, f32) {
+        let t = self.0.as_ref().map(|d| d.table).unwrap_or_default();
+        let animal = v.animal;
+        let health = v.health.unwrap_or(t.global);
+        let scale = health / t.global.max(1.0);
+        let pools = (!animal).then(|| [t.head * scale, t.torso * scale, t.legs * scale]);
+        (Counters { v, pools }, health)
+    }
+}
+
+/// How a character or animal takes damage (the game's counters): its
+/// multipliers, and what each body part can still lose.
+#[derive(Component, Clone, Debug)]
+pub struct Counters {
+    pub v: fc3_formats::counters::Vulnerability,
+    /// Head, torso and legs (characters; an animal has none, only its head's
+    /// multiplier).
+    pub pools: Option<[f32; 3]>,
+}
+
+impl Counters {
+    /// What this takes of `amount` of `kind` landing as `hit`, and whether
+    /// it kills outright (a body part with nothing left).
+    pub fn take(&mut self, amount: f32, kind: DamageKind, hit: Hit) -> (f32, bool) {
+        use fc3_formats::counters::Harm;
+        let harm = match (kind, hit) {
+            (_, Hit::Arrow(_)) => Some(Harm::Arrow),
+            (DamageKind::Bullet, _) => Some(Harm::Pierce),
+            (DamageKind::Explosion, _) => Some(Harm::Explosion),
+            (DamageKind::Melee, _) => Some(Harm::Cut),
+            (DamageKind::Fire, _) => Some(Harm::Burn),
+            (DamageKind::Fall, _) => Some(Harm::Crush),
+            (DamageKind::Drown, _) => None,
+        };
+        let mut amount = amount * self.v.body * harm.map_or(1.0, |h| self.v.harm(h));
+        // A shot not traced to a part lands in the torso.
+        let zone = match hit {
+            Hit::Bullet(z) | Hit::Arrow(z) => Some(z),
+            Hit::Whole if kind == DamageKind::Bullet => Some(Zone::Torso),
+            Hit::Whole => None,
+        };
+        let Some(zone) = zone else { return (amount, false) };
+        let i = zone as usize;
+        match &mut self.pools {
+            // A character: bullets are stopped by each part's armour, and a
+            // part that has taken all it can is a kill.
+            Some(pools) => {
+                if matches!(hit, Hit::Bullet(_) | Hit::Whole) {
+                    amount *= [self.v.head, self.v.torso, self.v.legs][i];
+                }
+                pools[i] -= amount;
+                (amount, pools[i] <= 0.0)
+            }
+            // An animal: only its head multiplies.
+            None => (if zone == Zone::Head { amount * self.v.head } else { amount }, false),
+        }
+    }
+}
+
+/// The game's counters (and health) on enemies and animals as they appear;
+/// story characters bring their own.
+#[allow(clippy::type_complexity)]
+fn attach_counters(
+    table: Res<DamageTable>,
+    mut commands: Commands,
+    mut npcs: Query<(Entity, &crate::npc::Npc, &mut Health), Without<Counters>>,
+    mut animals: Query<(Entity, &crate::wildlife::WildAnimal, &mut Health), (Without<Counters>, Without<crate::npc::Npc>)>,
+) {
+    if table.0.is_none() {
+        return;
+    }
+    let fit = |e: Entity, name: &str, h: &mut Health, commands: &mut Commands| {
+        let Some((counters, health)) = table.archetype(name) else { return };
+        if h.current >= h.max {
+            h.current = health;
+        }
+        h.max = health;
+        // (The counters' armour replaces the hand-set one.)
+        commands.entity(e).insert(counters).remove::<Armour>();
+    };
+    for (e, npc, mut h) in &mut npcs {
+        fit(e, npc.role.archetype(npc.faction), &mut h, &mut commands);
+    }
+    for (e, animal, mut h) in &mut animals {
+        fit(e, animal.animal().archetype(), &mut h, &mut commands);
+    }
+}
+
+fn load_damage_table(info: Option<Res<crate::data::CacheInfo>>, mut table: ResMut<DamageTable>) {
+    let Some(info) = info else { return };
+    match std::fs::read_to_string(info.root.join(fc3_formats::counters::DAMAGE_REL))
+        .map_err(anyhow::Error::from)
+        .and_then(|t| fc3_formats::counters::from_text(&t))
+    {
+        Ok(d) => {
+            info!("damage: {} archetypes' counters, characters' health {}", d.archetypes.len(), d.table.global);
+            table.0 = Some(d);
+        }
+        Err(e) => warn!("damage: no counters table ({e:#}); re-run the converter"),
+    }
 }
 
 #[derive(Message, Clone, Copy)]
@@ -117,13 +260,15 @@ fn add_player_health(mut commands: Commands, player: Query<(Entity, &Transform),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_damage(
+    table: Res<DamageTable>,
     perks: Res<crate::progression::Perks>,
     settings: Res<crate::settings::Settings>,
     boosts: Res<crate::syringes::Boosts>,
     mut events: MessageReader<DamageEvent>,
     mut died: MessageWriter<Died>,
-    mut targets: Query<(&mut Health, Option<&GlobalTransform>, Option<&mut PlayerStats>, Option<&Armour>, Option<&DamageScale>)>,
+    mut targets: Query<(&mut Health, Option<&GlobalTransform>, Option<&mut PlayerStats>, Option<&Armour>, Option<&DamageScale>, Option<&mut Counters>)>,
     mut stats: Query<&mut PlayerStats, Without<Health>>,
     scripted: Res<crate::story::ScriptedPlayer>,
     instigators: Query<(Option<&crate::wildlife::WildAnimal>, Option<&crate::npc::Npc>, Option<&crate::story_actors::StoryActor>, Option<&Name>)>,
@@ -132,7 +277,7 @@ fn apply_damage(
     mut progress: ResMut<crate::progression::Progress>,
 ) {
     for ev in events.read() {
-        let Ok((mut h, gt, ps, armour, scale)) = targets.get_mut(ev.target) else { continue };
+        let Ok((mut h, gt, ps, armour, scale, counters)) = targets.get_mut(ev.target) else { continue };
         if h.dead {
             continue;
         }
@@ -148,9 +293,32 @@ fn apply_damage(
             DamageKind::Melee => perks.melee_taken,
             _ => 1.0,
         };
-        let mut amount = if ps.is_some() { ev.amount * perks.damage_taken * resist * settings.difficulty.damage_taken() } else { ev.amount };
-        if let Some(a) = armour.filter(|_| ev.kind == DamageKind::Bullet && !ev.headshot) {
+        // The difficulty: the game's health bars hold more or less of a hit.
+        let difficulty = table.0.as_ref().map_or(settings.difficulty.damage_taken(), |d| 1.0 / d.player.bar_scale[settings.difficulty.index()].max(0.05));
+        let mut amount = if ps.is_some() { ev.amount * perks.damage_taken * resist * difficulty } else { ev.amount };
+        if let Some(a) = armour.filter(|_| ev.kind == DamageKind::Bullet && !ev.headshot && counters.is_none()) {
             amount *= a.0;
+        }
+        // The game's counters: each kind of harm and body part's armour, and
+        // a part that has taken all it can kills.
+        match counters {
+            Some(mut c) if ps.is_none() => {
+                let (taken, kill) = c.take(amount, ev.kind, ev.hit);
+                if std::env::var_os("FC3_DAMAGE_DEBUG").is_some() {
+                    info!(
+                        "damage: {} {:?} {:?} {amount:.1} -> {taken:.1} of {:.1}, parts {:?}{}",
+                        c.v.name,
+                        ev.kind,
+                        ev.hit,
+                        h.current,
+                        c.pools,
+                        if kill { ", killed" } else { "" }
+                    );
+                }
+                amount = if kill { taken.max(h.current) } else { taken };
+            }
+            _ if matches!(ev.hit, Hit::Bullet(Zone::Head) | Hit::Arrow(Zone::Head)) => amount *= HEADSHOT,
+            _ => {}
         }
         if let Some(s) = scale {
             amount *= match ev.kind {
@@ -224,7 +392,15 @@ fn apply_damage(
     let _ = &mut stats;
 }
 
-fn player_regen(time: Res<Time>, perks: Res<crate::progression::Perks>, mut q: Query<(&mut Health, &mut PlayerStats), With<Player>>) {
+fn player_regen(
+    time: Res<Time>,
+    perks: Res<crate::progression::Perks>,
+    table: Res<DamageTable>,
+    settings: Res<crate::settings::Settings>,
+    mut q: Query<(&mut Health, &mut PlayerStats), With<Player>>,
+) {
+    // The game's delay for the difficulty.
+    let delay = table.0.as_ref().map_or(REGEN_DELAY, |d| d.player.regen_delay[settings.difficulty.index()]);
     let dt = time.delta_secs();
     for (mut h, mut ps) in &mut q {
         ps.burning = (ps.burning - dt).max(0.0);
@@ -238,7 +414,7 @@ fn player_regen(time: Res<Time>, perks: Res<crate::progression::Perks>, mut q: Q
             continue;
         }
         h.since_damage += dt;
-        if h.since_damage > REGEN_DELAY * perks.regen_delay {
+        if h.since_damage > delay * perks.regen_delay {
             // Regenerate to the top of the current (partially filled) segment.
             let cap = ((h.current / HEALTH_SEGMENT).ceil() * HEALTH_SEGMENT).clamp(HEALTH_SEGMENT, h.max);
             if h.current < cap {
@@ -254,7 +430,7 @@ fn fall_damage(perks: Res<crate::progression::Perks>, mut q: Query<(Entity, &mut
         // Safe up to ~3 m drops; lethal around 15 m.
         if v > 9.0 {
             let amount = (v - 9.0) * 9.0 * perks.fall_damage;
-            damage.write(DamageEvent { target: e, amount, kind: DamageKind::Fall, source: None, instigator: None, headshot: false });
+            damage.write(DamageEvent { target: e, amount, kind: DamageKind::Fall, source: None, instigator: None, headshot: false, hit: Hit::Whole });
         }
     }
 }
@@ -336,5 +512,39 @@ fn respawn_player(
                 info!("respawned at {:.0?} (died at {died_at:.0?})", t.translation);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fc3_formats::counters::{Damage, Vulnerability};
+
+    fn table() -> DamageTable {
+        let mut heavy = Vulnerability { name: "Pirate_HeavyGunner".into(), torso: 0.025, legs: 0.04, ..Default::default() };
+        heavy.harms[3] = 0.5;
+        let tiger = Vulnerability { name: "Tiger".into(), animal: true, health: Some(800.0), head: 2.3, ..Default::default() };
+        let pirate = Vulnerability { name: "Pirate_Assaulter".into(), ..Default::default() };
+        DamageTable(Some(Damage { archetypes: vec![heavy, tiger, pirate], ..Default::default() }))
+    }
+
+    #[test]
+    fn parts_armour_and_harms_follow_the_counters() {
+        let t = table();
+        let (mut pirate, health) = t.archetype("Pirate_Assaulter_Commander").unwrap();
+        assert_eq!(health, 100.0);
+        // Any real head shot kills; two rifle rounds to the torso do.
+        assert!(pirate.clone().take(40.0, DamageKind::Bullet, Hit::Bullet(Zone::Head)).1);
+        assert!(!pirate.take(40.0, DamageKind::Bullet, Hit::Bullet(Zone::Torso)).1);
+        assert!(pirate.take(40.0, DamageKind::Bullet, Hit::Bullet(Zone::Torso)).1);
+        // A heavy's armour soaks bullets to the body, burns half.
+        let (mut heavy, _) = t.archetype("Pirate_HeavyGunner").unwrap();
+        assert_eq!(heavy.take(40.0, DamageKind::Bullet, Hit::Bullet(Zone::Torso)), (1.0, false));
+        assert_eq!(heavy.take(10.0, DamageKind::Fire, Hit::Whole), (5.0, false));
+        // An animal has its own health and only a head multiplier.
+        let (mut tiger, health) = t.archetype("Tiger").unwrap();
+        assert_eq!(health, 800.0);
+        assert!(tiger.pools.is_none());
+        assert!((tiger.take(100.0, DamageKind::Bullet, Hit::Bullet(Zone::Head)).0 - 230.0).abs() < 1e-3);
     }
 }

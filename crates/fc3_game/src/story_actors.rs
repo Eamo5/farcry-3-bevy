@@ -203,6 +203,7 @@ fn spawn_actors(
     time: Res<Time>,
     faces: Option<ResMut<crate::faces::FaceLibrary>>,
     placements: Res<crate::story::EntityPlacements>,
+    damage: Res<crate::combat::DamageTable>,
 ) {
     let (Some(host), Some(chars)) = (host, chars) else { return };
     let mut faces = faces;
@@ -257,7 +258,12 @@ fn spawn_actors(
         budget -= 1;
         let yaw = pose.rotation.to_euler(EulerRot::YXZ).0;
         let fighter = fighter_of(e);
-        let health = fighter.map_or(100.0, |f| f.role.stats(f.faction).health);
+        // Its own counters (health, armour, what harms it), as placed.
+        let counters = damage.0.as_ref().and(e.component("CFCXCountersComponentAI")).map(|c| {
+            let name = e.name.rsplit(['/', ':']).next().unwrap_or(&e.name);
+            damage.counters(fc3_formats::counters::Vulnerability::from_component(name, c))
+        });
+        let health = counters.as_ref().map(|c| c.1).unwrap_or_else(|| fighter.map_or(100.0, |f| f.role.stats(f.faction).health));
         let root = commands
             .spawn((
                 Transform { translation: at + Vec3::Y * HALF_HEIGHT, ..pose },
@@ -268,6 +274,9 @@ fn spawn_actors(
                 Name::new(e.name.clone()),
             ))
             .id();
+        if let Some((c, _)) = counters {
+            commands.entity(root).insert(c);
+        }
         // Fighters carry their faction's gun for the role.
         let weapon = fighter.and_then(|f| chars.looks_for(f.faction, f.role).first().and_then(|&l| models.get(&chars.looks[l].weapon)));
         let rig = spawn_kit_character(&mut commands, root, &chars, kit, &models, weapon, &mut rng, Vec3::new(0.0, -HALF_HEIGHT, 0.0));

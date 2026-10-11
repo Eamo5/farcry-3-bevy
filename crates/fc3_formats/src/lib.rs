@@ -1,11 +1,15 @@
 //! Readers for Far Cry 3 (Dunia 2 engine) data formats.
 
+pub mod aim;
 pub mod anim;
+pub mod animals;
 pub mod archive;
 pub mod barks;
+pub mod body;
 pub mod audio;
 pub mod cache;
 pub mod cinema;
+pub mod counters;
 pub mod d3d9;
 pub mod d3d9_interp;
 pub mod d3d9_wgsl;
@@ -36,6 +40,8 @@ pub mod reader;
 pub mod realtree;
 pub mod rml;
 pub mod scripts;
+pub mod senses;
+pub mod shakes;
 pub mod shop;
 pub mod story;
 pub mod splines;

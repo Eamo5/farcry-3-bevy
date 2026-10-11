@@ -260,9 +260,12 @@ is the story's own:
   script group (`UnlockItemsFromScript`, which also opens the shop's
   script-locked supplies; groups are saved). Pages the engine opens as the
   player meets what they describe: an animal's once one is killed or
-  skinned, a plant's once gathered (by name, saved as met), and as many of
-  a kind of collectible as have been found; weapons and vehicles are open
-  from the start. Free roam opens all of them.
+  skinned, a plant's once gathered (by name, saved as met), a weapon's once
+  held (or a gadget carried), a vehicle's once boarded, the parachute's and
+  wingsuit's once owned (the handbook's own names for them, matched on
+  letters and digits; a few differ, mapped in `weapon_page`/`vehicle_page`),
+  and as many of a kind of collectible as have been found. Free roam opens
+  all of them.
 * **UI type**: Windows' Bahnschrift replaces Bevy's built-in monospace
   (closer to the game's own bitmap Trade Gothic, and it has the curly quotes
   and accents the game's text uses). `FC3_UI_FONT=<file>` picks another, and
@@ -352,9 +355,16 @@ is the story's own:
   that owner releases its looping scenes and character overrides, without
   stopping unrelated scenes or the host's QTE phases.
 * **Videos** (`video`, decoded by `fc3_bink`): full screen when the screen is
-  the player (or names no material), else a picture in a corner; the stereo
-  bed and the voice track (`FC3_VIDEO_VOICE`, by default 1) mixed; skippable;
-  the story hears them start and end.
+  the player (or names no material); else on the screen entity itself: the
+  converter indexes the materials scripts name for screens (`BinkPlayer`'s
+  `MaterialName`, found by the material files' own names) in
+  `video/screens.txt`, and the parts of the placed entity with that material
+  show the video self-lit (off the original shaders while it plays), getting
+  their own material back when it ends; a picture in a corner stands in until
+  the screen is found. The stereo bed and the voice track (`FC3_VIDEO_VOICE`,
+  by default 1) mixed; skippable; the story hears them start and end (videos
+  also play without a story). `FC3_SCREEN_TEST=<video>` plays one on the
+  nearest placed screen within 40 m.
 * **Phone calls** show the caller in a panel until the scripts' `PhoneCallEnd`.
 * **Story teleports** keep to the height they give (a cave floor, not the rock
   over it). Actor and prop destinations are resolved when the native runs,
@@ -381,6 +391,108 @@ is the story's own:
   and dying, with battle yells, search mutters and idle
   chatter between; within earshot, two at a time, his face mouthing the
   line where the game has its lip-sync.
+* **Moving** (`player::PlayerBody`, `fc3_formats::body`): the converter
+  writes the player prototype's body (walking 4, crouching 1.75 and swimming
+  3 m/s, a 1.25 m jump under 20 m/s² gravity) and the counters service's
+  sprint speeds (7.5 upright, 3.25 crouched) and stamina into
+  `characters/body.txt`; the player moves by them (the tuned constants stand
+  in without the table). Sprinting drains the stamina (20 a second of 100,
+  25 a second back otherwise): the fast sprint lasts while 20 is left, then
+  eases to the tired one (6.25 m/s), unless `SP_LongerSprintBurst` is
+  learned (its endless burst, the attribute 65 bonus).
+* **Minimap reach** (`map::MinimapReach`): the player's HUD component's
+  `MiniMap` (40 m on foot; in a vehicle eased to 100 m between 10 and 15
+  km/h; 100 m on the glider), written with the body to
+  `characters/minimap.txt`; without it the minimap keeps 160 m.
+* **Enemy fire on the player** (`npc::shoot`, `fc3_formats::aim`): the
+  converter writes the shooting preferences (`aishooterprefs:*`: focus
+  multipliers, damage lap, damage power and miss distance by difficulty), the
+  NPC weapons' damage (`WeaponProperties:FC3/*_NPC`) and the player's damage
+  group (how an AI's progress falls back) into `characters/aim.txt`.
+  Riflemen, shotgunners, snipers and machine gunners shoot the player by the
+  game's damage lap: their focus is the product of the distance, how long
+  they have shot without losing him, his movement (across, away, toward),
+  his exposure (how many of head, chest and knees show at the shot) and how
+  many are shooting; while he is in sight their progress fills at the
+  focus's lap after its least time, and the shot that finds it full lands for
+  the weapon's damage times the focus's power, the others missing past him by
+  the aiming curve's distance (nearer as the next hit nears). Out of sight
+  the progress falls back after a second and the chaining starts over once
+  he moves off. Three riflemen in the open now take about 600 health in 25 s
+  (before, about 220); a shotgunner close by kills with a hit, as the
+  shotgun's power (1.5 times its 100 at full focus) says. Rockets, firebombs
+  and flames keep their own handling, as do fights between NPCs.
+* **Being noticed** (`npc::perceive`, `fc3_formats::senses`): the converter
+  writes the templates' sensory systems (`aisensorysystem:*`) into
+  `characters/senses.txt`. Enemies notice the player as the default one says
+  (snipers through the scoped one): for the player's posture (crouched is
+  stealthy; sprinting, driving or having just fired an unsilenced gun is
+  action; else normal) and the enemy's state (idle is unaware, suspicious or
+  searching aware, fighting focused), nothing beyond the farthest distance,
+  and within it a time to notice from the shortest close by to the longest
+  far off; anyone within the sixth sense's few metres is noticed whichever
+  way the enemy faces, within its time. Grass, the stealth ability and the
+  difficulty still scale it, and the view cones stay ours.
+* **Animals' senses and behaviour** (`wildlife::animal_ai`,
+  `fc3_formats::animals`): the converter writes each animal archetype's AI
+  personality (`tmplPersonalityType`) and sensory system (`tmplSettings`)
+  into `characters/animals.txt`. An animal notices its nearest person by
+  sight (the sensory system's table, for the player's posture and its own
+  state, ahead of it with a clear line), by smell (nearer for a crouched
+  player; some ignore it while idle), at once within its immediate radius,
+  a vehicle out to its radius scaled by speed, nothing beyond its height
+  limit; and hears each kind of sound (`npc::NoiseKind`: interesting,
+  threatening, explosion) only so far. Aware, it stops and watches; after
+  its aware-to-active time with them still sensed it acts, and it relaxes
+  once nothing has been sensed for its cooldown. Prey move off to the avoid
+  distance, or flee to the flee distance when pressed (hurt, too near,
+  gunfire or an explosion); defensive animals charge when pressed and stop
+  after their unprovoked time; predators hunt and strike in bursts of the
+  personality's size, with its delay between strikes, then pause to look.
+  Wandering uses the idle chance and radii. `--animal-test herd` puts the
+  prey and defensive animals 18 m out and fires a shot 15 s in;
+  `FC3_ANIMAL_DEBUG` logs each change of mood with what was sensed.
+  `FC3_SENSE_DEBUG=1` logs how long each took.
+* **Camera shakes and pad rumbles** (`shake`): the converter writes the
+  player prototype's `CCameraShakeAndPadRumbleComponent` effects (each the
+  view's roll and pitch and the pad's two motors as `Curves:` knots) and the
+  explosives' `CameraShakeAndRumble` falloff into `fx/shakes.txt`.
+  `CAPI_Player.CameraShakeAndGamePadRumble` plays an effect by name at the
+  script's intensity; the world plays them too: explosions near the player
+  (whole within the near distance, fading out by the far one), being hurt,
+  burnt or mauled by an animal, boarding and crashing the vehicle driven,
+  and the weapon in hand drawn and firing. A shot or blow on the player is
+  the hit progression service's reaction: its roll, pitch and yaw curves
+  (times its angle, and its damage curve at the damage taken) kick the view
+  away from the side the hit came from, no more often than its cooldown,
+  with its hit sound and grunt. The view's offset adds onto the
+  player's look; the pad's motors follow while the options' Vibration is on.
+  `FC3_SHAKE_TEST=1` sets off a harmless blast 6 m ahead every 3 s and logs
+  the view's peak offset.
+* **Damage** (`combat::Counters`): the converter writes the counters
+  service's health table (a character's health, and what its head, torso
+  and legs can each take) and every enemy archetype's and animal's counters
+  component (each part's armour against bullets, a multiplier for each kind
+  of harm, an animal's own health and head multiplier) into
+  `characters/damage.txt`. Enemies take their role's archetype, story
+  characters their own placed counters, animals their species'. A bullet
+  or arrow lands in a part (head, torso below the hips is legs) and a part
+  that has taken all it can is a kill: any real head shot, two rifle rounds
+  to the torso, while a heavy's armour soaks body rounds and fire. Weapons
+  carry the game's damage fall-off with range, and the bow its arrow's
+  damage. Shots stray as the weapons' first-person `BulletSpread`s say:
+  by stance (from the hip, aimed, crouched, crouched and aimed, in the air)
+  from a base to the most after a few shots in a row, settling back at the
+  weapon's rate and wider on the move (the crosshair opens with it); a
+  shotgun's shot strays as one and each pellet about it by its own angle. The player's health by difficulty is the service's too: each
+  bar holds 1.5, 1, 0.6 or 0.3 times as much (Casual to Infamous), and
+  regeneration waits its delay. An animal's bite or charge is its AI personality's
+  (`AttackDamage`, joined by the CRC of the personality's name): within its
+  range against characters, and against the player the share of the
+  player's health it gives, less its per-level factor for each health bar
+  gained (read as the health upgrades: a tiger's half of 100 and its 26% of
+  200 are nearly the same bite). `FC3_DAMAGE_DEBUG=1` logs each hit's part,
+  damage and what is left.
 * **Scenes' props and figures**: a scene's generic groups play their simple
   animations on the objects they hold (the clip's root at the scene's place,
   the prop's node on it): machetes, bottles, tools. Kit-dressed figures (the

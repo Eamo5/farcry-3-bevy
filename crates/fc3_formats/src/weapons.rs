@@ -5,6 +5,10 @@
 //! them as text ([`STATS_REL`]); the game matches them to its weapons by
 //! model. With them go the attachments the shop sells for each weapon
 //! (`shoppingitems.lib`: an attachment's name starts with its weapon's).
+//! A weapon that fires a projectile (the bow's arrow) takes the
+//! projectile's damage, and a weapon's damage falls off with range as its
+//! `RangeMultipliers` (the normal difficulty's) say. Its first-person
+//! `BulletSpread`s give how far shots stray, by stance.
 
 use std::collections::HashMap;
 
@@ -13,7 +17,7 @@ use anyhow::{bail, Result};
 use crate::fcb::Object;
 
 pub const STATS_REL: &str = "weapons/stats.txt";
-const MAGIC: &str = "fc3-weapons 2";
+const MAGIC: &str = "fc3-weapons 4";
 
 /// The shop's attachment kinds (`selAttachmentType`).
 pub const ATTACH_SIGHT: u32 = 1;
@@ -50,6 +54,95 @@ pub struct WeaponStats {
     pub pellets: u32,
     pub silent: bool,
     pub attachments: Vec<AttachmentOffer>,
+    /// Damage over range: (from, to metres, multiplier at each end).
+    pub ranges: Vec<[f32; 4]>,
+    pub spread: Option<Spread>,
+}
+
+/// How far a weapon's shots stray (degrees off the aim), from the base
+/// to the most after `shots` shots in a row, by stance; shrinking back at
+/// `contraction` degrees a second, and `moving` times as much on the move.
+/// A shotgun's pellets each stray `pellets` (yaw, pitch) about the shot.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Spread {
+    pub hip: [f32; 2],
+    pub aimed: [f32; 2],
+    pub crouched: [f32; 2],
+    pub crouched_aimed: [f32; 2],
+    pub jumping: [f32; 2],
+    pub shots: f32,
+    pub contraction: f32,
+    pub moving: f32,
+    pub pellets: Option<[f32; 2]>,
+}
+
+impl Spread {
+    fn to_text(&self) -> String {
+        let p = self.pellets.unwrap_or([-1.0, -1.0]);
+        [self.hip, self.aimed, self.crouched, self.crouched_aimed, self.jumping, [self.shots, self.contraction], [self.moving, 0.0], p]
+            .iter()
+            .flat_map(|v| v.iter())
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    fn from_text(s: &str) -> Option<Spread> {
+        let v: Vec<f32> = s.split(',').filter_map(|x| x.parse().ok()).collect();
+        (v.len() == 16).then(|| Spread {
+            hip: [v[0], v[1]],
+            aimed: [v[2], v[3]],
+            crouched: [v[4], v[5]],
+            crouched_aimed: [v[6], v[7]],
+            jumping: [v[8], v[9]],
+            shots: v[10],
+            contraction: v[11],
+            moving: v[12],
+            pellets: (v[14] >= 0.0).then_some([v[14], v[15]]),
+        })
+    }
+}
+
+/// The first-person spread table under a weapon's properties.
+fn spread(props: &Object, fire: Option<&Object>) -> Option<Spread> {
+    let mut first = None;
+    props.walk(&mut |o, _| {
+        if first.is_none() && o.is("FirstPerson") && o.child("BulletSpread").is_some() {
+            first = Some(o);
+        }
+    });
+    let first = first?;
+    let pair =
+        |n: &str| -> [f32; 2] { first.child(n).map_or([0.0; 2], |b| [float(b, "fBaseSpread").unwrap_or(0.0), float(b, "fMaxBulletSpread").unwrap_or(0.0)]) };
+    let angles = fire
+        .filter(|f| f.bool("bUseAngleSpread").unwrap_or(false))
+        .map(|f| [float(f, "fAngleYawBulletSpread").unwrap_or(0.0), float(f, "fAnglePitchBulletSpread").unwrap_or(0.0)]);
+    Some(Spread {
+        hip: pair("BulletSpread"),
+        aimed: pair("BulletSpread_ironSight"),
+        crouched: pair("BulletSpread_crouch"),
+        crouched_aimed: pair("BulletSpread_crouch_ironSight"),
+        jumping: pair("fBulletSpread_jump"),
+        shots: float(first, "fMax_spread_bullet_number").unwrap_or(1.0).max(1.0),
+        contraction: float(first, "fShooting_contraction_speed").unwrap_or(10.0),
+        moving: float(first, "fBulletSpread_movement_modifier").filter(|m| *m > 0.0).unwrap_or(1.0),
+        pellets: angles,
+    })
+}
+
+impl WeaponStats {
+    /// The damage multiplier at a distance (whole before the first band,
+    /// the last band's end beyond the last).
+    pub fn range_scale(&self, distance: f32) -> f32 {
+        let mut scale = 1.0;
+        for &[from, to, start, end] in &self.ranges {
+            if distance < from {
+                break;
+            }
+            scale = if distance >= to || to <= from { end } else { start + (end - start) * (distance - from) / (to - from) };
+        }
+        scale
+    }
 }
 
 fn float(o: &Object, name: &str) -> Option<f32> {
@@ -79,12 +172,25 @@ pub fn weapon_stats(library: &Object, shop_items: Option<&Object>) -> Vec<Weapon
     let mut props: Vec<(String, Object)> = Vec::new();
     // Library item id -> weapon name, for the shop's weapons.
     let mut by_item: HashMap<u64, String> = HashMap::new();
+    // Library item id -> a projectile's damage.
+    let mut projectiles: HashMap<u64, f32> = HashMap::new();
     library.walk(&mut |o, _| {
         if !o.is("EntityPrototype") {
             return;
         }
         let Some(e) = o.child("Entity") else { return };
         let Some(name) = e.str("hidName") else { return };
+        if let Some(id) = uint(o, "disLibItemId") {
+            let mut damage = None;
+            e.walk(&mut |c, _| {
+                if damage.is_none() && c.is("BaseDamage") {
+                    damage = float(c, "fLevel").filter(|d| *d > 0.0);
+                }
+            });
+            if let Some(d) = damage {
+                projectiles.insert(id, d);
+            }
+        }
         if let (Some(n), Some(id)) = (name.strip_prefix("weapons:FC3/").filter(|n| !n.contains('.')), uint(o, "disLibItemId")) {
             by_item.insert(id, n.to_ascii_lowercase());
         }
@@ -113,10 +219,28 @@ pub fn weapon_stats(library: &Object, shop_items: Option<&Object>) -> Vec<Weapon
         let reloading = common.child("Reloading").map(|r| r.as_ref());
         let rate = common.child("FireRate").map(|r| r.as_ref());
         let ammo = common.child("Ammo").map(|r| r.as_ref());
+        let mut damage = get(fire.and_then(|f| f.child("BaseDamage")).map(|d| d.as_ref()), "fLevel");
+        if damage <= 0.0 {
+            damage = fire.and_then(|f| uint(f, "arkProjectileArchetype")).and_then(|id| projectiles.get(&id)).copied().unwrap_or(0.0);
+        }
+        let ranges = fire
+            .and_then(|f| f.child("RangeMultipliers"))
+            .and_then(|r| r.child("RangeMultiplierExperimented"))
+            .and_then(|r| r.child("RangeMultiplierDifficulty"))
+            .map(|r| {
+                r.children_named("RangeMultiplier")
+                    .filter_map(|m| {
+                        let f = |n: &str| float(m, n).unwrap_or(0.0);
+                        let band = [f("fMinRange"), f("fMaxRange"), f("fStartMultiplier"), f("fEndMultiplier")];
+                        (band[1] > band[0] && band[2] > 0.0).then_some(band)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         out.push(WeaponStats {
             name,
             model: model.clone(),
-            damage: get(fire.and_then(|f| f.child("BaseDamage")).map(|d| d.as_ref()), "fLevel"),
+            damage,
             fire_rate: get(rate, "iFireRate"),
             magazine: get(ammo, "iAmmoInClip") as u32,
             reload: get(reloading, "fReloadTimeNormal"),
@@ -125,6 +249,8 @@ pub fn weapon_stats(library: &Object, shop_items: Option<&Object>) -> Vec<Weapon
             pellets: get(fire.map(|f| f.as_ref()), "iBulletsShot").max(1.0) as u32,
             silent: common.bool("bIsSilent").unwrap_or(false),
             attachments: Vec::new(),
+            ranges,
+            spread: spread(&p, fire.map(|f| f.as_ref())),
         });
     }
     if let Some(items) = shop_items {
@@ -163,8 +289,10 @@ pub fn to_text(stats: &[WeaponStats]) -> String {
     let mut s = format!("{MAGIC}\n");
     for w in stats {
         let attachments = w.attachments.iter().map(|a| format!("{}:{}:{}", a.kind, a.cost, a.name)).collect::<Vec<_>>().join(";");
+        let ranges = w.ranges.iter().map(|r| r.map(|v| v.to_string()).join(":")).collect::<Vec<_>>().join(";");
+        let spread = w.spread.map(|s| s.to_text()).unwrap_or_default();
         s += &format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{attachments}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{attachments}\t{ranges}\t{spread}\n",
             w.name,
             w.model,
             w.damage,
@@ -214,6 +342,18 @@ pub fn from_text(text: &str) -> Result<Vec<WeaponStats>> {
                             .collect()
                     })
                     .unwrap_or_default(),
+                spread: f.get(12).and_then(|s| Spread::from_text(s)),
+                ranges: f
+                    .get(11)
+                    .map(|r| {
+                        r.split(';')
+                            .filter_map(|b| {
+                                let v: Vec<f32> = b.split(':').filter_map(|x| x.parse().ok()).collect();
+                                (v.len() == 4).then(|| [v[0], v[1], v[2], v[3]])
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             })
         })
         .collect())
@@ -244,8 +384,23 @@ mod tests {
             pellets: 1,
             silent: false,
             attachments: vec![AttachmentOffer { kind: ATTACH_SIGHT, name: "reflex A".into(), cost: 300 }],
+            ranges: vec![[0.0, 25.0, 1.0, 1.0], [25.0, 40.0, 1.0, 0.7]],
+            spread: Some(Spread {
+                hip: [2.0, 3.75],
+                aimed: [0.2, 1.0],
+                crouched: [1.7, 3.75],
+                crouched_aimed: [0.2, 1.0],
+                jumping: [4.0, 4.0],
+                shots: 3.0,
+                contraction: 10.0,
+                moving: 1.4,
+                pellets: Some([1.0, 1.0]),
+            }),
         };
         assert_eq!(from_text(&to_text(&[w.clone()])).unwrap(), vec![w.clone()]);
+        assert_eq!(w.range_scale(10.0), 1.0);
+        assert!((w.range_scale(32.5) - 0.85).abs() < 1e-5);
+        assert_eq!(w.range_scale(100.0), 0.7);
         assert_eq!(model_key(&w.model), model_key(r"Graphics\Weapons\ak74m\ak74m.xbg"));
     }
 }

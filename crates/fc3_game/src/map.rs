@@ -24,9 +24,50 @@ use crate::player::Player;
 
 /// Ground within this distance of the player counts as explored.
 const REVEAL_RADIUS: f32 = 320.0;
-/// Minimap diameter (pixels) and the ground radius it shows (metres).
+/// Minimap diameter (pixels) and the ground radius it shows (metres)
+/// without the game's table (`MinimapReach`).
 const MINIMAP_SIZE: f32 = 230.0;
 const MINIMAP_RADIUS_M: f32 = 160.0;
+
+/// The ground radius the minimap shows (metres): the game's reach for the
+/// player's HUD (on foot, widening with a vehicle's speed, on the glider),
+/// eased toward as it changes.
+#[derive(Resource)]
+pub struct MinimapReach {
+    table: Option<fc3_formats::body::Minimap>,
+    pub radius: f32,
+}
+
+impl Default for MinimapReach {
+    fn default() -> Self {
+        MinimapReach { table: None, radius: MINIMAP_RADIUS_M }
+    }
+}
+
+fn load_minimap(info: Option<Res<CacheInfo>>, mut reach: ResMut<MinimapReach>) {
+    let Some(info) = info else { return };
+    if let Ok(m) = std::fs::read_to_string(info.root.join(fc3_formats::body::MINIMAP_REL))
+        .map_err(anyhow::Error::from)
+        .and_then(|t| fc3_formats::body::Minimap::from_text(&t))
+    {
+        reach.radius = m.radius;
+        reach.table = Some(m);
+    }
+}
+
+fn update_reach(
+    time: Res<Time>,
+    mut reach: ResMut<MinimapReach>,
+    driving: Res<crate::vehicles::Driving>,
+    vehicles: Query<(&crate::vehicles::Vehicle, &avian3d::prelude::LinearVelocity)>,
+) {
+    let Some(m) = reach.table else { return };
+    let ride = driving.vehicle.and_then(|v| vehicles.get(v).ok());
+    let glider = ride.is_some_and(|(v, _)| v.kind() == crate::vehicles::Kind::Glider);
+    let kmh = ride.map_or(0.0, |(_, lv)| lv.0.length() * 3.6);
+    let target = m.radius_at(ride.is_some(), glider, kmh);
+    reach.radius += (target - reach.radius) * (time.delta_secs() * 2.0).min(1.0);
+}
 
 pub struct MapPlugin;
 
@@ -40,6 +81,9 @@ impl Plugin for MapPlugin {
             .init_resource::<MapPad>()
             .init_resource::<MapAutomation>()
             .init_resource::<Gps>()
+            .init_resource::<MinimapReach>()
+            .add_systems(OnExit(GameState::Loading), load_minimap)
+            .add_systems(Update, update_reach.before(update_minimap))
             .add_systems(Startup, setup_fog)
             .add_systems(
                 Update,
@@ -488,6 +532,7 @@ fn update_minimap(
     mut materials: ResMut<Assets<MapMaterial>>,
     scripted: Res<crate::story::ScriptedPlayer>,
     cinema: Res<crate::cinema::Cinema>,
+    reach: Res<MinimapReach>,
 ) {
     let Ok((node, mut vis)) = minimap.single_mut() else { return };
     let Ok((t, p, h)) = players.single() else { return };
@@ -499,7 +544,7 @@ fn update_minimap(
     }
     let Some(mut m) = materials.get_mut(&node.0) else { return };
     let player = map_uv(t.translation);
-    let half = MINIMAP_RADIUS_M / worldmap::METRES_PER_PIXEL / MAP_SIZE as f32;
+    let half = reach.radius / worldmap::METRES_PER_PIXEL / MAP_SIZE as f32;
     m.params = MapParams {
         center: player,
         half_extent: Vec2::splat(half),
@@ -507,7 +552,7 @@ fn update_minimap(
         heading: heading(p),
         rotation: heading(p),
         waypoint: waypoint.0.map(|w| map_uv(w).extend(1.0).extend(0.0)).unwrap_or(Vec4::ZERO),
-        ..gps.packed(t.translation, MINIMAP_RADIUS_M * 1.6)
+        ..gps.packed(t.translation, reach.radius * 1.6)
     };
 }
 
@@ -628,6 +673,7 @@ fn update_minimap_icons(
     dots: Query<Entity, With<MinimapDot>>,
     mut commands: Commands,
     objectives: Res<crate::story::ObjectiveMarkers>,
+    reach: Res<MinimapReach>,
 ) {
     for e in &dots {
         commands.entity(e).despawn();
@@ -640,7 +686,7 @@ fn update_minimap_icons(
     // Mission objectives: held on the rim when further than the map shows.
     for &at in &objectives.0 {
         let d = at - t.translation;
-        let mut local = rot.inverse() * Vec2::new(d.x, d.z) / MINIMAP_RADIUS_M;
+        let mut local = rot.inverse() * Vec2::new(d.x, d.z) / reach.radius;
         if local.length() > 0.88 {
             local = local.normalize() * 0.88;
         }
@@ -650,7 +696,7 @@ fn update_minimap_icons(
     // Outposts in range: red while enemy-held, blue once liberated.
     for o in &outposts.list {
         let d = o.centre - t.translation;
-        let local = rot.inverse() * Vec2::new(d.x, d.z) / MINIMAP_RADIUS_M;
+        let local = rot.inverse() * Vec2::new(d.x, d.z) / reach.radius;
         if local.length() > 0.9 {
             continue;
         }
@@ -674,7 +720,7 @@ fn update_minimap_icons(
     // Radio towers: amber until taken, then green.
     for (i, at) in ways.data.towers.iter().enumerate() {
         let d = Vec3::from(*at) - t.translation;
-        let local = rot.inverse() * Vec2::new(d.x, d.z) / MINIMAP_RADIUS_M;
+        let local = rot.inverse() * Vec2::new(d.x, d.z) / reach.radius;
         if local.length() > 0.9 {
             continue;
         }
@@ -692,7 +738,7 @@ fn update_minimap_icons(
         let d = gt.translation() - t.translation;
         // Map space: x east, y south.
         let offset = Vec2::new(d.x, d.z);
-        let local = rot.inverse() * offset / MINIMAP_RADIUS_M;
+        let local = rot.inverse() * offset / reach.radius;
         if local.length() > 0.92 {
             continue;
         }

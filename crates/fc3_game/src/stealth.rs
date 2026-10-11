@@ -264,7 +264,7 @@ fn fly_rocks(
                 t.translation += step.normalize_or_zero() * h.distance + h.normal * 0.05;
                 rock.landed = true;
                 rock.age = 0.0;
-                noise.write(crate::npc::Noise { at: t.translation, radius: ROCK_HEARD });
+                noise.write(crate::npc::Noise { at: t.translation, radius: ROCK_HEARD, kind: crate::npc::NoiseKind::Interesting });
                 debug!("rock impact at {:?}", t.translation);
                 let event = crate::sound::switched(crate::sound::ev::ROCK_IMPACT, probe.at(h.entity, t.translation, h.normal), 0);
                 sfx.write(crate::sound::PlaySfx { event, at: Some(t.translation), volume: 0.45 });
@@ -537,6 +537,7 @@ fn takedown(
                     source: Some(pt.translation),
                     instigator: Some(pe),
                     headshot: false,
+                    hit: crate::combat::Hit::Whole,
                 });
                 crate::particles::fx::blood(&mut particles, &mut rng, eye + to, to.normalize_or_zero());
                 sfx.write(crate::sound::PlaySfx {
@@ -621,6 +622,7 @@ fn takedown(
                         source: Some(pt.translation),
                         instigator: Some(pe),
                         headshot: false,
+                        hit: crate::combat::Hit::Whole,
                     });
                     td.timer = crate::fp::DOUBLE_TIME + 0.1;
                 }
@@ -838,7 +840,15 @@ fn strike(
     td.timer = 2.2;
     td.chain_window = td.timer + CHAIN_WINDOW;
     td.last = Some(target);
-    damage.write(DamageEvent { target, amount: 10_000.0, kind: DamageKind::Melee, source: Some(at), instigator: Some(player), headshot: false });
+    damage.write(DamageEvent {
+        target,
+        amount: 10_000.0,
+        kind: DamageKind::Melee,
+        source: Some(at),
+        instigator: Some(player),
+        headshot: false,
+        hit: crate::combat::Hit::Whole,
+    });
     sfx.write(crate::sound::PlaySfx {
         event: crate::sound::switched(crate::sound::ev::MELEE_IMPACT, crate::surfaces::value::FLESH, 0),
         at: Some(at),

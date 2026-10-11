@@ -48,6 +48,11 @@ pub fn anim_rel(original: &str) -> String {
 
 /// A Bink video, copied as it is (scripts name it by its archive path, in
 /// any case and with either slash).
+/// The materials videos play on in the world (a screen's material, named as
+/// scripts name it, lower case), each with its cached file: one
+/// `name<TAB>materials/<hash>.fcmat` per line.
+pub const VIDEO_SCREENS_REL: &str = "video/screens.txt";
+
 pub fn video_rel(original: &str) -> String {
     let p: String = original.chars().map(|c| if c == '/' { '\\' } else { c.to_ascii_lowercase() }).collect();
     format!("video/{}.bik", hash_name(&p))

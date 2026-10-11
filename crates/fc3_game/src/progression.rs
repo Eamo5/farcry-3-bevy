@@ -108,6 +108,28 @@ impl Animal {
         Animal::Chicken,
     ];
 
+    /// The game's animal archetype (its counters: health and what harms
+    /// it), `fc3_formats::counters`.
+    pub fn archetype(self) -> &'static str {
+        match self {
+            Animal::Boar => "Boar",
+            Animal::Deer => "DeerFC3",
+            Animal::Goat => "Goat",
+            Animal::Dog => "Dogs_Rapid",
+            Animal::Tapir => "AsianTapir",
+            Animal::Leopard => "Leopard",
+            Animal::Bear => "AsianBlackBear",
+            Animal::Tiger => "Tiger",
+            Animal::Komodo => "KomodoDragon",
+            Animal::Cassowary => "Cassowary",
+            Animal::Buffalo => "Buffalo",
+            Animal::Crocodile => "Crocodile",
+            Animal::Shark => "BullShark",
+            Animal::Macaque => "Macaque",
+            Animal::Chicken => "Chicken",
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Animal::Boar => "Boar",
@@ -588,6 +610,8 @@ pub struct Perks {
     pub recoil: f32,
     pub headshot: f32,
     pub sprint: f32,
+    /// The fast sprint never tires (`SP_LongerSprintBurst`'s endless burst).
+    pub endless_sprint: bool,
     pub swim: f32,
     pub fall_damage: f32,
     /// Multiplies how fast enemies spot a crouching player.
@@ -724,6 +748,7 @@ impl Perks {
             recoil: ["SP_ReducedBulletSpreadA", "SP_ReducedBulletSpreadB"].iter().map(|id| scale(id)).product(),
             headshot: 1.0,
             sprint: 1.0 + sum(attr::SPRINT),
+            endless_sprint: sum(attr::SPRINT_BURST) > 0.0,
             swim: 1.0 + sum(attr::SWIM),
             fall_damage: 1.0 - sum(attr::FALL_DAMAGE).min(0.9),
             crouch_detection: 1.0,
@@ -788,6 +813,7 @@ mod gear {
 mod attr {
     pub const SWAP: u32 = 11;
     pub const SPRINT: u32 = 18;
+    pub const SPRINT_BURST: u32 = 65;
     pub const SCOPE_BREATH: u32 = 37;
     pub const RELOAD: u32 = 13;
     pub const BREATH: u32 = 94;
@@ -970,18 +996,31 @@ fn award_kills(
     }
 }
 
-fn award_outposts(mut liberated: MessageReader<crate::outposts::OutpostLiberated>, mut progress: ResMut<Progress>, mut xp: MessageWriter<XpGain>) {
+/// A taken outpost: the game's reward for a new safe house, and its flag
+/// controller's bonus for taking it undetected or with no alarm raised.
+fn award_outposts(
+    mut liberated: MessageReader<crate::outposts::OutpostLiberated>,
+    skills: Res<Skills>,
+    mut progress: ResMut<Progress>,
+    mut xp: MessageWriter<XpGain>,
+) {
     for l in liberated.read() {
         progress.outposts += 1;
         if l.undetected {
             *progress.stats.entry(stat::OUTPOSTS_UNDETECTED).or_insert(0) += 1;
         }
         progress.add_money(500);
-        xp.write(XpGain { amount: 1500, reason: "Outpost liberated" });
-        if l.undetected {
-            xp.write(XpGain { amount: 1500, reason: "Undetected bonus" });
+        let reward = |name: &str| skills.xp_reward(name).unwrap_or(0.0) as u32;
+        xp.write(XpGain { amount: reward("SafeHouse"), reason: "Outpost liberated" });
+        let bonus = match (l.undetected, l.alarm) {
+            (true, _) => Some((reward("Outpost/Undetected"), "Undetected bonus")),
+            (false, false) => Some((reward("Outpost/NoAlarm"), "No alarms bonus")),
+            _ => None,
+        };
+        info!("outpost {} taken: {} XP, bonus {:?}", l.outpost, reward("SafeHouse"), bonus);
+        if let Some((amount, reason)) = bonus.filter(|b| b.0 > 0) {
+            xp.write(XpGain { amount, reason });
         }
-        let _ = l.outpost;
     }
 }
 
@@ -1836,9 +1875,9 @@ fn load_handbook(info: Res<crate::data::CacheInfo>, mut book: ResMut<HandbookDat
 /// Whether the player can read a page: in free roam all of them; in the
 /// story, those open from the start, by their mission or by their script
 /// group, and those the engine opens as the player meets what they
-/// describe: animals killed or skinned and plants gathered (`Progress::met`),
-/// and as many of a kind of collectible as have been found. Weapons and
-/// vehicles are open from the start.
+/// describe: animals killed or skinned, plants gathered, weapons held and
+/// vehicles boarded (`Progress::met`), and as many of a kind of collectible
+/// as have been found.
 fn handbook_open(e: &fc3_formats::progression::HandbookEntry, progress: &Progress) -> bool {
     if !progress.story || e.at_start {
         return true;
@@ -1848,7 +1887,7 @@ fn handbook_open(e: &fc3_formats::progression::HandbookEntry, progress: &Progres
             || (!e.unlock_group.is_empty() && progress.unlocks.contains(&e.unlock_group));
     }
     let key = e.key.to_ascii_lowercase();
-    if key.starts_with("wild life/") || key.starts_with("plant life/") {
+    if ["wild life/", "plant life/", "weapons/", "transport/"].iter().any(|s| key.starts_with(s)) {
         return progress.met.contains(&e.key);
     }
     if let Some(rest) = key.strip_prefix("collectibles/") {
@@ -1881,13 +1920,52 @@ fn met_pages<'a>(book: &'a fc3_formats::progression::Handbook, section: &str, na
         .collect()
 }
 
-/// Opens the handbook pages of the animals and plants the player meets.
+/// A weapon's handbook page, where the handbook names it otherwise
+/// (the rest go by their own name).
+fn weapon_page(name: &str) -> &str {
+    match name {
+        "AK-74M Rifle" => "AK47",
+        "870 Shotgun" => "M133",
+        "700 Sniper" => "R700",
+        "PKM LMG" => "PKM",
+        "MP5 SMG" => "MP5",
+        "Vector .45 ACP" => "ACP",
+        "Z93" => "M93",
+        _ => name,
+    }
+}
+
+/// A vehicle's handbook page.
+fn vehicle_page(name: &str) -> &str {
+    match name {
+        "4x4" => "Scavenger",
+        "Sedan" => "Darrah",
+        "Hatchback" => "Stryus",
+        "Truck" => "Cargo truck",
+        "Boat" => "RHIB",
+        "Hang glider" => "Glider",
+        _ => name,
+    }
+}
+
+/// A handbook page in a section by name, matched on letters and digits
+/// alone ("SPAS-12" is "SPAS 12").
+fn page_named<'a>(book: &'a fc3_formats::progression::Handbook, section: &str, name: &str) -> Option<&'a str> {
+    let plain = |s: &str| s.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
+    let want = plain(name);
+    book.entries.iter().find(|e| e.key.strip_prefix(section).is_some_and(|p| plain(p) == want)).map(|e| e.key.as_str())
+}
+
+/// Opens the handbook pages of what the player meets: animals and plants,
+/// the weapons and gadgets carried, the vehicles boarded and the gear owned.
+#[allow(clippy::too_many_arguments)]
 fn handbook_encounters(
     book: Res<HandbookData>,
     mut looted: MessageReader<ItemLooted>,
     mut died: MessageReader<Died>,
-    players: Query<Entity, With<Player>>,
+    players: Query<(Entity, Option<&crate::weapons::Inventory>), With<Player>>,
     animals: Query<&crate::wildlife::WildAnimal>,
+    (driving, vehicles, time, mut next): (Res<crate::vehicles::Driving>, Query<&crate::vehicles::Vehicle>, Res<Time>, Local<f32>),
     mut progress: ResMut<Progress>,
 ) {
     let Some(b) = book.0.as_ref() else {
@@ -1895,8 +1973,30 @@ fn handbook_encounters(
         died.clear();
         return;
     };
-    let player = players.single().ok();
+    let (player, inventory) = players.single().map(|(e, i)| (Some(e), i)).unwrap_or((None, None));
     let mut met: Vec<&str> = Vec::new();
+    // What is carried and ridden, twice a second.
+    if time.elapsed_secs() >= *next {
+        *next = time.elapsed_secs() + 0.5;
+        if let Some(inv) = inventory {
+            for s in &inv.slots {
+                met.extend(inv.defs.get(s.def).and_then(|d| page_named(b, "Weapons/", weapon_page(d.name))));
+            }
+            for (have, page) in [(inv.grenades, "Grenade"), (inv.molotovs, "Molotov"), (inv.c4, "C4"), (inv.mines, "Mine")] {
+                if have > 0 {
+                    met.extend(page_named(b, "Weapons/", page));
+                }
+            }
+        }
+        if let Some(v) = driving.vehicle.and_then(|v| vehicles.get(v).ok()) {
+            met.extend(page_named(b, "Transport/", vehicle_page(v.name())));
+        }
+        for (gear, page) in [(crate::freefall::PARACHUTE, "Parachute"), (crate::freefall::WINGSUIT, "Wingsuit")] {
+            if progress.upgrade(gear) > 0 {
+                met.extend(page_named(b, "Transport/", page));
+            }
+        }
+    }
     for l in looted.read() {
         match l.0 {
             LootKind::Skin(a) => met.extend(met_pages(b, "Wild life/", a.name())),
@@ -2155,7 +2255,7 @@ pub(crate) fn give_supply(
     perks: &Perks,
     progress: &mut Progress,
 ) -> u32 {
-    let mut add = |have: &mut u32, cap: u32| {
+    let add = |have: &mut u32, cap: u32| {
         let took = n.min(cap.saturating_sub(*have));
         *have += took;
         took
@@ -2929,6 +3029,18 @@ mod skill_tests {
         assert!(handbook_open(&named("Wild life/Mean dog"), &p));
         p.relics = 2;
         assert!(handbook_open(&named("Collectibles/Hidden relic 2"), &p) && !handbook_open(&named("Collectibles/Hidden relic 3"), &p));
+        // Weapons held and vehicles boarded, by the handbook's names for them.
+        let book = fc3_formats::progression::Handbook {
+            entries: vec![named("Weapons/SPAS 12"), named("Weapons/AK47"), named("Transport/Scavenger"), named("Transport/Cargo truck")],
+            ..Default::default()
+        };
+        assert_eq!(page_named(&book, "Weapons/", weapon_page("SPAS-12")), Some("Weapons/SPAS 12"));
+        assert_eq!(page_named(&book, "Weapons/", weapon_page("AK-74M Rifle")), Some("Weapons/AK47"));
+        assert_eq!(page_named(&book, "Transport/", vehicle_page("4x4")), Some("Transport/Scavenger"));
+        assert_eq!(page_named(&book, "Transport/", vehicle_page("Truck")), Some("Transport/Cargo truck"));
+        assert!(!handbook_open(&named("Weapons/AK47"), &p));
+        p.met.insert("Weapons/AK47".into());
+        assert!(handbook_open(&named("Weapons/AK47"), &p));
         // Free roam: everything.
         assert!(handbook_open(&page(false, "JAS_999_main", ""), &Progress::default()));
     }
@@ -2965,7 +3077,15 @@ mod skill_tests {
                 app.world_mut().resource_mut::<TakedownRewards>().0.insert(victim, "StandardTakedown");
             }
             let kind = if takedown { DamageKind::Melee } else { DamageKind::Bullet };
-            app.world_mut().write_message(DamageEvent { target: victim, amount: 500.0, kind, source: None, instigator: Some(player), headshot });
+            app.world_mut().write_message(DamageEvent {
+                target: victim,
+                amount: 500.0,
+                kind,
+                source: None,
+                instigator: Some(player),
+                headshot,
+                hit: crate::combat::Hit::Whole,
+            });
             app.world_mut().write_message(Died { entity: victim, killer: Some(player), kind });
             app.update();
             app.world_mut().resource_mut::<Messages<XpGain>>().drain().map(|g| g.amount).sum()

@@ -265,7 +265,15 @@ fn burn_damage(time: Res<Time>, mut fires: ResMut<Fires>, targets: Query<(Entity
         }
         if let Some(b) = fires.burning.get(&cell_of(p)) {
             if (p.y - b.y).abs() < 2.5 && b.age > 0.3 && b.age < b.life * 0.9 {
-                damage.write(DamageEvent { target: e, amount: 7.0, kind: DamageKind::Fire, source: Some(p), instigator: fires.instigator, headshot: false });
+                damage.write(DamageEvent {
+                    target: e,
+                    amount: 7.0,
+                    kind: DamageKind::Fire,
+                    source: Some(p),
+                    instigator: fires.instigator,
+                    headshot: false,
+                    hit: crate::combat::Hit::Whole,
+                });
             }
         }
     }

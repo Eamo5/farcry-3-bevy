@@ -824,6 +824,41 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
+    // ---- the screens videos play on: each material a script names for one
+    // (`BinkPlayer`'s `MaterialName`), found by its own name
+    if opts.only_sectors.is_none() && job.should_write(cache::VIDEO_SCREENS_REL) {
+        let result = (|| -> Result<()> {
+            let pack = std::fs::read(job.root().join(fc3_formats::scripts::DOMINO_PACK_REL)).context("the script pack")?;
+            let pack = fc3_formats::scripts::ScriptPack::from_bytes(&pack)?;
+            let mut wanted = std::collections::BTreeSet::new();
+            for p in pack.paths() {
+                for l in pack.get(p).unwrap_or_default().lines() {
+                    if let Some(name) = l.trim().strip_prefix("l0.MaterialName = \"").and_then(|r| r.split('"').next()) {
+                        if !name.is_empty() && name != "not_used" {
+                            wanted.insert(name.to_ascii_lowercase());
+                        }
+                    }
+                }
+            }
+            let mut found: Vec<(String, String)> = Vec::new();
+            for (h, path) in &job.vfs.names {
+                if !path.ends_with(".material.bin") {
+                    continue;
+                }
+                let Ok(m) = job.vfs.read_hash(*h).and_then(|b| fc3_formats::material::parse(&b)) else { continue };
+                if wanted.contains(&m.name.to_ascii_lowercase()) {
+                    found.push((m.name.to_ascii_lowercase(), cache::material_rel(path)));
+                }
+            }
+            found.sort();
+            let text: String = found.iter().map(|(n, rel)| format!("{n}\t{rel}\n")).collect();
+            write_atomic(job.root(), cache::VIDEO_SCREENS_REL, text.as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("video screens: {e:#}"));
+        }
+    }
+
     // ---- what the shop sells, as scripts name it
     if opts.only_sectors.is_none() && job.should_write(fc3_formats::story::SHOP_ITEMS_REL) {
         let items = std::fs::read(job.root().join("story/entitylibrary.fcb")).map_err(anyhow::Error::from).and_then(|b| {
@@ -926,6 +961,127 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
+    // ---- the damage characters and animals take
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::counters::DAMAGE_REL) {
+        let result = (|| -> Result<()> {
+            let bytes = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
+            let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+            let library = fc3_formats::fcb::parse(&bytes[at..])?;
+            let templates = job.vfs.read(fc3_formats::progression::TEMPLATES)?;
+            let at = templates.windows(4).position(|w| w == b"nbCF").context("no templates FCB header")?;
+            let templates = fc3_formats::fcb::parse(&templates[at..])?;
+            let damage = fc3_formats::counters::Damage {
+                table: fc3_formats::counters::health_table(&templates).context("no counters health table")?,
+                player: fc3_formats::counters::player_health(&templates).unwrap_or_default(),
+                archetypes: fc3_formats::counters::archetypes(&library, &templates),
+            };
+            if damage.archetypes.is_empty() {
+                bail!("no character counters");
+            }
+            write_atomic(job.root(), fc3_formats::counters::DAMAGE_REL, fc3_formats::counters::to_text(&damage).as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("damage: {e:#}"));
+        }
+    }
+
+    // ---- how the player moves
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::body::BODY_REL) {
+        let result = (|| -> Result<()> {
+            let templates = job.vfs.read(fc3_formats::progression::TEMPLATES)?;
+            let at = templates.windows(4).position(|w| w == b"nbCF").context("no templates FCB header")?;
+            let templates = fc3_formats::fcb::parse(&templates[at..])?;
+            let bytes = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
+            let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+            let library = fc3_formats::fcb::parse(&bytes[at..])?;
+            let body = fc3_formats::body::body(&library, &templates).context("no player body")?;
+            if let Some(m) = fc3_formats::body::minimap(&library) {
+                write_atomic(job.root(), fc3_formats::body::MINIMAP_REL, m.to_text().as_bytes(), job.ctx)?;
+            }
+            write_atomic(job.root(), fc3_formats::body::BODY_REL, fc3_formats::body::to_text(&body).as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("player body: {e:#}"));
+        }
+    }
+
+    // ---- how often the AI's fire lands on the player
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::aim::AIM_REL) {
+        let result = (|| -> Result<()> {
+            let templates = job.vfs.read(fc3_formats::progression::TEMPLATES)?;
+            let at = templates.windows(4).position(|w| w == b"nbCF").context("no templates FCB header")?;
+            let templates = fc3_formats::fcb::parse(&templates[at..])?;
+            let bytes = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
+            let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+            let library = fc3_formats::fcb::parse(&bytes[at..])?;
+            let aim = fc3_formats::aim::aim(&templates, &library);
+            if aim.prefs.is_empty() {
+                bail!("no shooting preferences");
+            }
+            write_atomic(job.root(), fc3_formats::aim::AIM_REL, fc3_formats::aim::to_text(&aim).as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("aim: {e:#}"));
+        }
+    }
+
+    // ---- how the AI notices the player
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::senses::SENSES_REL) {
+        let result = (|| -> Result<()> {
+            let templates = job.vfs.read(fc3_formats::progression::TEMPLATES)?;
+            let at = templates.windows(4).position(|w| w == b"nbCF").context("no templates FCB header")?;
+            let templates = fc3_formats::fcb::parse(&templates[at..])?;
+            let senses = fc3_formats::senses::senses(&templates);
+            if senses.is_empty() {
+                bail!("no sensory systems");
+            }
+            write_atomic(job.root(), fc3_formats::senses::SENSES_REL, fc3_formats::senses::to_text(&senses).as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("senses: {e:#}"));
+        }
+    }
+
+    // ---- the player's camera shakes and pad rumbles
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::shakes::SHAKES_REL) {
+        let result = (|| -> Result<()> {
+            let bytes = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
+            let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+            let library = fc3_formats::fcb::parse(&bytes[at..])?;
+            let templates = job.vfs.read(fc3_formats::progression::TEMPLATES)?;
+            let at = templates.windows(4).position(|w| w == b"nbCF").context("no templates FCB header")?;
+            let templates = fc3_formats::fcb::parse(&templates[at..])?;
+            let shakes = fc3_formats::shakes::shakes(&library, &templates);
+            if shakes.effects.is_empty() {
+                bail!("no player shake effects");
+            }
+            write_atomic(job.root(), fc3_formats::shakes::SHAKES_REL, fc3_formats::shakes::to_text(&shakes).as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("camera shakes: {e:#}"));
+        }
+    }
+
+    // ---- how animals notice threats and behave
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::animals::ANIMALS_REL) {
+        let result = (|| -> Result<()> {
+            let bytes = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
+            let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+            let library = fc3_formats::fcb::parse(&bytes[at..])?;
+            let templates = job.vfs.read(fc3_formats::progression::TEMPLATES)?;
+            let at = templates.windows(4).position(|w| w == b"nbCF").context("no templates FCB header")?;
+            let templates = fc3_formats::fcb::parse(&templates[at..])?;
+            let animals = fc3_formats::animals::animals(&library, &templates);
+            if animals.is_empty() {
+                bail!("no animal personalities");
+            }
+            write_atomic(job.root(), fc3_formats::animals::ANIMALS_REL, fc3_formats::animals::to_text(&animals).as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("animals: {e:#}"));
+        }
+    }
+
     // ---- the handbook
     if opts.only_sectors.is_none() && job.should_write(fc3_formats::progression::HANDBOOK_REL) {
         if let Err(e) = convert_handbook(&job) {
@@ -936,7 +1092,8 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     // ---- the skill tree and XP levels, with the tattoo's parts (written again
     // when an older table lacks them), and the tattoo's design and mask
     if opts.only_sectors.is_none() {
-        let current = std::fs::read_to_string(job.root().join(fc3_formats::progression::SKILLS_REL)).is_ok_and(|t| t.contains("\ntattoo\t") && t.contains("\nxpreward\t"));
+        let current = std::fs::read_to_string(job.root().join(fc3_formats::progression::SKILLS_REL))
+            .is_ok_and(|t| t.contains("\ntattoo\t") && t.contains("\nxpreward\tOutpost/"));
         if job.should_write(fc3_formats::progression::SKILLS_REL) || !current {
             if let Err(e) = convert_skills(&job) {
                 job.error(format!("skill tree: {e:#}"));
@@ -1766,7 +1923,15 @@ fn convert_skills(job: &Job) -> Result<()> {
     let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
     let templates = fcb::parse(&bytes[at..])?;
     let strings = oasis::Strings::from_bytes(&job.vfs.read(r"languages\english\oasisstrings_compressed.bin")?)?;
-    let tree = p::skill_tree(&templates, &|id| strings.get(id).unwrap_or_default().to_string())?;
+    let mut tree = p::skill_tree(&templates, &|id| strings.get(id).unwrap_or_default().to_string())?;
+    // A taken outpost's bonuses, from its flag controller script.
+    let pack = std::fs::read(job.root().join(fc3_formats::scripts::DOMINO_PACK_REL)).context("the script pack")?;
+    let pack = fc3_formats::scripts::ScriptPack::from_bytes(&pack)?;
+    let bonuses = p::outpost_bonuses(&pack.get(p::FLAG_CONTROLLER).context("no outpost flag controller")?);
+    if bonuses.len() < 2 {
+        bail!("the outpost flag controller's bonuses not found");
+    }
+    tree.xp_rewards.extend(bonuses);
     write_atomic(job.root(), p::SKILLS_REL, tree.to_text().as_bytes(), job.ctx)
 }
 

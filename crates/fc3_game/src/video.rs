@@ -1,6 +1,8 @@
 //! Bink videos the story plays: full screen over the game (the opening reel,
-//! the chapter quotes, logos), or on a screen in the world (a TV, a camera's
-//! playback), which shows here as a picture in a corner. The converter keeps
+//! the chapter quotes, logos), or on a screen in the world (a TV, a laptop):
+//! the screen entity's parts with the named material show it, self-lit, until
+//! it ends (a picture in a corner stands in until the screen is found). The
+//! converter indexes the screens' materials (`cache::VIDEO_SCREENS_REL`) and keeps
 //! the files as they are (`cache::video_rel`); they decode as they play
 //! (`fc3_bink`), the sound from the stereo bed and the voice track.
 //!
@@ -23,7 +25,7 @@ pub struct VideoPlugin;
 
 impl Plugin for VideoPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Videos>().add_systems(Update, play_videos.after(crate::story::StorySet));
+        app.init_resource::<Videos>().add_systems(Update, (screen_test, play_videos, show_on_screens).chain().after(crate::story::StorySet));
     }
 }
 
@@ -33,6 +35,9 @@ pub struct VideoRequest {
     pub fullscreen: bool,
     pub looped: bool,
     pub volume: f32,
+    /// The screen in the world it plays on: an entity id and the name of
+    /// the material showing it.
+    pub screen: Option<(u64, String)>,
 }
 
 #[derive(Resource, Default)]
@@ -70,6 +75,9 @@ struct Playing {
     /// The panel showing it and its sound.
     ui: Entity,
     sound: Option<Entity>,
+    /// Its screen in the world, and whether it is showing there.
+    screen: Option<(u64, String)>,
+    on_screen: bool,
 }
 
 #[derive(Component)]
@@ -131,13 +139,16 @@ fn play_videos(
     mut hold: ResMut<crate::fp::Cinematic>,
     mut commands: Commands,
 ) {
-    let Some(mut host) = host else {
-        videos.reset();
-        return;
+    // (The story hears each start and end, while there is one.)
+    let mut host = host;
+    let mut event = |path: &str, ended: bool, fullscreen: bool| {
+        if let Some(h) = host.as_mut() {
+            h.story.video_event(path, ended, fullscreen);
+        }
     };
     let videos = &mut *videos;
     for r in std::mem::take(&mut videos.requests) {
-        host.story.video_event(&r.path, false, r.fullscreen);
+        event(&r.path, false, r.fullscreen);
         let file = video_file(&info.root, &r.path);
         let bink = std::fs::read(&file).map_err(anyhow::Error::from).and_then(|b| fc3_bink::Bink::new(Arc::from(b)));
         let bink = match bink {
@@ -145,7 +156,7 @@ fn play_videos(
             Err(e) => {
                 // Not converted (or unreadable): it ends at once.
                 warn!("video {}: {e:#}", r.path);
-                host.story.video_event(&r.path, true, r.fullscreen);
+                event(&r.path, true, r.fullscreen);
                 continue;
             }
         };
@@ -215,7 +226,19 @@ fn play_videos(
                 .id()
         });
         info!("video: {} ({}x{}, {:.0} s{})", r.path, w, h, bink.frame_count() as f32 * frame_time(&bink), if r.fullscreen { ", full screen" } else { "" });
-        videos.playing.push(Playing { path: r.path, fullscreen: r.fullscreen, looped: r.looped, bink, image, t: 0.0, shown: None, ui, sound });
+        videos.playing.push(Playing {
+            path: r.path,
+            fullscreen: r.fullscreen,
+            looped: r.looped,
+            bink,
+            image,
+            t: 0.0,
+            shown: None,
+            ui,
+            sound,
+            screen: r.screen,
+            on_screen: false,
+        });
     }
     for fullscreen in std::mem::take(&mut videos.stops) {
         for p in videos.playing.iter_mut().filter(|p| p.fullscreen == fullscreen) {
@@ -269,7 +292,7 @@ fn play_videos(
             commands.entity(s).try_despawn();
         }
         images.remove(&p.image);
-        host.story.video_event(&p.path, true, p.fullscreen);
+        event(&p.path, true, p.fullscreen);
     }
 }
 
@@ -280,5 +303,134 @@ fn frame_time(bink: &fc3_bink::Bink) -> f32 {
         1.0 / 30.0
     } else {
         den as f32 / num as f32
+    }
+}
+
+/// A screen's part showing a video, and the material it had.
+#[derive(Component)]
+struct OnScreen {
+    image: Handle<Image>,
+    standard: Handle<StandardMaterial>,
+}
+
+/// Puts each playing video on its screen: the parts of the screen entity
+/// whose material is the one named, self-lit; and gives the parts their own
+/// material back when it ends.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn show_on_screens(
+    info: Res<CacheInfo>,
+    mut table: Local<Option<std::collections::HashMap<String, String>>>,
+    mut screen_materials: Local<std::collections::HashMap<AssetId<Image>, Handle<StandardMaterial>>>,
+    mut videos: ResMut<Videos>,
+    server: Res<AssetServer>,
+    placed: Query<(Entity, &crate::objects::PlacedId)>,
+    children: Query<&Children>,
+    parts: Query<(Option<&MeshMaterial3d<StandardMaterial>>, Option<&crate::original_shaders::OriginalSwap>), Without<OnScreen>>,
+    shown: Query<(Entity, &OnScreen)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut panels: Query<&mut Visibility, With<VideoPanel>>,
+    mut commands: Commands,
+) {
+    let table = table.get_or_insert_with(|| {
+        std::fs::read_to_string(info.root.join(fc3_formats::cache::VIDEO_SCREENS_REL))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.split_once('\t'))
+            .map(|(n, rel)| (n.to_string(), rel.to_string()))
+            .collect()
+    });
+    // Screens whose video has ended show their own material again.
+    let playing: std::collections::HashSet<AssetId<Image>> = videos.playing.iter().map(|p| p.image.id()).collect();
+    for (e, s) in &shown {
+        if !playing.contains(&s.image.id()) {
+            commands.entity(e).remove::<(OnScreen, crate::tattoo::NoOriginal)>().insert(MeshMaterial3d(s.standard.clone()));
+        }
+    }
+    screen_materials.retain(|id, _| playing.contains(id));
+    for p in videos.playing.iter_mut() {
+        let Some((id, name)) = &p.screen else { continue };
+        let Some(rel) = table.get(&name.to_ascii_lowercase()) else { continue };
+        let mut found = false;
+        for (root, _) in placed.iter().filter(|(_, pid)| pid.0 == *id) {
+            for e in children.iter_descendants(root) {
+                let Ok((standard, swap)) = parts.get(e) else { continue };
+                let Some(own) = swap.map(|s| s.standard.clone()).or_else(|| standard.map(|m| m.0.clone())) else { continue };
+                if !server.get_path(&own).is_some_and(|a| a.path().to_string_lossy().replace('\\', "/").ends_with(rel.as_str())) {
+                    continue;
+                }
+                let video = screen_materials
+                    .entry(p.image.id())
+                    .or_insert_with(|| materials.add(StandardMaterial { base_color_texture: Some(p.image.clone()), unlit: true, ..default() }))
+                    .clone();
+                commands
+                    .entity(e)
+                    .remove::<(crate::original_shaders::OriginalSwap, MeshMaterial3d<crate::original_shaders::OriginalMaterial>, MeshMaterial3d<StandardMaterial>)>()
+                    .insert((MeshMaterial3d(video), crate::tattoo::NoOriginal, OnScreen { image: p.image.clone(), standard: own }));
+                found = true;
+            }
+        }
+        // On its screen: the stand-in picture goes.
+        if found && !p.on_screen {
+            p.on_screen = true;
+            info!("video: {} on screen {id} ({name})", p.path);
+            if let Ok(mut v) = panels.get_mut(p.ui) {
+                *v = Visibility::Hidden;
+            }
+        }
+    }
+}
+
+/// `FC3_SCREEN_TEST=<video>`: 15 s in, plays the video on the nearest placed
+/// object (within 40 m) that has a screen material.
+#[allow(clippy::type_complexity)]
+fn screen_test(
+    time: Res<Time>,
+    info: Res<CacheInfo>,
+    mut done: Local<bool>,
+    mut videos: ResMut<Videos>,
+    server: Res<AssetServer>,
+    players: Query<&GlobalTransform, With<crate::player::Player>>,
+    placed: Query<(Entity, &crate::objects::PlacedId, &GlobalTransform)>,
+    children: Query<&Children>,
+    parts: Query<(Option<&MeshMaterial3d<StandardMaterial>>, Option<&crate::original_shaders::OriginalSwap>)>,
+) {
+    let Ok(video) = std::env::var("FC3_SCREEN_TEST") else { return };
+    if *done || time.elapsed_secs() < 15.0 {
+        return;
+    }
+    let Ok(eye) = players.single() else { return };
+    let screens: Vec<(String, String)> = std::fs::read_to_string(info.root.join(fc3_formats::cache::VIDEO_SCREENS_REL))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.split_once('\t'))
+        .map(|(n, r)| (n.to_string(), r.to_string()))
+        .collect();
+    let mut best: Option<(f32, u64, String)> = None;
+    for (root, id, t) in &placed {
+        let d = t.translation().distance(eye.translation());
+        if d > 40.0 || best.as_ref().is_some_and(|b| b.0 < d) {
+            continue;
+        }
+        for e in children.iter_descendants(root) {
+            let Ok((standard, swap)) = parts.get(e) else { continue };
+            let Some(own) = swap.map(|s| s.standard.clone()).or_else(|| standard.map(|m| m.0.clone())) else { continue };
+            let Some(path) = server.get_path(&own).map(|a| a.path().to_string_lossy().replace('\\', "/")) else { continue };
+            if let Some((name, _)) = screens.iter().find(|(_, rel)| path.ends_with(rel.as_str())) {
+                best = Some((d, id.0, name.clone()));
+            }
+        }
+    }
+    // (Looked for until the objects around have streamed in.)
+    match best {
+        Some((d, id, name)) => {
+            *done = true;
+            info!("screen-test: playing on {id} ({name}) {d:.1} m away");
+            videos.requests.push(VideoRequest { path: video, fullscreen: false, looped: true, volume: 1.0, screen: Some((id, name)) });
+        }
+        None if time.elapsed_secs() > 60.0 => {
+            *done = true;
+            info!("screen-test: no screen within 40 m");
+        }
+        None => {}
     }
 }

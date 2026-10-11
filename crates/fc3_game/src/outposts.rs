@@ -59,11 +59,13 @@ pub struct AlarmRaised {
     pub outpost: usize,
 }
 
-/// An outpost was taken (`undetected`: without the alarm being raised).
+/// An outpost was taken (`undetected`: without its garrison ever fighting
+/// the player; `alarm`: whether its alarm was raised).
 #[derive(Message, Clone, Copy)]
 pub struct OutpostLiberated {
     pub outpost: usize,
     pub undetected: bool,
+    pub alarm: bool,
 }
 
 pub struct OutpostState {
@@ -75,6 +77,8 @@ pub struct OutpostState {
     /// Time the siren started (game seconds) while it sounds.
     pub alarm_since: Option<f32>,
     pub alarm_raised: bool,
+    /// Its garrison has fought the player.
+    pub detected: bool,
     /// Reinforcements arrive at this time.
     reinforce_at: Option<f32>,
     /// When the last reinforcements were sent (they take a moment to appear).
@@ -96,6 +100,7 @@ impl OutpostState {
             liberated: false,
             alarm_since: None,
             alarm_raised: false,
+            detected: false,
             reinforce_at: None,
             reinforced: f32::MIN,
             engaged: false,
@@ -334,7 +339,7 @@ fn liberate(
     mut outposts: ResMut<Outposts>,
     director: Res<crate::npc::NpcDirector>,
     players: Query<&Transform, With<Player>>,
-    garrison: Query<(&Health, &Garrison)>,
+    garrison: Query<(&Health, &Garrison, &crate::npc::Npc)>,
     mut hud: ResMut<HudState>,
     mut done: MessageWriter<OutpostLiberated>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
@@ -345,7 +350,10 @@ fn liberate(
             continue;
         }
         let near = Vec2::new(pt.translation.x - o.centre.x, pt.translation.z - o.centre.z).length() < o.radius + 120.0;
-        let alive = garrison.iter().filter(|(h, g)| g.0 == i && !h.dead).count();
+        let alive = garrison.iter().filter(|(h, g, _)| g.0 == i && !h.dead).count();
+        if garrison.iter().any(|(h, g, n)| g.0 == i && !h.dead && n.state == crate::npc::NpcState::Combat) {
+            o.detected = true;
+        }
         if alive > 0 && near {
             o.engaged = true;
         }
@@ -365,9 +373,13 @@ fn liberate(
         }
         o.liberated = true;
         o.alarm_since = None;
-        let undetected = !o.alarm_raised;
-        hud.notify(if undetected { "OUTPOST LIBERATED - UNDETECTED" } else { "OUTPOST LIBERATED" });
-        done.write(OutpostLiberated { outpost: i, undetected });
+        let undetected = !o.detected && !o.alarm_raised;
+        hud.notify(match (undetected, o.alarm_raised) {
+            (true, _) => "OUTPOST LIBERATED - UNDETECTED",
+            (false, false) => "OUTPOST LIBERATED - NO ALARMS",
+            _ => "OUTPOST LIBERATED",
+        });
+        done.write(OutpostLiberated { outpost: i, undetected, alarm: o.alarm_raised });
         sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 1.0 });
     }
 }
@@ -489,6 +501,7 @@ fn outpost_test(
                     source: Some(pt.translation),
                     instigator: Some(pe),
                     headshot: false,
+                    hit: crate::combat::Hit::Whole,
                 });
             }
         }

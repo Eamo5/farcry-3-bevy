@@ -69,7 +69,7 @@ impl CraftCatalog {
 
     fn roll(&self, source: &fc3_formats::progression::Source, rng: &mut crate::weapons::Rng) -> BodyLoot {
         let mut loot = BodyLoot::default();
-        let mut range = |lo: u32, hi: u32, rng: &mut crate::weapons::Rng| lo + ((rng.f32() * (hi.max(lo) - lo + 1) as f32) as u32).min(hi.max(lo) - lo);
+        let range = |lo: u32, hi: u32, rng: &mut crate::weapons::Rng| lo + ((rng.f32() * (hi.max(lo) - lo + 1) as f32) as u32).min(hi.max(lo) - lo);
         for &(id, chance) in &source.groups {
             if rng.f32() * 100.0 >= chance {
                 continue;

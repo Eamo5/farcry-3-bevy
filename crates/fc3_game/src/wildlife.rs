@@ -1,15 +1,20 @@
 //! Wildlife: animals roaming the island, built from the game's animal models
-//! and clips. Prey (deer, goats, tapirs, macaques, chickens) graze and bolt when
-//! the player comes close or shoots nearby; boar, buffalo and cassowaries charge
-//! when crowded or hurt; predators (wild dogs, leopards, tigers, bears, komodo
-//! dragons, crocodiles) stalk and attack; bull sharks hunt swimmers. Dead
-//! animals can be skinned for crafting.
+//! and clips. Each behaves by its personality in the game's data
+//! (`fc3_formats::animals`): it notices someone by sight (its sensory
+//! system), smell, a moving vehicle or sounds, watches while aware, and once
+//! that turns to action, prey (deer, goats, tapirs, macaques, chickens) keep
+//! off or bolt, boar and buffalo charge whoever comes too near or hurts them,
+//! and predators (wild dogs, leopards, tigers, bears, komodo dragons,
+//! cassowaries, crocodiles) hunt and strike in bursts; bull sharks hunt
+//! swimmers. Dead animals can be skinned for crafting.
 
 use std::sync::Arc;
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
 use fc3_formats::cache;
+
+use fc3_formats::animals::Personality;
 
 use crate::cache_assets::{cache_path, skinned_cache_path, Fc3Model, ModelSettings};
 use crate::characters::{spawn_rig_with, AnimKind, AnimRequest, ClipSet};
@@ -23,7 +28,7 @@ pub struct WildlifePlugin;
 
 impl Plugin for WildlifePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnExit(crate::menu::GameState::Loading), load_animals).add_systems(
+        app.init_resource::<AnimalTable>().add_systems(OnExit(crate::menu::GameState::Loading), (load_animals, load_animal_table)).add_systems(
             Update,
             (
                 animal_test,
@@ -459,7 +464,7 @@ impl AnimalAssets {
             species, mood: Mood::Graze, call_in: rng.range(CALL_EVERY.0, CALL_EVERY.1),
             health_seen: f32::MAX, timer: rng.range(2.0, 8.0), goal: at, yaw,
             velocity: Vec3::ZERO, rig, attack_cooldown: 0.0, frozen: None,
-            body_lift: crate::player::HALF_HEIGHT,
+            body_lift: crate::player::HALF_HEIGHT, sense: Sensing::default(),
         }, Health::new(s.health), Collider::capsule(s.size.0, s.size.1 * 2.0)));
         if let Some(rig) = rig {
             let clips = self.sets[species].clone();
@@ -501,10 +506,113 @@ fn load_animals(mut commands: Commands, server: Res<AssetServer>) {
 enum Mood {
     Graze,
     Wander,
+    /// Aware of someone (or a sound): stops and watches.
+    Watch,
+    /// Keeping off from someone.
+    Avoid,
     Flee,
     Hunt,
     Attack,
 }
+
+/// What an animal makes of the one it notices (the game's animal awareness).
+#[derive(Clone, Copy, Default)]
+struct Sensing {
+    /// Seconds in view toward being seen.
+    noticing: f32,
+    /// Seconds aware with them sensed (toward acting), and since they were
+    /// last sensed (toward relaxing, after `relax_after`, or giving up).
+    aware: f32,
+    lost: f32,
+    relax_after: f32,
+    /// A defensive animal's charge: seconds left.
+    aggro: f32,
+    /// Strikes made in this burst, and how many it makes before it stops to
+    /// look (0 until it picks).
+    strikes: u32,
+    burst: u32,
+}
+
+/// The animals' personalities by species: the game's (`fc3_formats::animals`)
+/// once read from the cache, else rough ones by behaviour.
+#[derive(Resource)]
+pub(crate) struct AnimalTable(Vec<Personality>);
+
+impl Default for AnimalTable {
+    fn default() -> Self {
+        AnimalTable(SPECIES.iter().map(fallback).collect())
+    }
+}
+
+fn fallback(s: &Species) -> Personality {
+    let (smell, immediate) = match s.behaviour {
+        Behaviour::Predator => (35.0, 5.0),
+        Behaviour::Defensive => (20.0, 9.0),
+        Behaviour::Prey => (22.0, 12.0),
+    };
+    Personality {
+        temper: if s.behaviour == Behaviour::Predator { fc3_formats::animals::TEMPER_AGGRESSIVE } else { 2 },
+        defensive: s.behaviour == Behaviour::Defensive,
+        smell,
+        stealth_smell: smell * 0.5,
+        immediate,
+        vehicle: 50.0,
+        aware_to_active: 1.0,
+        aware_cooldown: 5.0,
+        max_height: 20.0,
+        interesting_sound: 25.0,
+        threatening_sound: 60.0,
+        explosion_sound: 60.0,
+        wander_chance: 0.5,
+        wander: (5.0, 15.0),
+        avoid: (25.0, 30.0),
+        avoid_cooldown: 5.0,
+        flee: (30.0, 40.0),
+        defensive_stop: 12.0,
+        attack_delay: (0.4, 0.4),
+        attacks_before_pause: (3, 3),
+        attack_reach: 1.8,
+        attack_height: 1.5,
+        ..Default::default()
+    }
+}
+
+fn load_animal_table(info: Option<Res<crate::data::CacheInfo>>, mut table: ResMut<AnimalTable>) {
+    let Some(info) = info else { return };
+    match std::fs::read_to_string(info.root.join(fc3_formats::animals::ANIMALS_REL))
+        .map_err(anyhow::Error::from)
+        .and_then(|t| fc3_formats::animals::from_text(&t))
+    {
+        Ok(all) => {
+            let mut found = 0;
+            for (i, s) in SPECIES.iter().enumerate() {
+                if let Some(p) = all.iter().find(|p| p.name == s.animal.archetype()) {
+                    table.0[i] = p.clone();
+                    found += 1;
+                }
+            }
+            info!("animals: {} personalities, {found} of {} species", all.len(), SPECIES.len());
+        }
+        Err(e) => warn!("animals: no personality table ({e:#}); re-run the converter"),
+    }
+}
+
+/// How a personality reacts once it acts on someone.
+fn behaviour(p: &Personality) -> Behaviour {
+    if p.defensive {
+        Behaviour::Defensive
+    } else if p.predator() {
+        Behaviour::Predator
+    } else {
+        Behaviour::Prey
+    }
+}
+
+/// The swing of an attack (seconds), before the personality's wait between
+/// attacks.
+const ATTACK_SWING: f32 = 0.8;
+/// Animals see ahead and to the sides (the cosine of half their view).
+const SIGHT_COS: f32 = 0.0;
 
 /// A species' calls: sound events from its archetype's sound component in
 /// the entity library (`sndIdleSound`, `sndHurtSound`, `sndDeathSound`, and
@@ -539,6 +647,10 @@ fn calls(animal: Animal) -> Calls {
     }
 }
 
+/// The health bars the player starts with (gained ones make animals' share
+/// of the player's health smaller).
+const BASE_HEALTH_BARS: f32 = 4.0;
+
 /// Idle calls come every so often (seconds) from animals this near (m).
 const CALL_EVERY: (f32, f32) = (10.0, 25.0);
 const CALL_RANGE: f32 = 70.0;
@@ -561,6 +673,7 @@ pub struct WildAnimal {
     /// Story roots share the story host's capsule offset; ordinary wildlife
     /// uses the species' own offset. Keep both feet and graphic kits grounded.
     body_lift: f32,
+    sense: Sensing,
 }
 
 impl WildAnimal {
@@ -701,6 +814,7 @@ fn spawn_animal(commands: &mut Commands, assets: &AnimalAssets, model: &Fc3Model
                 attack_cooldown: 0.0,
                 frozen: None,
                 body_lift: radius + 0.25,
+                sense: Sensing::default(),
             },
             Health::new(s.health),
             RigidBody::Kinematic,
@@ -744,6 +858,7 @@ fn cage_test(
             source: Some(pt.translation),
             instigator: Some(pe),
             headshot: false,
+            hit: crate::combat::Hit::Whole,
         });
         return;
     }
@@ -796,6 +911,27 @@ fn yaw_to(v: Vec3) -> f32 {
     (-v.x).atan2(-v.z)
 }
 
+/// Moves off from `from`, some way within `range` (metres).
+fn move_off(a: &mut WildAnimal, rng: &mut Rng, pos: Vec3, from: Vec3, range: (f32, f32), mood: Mood) {
+    a.mood = mood;
+    let away = Vec3::new(pos.x - from.x, 0.0, pos.z - from.z).normalize_or(Vec3::X);
+    a.goal = pos + away * rng.range(range.0, range.1.max(range.0));
+    // (Given up if it cannot get there.)
+    a.timer = 15.0;
+}
+
+/// Aware of something at `at`: stops and watches it, relaxing once nothing
+/// has been sensed for `relax_after` seconds.
+fn watch(a: &mut WildAnimal, at: Vec3, relax_after: f32) {
+    a.mood = Mood::Watch;
+    a.goal = at;
+    a.timer = 0.0;
+    a.sense.aware = 0.0;
+    a.sense.lost = 0.0;
+    a.sense.relax_after = relax_after;
+    a.sense.burst = 0;
+}
+
 #[allow(clippy::too_many_arguments)]
 fn animal_ai(
     time: Res<Time>,
@@ -804,16 +940,21 @@ fn animal_ai(
     heights: Res<Heightfield>,
     mut rng: ResMut<Rng>,
     mut noises: MessageReader<crate::npc::Noise>,
-    players: Query<(Entity, &Transform, &Player, &Health), Without<WildAnimal>>,
+    players: Query<(Entity, &Transform, &Player, &Health, Option<&crate::weapons::Inventory>), Without<WildAnimal>>,
     people: Query<(Entity, &Transform, &Health), (With<crate::npc::Npc>, Without<WildAnimal>, Without<Player>)>,
-    mut animals: Query<(Entity, &mut Transform, &mut WildAnimal, &Health, Option<&crate::story_actors::StoryActor>), Without<Carcass>>,
+    mut animals: Query<
+        (Entity, &mut Transform, &mut WildAnimal, &Health, Option<&crate::story_actors::StoryActor>, Option<&crate::combat::Counters>),
+        Without<Carcass>,
+    >,
     mut anims: Query<&mut AnimRequest>,
     mut damage: MessageWriter<DamageEvent>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
-    boosts: Option<Res<crate::syringes::Boosts>>,
+    (boosts, table, sense_table): (Option<Res<crate::syringes::Boosts>>, Res<AnimalTable>, Res<crate::npc::SenseTable>),
+    (driving, vehicles): (Res<crate::vehicles::Driving>, Query<(&crate::vehicles::Vehicle, &LinearVelocity)>),
 ) {
     let dt = time.delta_secs();
-    let Ok((pe, pt, player, ph)) = players.single() else { return };
+    let Ok((pe, pt, player, ph, inventory)) = players.single() else { return };
+    let debug = std::env::var_os("FC3_ANIMAL_DEBUG").is_some();
     // (The animal repellent syringe: they leave the player be.)
     let repellent = boosts.as_ref().is_some_and(|b| b.active(crate::syringes::Syringe::AnimalRepellent));
     let mut call = |event: u32, at: Vec3, volume: f32| {
@@ -825,7 +966,11 @@ fn animal_ai(
     // Pirates, privateers and rebels nearby are prey (or a threat) too.
     let npcs: Vec<(Entity, Vec3)> =
         people.iter().filter(|(_, t, h)| !h.dead && t.translation.distance(pt.translation) < 160.0).map(|(e, t, _)| (e, t.translation)).collect();
-    for (e, mut t, mut a, h, story) in &mut animals {
+    // The player's posture for their senses, and the vehicle he drives (its
+    // speed against its top speed).
+    let player_posture = crate::npc::posture(player, inventory);
+    let ride = driving.vehicle.and_then(|v| vehicles.get(v).ok()).map(|(v, lv)| (lv.0.length() / v.top_speed().max(1.0)).min(1.0));
+    for (e, mut t, mut a, h, story, counters) in &mut animals {
         if h.dead || story.is_some_and(|s| s.script_driven()) {
             continue;
         }
@@ -836,11 +981,16 @@ fn animal_ai(
             continue;
         }
         let s = &SPECIES[a.species];
+        let p = &table.0[a.species];
+        let behaviour = behaviour(p);
+        let sight = p.senses.as_deref().and_then(|n| sense_table.named(n));
         let pos = t.translation;
         let voice = calls(s.animal);
         let mood_before = a.mood;
-        // A cry when hurt (the death call is the death's).
-        if h.current < a.health_seen && a.health_seen != f32::MAX {
+        // A cry when hurt (the death call is the death's; health set from
+        // the game's counters is no hurt).
+        let hurt_now = h.current < a.health_seen && h.current < h.max && a.health_seen != f32::MAX;
+        if hurt_now {
             call(voice.hurt, pos, 1.0);
         }
         a.health_seen = h.current;
@@ -852,73 +1002,239 @@ fn animal_ai(
                 call(voice.idle, pos, 0.8);
             }
         }
-        // The nearest person: the player counts as farther when crouched.
-        let crouched = if player.crouching { 0.5 } else { 1.0 };
-        // Horizontal steering does not imply horizontal attack range: a
-        // surface animal cannot bite a player in the cave beneath it.
+        // The nearest one it could notice: the player, or a soldier (sea
+        // animals only go for swimmers). Horizontal steering does not imply
+        // horizontal attack range: a surface animal cannot bite a player in
+        // the cave beneath it.
         let player_dist = pt.translation.distance(pos);
-        let player_available = !ph.dead && !player.noclip && !player.spawning && !repellent
-            && cinema.as_ref().is_none_or(|c| c.view.is_none());
-        let mut target = player_available.then_some((pe, pt.translation, player_dist, player_dist / crouched));
+        let player_available = !ph.dead && !player.noclip && !player.spawning && !repellent && cinema.as_ref().is_none_or(|c| c.view.is_none());
+        let mut target = player_available.then_some((pe, pt.translation, player_dist));
         if s.habitat != Habitat::Sea {
             for (ne, np) in &npcs {
                 let d = np.distance(pos);
-                if target.is_none_or(|t| d < t.3) {
-                    target = Some((*ne, *np, d, d));
+                if target.is_none_or(|t| d < t.2) {
+                    target = Some((*ne, *np, d));
                 }
             }
         }
-        let (target_e, target_pos, dist, _) = target.unwrap_or((pe, pos, f32::MAX, f32::MAX));
+        let (target_e, target_pos, dist) = target.unwrap_or((pe, pos, f32::MAX));
         let is_player = target_e == pe;
-        let to_player = target_pos - pos;
+        let to_target = target_pos - pos;
         a.timer -= dt;
         a.attack_cooldown -= dt;
-        let heard = noises.iter().any(|n| n.at.distance(pos) < n.radius.min(90.0));
-        let crouched = if is_player { crouched } else { 1.0 };
-        let hurt = h.current < h.max;
         // Sharks only go for someone in the water.
         let reachable = target.is_some() && (s.habitat != Habitat::Sea || player.swimming);
         let ph_dead = is_player && ph.dead;
-        let flee = |a: &mut WildAnimal, rng: &mut Rng| {
-            a.mood = Mood::Flee;
-            a.timer = rng.range(6.0, 10.0);
-            let away = Vec3::new(-to_player.x, 0.0, -to_player.z).normalize_or(Vec3::X);
-            a.goal = pos + away * 60.0;
+        // What it senses of them: nothing too far above or below; by smell
+        // (nearer for a stealthy player, and ignored while idle by some), at
+        // once when very near, a moving vehicle (farther the faster), and by
+        // sight in its sensory system's time for their posture and its state.
+        let posture = if is_player { player_posture } else { 1 };
+        let level = match a.mood {
+            Mood::Graze | Mood::Wander => 0,
+            Mood::Watch | Mood::Avoid => 1,
+            Mood::Flee | Mood::Hunt | Mood::Attack => 2,
         };
-        if !ph_dead && reachable {
-            match s.behaviour {
-                Behaviour::Predator => {
-                    if (dist < 35.0 * crouched || heard || hurt) && a.mood != Mood::Attack {
-                        a.mood = Mood::Hunt;
+        let near = reachable && !ph_dead && (p.max_height <= 0.0 || to_target.y.abs() <= p.max_height);
+        let immediate = near && dist < p.immediate;
+        let smelled = near && dist < p.smell_for(posture == 0) && !(level == 0 && p.ignore_while_idle);
+        let driven = if is_player && player.driving { ride } else { None };
+        let vehicle = near && driven.is_some_and(|speed| p.vehicle < 0.0 || dist < p.vehicle * speed);
+        let mut seen = false;
+        match sight.and_then(|v| v.get(posture, level).time(dist).map(|need| (need, v.sixth_sense.0))) {
+            Some((need, sixth)) if near => {
+                let facing = Vec3::new(-a.yaw.sin(), 0.0, -a.yaw.cos());
+                let ahead = facing.dot(Vec3::new(to_target.x, 0.0, to_target.z).normalize_or_zero()) > SIGHT_COS || dist < sixth;
+                let eye = pos + Vec3::Y * 0.3;
+                let filter = SpatialQueryFilter::from_excluded_entities([e, target_e]);
+                let clear = ahead && Dir3::new(target_pos - eye).is_ok_and(|d| spatial.cast_ray(eye, d, dist, true, &filter).is_none());
+                if clear {
+                    a.sense.noticing += dt;
+                    seen = a.sense.noticing >= need;
+                } else {
+                    a.sense.noticing = (a.sense.noticing - dt).max(0.0);
+                }
+            }
+            _ => a.sense.noticing = (a.sense.noticing - dt).max(0.0),
+        }
+        let sensed = seen || smelled || immediate || vehicle;
+        // Sounds within its hearing for their kind.
+        let (mut interest, mut threat, mut blast) = (None, None, None);
+        for n in &noises {
+            let cap = match n.kind {
+                crate::npc::NoiseKind::Interesting => p.interesting_sound,
+                crate::npc::NoiseKind::Threatening => p.threatening_sound,
+                crate::npc::NoiseKind::Explosion => p.explosion_sound,
+            };
+            let reach = if cap < 0.0 { n.radius } else { n.radius.min(cap) };
+            if n.at.distance(pos) < reach {
+                *match n.kind {
+                    crate::npc::NoiseKind::Interesting => &mut interest,
+                    crate::npc::NoiseKind::Threatening => &mut threat,
+                    crate::npc::NoiseKind::Explosion => &mut blast,
+                } = Some(n.at);
+            }
+        }
+        // Acting on them: predators hunt; defensive animals charge when
+        // pressed (too near, or hurt) and otherwise keep off; the rest keep
+        // off or, pressed, run.
+        let act = |a: &mut WildAnimal, rng: &mut Rng, pressed: bool| match behaviour {
+            Behaviour::Predator => {
+                a.mood = Mood::Hunt;
+                a.sense.lost = 0.0;
+            }
+            Behaviour::Defensive if pressed => {
+                a.mood = Mood::Hunt;
+                a.sense.lost = 0.0;
+                a.sense.aggro = p.defensive_stop;
+            }
+            Behaviour::Defensive | Behaviour::Prey if !pressed => move_off(a, rng, pos, target_pos, p.avoid, Mood::Avoid),
+            _ => move_off(a, rng, pos, target_pos, p.flee, Mood::Flee),
+        };
+        // Explosions scare them all off, gunfire all but the predators.
+        let scare = blast.or(threat.filter(|_| behaviour != Behaviour::Predator));
+        match a.mood {
+            Mood::Graze | Mood::Wander => {
+                if hurt_now || immediate {
+                    act(&mut a, &mut rng, true);
+                } else if let Some(at) = scare {
+                    move_off(&mut a, &mut rng, pos, at, p.flee, Mood::Flee);
+                } else if sensed {
+                    watch(&mut a, target_pos, p.aware_cooldown);
+                } else if let Some(at) = interest.or(threat) {
+                    watch(&mut a, at, p.aware_cooldown);
+                }
+            }
+            Mood::Watch => {
+                // (A pause after a burst of attacks holds off the next.)
+                if hurt_now || (immediate && a.timer <= 0.0) {
+                    act(&mut a, &mut rng, true);
+                } else if let Some(at) = scare {
+                    move_off(&mut a, &mut rng, pos, at, p.flee, Mood::Flee);
+                } else if sensed {
+                    a.goal = target_pos;
+                    a.sense.lost = 0.0;
+                    a.sense.aware += dt;
+                    let need = if driven.is_some() && p.aware_to_active_vehicle > 0.0 { p.aware_to_active_vehicle } else { p.aware_to_active };
+                    if a.sense.aware >= need && a.timer <= 0.0 {
+                        act(&mut a, &mut rng, false);
+                    }
+                } else {
+                    a.sense.lost += dt;
+                    if a.sense.lost >= a.sense.relax_after {
+                        a.mood = Mood::Graze;
+                        a.timer = rng.range(2.0, 6.0);
                     }
                 }
-                // Charges when crowded or hurt, keeps away from noise.
-                Behaviour::Defensive => {
-                    if (dist < 9.0 * crouched || hurt) && !matches!(a.mood, Mood::Attack | Mood::Hunt) {
-                        a.mood = Mood::Hunt;
-                        a.timer = 12.0;
-                    } else if heard && matches!(a.mood, Mood::Graze | Mood::Wander) {
-                        flee(&mut a, &mut rng);
-                    }
+            }
+            Mood::Avoid | Mood::Flee => {
+                let bolting = a.mood == Mood::Flee && behaviour == Behaviour::Prey;
+                if hurt_now || (immediate && !bolting) {
+                    act(&mut a, &mut rng, true);
+                } else if a.timer <= 0.0 {
+                    watch(&mut a, target_pos, p.avoid_cooldown);
                 }
-                Behaviour::Prey => {
-                    if (dist < 22.0 * crouched || heard || hurt) && a.mood != Mood::Flee {
-                        flee(&mut a, &mut rng);
+            }
+            Mood::Hunt => {
+                a.goal = target_pos;
+                if sensed {
+                    a.sense.lost = 0.0;
+                } else {
+                    a.sense.lost += dt;
+                }
+                if behaviour == Behaviour::Defensive {
+                    if hurt_now || threat.is_some() {
+                        a.sense.aggro = p.defensive_stop;
+                    }
+                    a.sense.aggro -= dt;
+                }
+                if ph_dead || !reachable || a.sense.lost >= p.aware_cooldown.max(1.0) {
+                    watch(&mut a, target_pos, p.aware_cooldown);
+                } else if behaviour == Behaviour::Defensive && a.sense.aggro <= 0.0 {
+                    move_off(&mut a, &mut rng, pos, target_pos, p.avoid, Mood::Avoid);
+                } else if dist < p.attack_reach.max(1.2) {
+                    a.mood = Mood::Attack;
+                }
+            }
+            Mood::Attack => {
+                a.goal = target_pos;
+                let reach = p.attack_reach.max(1.2);
+                if a.sense.burst == 0 {
+                    let (lo, hi) = (p.attacks_before_pause.0.max(1), p.attacks_before_pause.1);
+                    a.sense.burst = lo + (rng.f32() * (hi.saturating_sub(lo) + 1) as f32) as u32;
+                    a.sense.strikes = 0;
+                }
+                if a.sense.strikes >= a.sense.burst {
+                    // A burst done: once the swing ends it stops to look.
+                    if a.attack_cooldown <= 0.0 {
+                        watch(&mut a, target_pos, p.aware_cooldown);
+                        a.timer = p.aware_to_active;
+                    }
+                } else if a.attack_cooldown <= 0.0
+                    && dist < reach + 0.4
+                    && to_target.y.abs() < p.attack_height.max(1.0) + 0.5
+                    && !ph_dead
+                    && reachable
+                    && spatial
+                        .cast_ray(pos, Dir3::new(to_target).unwrap_or(Dir3::X), dist, true, &SpatialQueryFilter::from_excluded_entities([e, target_e]))
+                        .is_none()
+                {
+                    a.attack_cooldown = ATTACK_SWING + rng.range(p.attack_delay.0, p.attack_delay.1.max(p.attack_delay.0));
+                    a.sense.strikes += 1;
+                    if a.sense.strikes >= a.sense.burst {
+                        a.attack_cooldown = ATTACK_SWING;
+                    }
+                    // The game's attack: a share of the player's health (less
+                    // for each health bar gained), else within its range.
+                    let amount = match counters.and_then(|c| c.v.attack) {
+                        Some(attack) => attack
+                            .to_player(ph.max, ph.max / crate::combat::HEALTH_SEGMENT - BASE_HEALTH_BARS)
+                            .filter(|_| is_player)
+                            .unwrap_or_else(|| rng.range(attack.min, attack.max.max(attack.min))),
+                        None => s.damage,
+                    };
+                    damage.write(DamageEvent {
+                        target: target_e,
+                        amount,
+                        kind: DamageKind::Melee,
+                        source: Some(pos),
+                        instigator: Some(e),
+                        headshot: false,
+                        hit: crate::combat::Hit::Whole,
+                    });
+                }
+                if a.mood == Mood::Attack {
+                    if !reachable || ph_dead {
+                        watch(&mut a, target_pos, p.aware_cooldown);
+                    } else if dist > reach + 1.0 && a.sense.strikes < a.sense.burst {
+                        a.mood = Mood::Hunt;
                     }
                 }
             }
         }
         // Bolting, or going for someone: the alarm call.
-        if a.mood != mood_before && matches!(a.mood, Mood::Flee | Mood::Hunt) {
+        if a.mood != mood_before && matches!(a.mood, Mood::Flee | Mood::Hunt) && !matches!(mood_before, Mood::Flee | Mood::Hunt | Mood::Attack) {
             call(voice.alarm, pos, 1.0);
+        }
+        // FC3_ANIMAL_DEBUG: each change of mood and what it sensed.
+        if debug && a.mood != mood_before {
+            info!(
+                "animal: {} {mood_before:?} -> {:?} at {dist:.1} m (seen {seen}, smelled {smelled}, immediate {immediate}, vehicle {vehicle}, hurt {hurt_now}, sounds {}/{}/{})",
+                s.animal.name(),
+                a.mood,
+                interest.is_some(),
+                threat.is_some(),
+                blast.is_some()
+            );
         }
         let (mut speed, mut anim) = (0.0, AnimKind::Idle);
         match a.mood {
             Mood::Graze | Mood::Wander if a.timer <= 0.0 => {
-                // Alternate grazing and short walks.
-                if a.mood == Mood::Graze {
+                // Now and then a wander, else more grazing.
+                if a.mood == Mood::Graze && rng.f32() < p.wander_chance {
                     a.mood = Mood::Wander;
-                    a.goal = pos + Vec3::new(rng.range(-15.0, 15.0), 0.0, rng.range(-15.0, 15.0));
+                    let angle = rng.f32() * std::f32::consts::TAU;
+                    a.goal = pos + Vec3::new(angle.cos(), 0.0, angle.sin()) * rng.range(p.wander.0, p.wander.1.max(p.wander.0));
                     a.timer = rng.range(5.0, 10.0);
                 } else {
                     a.mood = Mood::Graze;
@@ -930,42 +1246,23 @@ fn animal_ai(
                 speed = s.walk_speed;
                 anim = AnimKind::Walk;
             }
-            Mood::Flee => {
-                speed = s.run_speed;
-                anim = AnimKind::Run;
-                if a.timer <= 0.0 {
-                    a.mood = Mood::Wander;
-                    a.timer = 4.0;
+            Mood::Watch => {
+                let look = Vec3::new(a.goal.x - pos.x, 0.0, a.goal.z - pos.z);
+                if look.length() > 0.5 {
+                    a.yaw = turn_toward(a.yaw, yaw_to(look), dt * 3.0);
                 }
             }
+            Mood::Avoid | Mood::Flee => {
+                speed = s.run_speed;
+                anim = AnimKind::Run;
+            }
             Mood::Hunt => {
-                a.goal = target_pos;
                 speed = s.run_speed * 0.85;
                 anim = AnimKind::Run;
-                let gave_up = s.behaviour == Behaviour::Defensive && a.timer <= 0.0;
-                if ph_dead || dist > 80.0 || !reachable || gave_up {
-                    a.mood = Mood::Wander;
-                    a.timer = 4.0;
-                } else if dist < 1.8 {
-                    a.mood = Mood::Attack;
-                }
             }
             Mood::Attack => {
                 anim = AnimKind::Attack;
-                a.yaw = yaw_to(Vec3::new(to_player.x, 0.0, to_player.z));
-                if a.attack_cooldown <= 0.0 && dist < 2.2 && !ph_dead && reachable
-                    && spatial.cast_ray(pos, Dir3::new(to_player).unwrap_or(Dir3::X), dist, true,
-                        &SpatialQueryFilter::from_excluded_entities([e, target_e])).is_none() {
-                    a.attack_cooldown = 1.2;
-                    let amount = s.damage;
-                    damage.write(DamageEvent { target: target_e, amount, kind: DamageKind::Melee, source: Some(pos), instigator: Some(e), headshot: false });
-                }
-                if !reachable || ph_dead {
-                    a.mood = Mood::Wander;
-                    a.timer = 4.0;
-                } else if dist > 2.6 {
-                    a.mood = Mood::Hunt;
-                }
+                a.yaw = yaw_to(Vec3::new(to_target.x, 0.0, to_target.z));
             }
         }
         // Steer toward the goal over the ground.
@@ -977,9 +1274,14 @@ fn animal_ai(
             a.velocity = a.velocity.lerp(fwd * speed, (dt * 4.0).min(1.0));
         } else {
             a.velocity = a.velocity.lerp(Vec3::ZERO, (dt * 6.0).min(1.0));
-            if speed > 0.0 && a.mood == Mood::Wander {
-                a.mood = Mood::Graze;
-                a.timer = rng.range(4.0, 10.0);
+            match a.mood {
+                Mood::Wander if speed > 0.0 => {
+                    a.mood = Mood::Graze;
+                    a.timer = rng.range(4.0, 10.0);
+                }
+                // Far enough off: it stops and looks back.
+                Mood::Avoid | Mood::Flee if speed > 0.0 => watch(&mut a, target_pos, p.avoid_cooldown),
+                _ => {}
             }
         }
         let mut next = pos + a.velocity * dt;
@@ -1173,6 +1475,7 @@ mod tests {
             .init_resource::<Progress>().init_resource::<crate::hud::HudState>()
             .init_resource::<crate::fp::HandsBusy>().init_resource::<crate::story::ScriptedPlayer>()
             .init_resource::<Heightfield>()
+            .init_resource::<AnimalTable>().init_resource::<crate::npc::SenseTable>().init_resource::<crate::vehicles::Driving>()
             .insert_resource(Rng::seeded(1)).insert_resource(AnimalAssets {
                 models: Vec::new(), skins: Vec::new(),
                 sets: SPECIES.iter().map(|_| Arc::new(ClipSet { skeleton: Handle::default(), clips: std::collections::HashMap::new() })).collect(),
@@ -1211,7 +1514,8 @@ mod tests {
             app.world_mut().resource_mut::<Messages<DamageEvent>>().clear();
             app.update();
             assert!(app.world().resource::<Messages<DamageEvent>>().is_empty(), "unavailable player case {unavailable}");
-            assert!(matches!(app.world().get::<WildAnimal>(root).unwrap().mood, Mood::Wander));
+            // (It stops and watches, relaxing after its aware cooldown.)
+            assert!(matches!(app.world().get::<WildAnimal>(root).unwrap().mood, Mood::Watch));
         }
         // Leaving the cinematic restores ordinary combat, not invulnerability.
         app.world_mut().resource_mut::<crate::cinema::Cinema>().view = None;
@@ -1319,17 +1623,25 @@ mod tests {
 #[allow(clippy::too_many_arguments)]
 fn animal_test(
     args: Res<crate::Args>,
-    mut done: Local<bool>,
+    time: Res<Time>,
+    (mut done, mut shot_at): (Local<bool>, Local<Option<f32>>),
     assets: Option<Res<AnimalAssets>>,
     server: Res<AssetServer>,
     models: Res<Assets<Fc3Model>>,
     heights: Res<Heightfield>,
     players: Query<(&Transform, &Player)>,
+    mut noise: MessageWriter<crate::npc::Noise>,
     mut commands: Commands,
 ) {
     let Some(clip) = args.animal_test.as_deref() else { return };
     let Some(assets) = assets else { return };
     let Ok((pt, p)) = players.single() else { return };
+    // "herd": a shot by the player 15 s after they appear.
+    if shot_at.is_some_and(|t| time.elapsed_secs() > t) {
+        *shot_at = None;
+        info!("animal-test: a shot");
+        noise.write(crate::npc::Noise { at: pt.translation, radius: 120.0, kind: crate::npc::NoiseKind::Threatening });
+    }
     if *done || p.spawning {
         return;
     }
@@ -1347,16 +1659,33 @@ fn animal_test(
     };
     let fwd = Vec3::new(-p.yaw.sin(), 0.0, -p.yaw.cos());
     let right = Vec3::new(-fwd.z, 0.0, fwd.x);
-    // "hunt": one live tiger out in front, left to its own devices.
+    // "hunt": one live tiger out in front (within its smell), left to its
+    // own devices; "herd": the prey and defensive animals in a row 18 m out,
+    // live.
     let hunt = clip == "hunt";
+    let herd = clip == "herd";
+    if herd {
+        *shot_at = Some(time.elapsed_secs() + 15.0);
+    }
+    let mut placed = 0.0;
     for (i, s) in SPECIES.iter().enumerate() {
         if hunt && s.animal != Animal::Tiger {
+            continue;
+        }
+        if herd && (s.behaviour == Behaviour::Predator || s.habitat != Habitat::Land) {
             continue;
         }
         let Some(model) = models.get(&assets.models[i]) else { continue };
         // A grid of five across, rows further out.
         let (col, row) = ((i % 5) as f32, (i / 5) as f32);
-        let at = if hunt { pt.translation + fwd * 30.0 } else { pt.translation + fwd * (9.0 + row * 5.0) + right * ((col - 2.0) * (3.2 + row * 1.2)) };
+        let at = if herd {
+            placed += 1.0;
+            pt.translation + fwd * 18.0 + right * ((placed - 4.0) * 4.0)
+        } else if hunt {
+            pt.translation + fwd * 22.0
+        } else {
+            pt.translation + fwd * (9.0 + row * 5.0) + right * ((col - 2.0) * (3.2 + row * 1.2))
+        };
         let ground = heights.height_at(at).unwrap_or(at.y);
         let (radius, half) = s.size;
         // Side-on to the camera.
@@ -1368,14 +1697,15 @@ fn animal_test(
                     mood: Mood::Graze,
                     call_in: 3.0,
                     health_seen: f32::MAX,
-                    timer: if hunt { 1.0 } else { 99.0 },
+                    timer: if hunt || herd { 1.0 } else { 99.0 },
                     goal: at,
                     yaw,
                     velocity: Vec3::ZERO,
                     rig: None,
                     attack_cooldown: 0.0,
-                    frozen: (!hunt).then_some(kind),
+                    frozen: (!hunt && !herd).then_some(kind),
                     body_lift: radius + 0.25,
+                    sense: Sensing::default(),
                 },
                 Health::new(s.health),
                 Collider::capsule(radius, half * 2.0),

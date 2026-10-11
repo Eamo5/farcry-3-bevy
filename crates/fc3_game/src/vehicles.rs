@@ -349,6 +349,15 @@ impl Vehicle {
         DEFS[self.def].kind
     }
 
+    /// Its top speed (m/s).
+    pub fn top_speed(&self) -> f32 {
+        DEFS[self.def].top_speed
+    }
+
+    pub fn name(&self) -> &'static str {
+        DEFS[self.def].name
+    }
+
     /// Model-space bounds.
     pub fn bounds(&self) -> (Vec3, Vec3) {
         (self.min, self.max)
@@ -1640,6 +1649,7 @@ fn run_over(
                 source: Some(vt.translation),
                 instigator: player,
                 headshot: false,
+                hit: crate::combat::Hit::Whole,
             });
             cooldown.insert(e, 1.0);
         }
@@ -2071,6 +2081,7 @@ fn stray_hits(
             source: Some(h.from),
             instigator: Some(h.instigator),
             headshot: false,
+            hit: crate::combat::Hit::Whole,
         });
         if driving.vehicle == Some(vehicle) && rng.f32() < 0.35 {
             if let Some(p) = player {
@@ -2081,6 +2092,7 @@ fn stray_hits(
                     source: Some(h.from),
                     instigator: Some(h.instigator),
                     headshot: false,
+                    hit: crate::combat::Hit::Whole,
                 });
             }
         }

@@ -311,7 +311,15 @@ fn breath(
         air.hurt -= dt;
         if air.hurt <= 0.0 {
             air.hurt = 1.0;
-            damage.write(DamageEvent { target: pe, amount: 12.0, kind: DamageKind::Drown, source: None, instigator: None, headshot: false });
+            damage.write(DamageEvent {
+                target: pe,
+                amount: 12.0,
+                kind: DamageKind::Drown,
+                source: None,
+                instigator: None,
+                headshot: false,
+                hit: crate::combat::Hit::Whole,
+            });
         }
     }
 }

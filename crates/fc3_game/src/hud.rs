@@ -421,8 +421,11 @@ fn update_crosshair(
 ) {
     let Ok((inv, player, health)) = players.single() else { return };
     let d = inv.def();
-    let move_penalty = (player.velocity.length() / 6.0).min(1.0);
-    let cone = d.spread * (1.0 - 0.8 * inv.aim_blend) * (1.0 + inv.spread_bloom + move_penalty * 0.8);
+    let move_penalty = if player.grounded { (player.velocity.length() / 6.0).min(1.0) } else { 1.0 };
+    // (As the shots stray: the game's spread where the weapon has it.)
+    let cone = d
+        .spread_cone(inv.aim_blend, player.crouching, !player.grounded, inv.spread_bloom, move_penalty)
+        .unwrap_or(d.spread * (1.0 - 0.8 * inv.aim_blend) * (1.0 + inv.spread_bloom + move_penalty * 0.8));
     let gap = 6.0 + cone * 9.0;
     let in_menu = *game_state.get() != crate::menu::GameState::Playing;
     let hidden = in_menu || health.dead || player.noclip || player.swimming || player.driving || inv.aim_blend > 0.7;

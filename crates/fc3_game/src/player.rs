@@ -97,9 +97,50 @@ pub struct PlayerSpawn;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InputCaptured>()
+            .init_resource::<PlayerBody>()
+            .add_systems(OnExit(crate::menu::GameState::Loading), load_body)
             .add_systems(Startup, spawn_player.in_set(PlayerSpawn))
             .add_systems(Update, (player_look, place_on_ground, climb_course, player_move, scripted_walk_log, footsteps).chain())
             .add_systems(PreUpdate, slide_test.after(crate::controls::update_actions));
+    }
+}
+
+/// How the player moves by the game's data (`fc3_formats::body`): its
+/// walking, crouching, sprinting and swimming speeds, jump and gravity; the
+/// tuned constants stand in without it.
+#[derive(Resource)]
+pub struct PlayerBody(pub fc3_formats::body::Body);
+
+impl Default for PlayerBody {
+    fn default() -> Self {
+        PlayerBody(fc3_formats::body::Body {
+            walk: WALK_SPEED,
+            crouch: CROUCH_SPEED,
+            sprint: SPRINT_SPEED,
+            crouch_sprint: CROUCH_RUN_SPEED,
+            // (No stamina: the sprint keeps its speed.)
+            sprint_tired: SPRINT_SPEED,
+            crouch_sprint_tired: CROUCH_RUN_SPEED,
+            stamina: 0.0,
+            stamina_drain: 0.0,
+            stamina_regen: 0.0,
+            stamina_fast: 0.0,
+            swim: SWIM_SPEED,
+            jump_height: JUMP_SPEED * JUMP_SPEED / (2.0 * GRAVITY),
+            gravity: GRAVITY,
+        })
+    }
+}
+
+fn load_body(info: Option<Res<crate::data::CacheInfo>>, mut body: ResMut<PlayerBody>) {
+    let Some(info) = info else { return };
+    match std::fs::read_to_string(info.root.join(fc3_formats::body::BODY_REL)).map_err(anyhow::Error::from).and_then(|t| fc3_formats::body::from_text(&t)) {
+        Ok(b) if b.walk > 0.0 && b.gravity > 0.0 => {
+            info!("player body: walk {} m/s, sprint {} m/s, jump {} m", b.walk, b.sprint, b.jump_height);
+            body.0 = b;
+        }
+        Ok(_) => warn!("player body: an empty table; re-run the converter"),
+        Err(e) => warn!("player body: no table ({e:#}); re-run the converter"),
     }
 }
 
@@ -274,6 +315,7 @@ fn player_look(
     cinematic: Res<crate::fp::Cinematic>,
     sway: Res<crate::weapons::ScopeSway>,
     wheel: Res<crate::weapon_wheel::WeaponWheel>,
+    shake: Res<crate::shake::ViewShake>,
     mut player: Query<(&mut Player, &mut Transform), Without<PlayerCamera>>,
     mut camera: Query<&mut Transform, With<PlayerCamera>>,
 ) {
@@ -288,8 +330,9 @@ fn player_look(
     }
     t.rotation = Quat::from_rotation_y(p.yaw);
     if let Ok(mut ct) = camera.single_mut() {
-        // A scope drifting with the breath.
-        ct.rotation = Quat::from_rotation_y(sway.offset.x) * Quat::from_rotation_x(p.pitch + sway.offset.y);
+        // A scope drifting with the breath, and the view shaken.
+        ct.rotation =
+            Quat::from_rotation_y(sway.offset.x + shake.yaw) * Quat::from_rotation_x(p.pitch + sway.offset.y + shake.pitch) * Quat::from_rotation_z(shake.roll);
         ct.translation.y = p.eye - HALF_HEIGHT;
     }
 }
@@ -589,13 +632,16 @@ fn player_move(
     progress: Res<crate::progression::Progress>,
     mut actions_out: MessageWriter<crate::fp::FpAction>,
     sway: Res<crate::weapons::ScopeSway>,
-    (scripted, collision_ids, mut next_collision_log, mut commands): (
+    (scripted, collision_ids, mut next_collision_log, mut commands, body, mut stamina): (
         Res<crate::story::ScriptedPlayer>,
         Query<(Option<&crate::objects::PlacedId>, Option<&Name>, Option<&ChildOf>)>,
         Local<f32>,
         Commands,
+        Res<PlayerBody>,
+        Local<Option<f32>>,
     ),
 ) {
+    let body = body.0;
     let Ok((entity, mut p, mut t, collider)) = player.single_mut() else { return };
     let mut collider = collider.clone();
     let dt = time.delta_secs().min(0.05);
@@ -709,21 +755,35 @@ fn player_move(
     };
     p.eye += (target_eye - p.eye) * (dt * 12.0).min(1.0);
 
+    // Stamina: sprinting drains it, anything else restores it; the fast
+    // sprint lasts while there is enough (`SP_LongerSprintBurst`: always).
+    let left = stamina.get_or_insert(body.stamina);
+    if p.sprinting && !perks.endless_sprint {
+        *left = (*left - body.stamina_drain * dt).max(0.0);
+    } else {
+        *left = (*left + body.stamina_regen * dt).min(body.stamina);
+    }
+    let fast = perks.endless_sprint || *left >= body.stamina_fast;
     let speed = if p.dragging {
         DRAG_SPEED
     } else if p.swimming {
-        SWIM_SPEED * perks.swim * if boosts.active(crate::syringes::Syringe::SprintBurst) { 1.3 } else { 1.0 }
+        body.swim * perks.swim * if boosts.active(crate::syringes::Syringe::SprintBurst) { 1.3 } else { 1.0 }
     } else if p.crouching {
         // (`SP_CrouchRun`: the sprint key hurries a crouch along.)
         if perks.crouch_run && key(Action::Sprint) {
-            CROUCH_RUN_SPEED
+            if fast {
+                body.crouch_sprint
+            } else {
+                body.crouch_sprint_tired
+            }
         } else {
-            CROUCH_SPEED
+            body.crouch
         }
     } else if p.sprinting {
-        SPRINT_SPEED * perks.sprint * if boosts.active(crate::syringes::Syringe::SprintBurst) { 1.3 } else { 1.0 }
+        let sprint = if fast { body.sprint } else { body.sprint_tired };
+        sprint * perks.sprint * if boosts.active(crate::syringes::Syringe::SprintBurst) { 1.3 } else { 1.0 }
     } else {
-        WALK_SPEED
+        body.walk
     };
     // Sliding: momentum carries on (friction slows it, a little steering),
     // instead of accelerating toward the wished velocity.
@@ -764,7 +824,7 @@ fn player_move(
         p.velocity.y += (vy - p.velocity.y) * (dt * 4.0).min(1.0);
     } else {
         if p.grounded && key(Action::Jump) && !p.dragging {
-            p.velocity.y = JUMP_SPEED;
+            p.velocity.y = body.jump_speed();
             p.grounded = false;
         }
         // Jump in the air: the wingsuit, then the parachute.
@@ -778,7 +838,7 @@ fn player_move(
             };
         }
         match p.air {
-            AirMode::None => p.velocity.y -= GRAVITY * dt,
+            AirMode::None => p.velocity.y -= body.gravity * dt,
             AirMode::Wingsuit => {
                 // Gliding along the view: diving trades height for speed,
                 // pulling up bleeds speed for a flatter glide.

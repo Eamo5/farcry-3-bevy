@@ -29,29 +29,38 @@ pub enum Difficulty {
     Casual,
     Adventurer,
     Warrior,
+    Infamous,
 }
 
 impl Difficulty {
-    pub const ALL: [Difficulty; 3] = [Difficulty::Casual, Difficulty::Adventurer, Difficulty::Warrior];
+    pub const ALL: [Difficulty; 4] = [Difficulty::Casual, Difficulty::Adventurer, Difficulty::Warrior, Difficulty::Infamous];
 
     pub fn name(self) -> &'static str {
         match self {
             Difficulty::Casual => "Casual",
             Difficulty::Adventurer => "Adventurer",
             Difficulty::Warrior => "Warrior",
+            Difficulty::Infamous => "Infamous",
         }
+    }
+
+    /// Its place among the game's levels (casual 0 ... infamous 3).
+    pub fn index(self) -> usize {
+        Difficulty::ALL.iter().position(|d| *d == self).unwrap_or(1)
     }
 
     pub fn from_name(s: &str) -> Option<Difficulty> {
         Difficulty::ALL.into_iter().find(|d| d.name().eq_ignore_ascii_case(s))
     }
 
-    /// Multiplier on damage the player takes.
+    /// Multiplier on damage the player takes, without the game's table
+    /// (`combat::DamageTable`: its health bars' scale by difficulty).
     pub fn damage_taken(self) -> f32 {
         match self {
             Difficulty::Casual => 0.5,
             Difficulty::Adventurer => 1.0,
             Difficulty::Warrior => 1.6,
+            Difficulty::Infamous => 3.0,
         }
     }
 
@@ -60,7 +69,7 @@ impl Difficulty {
         match self {
             Difficulty::Casual => 0.7,
             Difficulty::Adventurer => 1.0,
-            Difficulty::Warrior => 1.35,
+            Difficulty::Warrior | Difficulty::Infamous => 1.35,
         }
     }
 }
@@ -101,6 +110,8 @@ pub struct Settings {
     pub sensitivity: f32,
     pub gamepad_sensitivity: f32,
     pub invert_y: bool,
+    /// The gamepad's rumble.
+    pub vibration: bool,
     /// Horizontal-ish field of view in degrees (vertical FOV of the camera).
     pub fov: f32,
     pub master_volume: f32,
@@ -132,6 +143,7 @@ impl Default for Settings {
             sensitivity: 1.0,
             gamepad_sensitivity: 1.0,
             invert_y: false,
+            vibration: true,
             fov: 75.0,
             master_volume: 0.8,
             music_volume: 0.6,
@@ -184,6 +196,7 @@ impl Settings {
         );
         out += &format!("vsync {}\nfullscreen {}\noriginal_shaders {}\nshow_fps {}\n", self.vsync, self.fullscreen, self.original_shaders, self.show_fps);
         out += &format!("subtitles {}\nstory {}\ndifficulty {}\nmusic_volume {}\n", self.subtitles, self.story, self.difficulty.name(), self.music_volume);
+        out += &format!("vibration {}\n", self.vibration);
         for a in Action::ALL {
             if let Some(b) = self.binding(a) {
                 out += &format!("bind {} {}\n", a.id(), b.id());
@@ -203,6 +216,7 @@ impl Settings {
                 "sensitivity" => s.sensitivity = f(value, 1.0).clamp(0.1, 5.0),
                 "gamepad_sensitivity" => s.gamepad_sensitivity = f(value, 1.0).clamp(0.1, 5.0),
                 "invert_y" => s.invert_y = b(value, false),
+                "vibration" => s.vibration = b(value, true),
                 "fov" => s.fov = f(value, 75.0).clamp(55.0, 110.0),
                 "master_volume" => s.master_volume = f(value, 0.8).clamp(0.0, 1.0),
                 "music_volume" => s.music_volume = f(value, 0.6).clamp(0.0, 1.0),
@@ -252,7 +266,7 @@ fn load_settings(info: Res<CacheInfo>, args: Res<crate::Args>, mut file: ResMut<
     if args.novsync {
         settings.vsync = false;
     }
-    // FC3_DIFFICULTY=Casual|Adventurer|Warrior (tests).
+    // FC3_DIFFICULTY=Casual|Adventurer|Warrior|Infamous (tests).
     if let Some(d) = std::env::var("FC3_DIFFICULTY").ok().and_then(|v| Difficulty::from_name(&v)) {
         settings.difficulty = d;
     }

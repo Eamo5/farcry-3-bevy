@@ -330,8 +330,13 @@ speed, so the water runs down the falls.
 Plants (foliage, grass) keep their wind material although they have a pair.
 
 Blended surfaces (`Blended` and `Decal` shaders: leaking dirt, blood, stains;
-`EffectLit` foam and glows) use their pair for colour and the diffuse map's
-alpha for coverage, blended over what is behind with the same small depth
+`EffectLit` foam and glows) use their pair for colour and, for coverage, the
+diffuse map's alpha times the vertex colour's alpha, as the game's own
+blending permutations do (the paired G-buffer permutation's `oC0.a` is often
+an encoded constant instead). Clear glass is lowered by the vertex alpha:
+Dennis's lenses (an opaque grey map, vertex alpha 0.66) were drawn as solid
+pale discs before. `FC3_BLEND_MAP_ALPHA=1` uses the map's alpha alone. They
+are blended over what is behind with the same small depth
 bias as on the standard material (set on the pipeline's depth state:
 `Material::depth_bias` only orders transparent draws). They cast no shadow
 (their prepass threshold is past any alpha). `FC3_NO_BLEND` leaves them on the

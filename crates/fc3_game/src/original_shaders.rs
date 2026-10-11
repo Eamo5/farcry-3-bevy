@@ -751,8 +751,10 @@ fn pair_sources(lib: &ShaderLibrary, key: OriginalKey) -> anyhow::Result<(String
     fields += &format!(
         "    @location({loc_world}) bevy_world: vec4<f32>,\n    @location({loc_normal}) bevy_normal: vec4<f32>,\n    @location({loc_instance}) @interpolate(flat) instance: u32,\n"
     );
+    // The mesh UV, and the vertex colour's alpha (a blended surface's
+    // coverage takes it, as the game's blending shaders do).
     if needs_uv {
-        fields += &format!("    @location({}) bevy_uv: vec2<f32>,\n", free[3]);
+        fields += &format!("    @location({}) bevy_uv: vec4<f32>,\n", free[3]);
     }
     fields += "}\n";
 
@@ -886,7 +888,7 @@ fn pair_sources(lib: &ShaderLibrary, key: OriginalKey) -> anyhow::Result<(String
     vsrc += "    out.bevy_world = world_from_local * vec4<f32>(a_position, 1.0);\n";
     vsrc += "    out.bevy_normal = vec4<f32>(normalize((world_from_local * vec4<f32>(a_normal, 0.0)).xyz), 0.0);\n";
     if needs_uv {
-        vsrc += "    out.bevy_uv = a_uv;\n";
+        vsrc += "    out.bevy_uv = vec4<f32>(a_uv, a_color.a, 0.0);\n";
     }
     vsrc += "    out.instance = instance;\n    return out;\n}\n";
 
@@ -936,11 +938,18 @@ fn pair_sources(lib: &ShaderLibrary, key: OriginalKey) -> anyhow::Result<(String
     }
     if key.alpha_test {
         // Cut out by the diffuse map's alpha (see `OriginalMaterial::cutout`).
-        fsrc += "    if textureSample(d3d_cutout, d3d_cutout_sampler, in.bevy_uv * d3d_cutout_params.xy).a < d3d_cutout_params.z {\n        discard;\n    }\n";
+        fsrc +=
+            "    if textureSample(d3d_cutout, d3d_cutout_sampler, in.bevy_uv.xy * d3d_cutout_params.xy).a < d3d_cutout_params.z {\n        discard;\n    }\n";
     }
-    // Blended: covers what is behind by the diffuse map's alpha.
-    fsrc += if key.blended {
-        "    let coverage = textureSample(d3d_cutout, d3d_cutout_sampler, in.bevy_uv * d3d_cutout_params.xy).a;\n"
+    // Blended: covers what is behind by the diffuse map's alpha times the
+    // vertex colour's, as the game's blending shaders do (clear glass and
+    // fading overlays are lowered by the latter; the paired permutation's
+    // own alpha is often something else). FC3_BLEND_MAP_ALPHA=1 (debug)
+    // uses the diffuse map's alpha alone.
+    fsrc += if key.blended && std::env::var_os("FC3_BLEND_MAP_ALPHA").is_some() {
+        "    let coverage = textureSample(d3d_cutout, d3d_cutout_sampler, in.bevy_uv.xy * d3d_cutout_params.xy).a;\n"
+    } else if key.blended {
+        "    let coverage = textureSample(d3d_cutout, d3d_cutout_sampler, in.bevy_uv.xy * d3d_cutout_params.xy).a * in.bevy_uv.z;\n"
     } else {
         "    let coverage = 1.0;\n"
     };

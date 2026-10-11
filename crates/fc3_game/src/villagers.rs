@@ -549,7 +549,7 @@ pub fn villager_log(
     let Ok(pt) = players.single() else { return };
     if mode == "panic" && !*shot && time.elapsed_secs() > 20.0 && !villagers.is_empty() {
         *shot = true;
-        noises.write(crate::npc::Noise { at: pt.translation, radius: 90.0 });
+        noises.write(crate::npc::Noise { at: pt.translation, radius: 90.0, kind: crate::npc::NoiseKind::Threatening });
         info!("villager-test: a shot");
     }
     if time.elapsed_secs() < *next {

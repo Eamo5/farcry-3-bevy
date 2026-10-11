@@ -2348,6 +2348,85 @@ fn main() -> Result<()> {
             fc3_formats::fcb::dump(&found.context("no prototype with that id")?, &names, 64, &mut out);
             println!("{out}");
         }
+        "material-named" => {
+            // The materials whose own name contains a text: material-named <text>
+            let needle = args.get(1).context("usage: material-named <text>")?.to_ascii_lowercase();
+            for (h, name) in &vfs.names {
+                if !name.ends_with(".material.bin") {
+                    continue;
+                }
+                let Ok(m) = vfs.read_hash(*h).and_then(|b| fc3_formats::material::parse(&b)) else { continue };
+                if m.name.to_ascii_lowercase().contains(&needle) {
+                    println!("{} {} ({})", m.name, name, m.shader);
+                }
+            }
+        }
+        "mesh-colors" => {
+            // Each submesh's material and the range of its vertex colours
+            // (first LOD): mesh-colors <path>
+            let target = args.get(1).context("usage: mesh-colors <path>")?;
+            let bytes = vfs.read_hash(parse_target(&vfs, target)?)?;
+            let m = fc3_formats::mesh::decode(&bytes, 8)?;
+            let Some((_, l)) = m.lods.first() else { bail!("no LODs") };
+            // (Skinned models' primitives name their materials in the skin data.)
+            let skin = fc3_formats::anim::skin_info_lods(&bytes, 8).ok();
+            for s in &l.submeshes {
+                let material =
+                    skin.as_ref().and_then(|k| k.lods.first()).and_then(|k| k.primitives.get(s.primitive)).map_or(s.material, |p| p.material as usize);
+                let name = m.materials.get(material).map(|r| r.name.as_str()).unwrap_or("?");
+                let mut lo = [f32::MAX; 4];
+                let mut hi = [f32::MIN; 4];
+                for &i in &l.indices[s.index_start..s.index_start + s.index_count] {
+                    if let Some(c) = l.colors.get(i as usize) {
+                        for k in 0..4 {
+                            lo[k] = lo[k].min(c[k]);
+                            hi[k] = hi[k].max(c[k]);
+                        }
+                    }
+                }
+                println!("{name}: rgba min {lo:.2?} max {hi:.2?}");
+            }
+        }
+        "library-grep" => {
+            // The cached entity library's objects with a field containing a
+            // text, under their prototype's name: library-grep <text> [depth]
+            let needle = args.get(1).context("usage: library-grep <text> [depth]")?.to_ascii_lowercase();
+            let depth = args.get(2).and_then(|d| d.parse().ok()).unwrap_or(4);
+            let bytes = std::fs::read(fc3_formats::cache::default_cache_root().join("story/entitylibrary.fcb"))?;
+            let start = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+            let root = fc3_formats::fcb::parse(&bytes[start..])?;
+            let mut names = fc3_formats::fcb::NameDb::default();
+            for n in KNOWN_NAMES {
+                names.add(n);
+            }
+            if let Some(dll) = fc3_formats::find_install().and_then(|d| d.parent().map(|p| p.join("bin").join("FC3.dll"))) {
+                if let Ok(b) = std::fs::read(dll) {
+                    names.add_identifiers_from(&b);
+                }
+            }
+            // (`@name` finds a field by its name instead.)
+            let field = args[1].strip_prefix('@').map(fc3_formats::hash::name_hash);
+            let has = |o: &fc3_formats::fcb::Object| match field {
+                Some(h) => o.fields.iter().any(|(k, _)| *k == h),
+                None => o.fields.iter().any(|(_, v)| String::from_utf8_lossy(v).to_ascii_lowercase().contains(&needle)),
+            };
+            let mut protos = Vec::new();
+            root.walk(&mut |o, _| {
+                if o.is("EntityPrototype") {
+                    protos.push(o);
+                }
+            });
+            for proto in protos {
+                let name = proto.child("Entity").and_then(|e| e.str("hidName")).unwrap_or_default();
+                proto.walk(&mut |o, _| {
+                    if has(o) {
+                        let mut out = String::new();
+                        fc3_formats::fcb::dump(o, &names, depth, &mut out);
+                        println!("== {name}\n{out}");
+                    }
+                });
+            }
+        }
         "story-entities" => {
             // Searches the cache's story entity table by name, class, id,
             // layer or component: story-entities [text] (no text: a summary)

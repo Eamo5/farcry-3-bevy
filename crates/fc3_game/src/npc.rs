@@ -26,8 +26,10 @@ impl Plugin for NpcPlugin {
             .add_message::<Noise>()
             .add_message::<SpawnEnemy>()
             .init_resource::<InjuryClips>()
+            .init_resource::<SenseTable>()
+            .init_resource::<AimTable>()
             .add_systems(Startup, (setup_npc_assets, load_melee_clips))
-            .add_systems(OnExit(crate::menu::GameState::Loading), load_injury_clips)
+            .add_systems(OnExit(crate::menu::GameState::Loading), (load_injury_clips, load_senses, load_aim))
             .add_systems(
                 Update,
                 (
@@ -123,6 +125,44 @@ pub struct RoleStats {
 }
 
 impl Role {
+    /// The game's shooting preferences and NPC weapon for a role whose fire
+    /// lands by the damage lap (`fc3_formats::aim`): the riflemen, shotgunners,
+    /// snipers and machine gunners (rockets, firebombs and flames keep theirs).
+    fn aim(self, faction: Faction) -> Option<(&'static str, &'static str)> {
+        Some(match (self, faction) {
+            (Role::Assault, Faction::Privateer) => ("assaultrifle", "P416_NPC"),
+            (Role::Assault, _) => ("assaultrifle", "AK47_NPC"),
+            (Role::Shotgunner, _) => ("shotgun", "M133_NPC"),
+            (Role::Sniper, Faction::Privateer) => ("rifle", "R700_NPC"),
+            (Role::Sniper, _) => ("rifle", "SVD_NPC"),
+            (Role::Heavy, _) => ("machinegun", "PKM_NPC"),
+            _ => return None,
+        })
+    }
+
+    /// The game's enemy archetype for this role in a faction (its counters:
+    /// health, armour and what harms it), `fc3_formats::counters`.
+    pub fn archetype(self, faction: Faction) -> &'static str {
+        match (faction, self) {
+            (Faction::Pirate, Role::Assault) => "Pirate_Assaulter",
+            (Faction::Pirate, Role::Shotgunner) => "Pirate_Defender",
+            (Faction::Pirate, Role::Sniper) => "Pirate_Sniper",
+            (Faction::Pirate, Role::Heavy) => "Pirate_HeavyGunner",
+            (Faction::Pirate, Role::Rocket) => "Pirate_Rocket",
+            (Faction::Pirate | Faction::Privateer, Role::Molotov) => "Pirate_Molotov",
+            (Faction::Pirate | Faction::Privateer, Role::Flamer) => "Privateer_HeavyFlammer",
+            (Faction::Privateer, Role::Assault) => "Privateer_Assaulter",
+            (Faction::Privateer, Role::Shotgunner) => "Privateer_Defender",
+            (Faction::Privateer, Role::Sniper) => "Privateer_Sniper",
+            (Faction::Privateer, Role::Heavy) => "Privateer_HeavyGunner",
+            (Faction::Privateer, Role::Rocket) => "Privateer_Rocket",
+            (Faction::Rebel, Role::Shotgunner) => "Rebel_Defender",
+            (Faction::Rebel, Role::Sniper) => "Rebel_Sniper",
+            (Faction::Rebel, Role::Rocket) => "Rebel_Rocket",
+            (Faction::Rebel, _) => "Rebel_Assaulter",
+        }
+    }
+
     pub fn stats(self, faction: Faction) -> RoleStats {
         let mut s = match self {
             Role::Assault => RoleStats {
@@ -327,6 +367,8 @@ pub enum NpcState {
 
 #[derive(Component)]
 pub struct Npc {
+    /// Its damage lap on the player (`AimTable`).
+    pub lap: LapState,
     /// A rifle-butt strike under way (seconds in), and the wait before the next.
     pub melee: Option<f32>,
     pub melee_cooldown: f32,
@@ -692,6 +734,18 @@ struct Corpse {
 pub struct Noise {
     pub at: Vec3,
     pub radius: f32,
+    pub kind: NoiseKind,
+}
+
+/// What a sound means to those who hear it (animals hear each kind only so
+/// far, and run from the threatening ones).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NoiseKind {
+    /// A thrown rock, a voice: worth a look.
+    Interesting,
+    /// Gunfire and flames.
+    Threatening,
+    Explosion,
 }
 
 #[derive(Resource, Default)]
@@ -1003,6 +1057,7 @@ pub fn role_from_weapon(prefs: &str) -> Option<Role> {
 pub(crate) fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker_id: u64, rng: &mut Rng) -> Npc {
     let stats = role.stats(faction);
     Npc {
+        lap: LapState::default(),
         faction,
         role,
         state: NpcState::Idle,
@@ -1076,22 +1131,112 @@ fn footstep_range(speed: f32, crouching: bool, sprinting: bool) -> f32 {
     }
 }
 
+/// How often the AI's fire lands on the player (`fc3_formats::aim`), once
+/// read from the cache.
+#[derive(Resource, Default)]
+pub struct AimTable(Option<fc3_formats::aim::Aim>);
+
+fn load_aim(info: Option<Res<crate::data::CacheInfo>>, mut table: ResMut<AimTable>) {
+    let Some(info) = info else { return };
+    match std::fs::read_to_string(info.root.join(fc3_formats::aim::AIM_REL)).map_err(anyhow::Error::from).and_then(|t| fc3_formats::aim::from_text(&t)) {
+        Ok(a) => {
+            info!("aim: {} kinds of shooting preferences, {} NPC weapons", a.prefs.len(), a.weapons.len());
+            table.0 = Some(a);
+        }
+        Err(e) => warn!("aim: no shooting table ({e:#}); re-run the converter"),
+    }
+}
+
+/// An enemy's damage lap on the player: while it shoots at him without
+/// losing him (`chain` seconds), its progress fills at its focus's lap; a
+/// shot when it is full lands, the rest miss. The least time before the
+/// first hit runs down first.
+#[derive(Default, Clone, Copy, Debug)]
+pub struct LapState {
+    progress: f32,
+    buffer: f32,
+    chain: f32,
+    unseen: f32,
+    shooting: bool,
+    /// Where he was when last seen.
+    lost_at: Vec3,
+    /// How exposed he showed at the last shot (its multiplier; 0 unknown).
+    exposure: f32,
+    focus: f32,
+}
+
+/// What a shot by the damage lap needs: the kind's preferences, the
+/// weapon's most damage, the difficulty and how many are shooting at him.
+struct Lap<'a> {
+    prefs: &'a fc3_formats::aim::Prefs,
+    max_damage: f32,
+    level: usize,
+    agents: u32,
+    /// The player's damage group: progress falls back after this long (s)
+    /// at this rate (percent a second).
+    decay: (f32, f32),
+}
+
+/// How the AI notices the player (`fc3_formats::senses`), once read from the
+/// cache.
+#[derive(Resource, Default)]
+pub struct SenseTable(Vec<fc3_formats::senses::Senses>);
+
+impl SenseTable {
+    /// A role's senses: a sniper's through his scope, the rest the default.
+    fn for_role(&self, role: Role) -> Option<&fc3_formats::senses::Senses> {
+        let name = if role == Role::Sniper { "aisensorysystem:default.default.scoped" } else { "aisensorysystem:default.default" };
+        self.named(name)
+    }
+
+    /// A sensory system by its template's name.
+    pub fn named(&self, name: &str) -> Option<&fc3_formats::senses::Senses> {
+        self.0.iter().find(|s| s.name == name)
+    }
+}
+
+fn load_senses(info: Option<Res<crate::data::CacheInfo>>, mut table: ResMut<SenseTable>) {
+    let Some(info) = info else { return };
+    match std::fs::read_to_string(info.root.join(fc3_formats::senses::SENSES_REL)).map_err(anyhow::Error::from).and_then(|t| fc3_formats::senses::from_text(&t))
+    {
+        Ok(s) => {
+            info!("senses: {} sensory systems", s.len());
+            table.0 = s;
+        }
+        Err(e) => warn!("senses: no sensory table ({e:#}); re-run the converter"),
+    }
+}
+
+/// The player's posture for the AI's senses: stealthy (crouched), in action
+/// (sprinting, driving, or just fired) or normal.
+pub(crate) fn posture(player: &Player, inventory: Option<&crate::weapons::Inventory>) -> usize {
+    let fired = inventory.is_some_and(|i| !i.slots.is_empty() && i.since_shot < 2.0 && !i.def().silenced);
+    if player.sprinting || player.driving || fired {
+        2
+    } else if player.crouching {
+        0
+    } else {
+        1
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn perceive(
     time: Res<Time>,
-    (perks, settings): (Res<crate::progression::Perks>, Res<crate::settings::Settings>),
+    (perks, settings, sense_table): (Res<crate::progression::Perks>, Res<crate::settings::Settings>, Res<SenseTable>),
     spatial: SpatialQuery,
     mut bodies: Query<(Entity, &Transform, &mut Corpse)>,
-    mut shouts: Local<Vec<Noise>>,
+    (mut shouts, mut sensing): (Local<Vec<Noise>>, Local<std::collections::HashMap<Entity, f32>>),
     mut noises: MessageReader<Noise>,
     mut damage: MessageReader<DamageEvent>,
-    players: Query<(Entity, &Transform, &Player, &Health)>,
+    players: Query<(Entity, &Transform, &Player, &Health, Option<&crate::weapons::Inventory>)>,
     mut npcs: Query<(Entity, &Transform, &mut Npc, &Health), (Without<Corpse>, Without<Frozen>, Without<Riding>)>,
     beasts: Query<(Entity, &Transform, &Health, &crate::wildlife::WildAnimal), Without<Npc>>,
     (cover, cinema): (Res<crate::vegetation::Concealment>, Res<crate::cinema::Cinema>),
 ) {
     let dt = time.delta_secs();
-    let Ok((pe, pt, player, ph)) = players.single() else { return };
+    let Ok((pe, pt, player, ph, inventory)) = players.single() else { return };
+    let posture = posture(player, inventory);
     // The story's autopilot (tests) steps into triggers in plain view: unseen.
     // (Nor while a cutscene has the player.)
     let unseen = player.noclip || cinema.cutscene() || std::env::var_os("FC3_STORY_AUTOPILOT").is_some();
@@ -1117,8 +1262,21 @@ fn perceive(
         let alert = matches!(npc.state, NpcState::Combat | NpcState::Search);
         let (range, fov_cos) = if alert { (110.0, -0.2) } else { (70.0, 0.35) };
         let range = range * npc.role.stats(npc.faction).sight;
+        // The game's senses: how far he can notice the player at this posture
+        // in his state, and the sixth sense close by.
+        let senses = sense_table.for_role(npc.role);
+        let level = match npc.state {
+            NpcState::Idle => 0,
+            NpcState::Suspicious | NpcState::Search => 1,
+            NpcState::Combat => 2,
+        };
+        let sense = senses.map(|s| *s.get(posture, level));
+        let (reach, sixth) = match senses {
+            Some(s) => (sense.map_or(range, |t| t.max_dist), s.sixth_sense),
+            None => (range, (4.0, 0.0)),
+        };
         let mut visible = false;
-        if !friendly && !ph.dead && !unseen && dist < range && (cos > fov_cos || dist < 4.0) {
+        if !friendly && !ph.dead && !unseen && dist < reach && (cos > fov_cos || dist < sixth.0) {
             if let Ok(dir) = Dir3::new(to) {
                 let filter = SpatialQueryFilter::from_excluded_entities([e]);
                 visible = match spatial.cast_ray(eye, dir, dist, true, &filter) {
@@ -1194,7 +1352,7 @@ fn perceive(
                 npc.state_time = 0.0;
                 npc.awareness = npc.awareness.max(0.8);
                 npc.last_known = Some(bt.translation);
-                shouts.push(Noise { at: bt.translation, radius: 30.0 });
+                shouts.push(Noise { at: bt.translation, radius: 30.0, kind: NoiseKind::Interesting });
                 break;
             }
         }
@@ -1203,15 +1361,36 @@ fn perceive(
             // bushes round the player slow it down (most for a still,
             // crouched player, and only up close do they give him away).
             let hidden = cover.level * if player.crouching { 1.0 } else { 0.6 } * if player.velocity.length() > 4.0 { 0.5 } else { 1.0 };
-            let stance = if player.crouching { 0.45 * perks.crouch_detection } else { 1.0 } * (1.0 - 0.85 * hidden * (dist / 8.0).min(1.0));
-            let motion = 0.6 + (player.velocity.length() / 6.0).min(1.0) * 0.6;
-            // Roughly 2 s to spot an upright player at 40 m, about 1 s point-blank.
-            let rate = ((1.0 - dist / range).max(0.05) * 0.9 + 0.1) * stance * motion * if alert { 3.0 } else { 1.0 } * settings.difficulty.spotting();
+            let concealed = 1.0 - 0.85 * hidden * (dist / 8.0).min(1.0);
+            let rate = match sense.and_then(|t| t.time(dist)) {
+                // The game's time to notice him at this distance (the sixth
+                // sense's at most, close by).
+                Some(t) => {
+                    let t = if dist < sixth.0 && sixth.1 > 0.0 { t.min(sixth.1) } else { t };
+                    let crouched = if posture == 0 { perks.crouch_detection } else { 1.0 };
+                    concealed * crouched / t.max(0.05) * settings.difficulty.spotting()
+                }
+                None => {
+                    let stance = if player.crouching { 0.45 * perks.crouch_detection } else { 1.0 } * concealed;
+                    let motion = 0.6 + (player.velocity.length() / 6.0).min(1.0) * 0.6;
+                    // Roughly 2 s to spot an upright player at 40 m, about 1 s point-blank.
+                    ((1.0 - dist / range).max(0.05) * 0.9 + 0.1) * stance * motion * if alert { 3.0 } else { 1.0 } * settings.difficulty.spotting()
+                }
+            };
+            let before = npc.awareness;
             npc.awareness = (npc.awareness + rate * dt).min(1.0);
             if npc.awareness > 0.35 {
                 npc.last_known = Some(pt.translation);
             }
+            // FC3_SENSE_DEBUG: how long each took to notice the player fully.
+            if std::env::var_os("FC3_SENSE_DEBUG").is_some() {
+                let started = *sensing.entry(e).or_insert(time.elapsed_secs());
+                if before < 1.0 && npc.awareness >= 1.0 {
+                    info!("sense: noticed at {dist:.0} m after {:.2} s (posture {posture}, level {level})", time.elapsed_secs() - started);
+                }
+            }
         } else {
+            sensing.remove(&e);
             npc.awareness = (npc.awareness - dt * if alert { 0.05 } else { 0.12 }).max(0.0);
         }
         // Steps heard out of sight: a sprint carries farthest, a crouch
@@ -1308,7 +1487,12 @@ fn act(
     mut commands: Commands,
     mut noises: MessageWriter<Noise>,
     mut damage: MessageWriter<DamageEvent>,
-    (mut loops, mut sfx): (MessageWriter<crate::sound::LoopSfx>, MessageWriter<crate::sound::PlaySfx>),
+    (mut loops, mut sfx, aim_table, settings): (
+        MessageWriter<crate::sound::LoopSfx>,
+        MessageWriter<crate::sound::PlaySfx>,
+        Res<AimTable>,
+        Res<crate::settings::Settings>,
+    ),
     (mut alarms, mut throw_clock, nav, probe, collider_names): (
         MessageWriter<crate::outposts::AlarmRaised>,
         Local<f32>,
@@ -1327,6 +1511,9 @@ fn act(
     beasts: Query<(Entity, &Transform), (With<crate::wildlife::WildAnimal>, Without<Npc>, Without<NpcLimb>)>,
 ) {
     let Some(fx) = fx else { return };
+    // Those shooting at the player now (the focus counts them).
+    let shooting_at_player =
+        npcs.iter().filter(|(_, _, n, h, _, _)| !h.dead && n.state == NpcState::Combat && n.sees_player && n.since_fired < 1.0).count() as u32;
     let dt = time.delta_secs();
     let trace_nav = std::env::var_os("FC3_NAV_TRACE").is_some();
     let log_nav = trace_nav && (time.elapsed_secs() * 2.0) as u32 != ((time.elapsed_secs() - dt) * 2.0) as u32;
@@ -1341,6 +1528,17 @@ fn act(
             continue;
         }
         let pos = t.translation;
+        // Its fire on the player by the game's damage lap, where the role has one.
+        let lap = aim_table.0.as_ref().and_then(|a| {
+            let (kind, weapon) = npc.role.aim(npc.faction)?;
+            Some(Lap {
+                prefs: a.prefs(kind)?,
+                max_damage: a.weapon(weapon)?,
+                level: settings.difficulty.index(),
+                agents: shooting_at_player,
+                decay: (a.decay_start, a.decay_rate),
+            })
+        });
         // Desired movement and facing for this frame.
         let (mut goal, mut speed, mut face) = (None, 0.0, None);
         // A guard running for the alarm ignores everything else.
@@ -1484,6 +1682,7 @@ fn act(
                                 &mut noises,
                                 &mut loops,
                                 &mut sfx,
+                                lap.as_ref(),
                             );
                         }
                     }
@@ -1530,6 +1729,7 @@ fn act(
                         &mut noises,
                         &mut loops,
                         &mut sfx,
+                        lap.as_ref(),
                     );
                 }
             }
@@ -1697,6 +1897,12 @@ struct Target {
     is_player: bool,
 }
 
+/// Out of sight this long (s), an enemy's damage lap starts over.
+const LAP_LOST_AFTER: f32 = 2.0;
+/// A missing shot passes at least this far from the target's middle (m;
+/// beyond the body), plus the miss distance.
+const LAP_MISS_CLEARANCE: f32 = 0.45;
+
 /// Launch velocity for a lob from `from` landing at `to`, trying flatter arcs first.
 fn lob(from: Vec3, to: Vec3, gravity: f32) -> Vec3 {
     let delta = to - from;
@@ -1776,12 +1982,52 @@ fn shoot(
     noises: &mut MessageWriter<Noise>,
     loops: &mut MessageWriter<crate::sound::LoopSfx>,
     sfx: &mut MessageWriter<crate::sound::PlaySfx>,
+    lap: Option<&Lap>,
 ) {
     use crate::sound::ev;
     let stats = npc.role.stats(npc.faction);
     let forward = Vec3::new(-npc.yaw.sin(), 0.0, -npc.yaw.cos());
     let muzzle = pos + Vec3::Y * 0.35 + forward * 0.7;
     let dist_to_player = tgt.pos.distance(muzzle);
+    // The damage lap on the player: while he stays in sight and in range, the
+    // focus (distance, time on him, his movement and exposure, how many are
+    // shooting) fills the progress at its lap, after the least time first.
+    let lap = lap.filter(|_| tgt.is_player);
+    if let Some(l) = lap {
+        let st = &mut npc.lap;
+        if tgt.seen && dist_to_player <= l.prefs.firing_range {
+            st.unseen = 0.0;
+            st.lost_at = tgt.pos;
+            st.chain += dt;
+            let exposure = if st.exposure > 0.0 { st.exposure } else { l.prefs.exposure[0] };
+            let movement = l.prefs.movement(tgt.vel.to_array(), (pos - tgt.pos).to_array(), dist_to_player);
+            st.focus = l.prefs.focus(dist_to_player, st.chain, movement, exposure, l.agents);
+            if !st.shooting {
+                st.shooting = true;
+                st.progress = 0.0;
+                st.buffer = l.prefs.buffer[l.level].at(st.focus);
+            }
+            if st.buffer > 0.0 {
+                st.buffer -= dt;
+            } else {
+                st.progress = (st.progress + dt / l.prefs.lap[l.level].at(st.focus).max(0.05)).min(1.0);
+            }
+        } else {
+            // Out of sight: the progress falls back after a moment, and the
+            // chaining starts over once he has moved off (or after a while).
+            st.unseen += dt;
+            if st.unseen > l.decay.0 {
+                st.progress = (st.progress - l.decay.1 / 100.0 * dt).max(0.0);
+            }
+            let moved = tgt.pos.distance(st.lost_at) > l.prefs.chain_reset_move;
+            if moved || (l.prefs.chain_reset_time >= 0.0 && st.unseen > l.prefs.chain_reset_time) {
+                st.chain = 0.0;
+            }
+            if st.unseen > LAP_LOST_AFTER && st.progress <= 0.0 {
+                st.shooting = false;
+            }
+        }
+    }
     // A sniper's scope glints while it is trained on the player.
     if npc.role == Role::Sniper && tgt.seen && tgt.is_player && npc.reload <= 0.0 && dist_to_player > 20.0 {
         let mut g =
@@ -1852,7 +2098,7 @@ fn shoot(
                 crate::particles::fx::barrel_smoke(&mut shot_fx.particles, rng, muzzle);
             }
             sfx.write(crate::sound::PlaySfx { event: ev::RPG, at: Some(muzzle), volume: 1.0 });
-            noises.write(Noise { at: muzzle, radius: 120.0 });
+            noises.write(Noise { at: muzzle, radius: 120.0, kind: NoiseKind::Threatening });
             return;
         }
         Role::Flamer => {
@@ -1879,18 +2125,51 @@ fn shoot(
                         source: Some(muzzle),
                         instigator: Some(me),
                         headshot: false,
+                        hit: crate::combat::Hit::Whole,
                     });
                 }
                 if rng.f32() < 0.12 {
                     shot_fx.ignite.write(crate::fire::Ignite { at: muzzle + dir * h.distance, radius: 1.5, instigator: Some(me) });
                 }
             }
-            noises.write(Noise { at: muzzle, radius: 40.0 });
+            noises.write(Noise { at: muzzle, radius: 40.0, kind: NoiseKind::Threatening });
             return;
         }
         _ => {}
     }
     let filter = SpatialQueryFilter::from_excluded_entities([me]);
+    // By the damage lap: this shot lands (for the weapon's most damage times
+    // the focus's power) once the progress is full; until then shots miss,
+    // nearer as the next hit nears. How much of him shows (head, chest,
+    // knees) is his exposure for the next.
+    let lap_shot: Option<Option<f32>> = lap.map(|l| {
+        let shown = [0.75f32, 0.2, -0.5]
+            .iter()
+            .filter(|h| {
+                let to = tgt.pos + Vec3::Y * **h - muzzle;
+                Dir3::new(to).is_ok_and(|d| {
+                    spatial.cast_ray(muzzle, d, to.length(), true, &filter).is_none_or(|hit| hit.entity == tgt.entity || hit.distance > to.length() - 0.4)
+                })
+            })
+            .count();
+        let st = &mut npc.lap;
+        st.exposure = match shown {
+            3 => l.prefs.exposure[0],
+            2 => l.prefs.exposure[1],
+            _ => l.prefs.exposure[2],
+        };
+        if st.progress >= 1.0 {
+            st.progress = 0.0;
+            Some(l.max_damage * l.prefs.power[l.level].at(st.focus))
+        } else {
+            None
+        }
+    });
+    let miss_by = lap.map(|l| {
+        let st = npc.lap;
+        let next = (1.0 - st.progress) * l.prefs.lap[l.level].at(st.focus) + st.buffer.max(0.0);
+        l.prefs.miss.at(next)
+    });
     let mut target_damage = 0.0;
     let mut stray: Vec<(Entity, f32, Vec3)> = Vec::new();
     let mut last_dir = forward;
@@ -1898,10 +2177,18 @@ fn shoot(
     for i in 0..stats.pellets.max(1) {
         let target = tgt.pos + Vec3::Y * rng.range(-0.4, 0.6);
         // Pellets spread: each rolls its own hit.
-        let aim = if rng.f32() < hit_chance {
-            target
-        } else {
-            target + Vec3::new(rng.range(-1.5, 1.5), rng.range(-0.6, 1.4), rng.range(-1.5, 1.5)) * (1.0 + dist_to_player / 40.0)
+        let aim = match (lap_shot, miss_by) {
+            (Some(Some(_)), _) => tgt.pos + Vec3::Y * rng.range(-0.2, 0.5),
+            (Some(None), Some(miss)) => {
+                // Past him, by the miss distance beyond his body.
+                let along = (target - muzzle).normalize_or(forward);
+                let side = along.cross(Vec3::Y).normalize_or(Vec3::X);
+                let up = side.cross(along);
+                let a = rng.f32() * std::f32::consts::TAU;
+                target + (side * a.cos() + up * a.sin()) * (LAP_MISS_CLEARANCE + miss)
+            }
+            _ if rng.f32() < hit_chance => target,
+            _ => target + Vec3::new(rng.range(-1.5, 1.5), rng.range(-0.6, 1.4), rng.range(-1.5, 1.5)) * (1.0 + dist_to_player / 40.0),
         };
         let dir = (aim - muzzle).normalize_or_zero();
         let Ok(d3) = Dir3::new(dir) else { continue };
@@ -1948,6 +2235,14 @@ fn shoot(
             ));
         }
     }
+    // By the damage lap, a landing shot does the lap's damage once (a miss
+    // none); one stopped by cover tries again with the next.
+    match lap_shot {
+        Some(Some(d)) if target_damage > 0.0 => target_damage = d,
+        Some(Some(_)) => npc.lap.progress = 1.0,
+        Some(None) => target_damage = 0.0,
+        None => {}
+    }
     if target_damage > 0.0 {
         damage.write(DamageEvent {
             target: tgt.entity,
@@ -1956,6 +2251,7 @@ fn shoot(
             source: Some(muzzle),
             instigator: Some(me),
             headshot: false,
+            hit: crate::combat::Hit::Whole,
         });
     }
     for (entity, amount, from) in stray {
@@ -1967,7 +2263,7 @@ fn shoot(
         _ => 1.1,
     };
     crate::particles::fx::muzzle_flash(&mut shot_fx.particles, rng, muzzle, last_dir, flash);
-    noises.write(Noise { at: muzzle, radius: if npc.role == Role::Sniper { 150.0 } else { 90.0 } });
+    noises.write(Noise { at: muzzle, radius: if npc.role == Role::Sniper { 150.0 } else { 90.0 }, kind: NoiseKind::Threatening });
     // The third-person sounds of each role's weapon (M133, SVD, 6P9, PKM, AK).
     match npc.role {
         Role::Shotgunner => {
@@ -2433,7 +2729,15 @@ fn kill_test(
     let t = time.elapsed_secs() - *start.get_or_insert(time.elapsed_secs());
     if t >= 2.0 && *shots == 0 {
         let amount = if mode == "hit" { 10.0 } else { 10_000.0 };
-        damage.write(DamageEvent { target: e, amount, kind: DamageKind::Bullet, source: Some(pt.translation), instigator: Some(pe), headshot: mode == "head" });
+        damage.write(DamageEvent {
+            target: e,
+            amount,
+            kind: DamageKind::Bullet,
+            source: Some(pt.translation),
+            instigator: Some(pe),
+            headshot: mode == "head",
+            hit: crate::combat::Hit::Whole,
+        });
         info!("kill-test: shot ({mode})");
         *shots = 1;
     }
@@ -2513,10 +2817,18 @@ fn npc_test_stealth(
             let side = (b - a).normalize_or_zero().cross(Vec3::Y) * 8.0;
             let at = a + side;
             info!("stealth-test: noise at {at:.1?}");
-            noise.write(Noise { at, radius: 16.0 });
+            noise.write(Noise { at, radius: 16.0, kind: NoiseKind::Interesting });
         } else {
             info!("stealth-test: killing one guard");
-            damage.write(DamageEvent { target: guards[1].0, amount: 10_000.0, kind: DamageKind::Melee, source: None, instigator: None, headshot: false });
+            damage.write(DamageEvent {
+                target: guards[1].0,
+                amount: 10_000.0,
+                kind: DamageKind::Melee,
+                source: None,
+                instigator: None,
+                headshot: false,
+                hit: crate::combat::Hit::Whole,
+            });
         }
     }
     if t > *next_log {
@@ -2558,9 +2870,9 @@ fn npc_test_pose(
     }
 }
 
-/// Lets player gunfire be heard by the AI.
-pub fn player_noise(writer: &mut MessageWriter<Noise>, at: Vec3, radius: f32) {
-    writer.write(Noise { at, radius });
+/// Lets player gunfire (and his explosions) be heard by the AI.
+pub fn player_noise(writer: &mut MessageWriter<Noise>, at: Vec3, radius: f32, kind: NoiseKind) {
+    writer.write(Noise { at, radius, kind });
 }
 
 #[cfg(test)]
@@ -2675,6 +2987,7 @@ fn npc_melee(
                         source: Some(t.translation),
                         instigator: Some(e),
                         headshot: false,
+                        hit: crate::combat::Hit::Whole,
                     });
                     sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::BUTT_HIT, at: Some(pt.translation), volume: 0.9 });
                     // Knocked back a step, the view jolted.

@@ -660,6 +660,7 @@ fn drive_gunners(
                     source: Some(muzzle),
                     instigator: Some(e),
                     headshot: false,
+                    hit: crate::combat::Hit::Whole,
                 });
             }
             _ if end.distance(pt.translation) < 50.0 => shot_fx.bullet_end(&mut rng, muzzle, dir, 400.0, hit.map(|h| (h.entity, h.distance, h.normal))),
@@ -676,7 +677,7 @@ fn drive_gunners(
             ));
         }
         crate::particles::fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle, dir, 1.5);
-        noises.write(crate::npc::Noise { at: muzzle, radius: 120.0 });
+        noises.write(crate::npc::Noise { at: muzzle, radius: 120.0, kind: crate::npc::NoiseKind::Threatening });
         loops.write(crate::sound::LoopSfx { key: g.turret.to_bits(), event: crate::sound::ev::LMG_LOOP, at: Some(muzzle), volume: 1.0, ..default() });
     }
 }

@@ -96,6 +96,11 @@ pub struct WeaponDef {
     /// holster and the other's draw).
     pub holster: f32,
     pub draw: f32,
+    /// Damage over range, the game's bands (from, to metres, multiplier at
+    /// each end); none keeps it whole.
+    pub ranges: Vec<[f32; 4]>,
+    /// The game's spread by stance (else `spread` and its bloom).
+    pub spread_table: Option<fc3_formats::weapons::Spread>,
 }
 
 const MODEL_ROOT: &str = r"graphics\__fc3_graphics\_common\weapons\";
@@ -104,6 +109,37 @@ impl WeaponDef {
     /// The weapon's model as the archives name it.
     pub fn model_path(&self) -> String {
         format!("{MODEL_ROOT}{}", self.model).to_ascii_lowercase()
+    }
+
+    /// The cone a shot strays within (degrees off the aim) with the game's
+    /// spread: the stance's (hip, crouched, in the air) from its base to its
+    /// most as shots follow each other (`bloom`, 0 to 1), toward the aimed
+    /// one as the sights come up, wider on the move.
+    pub fn spread_cone(&self, aim: f32, crouched: bool, airborne: bool, bloom: f32, moving: f32) -> Option<f32> {
+        let s = self.spread_table?;
+        let (hip, aimed) = if airborne {
+            (s.jumping, s.jumping)
+        } else if crouched {
+            (s.crouched, s.crouched_aimed)
+        } else {
+            (s.hip, s.aimed)
+        };
+        let at = |r: [f32; 2]| r[0] + (r[1] - r[0]) * bloom.clamp(0.0, 1.0);
+        let cone = at(hip) + (at(aimed) - at(hip)) * aim.clamp(0.0, 1.0);
+        Some(cone * (1.0 + (s.moving - 1.0) * moving.clamp(0.0, 1.0)))
+    }
+
+    /// How much of the way to its most spread a shot takes it, and how fast
+    /// the spread settles back (both of the 0 to 1 bloom), with the game's
+    /// spread.
+    fn spread_steps(&self) -> Option<(f32, f32)> {
+        let s = self.spread_table?;
+        Some((1.0 / s.shots.max(1.0), s.contraction / (s.hip[1] - s.hip[0]).max(0.25)))
+    }
+
+    /// The damage multiplier at a distance.
+    pub fn range_scale(&self, distance: f32) -> f32 {
+        fc3_formats::weapons::WeaponStats { ranges: self.ranges.clone(), ..Default::default() }.range_scale(distance)
     }
 }
 
@@ -124,9 +160,10 @@ fn load_weapon_stats(info: Option<Res<crate::data::CacheInfo>>) {
 }
 
 /// Puts the game's handling on the weapons whose model it names: damage
-/// a bullet, fire rate, magazine, reload time, pellets and silence (the
-/// launchers, bow and flamethrower keep their own damage; mounted guns their
-/// endless belts). Returns how many matched.
+/// a bullet (or the bow's arrow) and its fall-off with range, fire rate,
+/// magazine, reload time, pellets and silence (the launchers and
+/// flamethrower keep their own damage; mounted guns their endless belts).
+/// Returns how many matched.
 pub fn apply_stats(defs: &mut [WeaponDef], stats: &[fc3_formats::weapons::WeaponStats]) -> usize {
     use WeaponClass::*;
     let mut n = 0;
@@ -134,9 +171,11 @@ pub fn apply_stats(defs: &mut [WeaponDef], stats: &[fc3_formats::weapons::Weapon
         let key = fc3_formats::weapons::model_key(&d.model_path());
         let Some(s) = stats.iter().find(|s| fc3_formats::weapons::model_key(&s.model) == key) else { continue };
         n += 1;
-        if s.damage > 0.0 && !matches!(d.class, Launcher | GrenadeLauncher | Bow | Flamethrower) {
+        if s.damage > 0.0 && !matches!(d.class, Launcher | GrenadeLauncher | Flamethrower) {
             d.damage = s.damage;
         }
+        d.ranges = s.ranges.clone();
+        d.spread_table = s.spread;
         if s.fire_rate > 0.0 {
             d.interval = 60.0 / s.fire_rate;
         }
@@ -190,6 +229,8 @@ fn base_weapon_defs() -> Vec<WeaponDef> {
         silenced: false,
         holster: 0.1,
         draw: 0.25,
+        ranges: Vec::new(),
+        spread_table: None,
     };
     // Hand positions by kind of weapon.
     let pistol = Vec3::new(0.16, -0.17, -0.42);
@@ -754,6 +795,9 @@ pub struct Explosion {
     pub instigator: Option<Entity>,
 }
 
+/// A hit this far below the head's centre is in the legs (m).
+const LEGS_BELOW_HEAD: f32 = 0.85;
+
 /// An explosive arrow's blast (about a grenade's).
 const EXPLOSIVE_ARROW_RADIUS: f32 = 5.0;
 const EXPLOSIVE_ARROW_DAMAGE: f32 = 220.0;
@@ -1207,7 +1251,9 @@ fn fire(
     let Ok(cam) = camera.single() else { return };
     let dt = time.delta_secs();
     inv.cooldown = (inv.cooldown - dt).max(0.0);
-    inv.spread_bloom = (inv.spread_bloom - dt * 3.0).max(0.0);
+    // The spread settles back (at the game's rate, where it has one).
+    let settle = if inv.slots.is_empty() { None } else { inv.def().spread_steps().map(|(_, back)| back) };
+    inv.spread_bloom = (inv.spread_bloom - dt * settle.unwrap_or(3.0)).max(0.0);
     inv.recoil_kick = (inv.recoil_kick - dt * 6.0).max(0.0);
     // Recoil recovery: the view settles back toward the original aim, quickly
     // once the trigger is released and partially during sustained fire.
@@ -1318,12 +1364,13 @@ fn fire(
             fx::barrel_smoke(&mut shot_fx.particles, &mut rng, muzzle_pos);
         }
         player.pitch += d.recoil;
-        crate::npc::player_noise(&mut noise, origin, 150.0);
+        crate::npc::player_noise(&mut noise, origin, 150.0, crate::npc::NoiseKind::Threatening);
         return;
     }
     if d.class == WeaponClass::GrenadeLauncher || d.class == WeaponClass::Bow {
         let bow = d.class == WeaponClass::Bow;
-        let dir = if bow { spread_dir(&mut rng, forward, right, up, d.spread * (1.0 - 0.9 * inv.aim_blend) * perks.bow_spread) } else { forward };
+        let cone = d.spread_cone(inv.aim_blend, player.crouching, !player.grounded, 0.0, 0.0).unwrap_or(d.spread * (1.0 - 0.9 * inv.aim_blend));
+        let dir = if bow { spread_dir(&mut rng, forward, right, up, cone * perks.bow_spread) } else { forward };
         // A special arrow nocked: one fewer of them; plain arrows once they run out.
         let kind = if bow { inv.arrow_kind } else { 0 };
         if kind > 0 {
@@ -1354,7 +1401,7 @@ fn fire(
         if !bow {
             spawn_muzzle_light(&mut commands, muzzle_pos);
             fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, 1.3);
-            crate::npc::player_noise(&mut noise, origin, 120.0);
+            crate::npc::player_noise(&mut noise, origin, 120.0, crate::npc::NoiseKind::Threatening);
         }
         player.pitch += d.recoil;
         return;
@@ -1373,6 +1420,7 @@ fn fire(
                     source: Some(origin),
                     instigator: Some(player_e),
                     headshot: false,
+                    hit: crate::combat::Hit::Whole,
                 });
                 markers.write(HitMarker { kill: false, headshot: false });
             }
@@ -1380,17 +1428,30 @@ fn fire(
                 shot_fx.ignite.write(crate::fire::Ignite { at: end, radius: 1.5, instigator: Some(player_e) });
             }
         }
-        crate::npc::player_noise(&mut noise, origin, 40.0);
+        crate::npc::player_noise(&mut noise, origin, 40.0, crate::npc::NoiseKind::Threatening);
         return;
     }
 
     let aim = inv.aim_blend;
     let move_penalty = if player.grounded { (player.velocity.length() / 6.0).min(1.0) } else { 1.0 };
-    let cone = d.spread * (1.0 - 0.8 * aim) * (1.0 + inv.spread_bloom + move_penalty * 0.8);
+    let cone = d
+        .spread_cone(aim, player.crouching, !player.grounded, inv.spread_bloom, move_penalty)
+        .unwrap_or(d.spread * (1.0 - 0.8 * aim) * (1.0 + inv.spread_bloom + move_penalty * 0.8));
     let pellets = d.pellets.max(1);
+    // With the game's spread a shotgun's shot strays as one, and each pellet
+    // about it by its own angle.
+    let scatter = d.spread_table.and_then(|s| s.pellets).map(|p| p[0].max(p[1]));
+    let shot = if scatter.is_some() { spread_dir(&mut rng, forward, right, up, cone) } else { forward };
     let mut any_hit = None;
     for _ in 0..pellets {
-        let dir = if d.class == WeaponClass::Melee { forward } else { spread_dir(&mut rng, forward, right, up, cone) };
+        let dir = match scatter {
+            _ if d.class == WeaponClass::Melee => forward,
+            Some(a) => {
+                let r = shot.cross(up).normalize_or(right);
+                spread_dir(&mut rng, shot, r, r.cross(shot), a)
+            }
+            None => spread_dir(&mut rng, forward, right, up, cone),
+        };
         let Ok(dir3) = Dir3::new(dir) else { continue };
         let hit = spatial.cast_ray(origin, dir3, d.range, true, &filter);
         let end = hit.map(|h| origin + dir * h.distance).unwrap_or(origin + dir * d.range);
@@ -1421,17 +1482,33 @@ fn fire(
         // crouched (or falling) enemy goes over it.
         let over = target.and_then(|t| heads.get(t).ok()).is_some_and(|head| point.y > head.0.y + 0.3);
         if let Some(target) = target.filter(|_| !over) {
-            // Head hits: within a skull's width of the rig's head.
-            let headshot = heads.get(target).is_ok_and(|head| head.0.distance(point) < 0.2);
-            let mult = if headshot { 2.5 * perks.headshot } else { 1.0 };
-            let falloff = if d.class == WeaponClass::Shotgun { (1.0 - h.distance / d.range).clamp(0.2, 1.0) } else { 1.0 };
+            // Head hits: within a skull's width of the rig's head; legs
+            // below the hips.
+            let head = heads.get(target).ok();
+            let headshot = head.is_some_and(|head| head.0.distance(point) < 0.2);
+            let zone = match head {
+                _ if headshot => crate::combat::Zone::Head,
+                Some(head) if point.y < head.0.y - LEGS_BELOW_HEAD => crate::combat::Zone::Legs,
+                _ => crate::combat::Zone::Torso,
+            };
+            let mult = if headshot { perks.headshot } else { 1.0 };
+            // The game's fall-off with range (a shotgun's without it).
+            let falloff = if !d.ranges.is_empty() {
+                d.range_scale(h.distance)
+            } else if d.class == WeaponClass::Shotgun {
+                (1.0 - h.distance / d.range).clamp(0.2, 1.0)
+            } else {
+                1.0
+            };
+            let melee = d.class == WeaponClass::Melee;
             damage.write(DamageEvent {
                 target,
                 amount: d.damage * mult * falloff,
-                kind: if d.class == WeaponClass::Melee { DamageKind::Melee } else { DamageKind::Bullet },
+                kind: if melee { DamageKind::Melee } else { DamageKind::Bullet },
                 source: Some(origin),
                 instigator: Some(player_e),
                 headshot,
+                hit: if melee { crate::combat::Hit::Whole } else { crate::combat::Hit::Bullet(zone) },
             });
             any_hit = Some(headshot);
             fx::blood(&mut shot_fx.particles, &mut rng, point, dir);
@@ -1461,16 +1538,19 @@ fn fire(
     }
     if d.class != WeaponClass::Melee && d.silenced {
         // Suppressed: a faint flash and little noise.
-        crate::npc::player_noise(&mut noise, origin, 18.0);
+        crate::npc::player_noise(&mut noise, origin, 18.0, crate::npc::NoiseKind::Threatening);
         fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, 0.35);
-        inv.spread_bloom = (inv.spread_bloom + 0.3).min(2.5);
+        inv.spread_bloom = match d.spread_steps() {
+            Some((step, _)) => (inv.spread_bloom + step).min(1.0),
+            None => (inv.spread_bloom + 0.3).min(2.5),
+        };
         inv.recoil_kick = (inv.recoil_kick + 0.8).min(1.6);
         let kick = d.recoil * (1.0 - 0.4 * aim) * perks.recoil * steady;
         player.pitch = (player.pitch + kick).min(1.5);
         inv.recoil_offset += kick;
         inv.since_shot = 0.0;
     } else if d.class != WeaponClass::Melee {
-        crate::npc::player_noise(&mut noise, origin, 120.0);
+        crate::npc::player_noise(&mut noise, origin, 120.0, crate::npc::NoiseKind::Threatening);
         spawn_muzzle_light(&mut commands, muzzle_pos);
         let scale = match d.class {
             WeaponClass::Shotgun => 1.5,
@@ -1482,7 +1562,10 @@ fn fire(
         if rng.f32() < 0.35 {
             fx::barrel_smoke(&mut shot_fx.particles, &mut rng, muzzle_pos);
         }
-        inv.spread_bloom = (inv.spread_bloom + 0.35).min(2.5);
+        inv.spread_bloom = match d.spread_steps() {
+            Some((step, _)) => (inv.spread_bloom + step).min(1.0),
+            None => (inv.spread_bloom + 0.35).min(2.5),
+        };
         inv.recoil_kick = (inv.recoil_kick + 1.0).min(1.6);
         let kick = d.recoil * (1.0 - 0.4 * aim) * perks.recoil * steady;
         player.pitch = (player.pitch + kick).min(1.5);
@@ -1723,6 +1806,7 @@ fn update_projectiles(
                             source: Some(t.translation),
                             instigator: Some(p.owner),
                             headshot: false,
+                            hit: crate::combat::Hit::Whole,
                         });
                         markers.write(HitMarker { kill: false, headshot: false });
                     }
@@ -1745,6 +1829,7 @@ fn update_projectiles(
                             source: Some(t.translation),
                             instigator: Some(p.owner),
                             headshot: false,
+                            hit: crate::combat::Hit::Arrow(crate::combat::Zone::Torso),
                         });
                         markers.write(HitMarker { kill: false, headshot: false });
                         crate::particles::fx::blood(&mut particles, &mut rng, point, step.normalize());
@@ -1828,7 +1913,7 @@ fn explode(
 ) {
     let player = players.single().ok();
     for ex in events.read() {
-        crate::npc::player_noise(&mut noise, ex.at, 200.0);
+        crate::npc::player_noise(&mut noise, ex.at, 200.0, crate::npc::NoiseKind::Explosion);
         let blast = if ex.radius > 7.5 { crate::sound::ev::GRENADE_BLAST } else { crate::sound::ev::ROCKET_BLAST };
         sfx.write(crate::sound::PlaySfx { event: blast, at: Some(ex.at), volume: 1.0 });
         // Visual: fireball, smoke, sparks, a scorch mark and a brief light.
@@ -1866,7 +1951,15 @@ fn explode(
                 }
             }
             let amount = ex.damage * (1.0 - dist / ex.radius).powf(0.7);
-            damage.write(DamageEvent { target: e, amount, kind: DamageKind::Explosion, source: Some(ex.at), instigator: ex.instigator, headshot: false });
+            damage.write(DamageEvent {
+                target: e,
+                amount,
+                kind: DamageKind::Explosion,
+                source: Some(ex.at),
+                instigator: ex.instigator,
+                headshot: false,
+                hit: crate::combat::Hit::Whole,
+            });
             if Some(e) != player {
                 hit_any = true;
             }

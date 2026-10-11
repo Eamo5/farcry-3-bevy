@@ -117,6 +117,7 @@ fn retry_inventory_test(
         damage.write(crate::combat::DamageEvent {
             target: entity, amount: 100000.0, kind: crate::combat::DamageKind::Fall,
             source: None, instigator: None, headshot: false,
+            hit: crate::combat::Hit::Whole,
         });
         *stage = (1, now);
         info!("retry test: spent carried supplies and requested lethal combat damage");
@@ -909,10 +910,11 @@ fn run_story(
         ResMut<StoryCrafts>,
         ResMut<crate::crafting::CraftCatalog>,
     ),
-    (checkpoint_actors, mut commands_out, mut hidden, tagged, mut tattoo): (
+    (checkpoint_actors, mut commands_out, mut hidden, tagged, mut tattoo, mut shakes): (
         Query<Entity, Or<(With<crate::story_actors::StoryActor>, With<crate::wildlife::WildAnimal>)>>, Commands, ResMut<HiddenEntities>,
         Query<&crate::story_actors::StoryActor, With<crate::stealth::Tagged>>,
         ResMut<crate::tattoo::TattooShown>,
+        MessageWriter<crate::shake::Shake>,
     ),
     (mut xp_gain, mut progress, mut music, mut rock_test, mut videos, mut qtes, mut vines, mut postfx): (
         MessageWriter<crate::progression::XpGain>,
@@ -1027,11 +1029,7 @@ fn run_story(
         look: [forward.x, -forward.z, forward.y],
         fov: fov.fov,
         time_of_day: clock.hours,
-        difficulty: match fov.difficulty {
-            crate::settings::Difficulty::Casual => 0,
-            crate::settings::Difficulty::Adventurer => 1,
-            crate::settings::Difficulty::Warrior => 2,
-        },
+        difficulty: fov.difficulty.index() as u8,
         player_in_vehicle: p.driving,
         tagged: tagged.iter().map(|a| a.id).collect(),
         ..View::default()
@@ -1450,6 +1448,8 @@ fn run_story(
                         fullscreen: name == "PlayFullscreenVideo" || a(1) == fc3_story::PLAYER.to_string() || a(2).eq_ignore_ascii_case("not_used"),
                         looped: a(4) == "true",
                         volume: a(3).parse().unwrap_or(1.0),
+                        // The screen it plays on: an entity and its material.
+                        screen: a(1).parse::<u64>().ok().filter(|&id| id != fc3_story::PLAYER).map(|id| (id, a(2))),
                     }),
                     // Specific gameplays own their playback and completion.
                     "CreateSpecificGameplay" if a(1) == "QTEGSF" => qtes.pending.push(crate::qte::QteStart {
@@ -1545,6 +1545,10 @@ fn run_story(
                         clock.hours = h + m / 60.0 + sec / 3600.0;
                     }
                     "SetTimeScale" => clock.speed = crate::sky::CLOCK_SPEED * a(0).parse().unwrap_or(1.0f32).max(0.0),
+                    // One of the player's camera shakes and pad rumbles.
+                    "CAPI_Player.CameraShakeAndGamePadRumble" if a(0) == fc3_story::PLAYER.to_string() => {
+                        shakes.write(crate::shake::Shake::new(&a(1), a(2).parse().unwrap_or(1.0)));
+                    }
                     // The arm's tattoo shown or hidden.
                     "CAPI_Player.ShowTattoo" if a(0) == fc3_story::PLAYER.to_string() => {
                         let show = a(1) != "false" && a(1) != "0";
