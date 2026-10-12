@@ -665,6 +665,18 @@ impl Story {
         self.core.borrow().gameplays.iter().map(|(i, n)| (*i, n.clone())).collect()
     }
 
+    /// A tree the host is growing (`SetRealTreeGrowthSpeed`'s id) has
+    /// reached its size.
+    pub fn growth_finished(&mut self, id: u64) {
+        {
+            let mut c = self.core.borrow_mut();
+            if let Some(Some(cb)) = c.growths.remove(&id) {
+                c.call(cb, vec![]);
+            }
+        }
+        self.pump();
+    }
+
     /// A specific gameplay the host ran has ended.
     pub fn gameplay_ended(&mut self, id: u64) {
         self.core.borrow_mut().end_gameplay(id);
@@ -1290,6 +1302,40 @@ mod tests {
         let id: String = story.domino().lua().load(r#"return CAPI_Pawn.SpawnWeapon("1", "gadgets:FC3/Rock")"#).eval().unwrap();
         assert_eq!(story.item_name(&id), "gadgets:FC3/Rock");
         assert_eq!(story.item_name("weapons:FC3/Kimber"), "weapons:FC3/Kimber");
+    }
+
+    #[test]
+    fn a_tree_growth_calls_back_once_the_host_says_it_is_grown() {
+        let mut story = empty_story();
+        let lua = story.domino().lua();
+        lua.load(
+            r#"
+            Grown = 0
+            Box = { _type = { OnGrowthCompleted = function(self) Grown = Grown + 1 end } }
+            First = CAPI_Entity.SetRealTreeGrowthSpeed("7", 1, 0.5, Box, "OnGrowthCompleted")
+            Second = CAPI_Entity.SetRealTreeGrowthSpeed("8", 0, -0.2, Box, "OnGrowthCompleted")
+        "#,
+        )
+        .exec()
+        .unwrap();
+        let commands = story.update(0.1, View::default());
+        let grown = |story: &Story| story.domino().lua().globals().get::<i64>("Grown").unwrap();
+        assert_eq!(grown(&story), 0, "not before the host has grown it");
+        let ids: Vec<u64> = commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::Native { name, args } if name == "CAPI_Entity.SetRealTreeGrowthSpeed" => args.get(3)?.parse().ok(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids.len(), 2);
+        assert_eq!(ids[0].to_string(), story.domino().lua().globals().get::<String>("First").unwrap());
+        // A stopped growth never calls back; a finished one, once.
+        story.domino().lua().load("CAPI_Entity.StopRealTreeGrowth('8', Second)").exec().unwrap();
+        story.growth_finished(ids[1]);
+        story.growth_finished(ids[0]);
+        story.growth_finished(ids[0]);
+        assert_eq!(grown(&story), 1);
     }
 
     #[test]

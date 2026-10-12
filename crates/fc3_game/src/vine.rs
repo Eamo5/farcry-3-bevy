@@ -72,9 +72,14 @@ fn relocate(pose: Transform, first: Transform, second: Transform) -> Transform {
 fn stand_up_origin(mut capsule: Transform, first: Transform, second: Transform) -> Transform {
     capsule.translation.y -= crate::player::HALF_HEIGHT;
     let mut origin = relocate(capsule, first, second);
-    // The authored vine relocation applies a local X quarter-turn after
-    // changing anchor frames: the horizontal vine becomes a standing pose.
-    origin.rotation *= Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+    // The climber, carried over, lies as the second anchor does (face down,
+    // head along the vine: the climb turned to a crawl). The stand-up starts
+    // upright, facing the way a face-down head points (a face-up one sits up
+    // towards its feet). The climber's own turn on the vine would tip it
+    // over, so only the anchor sets the facing.
+    let (up, forward) = (second.rotation * Vec3::Y, second.rotation * Vec3::NEG_Z);
+    let ahead = if up.y.abs() < 0.5 { up * -forward.y.signum() } else { forward };
+    origin.rotation = Quat::from_rotation_y((-ahead.x).atan2(-ahead.z));
     origin
 }
 
@@ -552,5 +557,24 @@ mod tests {
         let local = second.to_matrix().inverse() * moved.to_matrix();
         assert!(local.abs_diff_eq(relative.to_matrix(), 0.0001));
         assert!(relocate(moved, second, first).to_matrix().abs_diff_eq(pose.to_matrix(), 0.0001));
+    }
+
+    #[test]
+    fn a_climber_facing_the_vine_stands_up_where_the_lying_anchor_points() {
+        // Upright first anchor; the second lies face down, head to the south.
+        let first = Transform::from_xyz(3.0, 10.0, -4.0).with_rotation(Quat::from_rotation_y(0.4));
+        let second = Transform::from_xyz(-20.0, 2.0, 15.0)
+            .with_rotation(Quat::from_rotation_y(std::f32::consts::PI) * Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2));
+        for turn in [0.0f32, 0.35, -0.35, std::f32::consts::PI] {
+            // Behind the vine, 4 m up it, facing it (turned a little off the anchor).
+            let relative = Transform::from_xyz(0.0, 4.0 + crate::player::HALF_HEIGHT, 0.6).with_rotation(Quat::from_rotation_y(turn));
+            let capsule = Transform::from_matrix(first.to_matrix() * relative.to_matrix());
+            let stood = stand_up_origin(capsule, first, second);
+            // Upright, facing south, whatever the climber's own turn.
+            assert!((stood.rotation * Vec3::Y).abs_diff_eq(Vec3::Y, 1e-4));
+            assert!((stood.rotation * Vec3::NEG_Z).abs_diff_eq(Vec3::Z, 1e-4), "turn {turn}: {:?}", stood.rotation * Vec3::NEG_Z);
+            // The climb carried along the ground, the step back from the vine up.
+            assert!(stood.translation.abs_diff_eq(Vec3::new(-20.0, 2.6, 19.0), 1e-3), "{:?}", stood.translation);
+        }
     }
 }

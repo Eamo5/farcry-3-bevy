@@ -9,13 +9,77 @@ pub struct ScreenshotPlugin;
 
 impl Plugin for ScreenshotPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (auto_screenshot, tour, perf_log));
+        app.add_systems(Update, (auto_screenshot, capture_near, tour, perf_log));
         if std::env::var_os("FC3_VIEW_MESH_DEBUG").is_some() {
             app.add_systems(PostUpdate, view_mesh_debug.after(bevy::transform::TransformSystems::Propagate));
         }
         if std::env::var("FC3_HITCH").is_ok() {
             add_hitch_log(app);
         }
+        if std::env::var_os("FC3_GROUND_MAP").is_some() {
+            app.add_systems(Update, ground_map);
+        }
+    }
+}
+
+/// `FC3_GROUND_MAP=<x>,<z>,<half>,<step>,<top>,<secs>` (Bevy, metres;
+/// elapsed seconds; several separated by `|`): once each, what stands under
+/// a grid round that point, by rays straight down from `top` through the
+/// physics the player walks on: a row per line of z, each cell its height
+/// (`----` for nothing, `*` after a slope too steep to stand on, `!` where
+/// the player's capsule wouldn't fit standing there (a wall, which a ray
+/// starting inside it doesn't see); `top` itself where the ray starts inside
+/// something).
+fn ground_map(time: Res<Time>, mut done: Local<Vec<usize>>, spatial: avian3d::prelude::SpatialQuery, players: Query<Entity, With<crate::player::Player>>) {
+    let Ok(maps) = std::env::var("FC3_GROUND_MAP") else { return };
+    for (k, map) in maps.split('|').enumerate() {
+        let v: Vec<f32> = map.split(',').filter_map(|v| v.trim().parse::<f32>().ok()).collect();
+        let [x, z, half, step, top, at] = v[..] else { continue };
+        if done.contains(&k) || time.elapsed_secs() < at || step <= 0.0 {
+            continue;
+        }
+        done.push(k);
+        ground_map_at(&spatial, &players, x, z, half, step, top);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ground_map_at(
+    spatial: &avian3d::prelude::SpatialQuery,
+    players: &Query<Entity, With<crate::player::Player>>,
+    x: f32,
+    z: f32,
+    half: f32,
+    step: f32,
+    top: f32,
+) {
+    let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(players.iter());
+    let capsule = avian3d::prelude::Collider::capsule(crate::player::CAPSULE_RADIUS, crate::player::CAPSULE_LENGTH);
+    let n = (half / step).round() as i32;
+    info!("ground map round ({x}, {z}) from {top}, every {step} m, x from {} to {}", x - n as f32 * step, x + n as f32 * step);
+    for j in -n..=n {
+        let cz = z + j as f32 * step;
+        let row: Vec<String> = (-n..=n)
+            .map(|i| {
+                let from = Vec3::new(x + i as f32 * step, top, cz);
+                match spatial.cast_ray(from, Dir3::NEG_Y, 20.0, true, &filter) {
+                    Some(h) => {
+                        let ground = from.y - h.distance;
+                        let stand = from.with_y(ground + crate::player::HALF_HEIGHT + 0.05);
+                        let mark = if !spatial.shape_intersections(&capsule, stand, Quat::IDENTITY, &filter).is_empty() {
+                            "!"
+                        } else if h.normal.y < crate::player::MIN_GROUND_NORMAL_Y {
+                            "*"
+                        } else {
+                            " "
+                        };
+                        format!("{ground:7.2}{mark}")
+                    }
+                    None => "   ---- ".into(),
+                }
+            })
+            .collect();
+        info!("ground map z {cz:9.2}: {}", row.join(""));
     }
 }
 
@@ -372,6 +436,37 @@ fn perf_log(
 pub fn capture(commands: &mut Commands, path: String) {
     info!("capturing screenshot to {path}");
     commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+}
+
+/// Test: `FC3_CAPTURE_NEAR=x,z,radius,path[|...]` captures the window once
+/// when the player first comes within `radius` of each point (Bevy x, z),
+/// to look at a place along a scripted walk.
+fn capture_near(
+    mut points: Local<Option<Vec<(Vec2, f32, String)>>>,
+    player: Query<&Transform, With<crate::player::Player>>,
+    mut commands: Commands,
+) {
+    let points = points.get_or_insert_with(|| {
+        std::env::var("FC3_CAPTURE_NEAR")
+            .unwrap_or_default()
+            .split('|')
+            .filter_map(|p| {
+                let mut it = p.splitn(4, ',');
+                let (x, z, r) = (it.next()?.trim().parse().ok()?, it.next()?.trim().parse().ok()?, it.next()?.trim().parse().ok()?);
+                Some((Vec2::new(x, z), r, it.next()?.trim().to_string()))
+            })
+            .collect()
+    });
+    let Ok(t) = player.single() else { return };
+    let here = Vec2::new(t.translation.x, t.translation.z);
+    points.retain(|(at, r, path)| {
+        if here.distance(*at) > *r {
+            return true;
+        }
+        info!("capturing {path} near {at}");
+        commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path.clone()));
+        false
+    });
 }
 
 /// Waits for streaming to settle, captures the window, then exits.

@@ -227,7 +227,7 @@ pub fn prefab_animals(root: &Object) -> Vec<Animal> {
 }
 
 pub const MARKERS_REL: &str = "world/encounters.txt";
-const MARKERS_MAGIC: &str = "fc3-encounters 15";
+const MARKERS_MAGIC: &str = "fc3-encounters 26";
 
 /// Whether a cached markers table is this version's.
 pub fn markers_current(text: &str) -> bool {
@@ -270,6 +270,329 @@ pub struct Markers {
     /// The prefabs whose shooters (an executioner, a firing squad) kill
     /// their captives once the player comes near, and how.
     pub executions: HashMap<u64, Execution>,
+    /// The conversation each prefab's script plays (by name, in
+    /// `conversations`), its people saying their lines as the player comes
+    /// within the script's proximity radius (0: its default).
+    pub talks: HashMap<u64, (String, f32)>,
+    /// The prefabs whose civilian is hunted by its fighters once the player
+    /// comes near: fleeing them, or running to the player for help.
+    pub chases: HashMap<u64, Chase>,
+    /// The parts each prefab's synced scenes have its people (and the
+    /// bodies it leaves) play.
+    pub parts: HashMap<u64, Vec<Part>>,
+}
+
+/// A synced scene's part ([`prefab_parts`]): who plays it, its clip (the
+/// archive path of its track in the scene's loop; `move:<name>` for a
+/// civilian's own point, its loop move), and where the scene puts them as
+/// the loop starts (about the prefab's origin, Dunia axes; heading in
+/// degrees about Z).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Part {
+    pub who: Who,
+    pub clip: String,
+    pub offset: [f32; 3],
+    pub yaw: f32,
+    /// Their track of the scene's start sequence (getting into the loop),
+    /// and where it puts them as it begins (as above).
+    pub start: Option<(String, [f32; 3], f32)>,
+    /// A loop that walks its actor on (a hostage marched along): its pace
+    /// (m/s, the clip's root motion over its length); 0: played in place.
+    pub pace: f32,
+}
+
+/// Who plays a scene's part: one of the prefab's people (by index in its
+/// pawns: the one its point's group filter names), a body or carcass it
+/// leaves (by index in its corpses: the nearest to the scene, for a track
+/// no point names), or any of its guards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Who {
+    Anyone,
+    Pawn(usize),
+    Corpse(usize),
+}
+
+impl Who {
+    fn to_text(self) -> String {
+        match self {
+            Who::Anyone => "*".into(),
+            Who::Pawn(i) => format!("p{i}"),
+            Who::Corpse(i) => format!("c{i}"),
+        }
+    }
+
+    fn from_text(s: &str) -> Option<Who> {
+        match (s.get(..1)?, s.get(1..)?) {
+            ("*", "") => Some(Who::Anyone),
+            ("p", i) => Some(Who::Pawn(i.parse().ok()?)),
+            ("c", i) => Some(Who::Corpse(i.parse().ok()?)),
+            _ => None,
+        }
+    }
+}
+
+/// The scene points' parameters (by hash): the scene entity, the text of
+/// the track their actor plays, and an extra's lead point.
+const CINEMA_ENTITY: u32 = 0x4DFC_080B;
+const TRACK_TAG_TEXT: u32 = 0xB546_1383;
+const LEAD_POINT: u32 = 0x600B_6061;
+/// A scene that walks its actors along (`isPatrol`: the hostage walk).
+const IS_PATROL: u32 = 0xCA93_29AB;
+/// A scene's body lies this near it (m).
+const BODY_REACH: f32 = 4.0;
+
+/// An entity's groups (its `CGroupComponent`'s, by hash).
+fn groups(e: &Object) -> Vec<u32> {
+    let Some(g) = e.child("Components").and_then(|c| c.child("CGroupComponent")).and_then(|c| c.child("Groups")) else { return Vec::new() };
+    g.children_named("group").filter_map(|o| o.u32("group")).filter(|h| *h != 0 && *h != u32::MAX).collect()
+}
+
+/// An id parameter, if set.
+fn entity_ref(o: &Object, hash: u32) -> Option<u64> {
+    let b = o.field_h(hash)?;
+    let v = u64::from_le_bytes(b.try_into().ok()?);
+    (v != 0 && v != u64::MAX).then_some(v)
+}
+
+/// Where a clip's first root key puts its actor in the scene it was
+/// authored in (Dunia axes, and heading in degrees), and how far (m) its
+/// root ends from there. A clip without root motion starts at the scene's
+/// origin.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClipStart {
+    pub at: [f32; 3],
+    pub yaw: f32,
+    pub drift: f32,
+    pub duration: f32,
+}
+
+pub fn clip_start(clip: &crate::anim::Clip) -> ClipStart {
+    let Some(r) = &clip.root_motion else { return ClipStart { at: [0.0; 3], yaw: 0.0, drift: 0.0, duration: clip.duration } };
+    let drift = r.translations.last().map_or(0.0, |t| (t[0] * t[0] + t[2] * t[2]).sqrt());
+    let [x, y, z] = r.start_translation;
+    let [qx, qy, qz, qw] = r.start_rotation;
+    let yaw = (2.0 * (qx * qz + qw * qy)).atan2(1.0 - 2.0 * (qx * qx + qy * qy)).to_degrees();
+    ClipStart { at: [x, -z, y], yaw, drift, duration: clip.duration }
+}
+
+/// How far (m) a loop's end may be from its start to be played in place;
+/// one that walks its actor off (a hostage marched along) walks him on at
+/// its pace.
+pub const LOOP_DRIFT: f32 = 1.0;
+
+/// A loop sequence's start sequence (`..._loop.cseq`: `..._start.cseq`).
+fn start_of(looped: &str) -> Option<String> {
+    let (head, tail) = looped.rsplit_once("loop")?;
+    Some(format!("{head}start{tail}"))
+}
+
+/// The tracks of a sequence: each one's tag (`leadActor`, `extraActor1`;
+/// empty for a body or carcass) and its first clip's source.
+pub fn sequence_tracks(cseq_xml: &str) -> Vec<(String, String)> {
+    let Some(root) = crate::xml::parse(cseq_xml) else { return Vec::new() };
+    let mut out = Vec::new();
+    root.walk(&mut |e| {
+        if e.name == "CCharacterTrackGroup" {
+            let mut clip = None;
+            e.walk(&mut |c| {
+                if clip.is_none() && c.name == "CAnimationClip" {
+                    clip = c.attr("sAnimationSource").map(str::to_string);
+                }
+            });
+            if let Some(clip) = clip {
+                out.push((e.attr("sTag").unwrap_or_default().to_string(), clip));
+            }
+        }
+    });
+    out
+}
+
+/// A prefab's synced scenes' parts, and the points they come from (by
+/// entity id: they are no guard spots). Each scene point's actor plays its
+/// track (its tag) of the scene's loop where the scene entity puts it; the
+/// point's group filter names who (else any guard, at a fighters' point);
+/// a track no point names (a body being looted, a carcass being skinned)
+/// is the nearest body's. A civilian's own point (a mourner at a grave, a
+/// girl picking flowers) is theirs too: its loop move, where it stands.
+/// Each also plays its track of the scene's start sequence first, from
+/// where that puts them. `sequence` reads a sequence's XML; `start` gives
+/// where a clip starts in its scene ([`clip_start`]).
+pub fn prefab_parts(root: &Object, sequence: &dyn Fn(&str) -> Option<String>, start: &dyn Fn(&str) -> Option<ClipStart>) -> (Vec<Part>, Vec<u64>) {
+    let entities: Vec<&std::sync::Arc<Object>> = root.children.iter().filter(|c| c.is("Entity")).collect();
+    let Some(origin) = entities.first().and_then(|e| e.vec3("hidPos")) else { return Default::default() };
+    // (Its people and bodies, as `prefab_pawns` and `prefab_corpses` list them.)
+    let pawns: Vec<([f32; 3], Vec<u32>, bool)> = entities
+        .iter()
+        .skip(1)
+        .filter(|e| e.str_h(crate::world::h::CLASS_NAME).as_deref() == Some("CPawnEntity"))
+        .filter_map(|e| Some((e.vec3("hidPos")?, groups(e), e.str("hidName")?.starts_with("Outsiders/"))))
+        .collect();
+    let bodies: Vec<[f32; 3]> =
+        entities.iter().skip(1).filter(|e| e.str("hidName").is_some_and(|n| n.starts_with("Corpses/Corpse"))).filter_map(|e| e.vec3("hidPos")).collect();
+    let by_id: HashMap<u64, &Object> = entities.iter().filter_map(|e| Some((e.u64("disEntityId")?, &***e))).collect();
+    let point = |e: &Object| e.child("Components")?.child("CAIContextualActionComponent").cloned();
+    let flat = |a: &[f32; 3], b: &[f32; 3]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    // Where a clip's actor stands: the scene's frame, then the clip's start
+    // (a loop's only if it stays about there).
+    let place_any = |scene: &Object, clip: &str, drift: f32| {
+        let (at, yaw) = (scene.vec3("hidPos")?, scene.vec3("hidAngles").map_or(0.0, |a| a[2]));
+        let c0 = start(clip).filter(|c| c.drift <= drift)?;
+        let (t, turn) = (c0.at, c0.yaw);
+        let (s, c) = yaw.to_radians().sin_cos();
+        let p = [at[0] + t[0] * c - t[1] * s, at[1] + t[0] * s + t[1] * c, at[2] + t[2]];
+        Some(([p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]], yaw + turn))
+    };
+    let place = |scene: &Object, clip: &str| place_any(scene, clip, LOOP_DRIFT);
+    // (A walking loop's pace.)
+    let pace = |clip: &str| start(clip).filter(|c| c.drift > LOOP_DRIFT && c.duration > 0.0).map_or(0.0, |c| c.drift / c.duration);
+    // A track of the start sequence (by tag, or the nth untagged one).
+    let started = |scene: &Object, looped: &str, pick: &dyn Fn(&[(String, String)]) -> Option<String>| {
+        let clip = pick(&sequence(&start_of(looped)?).map(|x| sequence_tracks(&x))?)?;
+        let (offset, yaw) = place_any(scene, &clip, f32::MAX)?;
+        Some((clip, offset, yaw))
+    };
+    let mut parts = Vec::new();
+    let mut used = Vec::new();
+    let mut cast: Vec<usize> = Vec::new();
+    let mut scenes: Vec<(u64, String)> = Vec::new();
+    for e in entities.iter().skip(1) {
+        let e: &Object = e;
+        let Some(name) = e.str("hidName") else { continue };
+        let n = name.to_ascii_lowercase();
+        let lead = n.contains("syncanimleadactor") || n.contains("syncanimmaster");
+        if !lead && !n.contains("syncanimextraactor") && !n.contains("syncanimslave") {
+            continue;
+        }
+        let (Some(c), Some(id)) = (point(e), e.u64("disEntityId")) else { continue };
+        let Some(params) = c.child("Parameters") else { continue };
+        let tag = params.str_h(TRACK_TAG_TEXT).filter(|t| !t.is_empty()).unwrap_or_else(|| if lead { "leadActor" } else { "extraActor1" }.to_string());
+        // Its scene: the one it names, its lead's, or the nearest.
+        let lead_point = entity_ref(params, LEAD_POINT).and_then(|l| by_id.get(&l).copied());
+        let named = entity_ref(params, CINEMA_ENTITY)
+            .or_else(|| lead_point.and_then(|l| entity_ref(point(l)?.child("Parameters")?, CINEMA_ENTITY)))
+            .and_then(|s| by_id.get(&s).copied());
+        let at = e.vec3("hidPos").unwrap_or_default();
+        let scene = named.or_else(|| {
+            entities
+                .iter()
+                .filter(|s| s.str("hidName").is_some_and(|n| n.starts_with("CinematicSceneEntity")))
+                .filter_map(|s| Some((flat(&s.vec3("hidPos")?, &at), &***s)))
+                .filter(|(d, _)| *d < SCENE_REACH)
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, s)| s)
+        });
+        let Some(scene) = scene else { continue };
+        // Its loop: its own, its lead's, or its scene's.
+        let looped = scene_role(e).or_else(|| scene_role(lead_point?)).map(|(_, l)| l).or_else(|| scene_loop(scene));
+        let Some(looped) = looped else { continue };
+        let Some(clip) = sequence(&looped).and_then(|x| sequence_tracks(&x).into_iter().find(|(t, _)| *t == tag)).map(|(_, c)| c) else { continue };
+        // (A patrol's loop walks them on; any other plays where it is.)
+        let patrol = |p: &Object| p.field_h(IS_PATROL) == Some(&[1u8][..]);
+        let walks = patrol(params) || lead_point.and_then(|l| point(l)).and_then(|c| c.child("Parameters").map(|p| patrol(p))).unwrap_or(false);
+        let Some((offset, yaw)) = place_any(scene, &clip, if walks { f32::MAX } else { LOOP_DRIFT }) else { continue };
+        let pace = if walks { pace(&clip) } else { 0.0 };
+        // Who: the nearest of its people in the group it is for.
+        let filter = c.u32("GroupFilter").filter(|h| *h != 0 && *h != u32::MAX);
+        let who = filter
+            .and_then(|f| {
+                pawns
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, (_, g, _))| g.contains(&f) && !cast.contains(i))
+                    .min_by(|a, b| flat(&a.1 .0, &at).total_cmp(&flat(&b.1 .0, &at)))
+                    .map(|(i, _)| i)
+            })
+            .map_or(Who::Anyone, Who::Pawn);
+        match who {
+            Who::Pawn(i) => cast.push(i),
+            // (Not a victim's part, for any guard.)
+            _ if !is_fighter_spot(&name) => continue,
+            _ => {}
+        }
+        let start = started(scene, &looped, &|t| t.iter().find(|(g, _)| *g == tag).map(|(_, c)| c.clone()));
+        parts.push(Part { who, clip, offset, yaw, start, pace });
+        used.push(id);
+        if let Some(s) = scene.u64("disEntityId").filter(|s| !scenes.iter().any(|(k, _)| k == s)) {
+            scenes.push((s, looped));
+        }
+    }
+    // Its civilians' own points: their loop moves.
+    for e in entities.iter().skip(1) {
+        let e: &Object = e;
+        if !e.str("hidName").is_some_and(|n| n.to_ascii_lowercase().contains("simpleanimation")) {
+            continue;
+        }
+        let (Some(c), Some(id), Some(at)) = (point(e), e.u64("disEntityId"), e.vec3("hidPos")) else { continue };
+        let Some(filter) = c.u32("GroupFilter").filter(|h| *h != 0 && *h != u32::MAX) else { continue };
+        let moves = c.child("Parameters").map(|p| crate::moves::move_names(p)).unwrap_or_default();
+        let Some(mv) = moves.iter().find(|m| m.ends_with("_loop") && !m.ends_with("avoid_loop")).or_else(|| moves.iter().find(|m| m.ends_with("_wait"))) else {
+            continue;
+        };
+        let who = pawns
+            .iter()
+            .enumerate()
+            .filter(|(i, (_, g, civilian))| *civilian && g.contains(&filter) && !cast.contains(i))
+            .min_by(|a, b| flat(&a.1 .0, &at).total_cmp(&flat(&b.1 .0, &at)))
+            .map(|(i, _)| i);
+        let Some(i) = who else { continue };
+        cast.push(i);
+        let offset = [at[0] - origin[0], at[1] - origin[1], at[2] - origin[2]];
+        parts.push(Part { who: Who::Pawn(i), clip: format!("move:{mv}"), offset, yaw: e.vec3("hidAngles").map_or(0.0, |a| a[2]), start: None, pace: 0.0 });
+        used.push(id);
+    }
+    // The bodies its scenes play (their untagged tracks): the nearest each.
+    let mut laid: Vec<usize> = Vec::new();
+    for (s, looped) in scenes {
+        let Some(scene) = by_id.get(&s).copied() else { continue };
+        let Some(at) = scene.vec3("hidPos") else { continue };
+        let untagged = sequence(&looped).map(|x| sequence_tracks(&x)).unwrap_or_default().into_iter().filter(|(t, _)| t.is_empty());
+        for (n, (_, clip)) in untagged.enumerate() {
+            let body = bodies
+                .iter()
+                .enumerate()
+                .filter(|(i, b)| !laid.contains(i) && flat(*b, &at) < BODY_REACH)
+                .min_by(|a, b| flat(a.1, &at).total_cmp(&flat(b.1, &at)))
+                .map(|(i, _)| i);
+            let (Some(i), Some((offset, yaw))) = (body, place(scene, &clip)) else { continue };
+            laid.push(i);
+            let start = started(scene, &looped, &|t| t.iter().filter(|(g, _)| g.is_empty()).nth(n).map(|(_, c)| c.clone()));
+            parts.push(Part { who: Who::Corpse(i), clip, offset, yaw, start, pace: 0.0 });
+        }
+    }
+    (parts, used)
+}
+
+/// A scene entity's loop sequence (of those its component plays).
+fn scene_loop(scene: &Object) -> Option<String> {
+    let mut out = None;
+    scene.walk(&mut |o, _| {
+        if let Some(p) = o.str_h(0xB1C2_6EBB).filter(|p| p.to_ascii_lowercase().ends_with(".cseq")) {
+            if out.is_none() && p.rsplit(['\\', '/']).next().is_some_and(|f| f.to_ascii_lowercase().contains("loop")) {
+                out = Some(p);
+            }
+        }
+    });
+    out
+}
+
+/// A chase: from how near the player it starts (the script's radius; 0:
+/// its default), and whether the quarry runs to the player (a
+/// `MoveToPlayer_CivRun` point) rather than away from the hunters (a
+/// `MoveAwayFromTarget` one).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Chase {
+    pub near: f32,
+    pub to_player: bool,
+}
+
+/// A prefab's chase, if it has one (by its points), given its script's
+/// radius.
+pub fn prefab_chase(root: &Object, near: f32) -> Option<Chase> {
+    let names: Vec<String> = root.children.iter().filter(|c| c.is("Entity")).filter_map(|e| e.str("hidName")).map(|n| n.to_ascii_lowercase()).collect();
+    let to_player = names.iter().any(|n| n.contains("movetoplayer_civrun"));
+    // (A victim running, a captive slipping away from his car.)
+    let flee = names.iter().any(|n| n.contains("moveawayfromtarget"));
+    (to_player || flee).then_some(Chase { near, to_player })
 }
 
 /// An execution, as the prefab's script runs it: once the player is within
@@ -312,6 +635,17 @@ pub fn prefab_script(root: &Object) -> Option<String> {
         }
     });
     out
+}
+
+/// A script's proximity radius (the widest of its listeners' `nearZone`s:
+/// the player's approach; the narrower watch others, a civilian reaching
+/// him), if any.
+pub fn script_near(script: &str) -> Option<f32> {
+    let key = "nearZone = ";
+    script
+        .match_indices(key)
+        .filter_map(|(i, _)| script[i + key.len()..].split(|c: char| !(c.is_ascii_digit() || c == '.')).next()?.parse::<f32>().ok())
+        .reduce(f32::max)
 }
 
 /// An execution from a prefab's script text, if its pawns include
@@ -413,34 +747,23 @@ pub fn prefab_pawns(root: &Object) -> Vec<Animal> {
 
 /// A prefab's guard spots (its `SimpleAnimation` points), placed about its
 /// origin.
-pub fn prefab_spots(root: &Object, role_clip: &dyn Fn(&str, &str) -> Option<String>) -> Vec<Animal> {
+/// (Not the scene points `scened` names, by entity id: their actors play
+/// their scene's parts.)
+pub fn prefab_spots(root: &Object, scened: &[u64]) -> Vec<Animal> {
     let entities: Vec<&std::sync::Arc<Object>> = root.children.iter().filter(|c| c.is("Entity")).collect();
     let Some(origin) = entities.first().and_then(|e| e.vec3("hidPos")) else { return Vec::new() };
-    // The scenes' loops, where their leads stand (an extra's part is in his
-    // lead's sequence).
-    let leads: Vec<([f32; 3], String)> =
-        entities.iter().filter_map(|e| Some((e.vec3("hidPos")?, scene_role(e).filter(|(r, _)| *r == "leadActor")?.1))).collect();
     entities
         .iter()
         .skip(1)
+        .filter(|e| e.u64("disEntityId").is_none_or(|id| !scened.contains(&id)))
         .filter_map(|e| {
             let name = e.str("hidName")?;
             // What is done there: a kind we know, or the loop its own move
             // plays (`move:<name>`, for the fighters' others: cleaning a
             // gun, the radio, searching).
-            // A synced scene's actor plays his part of its loop
-            // (`clip:<path>`: a conversation's speaker and listener).
             let at = e.vec3("hidPos")?;
-            let near_lead = || {
-                let d = |p: &[f32; 3]| (p[0] - at[0]).hypot(p[1] - at[1]);
-                leads.iter().filter(|(p, _)| d(p) < SCENE_REACH).min_by(|a, b| d(&a.0).total_cmp(&d(&b.0))).map(|(_, s)| s.clone())
-            };
-            let n = name.to_ascii_lowercase();
-            let role = scene_role(e).or_else(|| n.contains("syncanimextraactor").then(|| near_lead().map(|s| ("extraActor1", s))).flatten());
-            let scene = role.and_then(|(role, looped)| role_clip(&looped, role));
-            let kind = match (crate::cache::guard_spot_kind(&name), scene) {
-                (Some(k), _) => k.to_string(),
-                (None, Some(clip)) if is_fighter_spot(&name) => format!("clip:{clip}"),
+            let kind = match crate::cache::guard_spot_kind(&name) {
+                Some(k) => k.to_string(),
                 _ => format!("move:{}", fighter_spot_loop(e, &name)?),
             };
             Some(Animal { archetype: kind, offset: [at[0] - origin[0], at[1] - origin[1], at[2] - origin[2]], yaw: e.vec3("hidAngles").map_or(0.0, |a| a[2]) })
@@ -483,7 +806,8 @@ const SCENE_REACH: f32 = 5.0;
 /// loop sequence it plays (archive path, from its parameters).
 pub fn scene_role(e: &Object) -> Option<(&'static str, String)> {
     let n = e.str("hidName")?.to_ascii_lowercase();
-    let role = if n.contains("syncanimleadactor") {
+    // (A scene's master leads it.)
+    let role = if n.contains("syncanimleadactor") || n.contains("syncanimmaster") {
         "leadActor"
     } else if n.contains("syncanimextraactor") {
         "extraActor1"
@@ -491,28 +815,23 @@ pub fn scene_role(e: &Object) -> Option<(&'static str, String)> {
         return None;
     };
     let params = e.child("Components")?.child("CAIContextualActionComponent")?.child("Parameters")?;
-    let looped = params.fields.iter().filter(|(_, v)| v.last() == Some(&0) && v.len() > 5).map(|(_, v)| crate::fcb::bytes_to_string(v)).find(|s| {
-        let l = s.to_ascii_lowercase();
-        l.ends_with(".cseq") && l.rsplit(['\\', '/']).next().is_some_and(|f| f.contains("loop"))
+    let sequences: Vec<String> = params
+        .fields
+        .iter()
+        .filter(|(_, v)| v.last() == Some(&0) && v.len() > 5)
+        .map(|(_, v)| crate::fcb::bytes_to_string(v))
+        .filter(|s| s.to_ascii_lowercase().ends_with(".cseq"))
+        .collect();
+    let file = |s: &String| s.rsplit(['\\', '/']).next().unwrap_or_default().to_ascii_lowercase();
+    // Its loop; else (only its end or start named) the loop beside it.
+    let looped = sequences.iter().find(|s| file(s).contains("loop")).cloned().or_else(|| {
+        let s = sequences.first()?;
+        let (stem, _) = s.rsplit_once('.')?;
+        let (base, phase) = stem.rsplit_once('_')?;
+        let tail = ["start", "end", "wait"].iter().find_map(|p| phase.to_ascii_lowercase().strip_prefix(p).map(str::to_string))?;
+        Some(format!("{base}_loop{tail}.cseq"))
     })?;
     Some((role, looped))
-}
-
-/// The clip a part plays in a sequence (its first animation clip's source),
-/// from the sequence's XML.
-pub fn role_clip(cseq_xml: &str, role: &str) -> Option<String> {
-    let root = crate::xml::parse(cseq_xml)?;
-    let mut out = None;
-    root.walk(&mut |e| {
-        if out.is_none() && e.name == "CCharacterTrackGroup" && e.attr("sTag") == Some(role) {
-            e.walk(&mut |c| {
-                if out.is_none() && c.name == "CAnimationClip" {
-                    out = c.attr("sAnimationSource").map(str::to_string);
-                }
-            });
-        }
-    });
-    out
 }
 
 /// The moves a prefab's smart terrain points name (for the move table).
@@ -616,6 +935,29 @@ impl Markers {
                 s += &format!("{tag}\t{k}\t{}\n", list.join(";"));
             }
         }
+        let mut keys: Vec<_> = self.parts.keys().collect();
+        keys.sort();
+        for k in keys {
+            for p in &self.parts[k] {
+                s += &format!("part\t{k}\t{}\t{}\t{},{},{}\t{}\t{}", p.who.to_text(), p.clip, p.offset[0], p.offset[1], p.offset[2], p.yaw, p.pace);
+                if let Some((clip, o, yaw)) = &p.start {
+                    s += &format!("\t{clip}\t{},{},{}\t{yaw}", o[0], o[1], o[2]);
+                }
+                s += "\n";
+            }
+        }
+        let mut keys: Vec<_> = self.chases.keys().collect();
+        keys.sort();
+        for k in keys {
+            let c = self.chases[k];
+            s += &format!("chase\t{k}\t{}\t{}\n", c.near, u8::from(c.to_player));
+        }
+        let mut keys: Vec<_> = self.talks.keys().collect();
+        keys.sort();
+        for k in keys {
+            let (name, near) = &self.talks[k];
+            s += &format!("talk\t{k}\t{name}\t{near}\n");
+        }
         let mut keys: Vec<_> = self.executions.keys().collect();
         keys.sort();
         for k in keys {
@@ -652,6 +994,29 @@ impl Markers {
             match (f.first().copied(), f.get(1).and_then(|k| k.parse::<u64>().ok())) {
                 (Some("marker"), Some(k)) => {
                     m.markers.insert(k, (ids(f.get(2).unwrap_or(&"")), ids(f.get(3).unwrap_or(&""))));
+                }
+                (Some("part"), Some(k)) => {
+                    let v: Vec<f32> = f.get(4).unwrap_or(&"").split(',').filter_map(|x| x.parse().ok()).collect();
+                    let (Some(who), Some(clip), Some(yaw)) = (f.get(2).and_then(|w| Who::from_text(w)), f.get(3), f.get(5).and_then(|y| y.parse().ok())) else {
+                        continue;
+                    };
+                    let pace = f.get(6).and_then(|p| p.parse().ok()).unwrap_or(0.0);
+                    let start = (|| {
+                        let o: Vec<f32> = f.get(8)?.split(',').filter_map(|x| x.parse().ok()).collect();
+                        Some((f.get(7)?.to_string(), [*o.first()?, *o.get(1)?, *o.get(2)?], f.get(9)?.parse().ok()?))
+                    })();
+                    if v.len() == 3 {
+                        m.parts.entry(k).or_default().push(Part { who, clip: clip.to_string(), offset: [v[0], v[1], v[2]], yaw, start, pace });
+                    }
+                }
+                (Some("chase"), Some(k)) => {
+                    let near = f.get(2).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                    m.chases.insert(k, Chase { near, to_player: f.get(3) == Some(&"1") });
+                }
+                (Some("talk"), Some(k)) => {
+                    if let Some(name) = f.get(2).filter(|n| !n.is_empty()) {
+                        m.talks.insert(k, (name.to_string(), f.get(3).and_then(|v| v.parse().ok()).unwrap_or(0.0)));
+                    }
                 }
                 (Some("execution"), Some(k)) => {
                     let n = |i: usize| f.get(i).and_then(|v| v.parse::<f32>().ok());
@@ -839,6 +1204,46 @@ mod tests {
         m.spots.insert(7, vec![Animal { archetype: "smoke".into(), offset: [1.0, 1.0, 0.0], yaw: 180.0 }]);
         m.props.insert(7, vec![Animal { archetype: r"graphics\props\sandbag.xbg".into(), offset: [0.5, -2.0, 0.0], yaw: 45.0 }]);
         m.beasts.insert(7, vec![Animal { archetype: "FC3_Quadrupeds/AttackDog_FC3_0".into(), offset: [1.5, 0.0, 0.0], yaw: 10.0 }]);
+        m.parts.insert(
+            7,
+            vec![
+                Part {
+                    who: Who::Pawn(0),
+                    clip: r"anims\a_loop.mab".into(),
+                    offset: [0.5, 0.25, 0.0],
+                    yaw: -100.0,
+                    start: Some((r"anims\a_start.mab".into(), [0.75, 0.5, 0.0], -90.0)),
+                    pace: 0.0,
+                },
+                Part { who: Who::Corpse(1), clip: r"anims\b_loop.mab".into(), offset: [1.0, 0.0, 0.0], yaw: 80.0, start: None, pace: 0.0 },
+                Part { who: Who::Anyone, clip: r"anims\c_walk.mab".into(), offset: [0.0, 0.0, 0.0], yaw: 0.0, start: None, pace: 1.25 },
+            ],
+        );
         assert_eq!(Markers::from_text(&m.to_text()).unwrap(), m);
+    }
+
+    #[test]
+    fn scene_tracks_and_where_clips_start() {
+        let xml = r#"<Sequence><CCharacterTrackGroup sName="A" sTag="leadActor"><CAnimationSequenceTrack><CAnimationClip sAnimationSource="anims\a.mab"/></CAnimationSequenceTrack></CCharacterTrackGroup><CCharacterTrackGroup sName="B" sTag=""><CAnimationClip sAnimationSource="anims\b.mab"/></CCharacterTrackGroup></Sequence>"#;
+        assert_eq!(sequence_tracks(xml), vec![("leadActor".to_string(), r"anims\a.mab".to_string()), (String::new(), r"anims\b.mab".to_string())]);
+        let mut clip = crate::anim::Clip::default();
+        assert_eq!(clip_start(&clip), ClipStart { at: [0.0; 3], yaw: 0.0, drift: 0.0, duration: 0.0 });
+        // Half a turn round, a metre east and two north (Bevy: -Z) of the
+        // scene's origin.
+        clip.root_motion = Some(crate::anim::RootMotion {
+            start_translation: [1.0, 0.0, -2.0],
+            start_rotation: [0.0, 1.0, 0.0, 0.0],
+            translations: vec![[0.0; 3]],
+            ..Default::default()
+        });
+        let c = clip_start(&clip);
+        assert_eq!(c.at, [1.0, 2.0, 0.0]);
+        assert_eq!(c.duration, 0.0);
+        assert!((c.yaw.abs() - 180.0).abs() < 1e-3);
+        // One that walks its actor off ends that far from its start.
+        clip.root_motion.as_mut().unwrap().translations.push([0.0, 0.0, -4.0]);
+        assert_eq!(clip_start(&clip).drift, 4.0);
+        assert_eq!(start_of(r"seq\a_loop.cseq").as_deref(), Some(r"seq\a_start.cseq"));
+        assert_eq!(start_of(r"seq\b_msm_loopa.cseq").as_deref(), Some(r"seq\b_msm_starta.cseq"));
     }
 }

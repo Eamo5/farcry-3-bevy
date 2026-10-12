@@ -2,7 +2,7 @@
 //! gamepad layout, merged once per frame into [`ActionState`], which gameplay
 //! systems read instead of raw devices.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use bevy::input::gamepad::{Gamepad, GamepadAxis, GamepadButton};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
@@ -16,7 +16,165 @@ pub struct ControlsPlugin;
 
 impl Plugin for ControlsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ActionState>().add_systems(PreUpdate, update_actions.after(InputSystems));
+        app.init_resource::<ActionState>()
+            .init_resource::<ScriptActionMaps>()
+            .add_systems(OnExit(crate::menu::GameState::Loading), load_action_maps)
+            .add_systems(PreUpdate, (update_actions.after(InputSystems), apply_action_maps.after(update_actions)));
+    }
+}
+
+/// The engine's input action maps (each map's signals, from the cache), the
+/// maps the scripts have pushed on the player, and the one they've locked
+/// him to: the map in force lets through only its signals (a narrative
+/// scene takes away moving and shooting, and leaves looking and using).
+#[derive(Resource, Default)]
+pub struct ScriptActionMaps {
+    table: BTreeMap<String, BTreeSet<String>>,
+    stack: Vec<String>,
+    locked: Option<String>,
+}
+
+impl ScriptActionMaps {
+    pub fn push(&mut self, map: &str) {
+        self.stack.push(map.to_string());
+    }
+
+    /// The map taken off (its last push).
+    pub fn remove(&mut self, map: &str) {
+        if let Some(i) = self.stack.iter().rposition(|m| m.eq_ignore_ascii_case(map)) {
+            self.stack.remove(i);
+        }
+    }
+
+    /// The map alone in force.
+    pub fn set(&mut self, map: &str) {
+        self.stack = vec![map.to_string()];
+    }
+
+    /// The map in force whatever is pushed, until unlocked.
+    pub fn lock(&mut self, map: &str) {
+        self.locked = Some(map.to_string());
+    }
+
+    pub fn unlock(&mut self) {
+        self.locked = None;
+    }
+
+    pub fn reset(&mut self) {
+        self.stack.clear();
+        self.locked = None;
+    }
+
+    /// The map in force, if the scripts have set one.
+    fn in_force(&self) -> Option<&String> {
+        self.locked.as_ref().or(self.stack.last())
+    }
+
+    /// The signals the map in force lets through (none set, or one the
+    /// table lacks: everything).
+    fn allowed(&self) -> Option<&BTreeSet<String>> {
+        let name = self.in_force()?;
+        self.table.get(name).or_else(|| self.table.iter().find(|(m, _)| m.eq_ignore_ascii_case(name)).map(|(_, s)| s))
+    }
+}
+
+fn load_action_maps(info: Res<crate::data::CacheInfo>, mut maps: ResMut<ScriptActionMaps>) {
+    let text = std::fs::read_to_string(info.root.join(fc3_formats::actionmaps::ACTION_MAPS_REL)).unwrap_or_default();
+    maps.table = fc3_formats::actionmaps::from_text(&text);
+}
+
+/// The engine's signals an action sends (any of them let through lets it
+/// through; using also goes by the narrative scenes' interact signals).
+fn signals(a: Action) -> &'static [&'static str] {
+    match a {
+        Action::Forward | Action::Back | Action::Left | Action::Right => &["move"],
+        Action::Jump => &["jump", "jump_use"],
+        Action::Crouch | Action::SwimDown => &["crouch"],
+        Action::Sprint => &["sprint"],
+        Action::Fire => &["startshooting"],
+        Action::Aim => &["startironsight"],
+        Action::Reload => &["reload", "quickReload"],
+        Action::Interact => &["use", "jump_use"],
+        Action::Grenade => &["throw_grenade", "select_grenade"],
+        Action::Molotov => &["select_molotov"],
+        Action::Medkit => &["heal"],
+        Action::Melee => &["short_range_melee_start"],
+        Action::NextWeapon => &["select_next_weapon"],
+        Action::PrevWeapon => &["select_previous_weapon"],
+        Action::Map => &["show_map"],
+        Action::Tag => &["toggle_monocular"],
+        Action::ThrowRock => &["throw_rock"],
+        Action::C4 => &["select_IED_explosive"],
+        Action::Mine => &["select_proximity_mine"],
+    }
+}
+
+/// Takes away what the map in force doesn't let through.
+pub fn apply_action_maps(maps: Res<ScriptActionMaps>, mut actions: ResMut<ActionState>, mut last: Local<Option<String>>) {
+    if maps.is_changed() && maps.in_force() != last.as_ref() {
+        *last = maps.in_force().cloned();
+        info!("input action map: {:?} (pushed {:?}, locked {:?})", *last, maps.stack, maps.locked);
+    }
+    let Some(allowed) = maps.allowed() else { return };
+    let has = |s: &str| allowed.contains(s);
+    if !has("move") {
+        actions.movement = Vec2::ZERO;
+    }
+    if !has("look") {
+        actions.look = Vec2::ZERO;
+    }
+    if !has("select_next_weapon") && !has("select_previous_weapon") {
+        actions.cycle = 0;
+    }
+    let interact = allowed.iter().any(|s| s.starts_with("interact_"));
+    for a in Action::ALL {
+        if !(signals(a).iter().any(|s| has(s)) || (a == Action::Interact && interact)) {
+            actions.suppress(a);
+        }
+    }
+}
+
+#[cfg(test)]
+mod action_map_tests {
+    use super::*;
+
+    #[test]
+    fn a_pushed_map_lets_through_only_its_signals() {
+        let mut maps = ScriptActionMaps::default();
+        let set = |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>();
+        maps.table.insert("scene".into(), set(&["look", "interact_press_a"]));
+        maps.table.insert("walk_only".into(), set(&["move", "look"]));
+        let mut actions = ActionState::default();
+        let frame = |maps: &ScriptActionMaps, actions: &mut ActionState| {
+            actions.movement = Vec2::Y;
+            actions.look = Vec2::X;
+            actions.press(Action::Fire);
+            actions.press(Action::Interact);
+            let mut app = App::new();
+            app.insert_resource(ScriptActionMaps { table: maps.table.clone(), stack: maps.stack.clone(), locked: maps.locked.clone() })
+                .insert_resource(std::mem::take(actions))
+                .add_systems(Update, apply_action_maps);
+            app.update();
+            *actions = app.world_mut().remove_resource::<ActionState>().unwrap();
+        };
+        // Nothing pushed: everything.
+        frame(&maps, &mut actions);
+        assert_eq!(actions.movement, Vec2::Y);
+        assert!(actions.pressed(Action::Fire));
+        // A scene's map: looking and using, not moving or firing.
+        maps.push("scene");
+        frame(&maps, &mut actions);
+        assert_eq!((actions.movement, actions.look), (Vec2::ZERO, Vec2::X));
+        assert!(!actions.pressed(Action::Fire) && actions.pressed(Action::Interact));
+        // Locked to another until unlocked; popped back to everything.
+        maps.lock("walk_only");
+        frame(&maps, &mut actions);
+        assert_eq!(actions.movement, Vec2::Y);
+        assert!(!actions.pressed(Action::Interact));
+        maps.unlock();
+        maps.remove("scene");
+        frame(&maps, &mut actions);
+        assert!(actions.pressed(Action::Fire) && actions.pressed(Action::Interact));
     }
 }
 

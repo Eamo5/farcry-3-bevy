@@ -42,6 +42,7 @@ impl Plugin for WildlifePlugin {
                     cage_test,
                     animal_ai,
                     animal_deaths,
+                    carcass_parts,
                     skin_animals.before(crate::hud::HudSet).after(crate::turrets::man_turrets),
                     despawn_animals,
                 )
@@ -1282,6 +1283,44 @@ pub struct PlaceAnimal {
     pub cage: Option<u64>,
     /// A carcass the encounter leaves.
     pub dead: bool,
+    /// A carcass's part in the encounter's scene (being skinned): its
+    /// clip's archive path; and its start's, where that begins.
+    pub part: Option<String>,
+    pub start: Option<(String, Vec3, f32)>,
+}
+
+/// A carcass in an encounter's scene: it lies in its part, moving with it
+/// (its start, then its loop) while someone plays his part by it.
+#[derive(Component)]
+pub struct CarcassPart(crate::guard_spots::PartClips);
+
+/// Someone at his part this near (m) works a carcass.
+const PART_REACH: f32 = 4.0;
+
+#[allow(clippy::type_complexity)]
+fn carcass_parts(
+    clips: Res<Assets<crate::cache_assets::Fc3Clip>>,
+    mut carcasses: Query<(&Transform, &WildAnimal, &mut CarcassPart), With<Carcass>>,
+    actors: Query<(&Transform, &Health, &crate::guard_spots::AtSpot, Option<&crate::guard_spots::Entering>), Without<WildAnimal>>,
+    mut rigs: Query<(&mut crate::characters::CharacterRig, &mut AnimRequest, Option<&mut crate::guard_spots::PartMotion>)>,
+    mut commands: Commands,
+) {
+    use crate::guard_spots::Phase;
+    for (t, a, mut p) in &mut carcasses {
+        let Some(rig_e) = a.rig else { continue };
+        let Ok((mut rig, mut anim, motion)) = rigs.get_mut(rig_e) else { continue };
+        if !p.0.ready(&clips) {
+            continue;
+        }
+        let phase = actors
+            .iter()
+            .filter(|(at, h, spot, _)| spot.part() && !h.dead && at.translation.distance(t.translation) < PART_REACH)
+            .map(|(_, _, _, en)| Phase::of(en))
+            .max();
+        p.0.follow(phase, true, (rig_e, &mut rig, motion), &clips, &mut commands);
+        let worked = phase.is_some_and(|ph| ph != Phase::Coming);
+        *anim = AnimRequest { kind: AnimKind::Idle, rate: if worked { 1.0 } else { 0.0 } };
+    }
 }
 
 /// An animal held in a cage (by its door's id) until the door is broken.
@@ -1331,6 +1370,11 @@ fn place_animals(
         }
         if r.dead {
             commands.entity(e).insert(crate::combat::DieOnSpawn);
+            if let Some(clip) = &r.part {
+                let start =
+                    r.start.as_ref().map(|(s, at, yaw)| (server.load(cache_path(&cache::anim_rel(s))), crate::guard_spots::start_from(feet, r.yaw, *at, *yaw)));
+                commands.entity(e).insert(CarcassPart(crate::guard_spots::PartClips::new(server.load(cache_path(&cache::anim_rel(clip))), start)));
+            }
         }
         // (Held where it stands, pacing on the spot, until let out.)
         if let Some(door) = r.cage {
@@ -1673,11 +1717,18 @@ fn release_caged(
     mut rng: ResMut<Rng>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     mut commands: Commands,
+    (objects, mut breaks): (Query<&crate::objects::WorldObject>, ResMut<crate::breakables::Breaks>),
 ) {
     for d in died.read() {
         let Ok((door, gt, caged)) = doors.get(d.entity) else { continue };
         world.removed.insert(door.id);
-        commands.entity(d.entity).despawn();
+        // It breaks apart where its model has a broken state, else it's gone.
+        if objects.get(d.entity).ok().and_then(|o| models.get(&o.model)).is_some_and(crate::breakables::has_broken_state) {
+            breaks.break_object(d.entity);
+            commands.entity(d.entity).remove::<(CageDoor, crate::combat::Health)>();
+        } else {
+            commands.entity(d.entity).despawn();
+        }
         // An encounter's animal behind it comes out, on the hunt.
         let mut freed = false;
         for (e, cage, mut a) in &mut held {
@@ -2303,13 +2354,16 @@ fn skin_animals(
 fn despawn_animals(
     time: Res<Time>,
     players: Query<&Transform, With<Player>>,
-    mut animals: Query<(Entity, &mut Transform, Option<&mut Carcass>), (With<WildAnimal>, Without<crate::story_actors::StoryActor>, Without<Player>)>,
+    mut animals: Query<
+        (Entity, &mut Transform, Option<&mut Carcass>, Has<CarcassPart>),
+        (With<WildAnimal>, Without<crate::story_actors::StoryActor>, Without<Player>),
+    >,
     heights: Res<Heightfield>,
     mut commands: Commands,
 ) {
     let Ok(pt) = players.single() else { return };
     let dt = time.delta_secs();
-    for (e, mut t, carcass) in &mut animals {
+    for (e, mut t, carcass, scene) in &mut animals {
         let far = t.translation.distance(pt.translation) > DESPAWN;
         let rotten = carcass.is_some_and(|mut c| {
             c.age += dt;
@@ -2319,7 +2373,8 @@ fn despawn_animals(
                 let floor = heights.height_at(t.translation).map_or(t.translation.y, |g| g + s.size.0 + 0.25);
                 t.translation.y = (t.translation.y - 9.8 * c.age * dt).max(floor);
             }
-            c.age > 180.0
+            // (One in a scene stays while its encounter does.)
+            c.age > 180.0 && !scene
         });
         if far || rotten {
             commands.entity(e).despawn();

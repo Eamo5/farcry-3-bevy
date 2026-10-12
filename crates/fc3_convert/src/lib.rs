@@ -453,13 +453,20 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         Some(s) => s.clone(),
         None => (0..(ft::WORLD_SECTORS * ft::WORLD_SECTORS) as u32).collect(),
     };
-    let mut terrain_ids: Vec<u32> = job.run(Stage::Terrain, &sectors, |&id| match convert_terrain(&job, id) {
+    // (Sectors with holes are written again once, now they're read.)
+    let refresh_holes = !exists(job.root(), TERRAIN_HOLES_STAMP);
+    let mut terrain_ids: Vec<u32> = job.run(Stage::Terrain, &sectors, |&id| match convert_terrain(&job, id, refresh_holes) {
         Ok(r) => r,
         Err(e) => {
             job.error(format!("terrain {id}: {e:#}"));
             None
         }
     })?;
+    if refresh_holes && opts.only_sectors.is_none() {
+        if let Err(e) = write_atomic(job.root(), TERRAIN_HOLES_STAMP, b"terrain sectors carry their cave-mouth holes\n", job.ctx) {
+            job.error(format!("terrain holes stamp: {e:#}"));
+        }
+    }
     let atlas_ids: BTreeSet<u32> = terrain_ids.iter().map(|&id| SectorCoord::from_id(id).atlas_coord().id()).collect();
     let atlas_ids: Vec<u32> = atlas_ids.into_iter().collect();
     job.run(Stage::Terrain, &atlas_ids, |&id| {
@@ -550,13 +557,20 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     }
 
     // ---- sectors
-    let sector_results: Vec<SectorResult> = job.run(Stage::Sectors, &sectors, |&id| match convert_sector(&job, id) {
+    // (Sectors with placed RealTrees are written again once, now they're read.)
+    let refresh_realtrees = !exists(job.root(), REALTREE_ENTITIES_STAMP);
+    let sector_results: Vec<SectorResult> = job.run(Stage::Sectors, &sectors, |&id| match convert_sector(&job, id, refresh_realtrees) {
         Ok(r) => r,
         Err(e) => {
             job.error(format!("sector {id}: {e:#}"));
             None
         }
     })?;
+    if refresh_realtrees && opts.only_sectors.is_none() {
+        if let Err(e) = write_atomic(job.root(), REALTREE_ENTITIES_STAMP, b"sectors carry their placed RealTrees\n", job.ctx) {
+            job.error(format!("RealTree entities stamp: {e:#}"));
+        }
+    }
     let mut model_paths: BTreeSet<String> = BTreeSet::new();
     let mut material_paths: BTreeSet<String> = BTreeSet::new();
     let mut object_ids = Vec::new();
@@ -570,7 +584,9 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     let mut world_moves: BTreeSet<String> = BTreeSet::new();
     let mut villager_spots: Vec<(&'static str, [f32; 3], [f32; 4])> = Vec::new();
     let mut splines: Vec<(u32, fc3_formats::splines::SplinePrimitive)> = Vec::new();
+    let mut intangible: Vec<u64> = Vec::new();
     for r in sector_results {
+        intangible.extend(r.intangible.iter().copied());
         material_paths.extend(r.splines.iter().map(|s| s.material.clone()));
         splines.extend(r.splines.into_iter().map(|s| (r.id, s)));
         guard_spots.extend(r.guard_spots.iter().cloned());
@@ -586,6 +602,17 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         anchors.extend(r.anchors);
         traversal.ladders.extend(r.ladders);
         traversal.towers.extend(r.towers);
+        traversal.climbs.extend(r.climbs);
+    }
+    if opts.only_sectors.is_none() {
+        intangible.sort_unstable();
+        intangible.dedup();
+        let text: String = intangible.iter().map(|id| format!("{id}\n")).collect();
+        if std::fs::read_to_string(job.root().join(cache::INTANGIBLE_REL)).ok().as_deref() != Some(text.as_str()) {
+            if let Err(e) = write_atomic(job.root(), cache::INTANGIBLE_REL, text.as_bytes(), job.ctx) {
+                job.error(format!("intangible entities: {e:#}"));
+            }
+        }
     }
     if opts.only_sectors.is_none() && job.should_write(cache::ENVIRONMENT_REL) {
         let env = job.vfs.read(fc3_formats::environment::MANAGERS_PATH).and_then(|b| fc3_formats::environment::Environment::parse(&b)).map(|mut e| {
@@ -684,10 +711,12 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             job.error(format!("outposts: {e:#}"));
         }
     }
-    // ---- vegetation (baked per-sector plant instances)
+    // ---- vegetation (baked per-sector plant instances; rewritten once for
+    // the meshes' rotation order)
     let veg_lib = fc3_formats::vegetation::ClusterLibrary::load(&vfs).ok();
+    let refresh_vegetation = !exists(job.root(), VEGETATION_ORDER_STAMP);
     let veg_results: Vec<SectorVegetation> = match &veg_lib {
-        Some(lib) => job.run(Stage::Sectors, &sectors, |&id| match convert_vegetation(&job, lib, id) {
+        Some(lib) => job.run(Stage::Sectors, &sectors, |&id| match convert_vegetation(&job, lib, id, refresh_vegetation) {
             Ok(r) => r,
             Err(e) => {
                 job.error(format!("vegetation {id}: {e:#}"));
@@ -699,6 +728,11 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             Vec::new()
         }
     };
+    if refresh_vegetation && veg_lib.is_some() && opts.only_sectors.is_none() {
+        if let Err(e) = write_atomic(job.root(), VEGETATION_ORDER_STAMP, b"vegetation meshes rotated yaw, roll, pitch\n", job.ctx) {
+            job.error(format!("vegetation stamp: {e:#}"));
+        }
+    }
     let mut veg_ids = Vec::new();
     let mut forest = cache::VistaForest::default();
     let mut cards: HashMap<String, u16> = HashMap::new();
@@ -737,7 +771,12 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     let model_paths: Vec<String> = model_paths.into_iter().collect();
 
     // ---- models
-    let model_materials: Vec<Vec<String>> = job.run(Stage::Models, &model_paths, |p| match convert_model(&job, p) {
+    // Models written before their destruction states were kept are
+    // rewritten once (those that have states).
+    let refresh_states = !exists(job.root(), MODEL_STATES_STAMP);
+    // (And RealTrees once, for their trunk-only collision.)
+    let refresh_trunks = !exists(job.root(), REALTREE_TRUNKS_STAMP);
+    let model_materials: Vec<Vec<String>> = job.run(Stage::Models, &model_paths, |p| match convert_model(&job, p, refresh_states, refresh_trunks) {
         Ok(m) => Some(m),
         Err(e) => {
             job.error(format!("model {p}: {e:#}"));
@@ -747,12 +786,25 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     for m in model_materials {
         material_paths.extend(m);
     }
+    if refresh_states && opts.only_sectors.is_none() {
+        if let Err(e) = write_atomic(job.root(), MODEL_STATES_STAMP, b"destruction states kept, tagged per part\n", job.ctx) {
+            job.error(format!("model states stamp: {e:#}"));
+        }
+    }
+    if refresh_trunks && opts.only_sectors.is_none() {
+        if let Err(e) = write_atomic(job.root(), REALTREE_TRUNKS_STAMP, b"RealTrees collide by their trunks\n", job.ctx) {
+            job.error(format!("RealTree trunks stamp: {e:#}"));
+        }
+    }
     if opts.only_sectors.is_none() {
         if let Err(e) = convert_surfaces(&job, &model_paths) {
             job.error(format!("surfaces: {e:#}"));
         }
         if let Err(e) = convert_collision(&job, &model_paths) {
             job.error(format!("collision: {e:#}"));
+        }
+        if let Err(e) = convert_broken_collision(&job, &model_paths) {
+            job.error(format!("broken collision: {e:#}"));
         }
     }
     // Skins the animal models only get from their archetypes.
@@ -956,6 +1008,21 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         })();
         if let Err(e) = result {
             job.error(format!("barks: {e:#}"));
+        }
+    }
+
+    // ---- the conversations (their lines' voiced variants)
+    let current =
+        std::fs::read_to_string(job.root().join(fc3_formats::conversations::CONVERSATIONS_REL)).is_ok_and(|t| fc3_formats::conversations::is_current(&t));
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::conversations::CONVERSATIONS_REL) || !current) {
+        use fc3_formats::conversations as conv;
+        let result = job
+            .vfs
+            .read(conv::CONVERSATION_TABLE)
+            .and_then(|b| conv::parse_table(&b))
+            .and_then(|list| write_atomic(job.root(), conv::CONVERSATIONS_REL, conv::to_text(&list).as_bytes(), job.ctx));
+        if let Err(e) = result {
+            job.error(format!("conversations: {e:#}"));
         }
     }
 
@@ -1197,6 +1264,21 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         if let Err(e) = result { job.error(format!("specific gameplay settings: {e:#}")); }
     }
 
+    // ---- the input action maps scripts narrow the player's controls to
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::actionmaps::ACTION_MAPS_REL) {
+        let result = (|| -> Result<()> {
+            let texts = fc3_formats::actionmaps::SOURCES
+                .iter()
+                .map(|p| Ok(String::from_utf8_lossy(&job.vfs.read(p)?).into_owned()))
+                .collect::<Result<Vec<String>>>()?;
+            let maps = fc3_formats::actionmaps::resolve(&texts.iter().map(String::as_str).collect::<Vec<_>>());
+            write_atomic(job.root(), fc3_formats::actionmaps::ACTION_MAPS_REL, fc3_formats::actionmaps::to_text(&maps).as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("action maps: {e:#}"));
+        }
+    }
+
     // ---- authored gameplay post-effects (preserve unsupported tracks too)
     if opts.only_sectors.is_none() && job.should_write(fc3_formats::cinema::POSTFX_CACHE_REL) {
         let result = (|| -> Result<()> {
@@ -1226,6 +1308,34 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             Ok(())
         })();
         if let Err(e) = result { job.error(format!("vine particle: {e:#}")); }
+    }
+
+    // ---- water on the lens: the player's own droplet effect, with its
+    // drop shapes, their normal map and the reflected surroundings
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::particle_effects::SCREEN_DROPLETS_REL) {
+        let result = (|| -> Result<()> {
+            let bytes = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
+            let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+            let library = fc3_formats::fcb::parse(&bytes[at..])?;
+            let name = fc3_formats::particle_effects::player_screen_droplets(&library).context("the player names no lens drops")?;
+            let particles = job.vfs.read(fc3_formats::lights::PARTICLE_LIBRARY)?;
+            let xml = fc3_formats::particle_effects::effect_xml(std::str::from_utf8(&particles)?, &name)?;
+            let effect = fc3_formats::particle_effects::Effect::parse(xml)?;
+            for emitter in effect.emitters.iter().filter(|e| e.active) {
+                let others = ["NormalTexture", "DistortionTexture", "EnvMapTexture"].into_iter().filter_map(|a| emitter.texture_of(a));
+                for path in std::iter::once(emitter.texture_path()).chain(others) {
+                    let path = path?;
+                    let rel = cache::texture_rel(&path);
+                    if job.should_write(&rel) {
+                        convert_texture_to(&job, &path, &rel)?;
+                    }
+                }
+            }
+            write_atomic(job.root(), fc3_formats::particle_effects::SCREEN_DROPLETS_REL, xml.as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("lens drops: {e:#}"));
+        }
     }
 
     // ---- faces: the rigs, which character uses which, and every facial clip
@@ -1470,15 +1580,19 @@ fn island_sectors(sectors: &HashMap<u32, cache::CachedTerrain>) -> Vec<u32> {
     seen.into_iter().collect()
 }
 
-fn convert_terrain(job: &Job, id: u32) -> Result<Option<u32>> {
+/// Marks the terrain as written with its holes.
+const TERRAIN_HOLES_STAMP: &str = "terrain/stamp-holes.txt";
+
+fn convert_terrain(job: &Job, id: u32, refresh_holes: bool) -> Result<Option<u32>> {
     let c = SectorCoord::from_id(id);
     let path = c.sdat_path(&job.opts.world);
     if !job.vfs.exists(&path) {
         return Ok(None);
     }
     let rel = cache::terrain_rel(id);
-    if job.should_write(&rel) {
-        let s = ft::parse_sdat(&job.vfs.read(&path)?)?;
+    let fresh = job.should_write(&rel);
+    let parsed = if fresh || refresh_holes { Some(ft::parse_sdat(&job.vfs.read(&path)?)?) } else { None };
+    if let Some(s) = parsed.filter(|s| fresh || !s.holes.is_empty()) {
         let t = CachedTerrain {
             sector_id: id,
             min_height: s.min_height,
@@ -1782,6 +1896,45 @@ fn convert_surfaces(job: &Job, model_paths: &[String]) -> Result<()> {
     write_atomic(job.root(), cache::SURFACES_REL, &table.to_bytes(), job.ctx)
 }
 
+/// What characters collide with once a breakable model is broken (its last
+/// state's remains, `havok::broken_collision`): `collision/<hash>.broken.col`
+/// and the index of the models that have one. Runs whenever the index is
+/// missing.
+fn convert_broken_collision(job: &Job, model_paths: &[String]) -> Result<()> {
+    if !job.should_write(cache::BROKEN_COLLISION_INDEX_REL) {
+        return Ok(());
+    }
+    let models: Vec<&String> = model_paths.iter().filter(|p| p.ends_with(".xbg")).collect();
+    let mut have: Vec<String> = job.run(Stage::Models, &models, |p| {
+        let hkx = job.vfs.read(&format!("{}.hkx", p.strip_suffix(".xbg")?)).ok()?;
+        let (_, geometry) = match fc3_formats::havok::broken_collision(&hkx) {
+            Ok(Some(g)) if !g.1.triangles.is_empty() => g,
+            Ok(_) => return None,
+            Err(e) => {
+                job.error(format!("broken collision {p}: {e:#}"));
+                return None;
+            }
+        };
+        let cached = cache::CachedCollision {
+            positions: geometry.positions.iter().map(|&v| fmesh::to_bevy(v)).collect(),
+            indices: geometry.triangles.iter().flatten().copied().collect(),
+            no_impact: false,
+        };
+        let rel = cache::broken_collision_rel_of_hash(fc3_formats::hash::path_hash(p));
+        match write_atomic(job.root(), &rel, &cached.to_bytes(), job.ctx) {
+            Ok(()) => Some(cache::hash_name(p)),
+            Err(e) => {
+                job.error(format!("broken collision {p}: {e:#}"));
+                None
+            }
+        }
+    })?;
+    have.sort_unstable();
+    have.dedup();
+    let text: String = have.iter().map(|h| format!("{h}\n")).collect();
+    write_atomic(job.root(), cache::BROKEN_COLLISION_INDEX_REL, text.as_bytes(), job.ctx)
+}
+
 /// The game's own collision for every model that ships one (`<model>.hkx`,
 /// read by `havok::collision_geometry`): `collision/<hash>.col` in Bevy
 /// space per model, and the index of the models that have one. Runs whenever
@@ -2039,12 +2192,24 @@ fn convert_wildlife(job: &Job) -> Result<()> {
     let mut people: Vec<u64> = encounter_markers.markers.values().flat_map(|(h, f)| h.iter().chain(f)).copied().filter(|id| *id != 0).collect();
     people.sort();
     people.dedup();
-    // (The scripts the prefabs run, for their executions and rewards.)
+    // (The scripts the prefabs run, for their executions, rewards and
+    // conversations.)
     let pack = std::fs::read(job.root().join(fc3_formats::scripts::DOMINO_PACK_REL)).ok().and_then(|b| fc3_formats::scripts::ScriptPack::from_bytes(&b).ok());
+    let conversations =
+        job.vfs.read(fc3_formats::conversations::CONVERSATION_TABLE).ok().and_then(|b| fc3_formats::conversations::parse_table(&b).ok()).unwrap_or_default();
     for id in people {
         let Ok(bytes) = job.vfs.read(&enc::prefab_path(id)) else { continue };
         if let Ok(root) = enc::parse(&bytes) {
             let pawns = enc::prefab_pawns(&root);
+            let script = enc::prefab_script(&root);
+            let near = script.as_deref().and_then(|s| pack.as_ref()?.get(s)).and_then(|text| enc::script_near(&text)).unwrap_or(0.0);
+            if let Some(c) = enc::prefab_chase(&root, near) {
+                encounter_markers.chases.insert(id, c);
+            }
+            if let Some(c) = script.as_deref().and_then(|s| fc3_formats::conversations::for_script(&conversations, s)) {
+                let near = script.as_deref().and_then(|s| pack.as_ref()?.get(s)).and_then(|text| enc::script_near(&text)).unwrap_or(0.0);
+                encounter_markers.talks.insert(id, (c.name.clone(), near));
+            }
             if let Some(mut x) = enc::prefab_script(&root).and_then(|p| pack.as_ref()?.get(&p)).and_then(|text| enc::execution(&text, &pawns)) {
                 x.points = enc::prefab_attack_points(&root);
                 encounter_markers.executions.insert(id, x);
@@ -2054,9 +2219,15 @@ fn convert_wildlife(job: &Job) -> Result<()> {
             if !parked.is_empty() {
                 encounter_markers.vehicles.insert(id, parked);
             }
-            // (A synced scene's actors play their parts of its loop.)
-            let role_clip = |seq: &str, role: &str| job.vfs.read(seq).ok().and_then(|b| enc::role_clip(&String::from_utf8_lossy(&b), role));
-            let spots = enc::prefab_spots(&root, &role_clip);
+            // (A synced scene's actors play their parts of its loop, where it
+            // puts them; its points are no guard spots.)
+            let sequence = |seq: &str| job.vfs.read(seq).ok().map(|b| String::from_utf8_lossy(&b).into_owned());
+            let start = |clip: &str| job.vfs.read(clip).ok().and_then(|b| fc3_formats::anim::parse_clip(&b).ok()).map(|c| enc::clip_start(&c));
+            let (parts, scened) = enc::prefab_parts(&root, &sequence, &start);
+            if !parts.is_empty() {
+                encounter_markers.parts.insert(id, parts);
+            }
+            let spots = enc::prefab_spots(&root, &scened);
             if !spots.is_empty() {
                 encounter_markers.spots.insert(id, spots);
             }
@@ -2273,11 +2444,11 @@ fn convert_cinema(job: &Job) -> Result<()> {
         }
         Some(())
     })?;
-    write_atomic(job.root(), CINEMA_STAMP, b"vehicle/prop movement, clip anchors, Bezier FOV and head look\n", job.ctx)
+    write_atomic(job.root(), CINEMA_STAMP, b"vehicle/prop movement, clip anchors, Bezier FOV, head look and clips named sAnimation\n", job.ctx)
 }
 
 /// Marks the current sequence conversion schema.
-const CINEMA_STAMP: &str = "cinema/stamp-head-look.txt";
+const CINEMA_STAMP: &str = "cinema/stamp-anim-name.txt";
 
 /// Packs every Domino script the file lists name, and the ones they refer to
 /// that the lists don't.
@@ -2404,6 +2575,8 @@ struct SectorResult {
     anchors: Vec<(u64, u64, [f32; 3], bool)>,
     ladders: Vec<fc3_formats::traversal::Ladder>,
     towers: Vec<[f32; 3]>,
+    /// Ledges authored to be climbed onto.
+    climbs: Vec<fc3_formats::traversal::Climb>,
     /// Sound points: event and position (Bevy space).
     sound_points: Vec<(u32, [f32; 3])>,
     /// Placed effects the game plays: kind and position.
@@ -2413,6 +2586,8 @@ struct SectorResult {
     villager_spots: Vec<(&'static str, [f32; 3], [f32; 4])>,
     /// Roads and rivers.
     splines: Vec<fc3_formats::splines::SplinePrimitive>,
+    /// Entities with a model and no body.
+    intangible: Vec<u64>,
 }
 
 /// Rotates a vector by a quaternion (x, y, z, w).
@@ -2439,7 +2614,10 @@ fn resolve_cables(anchors: &[(u64, u64, [f32; 3], bool)]) -> Vec<fc3_formats::tr
     out
 }
 
-fn convert_sector(job: &Job, id: u32) -> Result<Option<SectorResult>> {
+/// Marks the sectors as written with their placed RealTrees.
+const REALTREE_ENTITIES_STAMP: &str = "sectors/stamp-realtree-entities.txt";
+
+fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool) -> Result<Option<SectorResult>> {
     let c = SectorCoord::from_id(id);
     let path = c.entities_path(&job.opts.world);
     if !job.vfs.exists(&path) {
@@ -2453,15 +2631,19 @@ fn convert_sector(job: &Job, id: u32) -> Result<Option<SectorResult>> {
     let mut override_materials = Vec::new();
     let mut outpost_markers = Vec::new();
     let mut lights = Vec::new();
-    let (mut anchors, mut ladders, mut towers) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut anchors, mut ladders, mut towers, mut climbs) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut sound_points = Vec::new();
     let mut effects = Vec::new();
     let mut guard_spots = Vec::new();
     let mut stp_moves = Vec::new();
     let mut villager_spots = Vec::new();
     let mut splines = Vec::new();
+    let mut intangible = Vec::new();
     for e in &data.entities {
         let entity_index = s.entities.len() as u32;
+        if !e.solid && !e.meshes.is_empty() {
+            intangible.push(e.id);
+        }
         let rotation = fw::angles_to_bevy_quat(e.angles);
         let translation = fw::pos_to_bevy(e.pos);
         // Entities on mission layers come and go with missions: they're kept
@@ -2548,6 +2730,13 @@ fn convert_sector(job: &Job, id: u32) -> Result<Option<SectorResult>> {
         // runtime gate mounting when the story removes or unloads them.
         {
             let rotate = |v: [f32; 3]| quat_rotate(rotation, v);
+            let place = |v: [f32; 3]| {
+                let o = rotate(fw::pos_to_bevy(v));
+                [translation[0] + o[0], translation[1] + o[1], translation[2] + o[2]]
+            };
+            for l in &e.climb_lines {
+                climbs.push(fc3_formats::traversal::Climb { mission_layer: e.mission_layer, a: place(l.start), b: place(l.end), anchor: place(l.anchor) });
+            }
             if fc3_formats::traversal::is_ladder(&e.name) {
                 if let Some((lo, hi)) = e.meshes.first().and_then(|m| job.model_bounds(&m.to_ascii_lowercase())) {
                     let foot = rotate([0.0, lo[1], 0.0]);
@@ -2558,6 +2747,7 @@ fn convert_sector(job: &Job, id: u32) -> Result<Option<SectorResult>> {
                         id: e.id,
                         mission_layer: e.mission_layer,
                         animation_package: e.ladder_animation_package,
+                        hand_over_hand: e.ladder_type == 1,
                         base: [translation[0] + foot[0], translation[1] + foot[1], translation[2] + foot[2]],
                         top: translation[1] + head[1],
                         facing: [fwd[0] / flat, 0.0, fwd[2] / flat],
@@ -2612,7 +2802,8 @@ fn convert_sector(job: &Job, id: u32) -> Result<Option<SectorResult>> {
         s.placements.push(Placement { model, translation, rotation, scale: 1.0, entity: entity_index, material_set });
     }
     let rel = cache::sector_rel(id);
-    if job.should_write(&rel) {
+    let realtrees = || data.entities.iter().any(|e| e.meshes.first().is_some_and(|m| m.to_ascii_lowercase().ends_with(".rtx")));
+    if job.should_write(&rel) || (refresh_realtrees && realtrees()) {
         write_atomic(job.root(), &rel, &s.to_bytes(), job.ctx)?;
     }
     Ok(Some(SectorResult {
@@ -2624,12 +2815,14 @@ fn convert_sector(job: &Job, id: u32) -> Result<Option<SectorResult>> {
         anchors,
         ladders,
         towers,
+        climbs,
         sound_points,
         effects,
         guard_spots,
         stp_moves,
         villager_spots,
         splines,
+        intangible,
     }))
 }
 
@@ -2638,7 +2831,10 @@ fn convert_sector(job: &Job, id: u32) -> Result<Option<SectorResult>> {
 /// far-distance billboards (card path, base in Bevy space, scale).
 type SectorVegetation = (u32, Vec<String>, Vec<(String, [f32; 3], f32)>);
 
-fn convert_vegetation(job: &Job, lib: &fc3_formats::vegetation::ClusterLibrary, id: u32) -> Result<Option<SectorVegetation>> {
+/// Marks the vegetation as written with its meshes' own rotation order.
+const VEGETATION_ORDER_STAMP: &str = "vegetation/stamp-mesh-order.txt";
+
+fn convert_vegetation(job: &Job, lib: &fc3_formats::vegetation::ClusterLibrary, id: u32, refresh: bool) -> Result<Option<SectorVegetation>> {
     use fc3_formats::cache::{veg_kind, CachedVegetation, VegInstance};
     use fc3_formats::vegetation::PlantKind;
     let plants = fc3_formats::vegetation::sector_vegetation_with(job.vfs, lib, id)?;
@@ -2687,7 +2883,7 @@ fn convert_vegetation(job: &Job, lib: &fc3_formats::vegetation::ClusterLibrary, 
                 let tilt = quat_from_to([0.0, 1.0, 0.0], up);
                 quat_mul(tilt, fw::angles_to_bevy_quat([0.0, 0.0, p.yaw.to_degrees()]))
             }
-            (PlantKind::Mesh, _) => fw::angles_to_bevy_quat(p.angles),
+            (PlantKind::Mesh, _) => fw::vegetation_angles_to_bevy_quat(p.angles),
             _ => fw::angles_to_bevy_quat([0.0, 0.0, p.yaw.to_degrees()]),
         };
         v.instances.push(VegInstance {
@@ -2714,7 +2910,7 @@ fn convert_vegetation(job: &Job, lib: &fc3_formats::vegetation::ClusterLibrary, 
         return Ok(None);
     }
     let rel = cache::vegetation_rel(id);
-    if job.should_write(&rel) {
+    if job.should_write(&rel) || (refresh && v.instances.iter().any(|i| i.kind == veg_kind::MESH)) {
         write_atomic(job.root(), &rel, &v.to_bytes(), job.ctx)?;
     }
     Ok(Some((id, originals, vista)))
@@ -2776,13 +2972,27 @@ fn substitute_placeholder(model: &str, bin: &str) -> String {
 }
 
 /// Converts one model; returns its per-slot material paths.
-fn convert_model(job: &Job, path: &str) -> Result<Vec<String>> {
+/// Marks the models as written with their destruction states.
+const MODEL_STATES_STAMP: &str = "models/stamp-states.txt";
+
+/// Whether a model has destruction states past its first (`STATE02...`).
+fn has_later_states(xbg: &[u8]) -> bool {
+    fc3_formats::anim::skin_info(xbg).is_ok_and(|s| {
+        s.nodes.iter().any(|n| n.name.to_ascii_uppercase().starts_with("STATE") && fc3_formats::havok::state_number(&n.name).is_some_and(|s| s >= 2))
+    })
+}
+
+/// Marks the RealTree models as written with trunk-only collision.
+const REALTREE_TRUNKS_STAMP: &str = "models/stamp-realtree-trunks.txt";
+
+fn convert_model(job: &Job, path: &str, refresh_states: bool, refresh_trunks: bool) -> Result<Vec<String>> {
     if path.ends_with(".rtx") {
-        return convert_realtree(job, path);
+        return convert_realtree(job, path, refresh_trunks);
     }
     let mats = job.model_materials(path);
     let rel = cache::model_rel(path);
-    if job.should_write(&rel) {
+    let stale = refresh_states && !job.should_write(&rel) && job.vfs.read(path).is_ok_and(|b| has_later_states(&b));
+    if job.should_write(&rel) || stale {
         let bytes = job.vfs.read(path)?;
         let mut model = fmesh::decode(&bytes, 8)?;
         // Skinning data and corrected per-primitive materials come from the anim decoder.
@@ -2824,7 +3034,17 @@ fn convert_model(job: &Job, path: &str) -> Result<Vec<String>> {
                 }
             }
         }
-        let pivots = skin.as_ref().map(|s| moving_parts(&mut model, s)).unwrap_or_default();
+        // Which of its destruction pieces fall: their bodies move in the
+        // game's physics (the coarse body's motion, else the detailed one's).
+        let mut motions: HashMap<String, u8> = HashMap::new();
+        if let Some(motion) =
+            path.strip_suffix(".xbg").and_then(|p| job.vfs.read(&format!("{p}.hkx")).ok()).and_then(|h| fc3_formats::havok::body_motions(&h).ok())
+        {
+            for (name, m) in motion.iter().filter(|(n, _)| n.starts_with("HIGH_")).chain(motion.iter().filter(|(n, _)| !n.starts_with("HIGH_"))) {
+                motions.insert(name.strip_prefix("HIGH_").unwrap_or(name).to_ascii_uppercase(), *m);
+            }
+        }
+        let pivots = skin.as_ref().map(|s| moving_parts(&mut model, s, &motions)).unwrap_or_default();
         let flags: Vec<u32> = mats.iter().map(|m| job.material(m).cached.flags).collect();
         let mut cm = build_cached_model(&model, mats.iter().map(|m| cache::material_rel(m)).collect(), flags, &pivots);
         // Collision the game never draws (it is painted with a placeholder).
@@ -2858,8 +3078,8 @@ const TREE_LODS: [(usize, f32); 3] = [(0, 0.0), (1, 40.0), (2, 100.0)];
 
 /// Builds a cached model from a RealTree file: branch tubes, leaf cards and
 /// big leaves per detail level, plus the trunk as a collision mesh.
-fn convert_realtree(job: &Job, path: &str) -> Result<Vec<String>> {
-    use fc3_formats::realtree::{self, MeshOptions, PartKind};
+fn convert_realtree(job: &Job, path: &str, refresh: bool) -> Result<Vec<String>> {
+    use fc3_formats::realtree::{self, MeshOptions};
     let tree = realtree::parse(&job.vfs.read(path)?)?;
     let mut materials: Vec<String> = Vec::new();
     for m in &tree.materials {
@@ -2869,10 +3089,15 @@ fn convert_realtree(job: &Job, path: &str) -> Result<Vec<String>> {
         }
     }
     let rel = cache::model_rel(path);
-    if !job.should_write(&rel) {
+    if !job.should_write(&rel) && !refresh {
         return Ok(materials);
     }
     let to_bevy = |v: &[f32; 3]| [v[0], v[2], -v[1]];
+    // A tree stands in the way by its trunk only (its branches are walked
+    // under or through); a bush not at all. The trunk at the coarsest
+    // detail.
+    let bush = path.to_ascii_lowercase().rsplit('\\').next().is_some_and(|f| f.contains("bush"));
+    let trunk = if bush { None } else { Some(tree.build_branches(&MeshOptions { lod: 2, max_level: Some(0), ..Default::default() })) };
     let mut out = CachedModel { materials: materials.iter().map(|m| cache::material_rel(m)).collect(), ..Default::default() };
     out.material_flags = materials.iter().map(|m| job.material(m).cached.flags).collect();
     for (lod, distance) in TREE_LODS {
@@ -2890,10 +3115,6 @@ fn convert_realtree(job: &Job, path: &str) -> Result<Vec<String>> {
             }
             if part.two_sided {
                 out.material_flags[slot] |= mat_flags::DOUBLE_SIDED;
-            }
-            if lod == 2 && part.kind == PartKind::Branches {
-                out.collision_positions = part.positions.iter().map(to_bevy).collect();
-                out.collision_indices = part.indices.clone();
             }
             lod_parts.push(CachedPart {
                 material: slot as u32,
@@ -2917,6 +3138,10 @@ fn convert_realtree(job: &Job, path: &str) -> Result<Vec<String>> {
         bail!("tree has no geometry");
     }
     (out.aabb_min, out.aabb_max) = (mn, mx);
+    if let Some(t) = trunk.filter(|t| !t.indices.is_empty()) {
+        out.collision_positions = t.positions.iter().map(to_bevy).collect();
+        out.collision_indices = t.indices;
+    }
     write_atomic(job.root(), &rel, &out.to_bytes(), job.ctx)?;
     Ok(materials)
 }
@@ -3056,10 +3281,21 @@ pub fn material_bin_path(path: &str) -> String {
     }
 }
 
-/// Damage states past the first (`STATE02__...`) are left out, so a model shows
-/// intact; parts under a wheel or the steering wheel are noted with that node
-/// (per LOD, per submesh) so they get parts of their own.
-fn moving_parts(model: &mut fmesh::Model, skin: &fc3_formats::anim::SkinInfo) -> Vec<Vec<Option<cache::PartPivot>>> {
+/// What a submesh is part of: the node it turns on (a wheel), its
+/// destruction state (0 every state, 1 whole, 2 and on broken) and whether
+/// it's then a loose piece that falls.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct PartTag {
+    pivot: Option<cache::PartPivot>,
+    state: u8,
+    piece: bool,
+}
+
+/// Parts under a wheel or the steering wheel are noted with that node (per
+/// LOD, per submesh) so they get parts of their own; so are destruction
+/// states' parts, by state, and each loose piece (its node's body moves in
+/// the game's physics: `motions`, by upper-case body name).
+fn moving_parts(model: &mut fmesh::Model, skin: &fc3_formats::anim::SkinInfo, motions: &HashMap<String, u8>) -> Vec<Vec<PartTag>> {
     let names: Vec<String> = skin.nodes.iter().map(|n| n.name.to_ascii_uppercase()).collect();
     let ancestors = |node: Option<u16>| {
         let mut out = Vec::new();
@@ -3071,29 +3307,36 @@ fn moving_parts(model: &mut fmesh::Model, skin: &fc3_formats::anim::SkinInfo) ->
         }
         out
     };
-    let later_state = |name: &str| name.strip_prefix("STATE0").and_then(|r| r.chars().next()).is_some_and(|c| ('2'..='9').contains(&c));
+    let pivot_at = |i: usize| {
+        let m = &skin.bind_world[i];
+        cache::PartPivot { name: skin.nodes[i].name.clone(), at: [m[12], m[13], m[14]], rotation: fc3_formats::anim::mat_rotation(m) }
+    };
     let mut out = Vec::new();
-    for (li, (_, lod)) in model.lods.iter_mut().enumerate() {
+    for (li, (_, lod)) in model.lods.iter().enumerate() {
         let prims = skin.lods.get(li).map(|l| l.primitives.as_slice()).unwrap_or(&[]);
-        let mut keep = Vec::new();
-        let mut pivots = Vec::new();
-        for sm in std::mem::take(&mut lod.submeshes) {
+        let mut tags = Vec::new();
+        for sm in &lod.submeshes {
             let chain = ancestors(prims.get(sm.primitive).and_then(|p| p.rigid_node));
-            if chain.iter().any(|&i| later_state(&names[i])) {
-                continue;
-            }
+            // The nearest state node it hangs from.
+            let state_node = chain.iter().copied().find(|&i| names[i].starts_with("STATE") && fc3_formats::havok::state_number(&names[i]).is_some());
+            let state = state_node.and_then(|i| fc3_formats::havok::state_number(&names[i])).unwrap_or(0);
+            let piece = state >= 2
+                && state_node
+                    .and_then(|i| motions.get(&names[i]))
+                    .is_some_and(|&m| m != fc3_formats::havok::MOTION_FIXED && m != fc3_formats::havok::MOTION_KEYFRAMED);
             // Wheels and steering turn; a weapon's mounted or handheld pieces
-            // show only when it's used that way.
-            let pivot =
-                chain.iter().copied().find(|&i| names[i].starts_with("WHEEL_") || names[i] == "STEERINGWHEEL" || names[i].starts_with("PIECES_")).map(|i| {
-                    let m = &skin.bind_world[i];
-                    cache::PartPivot { name: skin.nodes[i].name.clone(), at: [m[12], m[13], m[14]], rotation: fc3_formats::anim::mat_rotation(m) }
-                });
-            keep.push(sm);
-            pivots.push(pivot);
+            // show only when it's used that way; a loose piece falls on its own.
+            let pivot = match state_node.filter(|_| piece) {
+                Some(i) => Some(pivot_at(i)),
+                None => chain
+                    .iter()
+                    .copied()
+                    .find(|&i| names[i].starts_with("WHEEL_") || names[i] == "STEERINGWHEEL" || names[i].starts_with("PIECES_"))
+                    .map(pivot_at),
+            };
+            tags.push(PartTag { pivot, state, piece });
         }
-        lod.submeshes = keep;
-        out.push(pivots);
+        out.push(tags);
     }
     out
 }
@@ -3112,25 +3355,25 @@ fn additive_effect_collision_does_not_remove_solid_parts_or_render_geometry() {
     assert_eq!(out.collision_positions, vec![[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]]);
 }
 
-fn build_cached_model(model: &fmesh::Model, materials: Vec<String>, material_flags: Vec<u32>, pivots: &[Vec<Option<cache::PartPivot>>]) -> CachedModel {
+fn build_cached_model(model: &fmesh::Model, materials: Vec<String>, material_flags: Vec<u32>, tags: &[Vec<PartTag>]) -> CachedModel {
     let slot_flags = |m: usize| material_flags.get(m).copied().unwrap_or(0);
     let mut out = CachedModel { materials, ..Default::default() };
+    let tag_of = |li: usize, si: usize| tags.get(li).and_then(|t| t.get(si)).cloned().unwrap_or_default();
     for (li, (distance, lod)) in model.lods.iter().enumerate() {
-        // One part per material, and per moving node.
-        let pivot_of = |si: usize| pivots.get(li).and_then(|p| p.get(si)).cloned().flatten();
-        let mut by_mat: Vec<(usize, Option<cache::PartPivot>, Vec<&fmesh::SubMesh>)> = Vec::new();
+        // One part per material, per moving node and per destruction state.
+        let mut by_mat: Vec<(usize, PartTag, Vec<&fmesh::SubMesh>)> = Vec::new();
         for (si, s) in lod.submeshes.iter().enumerate() {
-            let pivot = pivot_of(si);
-            match by_mat.iter_mut().find(|(m, p, _)| *m == s.material && *p == pivot) {
+            let tag = tag_of(li, si);
+            match by_mat.iter_mut().find(|(m, t, _)| *m == s.material && *t == tag) {
                 Some((_, _, v)) => v.push(s),
-                None => by_mat.push((s.material, pivot, vec![s])),
+                None => by_mat.push((s.material, tag, vec![s])),
             }
         }
-        by_mat.sort_by_key(|(m, p, _)| (p.is_some(), *m));
+        by_mat.sort_by_key(|(m, t, _)| (t.state, t.pivot.is_some(), *m));
         let parts = by_mat
             .into_iter()
             .filter(|(m, _, _)| slot_flags(*m) & mat_flags::NO_DRAW == 0)
-            .map(|(m, pivot, subs)| CachedPart { pivot, ..compact_part(lod, &subs, m as u32) })
+            .map(|(m, tag, subs)| CachedPart { pivot: tag.pivot, state: tag.state, piece: tag.piece, ..compact_part(lod, &subs, m as u32) })
             .filter(|p| !p.indices.is_empty())
             .collect();
         out.lods.push(CachedLod { distance: *distance, parts });
@@ -3149,11 +3392,15 @@ fn build_cached_model(model: &fmesh::Model, materials: Vec<String>, material_fla
         out.aabb_min = mn;
         out.aabb_max = mx;
     }
-    // Collision from the coarsest LOD, excluding foliage (walk-through) and non-solid materials.
+    // Collision from the coarsest LOD, excluding foliage (walk-through),
+    // non-solid materials and the broken states' parts.
     if let Some((_, coarse)) = model.lods.last() {
+        let last = model.lods.len() - 1;
         let mut remap: HashMap<u32, u32> = HashMap::new();
-        for s in &coarse.submeshes {
-            if slot_flags(s.material) & (mat_flags::ALPHA_TEST | mat_flags::NO_DRAW | mat_flags::WATER | mat_flags::VEGETATION | mat_flags::NON_SOLID) != 0 {
+        for (si, s) in coarse.submeshes.iter().enumerate() {
+            if slot_flags(s.material) & (mat_flags::ALPHA_TEST | mat_flags::NO_DRAW | mat_flags::WATER | mat_flags::VEGETATION | mat_flags::NON_SOLID) != 0
+                || tag_of(last, si).state >= 2
+            {
                 continue;
             }
             for &i in &coarse.indices[s.index_start..s.index_start + s.index_count] {
@@ -3217,6 +3464,8 @@ fn compact_part(lod: &MeshData, subs: &[&fmesh::SubMesh], material: u32) -> Cach
         weights: if pick(lod.weights.len()) { order.iter().map(|&i| lod.weights[i as usize]).collect() } else { vec![] },
         indices,
         pivot: None,
+        state: 0,
+        piece: false,
     }
 }
 

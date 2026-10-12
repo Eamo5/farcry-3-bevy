@@ -319,8 +319,39 @@ The default options give 74k vertices and 89k triangles for all 82 trees
 together. Typical counts are 2–3k triangles for a large tree and 100–200 for a
 bush.
 
+## Placed RealTrees and their growth
+
+Most RealTrees are vegetation. Some are placed entities instead, with a
+`CRealtreeComponent` naming the tree (field `0xF9F2D5F4`, the same field as a
+skeleton's path): the trees the story grows, such as the doctor's
+hallucination path (`RT_Hibiscus_A_2100`, `RT_Dead_A_130` and others on a
+mission layer). The world parser takes that `.rtx` as the entity's model, and
+it is converted and placed as any other. It counts as solid, and like a
+planted tree it blocks by its trunk alone (see `docs/physics.md`); a bush
+blocks nothing. The converter rewrote the
+sectors holding such trees once (`sectors/stamp-realtree-entities.txt`).
+
+The story sizes them through `CAPI_Entity`:
+
+* `UpdateRealTreeRegen(tree, size)` sets the size at once: 0 is nothing, 1
+  fully grown.
+* `SetRealTreeGrowthSpeed(tree, size, speed, box, method)` moves it to that
+  size at `speed`, a share of the full size a second (the sign is
+  direction; the hallucination grows its trees at 0.1 and shrinks one at
+  -0.2). It returns an id, and the box's method is called once the tree is
+  there.
+* `StopRealTreeGrowth(tree, id)` stops it where it is; it never calls back.
+
+`fc3_story` keeps each callback until the host reports the growth done
+(`Story::growth_finished`). `fc3_game::tree_growth` moves the sizes on and
+draws each placed tree at its size from its foot, hidden at nothing. The
+game grows a RealTree branch by branch. Here the whole tree scales, which is
+an approximation.
+
 ## Known gaps
 
+* **Growth.** Trees scale as a whole rather than extending branch by branch
+  (see above).
 * **Wind and animation.** The per-node weights (node 0x18/0x1C/0x24/0x28/0x48),
   the physics constants and the big-leaf skin weights are decoded only as raw
   values. Swaying is not reproduced.

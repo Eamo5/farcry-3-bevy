@@ -347,6 +347,10 @@ pub struct StoryHost {
     /// The last block that completed, and whether it was a cinematic one
     /// (its end spawn is where the cinematic left the player).
     last_completed: Option<String>,
+    /// Whether a scene held the view during the running block, and during
+    /// the last one completed (its scene, played, left the player there).
+    scene_in_block: bool,
+    scene_in_last: bool,
     /// Tests (`FC3_STORY_AUTOPILOT`): seconds since anything happened, and
     /// the triggers already walked into.
     quiet: f32,
@@ -410,6 +414,8 @@ impl StoryHost {
             story,
             due: Vec::new(),
             last_completed: None,
+            scene_in_block: false,
+            scene_in_last: false,
             quiet: 0.0,
             used: Default::default(),
             checkpoint,
@@ -523,6 +529,7 @@ impl MissionArea {
 /// characters aren't shown.
 #[derive(Resource, Default)]
 pub struct HiddenEntities(pub std::collections::HashSet<u64>);
+
 
 /// Shows and hides placed objects and characters as the scripts ask (when
 /// that changes, and as they come into the world).
@@ -916,7 +923,7 @@ fn run_story(
         ResMut<crate::tattoo::TattooShown>,
         MessageWriter<crate::shake::Shake>,
     ),
-    (mut xp_gain, mut progress, mut music, mut rock_test, mut videos, mut qtes, mut vines, mut postfx): (
+    (mut xp_gain, mut progress, mut music, mut rock_test, mut videos, mut qtes, mut vines, mut postfx, mut pawn_anims, mut action_maps, mut breaks, mut trees, mut doors): (
         MessageWriter<crate::progression::XpGain>,
         ResMut<crate::progression::Progress>,
         ResMut<crate::music::Music>,
@@ -925,6 +932,11 @@ fn run_story(
         ResMut<crate::qte::Qtes>,
         ResMut<crate::vine::Vines>,
         ResMut<crate::script_postfx::PostEffects>,
+        ResMut<crate::pawn_anims::PawnAnims>,
+        ResMut<crate::controls::ScriptActionMaps>,
+        ResMut<crate::breakables::Breaks>,
+        ResMut<crate::tree_growth::TreeGrowth>,
+        ResMut<crate::doors::Doors>,
     ),
 ) {
     // (Not a run condition: those may run off the main thread.)
@@ -942,6 +954,7 @@ fn run_story(
     }
     let Ok((mut t, mut p, mut health)) = players.single_mut() else { return };
     let mut heal = false;
+    host.scene_in_block |= cinema.view.is_some();
     // Dying in a mission takes the player back to its last checkpoint.
     if std::mem::take(&mut host.to_respawn) {
         let data = host.story.data();
@@ -1000,6 +1013,9 @@ fn run_story(
             music.reset();
             videos.reset();
             qtes.reset();
+            pawn_anims.reset();
+            action_maps.reset();
+            trees.reset();
             vines.reset();
             postfx.reset();
             ui.subtitle = None;
@@ -1105,8 +1121,10 @@ fn run_story(
     } else {
         0
     };
-    // The player's inputs, as the signals scripts listen for.
-    if gameplay {
+    // The player's inputs, as the signals scripts listen for (not while a
+    // cutscene holds the view: the game takes no gameplay input then, and a
+    // scene's skip listener waits for `move`, which would end it at once).
+    if gameplay && cinema.view.is_none() {
         use crate::controls::Action;
         const SIGNALS: [(Action, &str); 11] = [
             (Action::Jump, "jump"),
@@ -1367,7 +1385,15 @@ fn run_story(
                 }
                 if block.is_some() && state == "Completed" {
                     host.last_completed = Some(name);
+                    host.scene_in_last = std::mem::take(&mut host.scene_in_block);
                 }
+            }
+            // A script's `Door` box locks a swing door, and unlocks it.
+            Command::EntityEvent { entity, event } if event == "CDoor_Disable" => {
+                doors.locked.insert(entity);
+            }
+            Command::EntityEvent { entity, event } if event == "CDoor_Enable" => {
+                doors.locked.remove(&entity);
             }
             // Removed by a script: gone from the world (the story
             // remembers it in its saves).
@@ -1383,8 +1409,9 @@ fn run_story(
             }
             Command::RespawnPoint(spawn) => {
                 // A cinematic block hands over where its scene left the
-                // player: there (cinematics aren't played yet).
-                if host.last_completed.as_deref().is_some_and(|n| n.ends_with('C')) {
+                // player: there, when its scene didn't play (one that did
+                // left him where it ended).
+                if host.last_completed.as_deref().is_some_and(|n| n.ends_with('C')) && !host.scene_in_last {
                     if let Some(sp) = data.spawn_points.get(&spawn) {
                         teleport(&mut t, &mut p, sp.pos, sp.angles[2]);
                     }
@@ -1662,6 +1689,55 @@ fn run_story(
                     "CAPI_Entity.SetPhysicsEnabled" => {
                         if let Ok(id) = a(0).parse::<u64>() {
                             placements.set_physics(id, a(1) != "false" && a(1) != "0");
+                        }
+                    }
+                    // The player's controls narrowed to an input action map.
+                    "CAPI_Player.PushPlayerActionMap" if a(0) == fc3_story::PLAYER.to_string() => action_maps.push(&a(1)),
+                    "CAPI_Player.RemovePlayerActionMap" if a(0) == fc3_story::PLAYER.to_string() => action_maps.remove(&a(1)),
+                    "CAPI_Player.SetPlayerActionMap" if a(0) == fc3_story::PLAYER.to_string() => action_maps.set(&a(1)),
+                    "CAPI_Player.LockPlayerActionMap" if a(0) == fc3_story::PLAYER.to_string() => action_maps.lock(&a(1)),
+                    "CAPI_Player.UnlockPlayerActionMap" if a(0) == fc3_story::PLAYER.to_string() => action_maps.unlock(),
+                    // A move played on a character by name, and stopped.
+                    "CAPI_AI.StartPlayAnim" => {
+                        if let Ok(pawn) = a(0).parse::<u64>() {
+                            pawn_anims.requests.push(crate::pawn_anims::Request::Play { pawn, name: a(1), looping: a(2) == "true" });
+                        }
+                    }
+                    "CAPI_AI.StopPlayAnim" => {
+                        if let Ok(pawn) = a(0).parse::<u64>() {
+                            pawn_anims.requests.push(crate::pawn_anims::Request::Stop { pawn });
+                        }
+                    }
+                    // The player turned to look at an entity.
+                    "CAPI_Player.SetPlayerLookAngles" if a(0) == fc3_story::PLAYER.to_string() => {
+                        if let Some(at) = a(1).parse::<u64>().ok().and_then(|id| data.position(id)).map(to_bevy) {
+                            let d = at - (t.translation + Vec3::Y * (p.eye - crate::player::HALF_HEIGHT));
+                            p.yaw = (-d.x).atan2(-d.z);
+                            p.pitch = d.y.atan2(Vec2::new(d.x, d.z).length());
+                        }
+                    }
+                    "CAPI_Entity.DestroyCompoundObject" => {
+                        if let Ok(id) = a(0).parse::<u64>() {
+                            breaks.break_now(id);
+                        }
+                    }
+                    // A placed RealTree sized, grown or stopped.
+                    "CAPI_Entity.UpdateRealTreeRegen" => {
+                        if let (Ok(id), Ok(size)) = (a(0).parse::<u64>(), a(1).parse::<f32>()) {
+                            debug!("tree growth: {id} sized {size}");
+                            trees.set(id, size);
+                        }
+                    }
+                    "CAPI_Entity.SetRealTreeGrowthSpeed" => {
+                        if let (Ok(id), Ok(size), Ok(speed), Ok(growth)) = (a(0).parse::<u64>(), a(1).parse::<f32>(), a(2).parse::<f32>(), a(3).parse::<u64>())
+                        {
+                            debug!("tree growth: {id} to {size} at {speed} a second");
+                            trees.grow(id, size, speed, growth);
+                        }
+                    }
+                    "CAPI_Entity.StopRealTreeGrowth" => {
+                        if let (Ok(id), Ok(growth)) = (a(0).parse::<u64>(), a(1).parse::<u64>()) {
+                            trees.stop(id, growth);
                         }
                     }
                     "CAPI_Player.AddGadget" if a(0) == fc3_story::PLAYER.to_string() => {

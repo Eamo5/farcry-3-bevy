@@ -7,7 +7,7 @@
 //! render mesh's coarsest detail level without its see-through, undrawn,
 //! water and foliage parts.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -27,13 +27,17 @@ pub struct WorldPhysicsPlugin;
 
 impl Plugin for WorldPhysicsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(PhysicsPlugins::default()).insert_resource(Gravity(Vec3::NEG_Y * 9.81)).init_resource::<ModelColliders>().add_systems(
-            Update,
-            (terrain_colliders, object_colliders)
-                .after(crate::terrain::TerrainStreaming)
-                .after(crate::objects::ObjectStreaming)
-                .after(crate::vegetation::VegStreaming),
-        );
+        app.add_plugins(PhysicsPlugins::default())
+            .insert_resource(Gravity(Vec3::NEG_Y * 9.81))
+            .init_resource::<ModelColliders>()
+            .add_systems(OnExit(crate::menu::GameState::Loading), load_intangible)
+            .add_systems(
+                Update,
+                (terrain_colliders, object_colliders)
+                    .after(crate::terrain::TerrainStreaming)
+                    .after(crate::objects::ObjectStreaming)
+                    .after(crate::vegetation::VegStreaming),
+            );
     }
 }
 
@@ -111,6 +115,10 @@ fn terrain_colliders(
         match (near, existing) {
             (true, None) => {
                 let Some(sector) = heights.sectors.get(&chunk.coord) else { continue };
+                // (A sector cut away entirely has no ground at all.)
+                if !sector.holes.is_empty() && sector.holes.iter().all(|h| *h) {
+                    continue;
+                }
                 commands.spawn((
                     RigidBody::Static,
                     sector_heightfield(sector),
@@ -131,6 +139,14 @@ fn terrain_colliders(
 pub struct ModelColliders {
     by_model: HashMap<AssetId<Fc3Model>, Option<Collider>>,
     waiting: std::collections::VecDeque<Entity>,
+    /// Placed entities with no body in the game (a model and no physics
+    /// component: plants, vines, wires, decals): nothing to bump into.
+    intangible: HashSet<u64>,
+}
+
+fn load_intangible(info: Res<crate::data::CacheInfo>, mut cache: ResMut<ModelColliders>) {
+    let text = std::fs::read_to_string(info.root.join(fc3_formats::cache::INTANGIBLE_REL)).unwrap_or_default();
+    cache.intangible = text.lines().filter_map(|l| l.trim().parse().ok()).collect();
 }
 
 /// World objects given colliders per frame: a sector's worth at once (some
@@ -165,7 +181,7 @@ fn object_colliders(
     models: Res<Assets<Fc3Model>>,
     added: Query<Entity, Added<WorldObject>>,
     // Placed under roots at the origin, so their own transform is where they are.
-    objects: Query<(&WorldObject, &Transform)>,
+    objects: Query<(&WorldObject, &Transform, Option<&crate::objects::PlacedId>, Has<crate::breakables::Broken>)>,
     players: Query<&Transform, With<crate::player::Player>>,
 ) {
     let fresh: Vec<Entity> = added.iter().collect();
@@ -173,18 +189,24 @@ fn object_colliders(
         cache.waiting.extend(fresh);
         // Nearest first (they may be underfoot).
         if let Ok(p) = players.single() {
-            let at = |e: &Entity| objects.get(*e).map_or(f32::MAX, |(_, t)| t.translation.distance_squared(p.translation));
+            let at = |e: &Entity| objects.get(*e).map_or(f32::MAX, |(_, t, _, _)| t.translation.distance_squared(p.translation));
             cache.waiting.make_contiguous().sort_by(|a, b| at(a).total_cmp(&at(b)));
         }
     }
     for _ in 0..COLLIDERS_PER_FRAME {
         let Some(entity) = cache.waiting.pop_front() else { break };
-        let Ok((obj, _)) = objects.get(entity) else { continue };
+        let Ok((obj, _, placed, broken)) = objects.get(entity) else { continue };
+        if placed.is_some_and(|p| cache.intangible.contains(&p.0)) {
+            commands.entity(entity).try_insert(ObjectCollisionReady);
+            continue;
+        }
         let Some(model) = models.get(&obj.model) else {
             cache.waiting.push_back(entity);
             continue;
         };
-        if let Some(collider) = cache.get(obj.model.id(), model) {
+        // (Broken already: what's left of it.)
+        let collider = if broken { crate::breakables::broken_collider(model) } else { cache.get(obj.model.id(), model) };
+        if let Some(collider) = collider {
             commands.entity(entity).try_insert((RigidBody::Static, collider));
         }
         commands.entity(entity).try_insert(ObjectCollisionReady);
@@ -208,6 +230,7 @@ mod tests {
         assert!(app.world().get::<ObjectCollisionReady>(entity).is_none());
         assert!(app.world().resource::<ModelColliders>().waiting.contains(&entity));
         let model = |collision| Fc3Model {
+            broken_collision: None,
             lods: Vec::new(), aabb_min: Vec3::splat(-2.0), aabb_max: Vec3::splat(2.0), collision,
             bones: Vec::new(), is_vegetation: false, inverse_bindposes: None,
         };
@@ -221,6 +244,12 @@ mod tests {
         assert!(app.world().get::<Collider>(entity).is_some());
         assert!(app.world().get::<ObjectCollisionReady>(nonblocking).is_some());
         assert!(app.world().get::<Collider>(nonblocking).is_none());
+        // A placed entity with no body in the game gets none, whatever its model.
+        app.world_mut().resource_mut::<ModelColliders>().intangible.insert(7);
+        let decoration = app.world_mut().spawn((WorldObject { model: handle.clone(), entity_index: 2 }, Transform::IDENTITY, crate::objects::PlacedId(7))).id();
+        app.update();
+        assert!(app.world().get::<ObjectCollisionReady>(decoration).is_some());
+        assert!(app.world().get::<Collider>(decoration).is_none());
     }
 
     #[test]

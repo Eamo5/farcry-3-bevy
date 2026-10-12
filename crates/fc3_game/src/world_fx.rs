@@ -17,8 +17,8 @@ pub struct WorldFxPlugin;
 impl Plugin for WorldFxPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<PlaceFire>()
-            .add_systems(OnExit(crate::menu::GameState::Loading), (load_effects, spawn_drops))
-            .add_systems(Update, (place_fires, play_effects, screen_drops).chain().run_if(in_state(crate::menu::GameState::Playing)));
+            .add_systems(OnExit(crate::menu::GameState::Loading), load_effects)
+            .add_systems(Update, (place_fires, play_effects).chain().run_if(in_state(crate::menu::GameState::Playing)));
     }
 }
 
@@ -219,64 +219,6 @@ fn play_effects(
                 }
             }
         }
-    }
-}
-
-/// Water on the lens: the game's droplets over the view, from standing in a
-/// waterfall's spray or coming up out of the sea, drying off in a few seconds.
-#[derive(Component)]
-struct ScreenDrops;
-
-/// Spray this near the eye (m) wets the view; it takes this long to dry (s).
-const SPRAY_WETS: f32 = 7.0;
-const DRY_TIME: f32 = 3.0;
-
-fn spawn_drops(mut commands: Commands, server: Res<AssetServer>) {
-    let image: Handle<Image> = server.load(crate::cache_assets::cache_path(&cache::fx_rel("fc3_gfx_waterdrops_01")));
-    // A few patches of the drop map about the view, turned different ways
-    // (left, top, size in % of the width, flips).
-    for (left, top, size, flip_x, flip_y) in
-        [(-8.0, -12.0, 52.0, false, false), (48.0, -6.0, 46.0, true, false), (4.0, 38.0, 44.0, true, true), (56.0, 44.0, 50.0, false, true)]
-    {
-        commands.spawn((
-            ScreenDrops,
-            Node {
-                left: Val::Percent(left),
-                top: Val::Percent(top),
-                width: Val::Percent(size),
-                aspect_ratio: Some(1.0),
-                position_type: PositionType::Absolute,
-                ..default()
-            },
-            ImageNode { image: image.clone(), color: Color::srgba(1.0, 1.0, 1.0, 0.0), flip_x, flip_y, ..default() },
-            GlobalZIndex(0),
-            Pickable::IGNORE,
-        ));
-    }
-}
-
-fn screen_drops(
-    time: Res<Time>,
-    effects: Option<Res<WorldEffects>>,
-    cameras: Query<&GlobalTransform, With<PlayerCamera>>,
-    mut drops: Query<&mut ImageNode, With<ScreenDrops>>,
-    mut state: Local<(f32, bool)>,
-    heights: Res<crate::terrain::Heightfield>,
-) {
-    let Ok(cam) = cameras.single() else { return };
-    let eye = cam.translation();
-    let (wet, was_under) = &mut *state;
-    *wet = (*wet - time.delta_secs() / DRY_TIME).max(0.0);
-    let under = crate::water::submerged(eye, &heights, 0.0);
-    if *was_under && !under {
-        *wet = 1.0;
-    }
-    *was_under = under;
-    if !under && effects.as_ref().is_some_and(|fx| fx.list.iter().any(|(k, at)| *k == Kind::FallsSpray && at.distance(eye) < SPRAY_WETS)) {
-        *wet = 1.0;
-    }
-    for mut image in &mut drops {
-        image.color = Color::srgba(1.0, 1.0, 1.0, *wet * 0.7);
     }
 }
 

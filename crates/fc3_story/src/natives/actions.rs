@@ -32,7 +32,6 @@ const ACTIONS: &[&str] = &[
     "CAPI_Entity.SetUsableEntityUsability",
     "CAPI_Entity.SetVisibility",
     "CAPI_Entity.StartPhysOnEntity",
-    "CAPI_Entity.StopRealTreeGrowth",
     "CAPI_Entity.TeleportEntity",
     "CAPI_Entity.UnBind",
     "CAPI_Entity.UpdateLootItemDropPercentage",

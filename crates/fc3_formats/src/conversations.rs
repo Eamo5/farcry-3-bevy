@@ -15,6 +15,25 @@ pub const CONVERSATION_TABLE: &str = r"dialog\conversationtable.dat";
 pub const CONVERSATIONS_REL: &str = "dialog/conversations.txt";
 const MAGIC: &str = "fc3-conversations 1";
 
+/// Whether a cached table is this version's.
+pub fn is_current(text: &str) -> bool {
+    text.lines().next().map(str::trim) == Some(MAGIC)
+}
+
+/// The table, parsed (it is a plain FCB).
+pub fn parse_table(bytes: &[u8]) -> Result<Vec<Conversation>> {
+    let start = bytes.windows(4).position(|w| w == b"nbCF").ok_or_else(|| anyhow::anyhow!("no FCB header"))?;
+    let root = crate::fcb::parse(&bytes[start..])?;
+    Ok(conversations(&root))
+}
+
+/// The conversation an encounter's script plays, by the script's name
+/// (`.../piratecivexecute_01.main.lua` plays `PirateCivExecute_01`).
+pub fn for_script<'a>(list: &'a [Conversation], script: &str) -> Option<&'a Conversation> {
+    let stem = script.rsplit(['\\', '/']).next()?.split('.').next()?;
+    list.iter().find(|c| c.name.eq_ignore_ascii_case(stem))
+}
+
 /// The fields the table names by hash: a conversation's name, a line
 /// variant's speaker.
 const NAME: u32 = 0xAB29_2DF5;
@@ -64,7 +83,11 @@ pub fn conversations(root: &Object) -> Vec<Conversation> {
             }
         }
         lines.sort_by_key(|(n, _)| *n);
-        out.push(Conversation { name, first_speaker: u32_field(o, "selFirstSpeaker").unwrap_or(0).min(1) as u8, lines: lines.into_iter().map(|(_, v)| v).collect() });
+        out.push(Conversation {
+            name,
+            first_speaker: u32_field(o, "selFirstSpeaker").unwrap_or(0).min(1) as u8,
+            lines: lines.into_iter().map(|(_, v)| v).collect(),
+        });
     });
     out
 }

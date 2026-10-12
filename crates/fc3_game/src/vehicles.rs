@@ -100,10 +100,6 @@ fn load_handling(info: Option<Res<crate::data::CacheInfo>>) {
 const KMH: f32 = 1.0 / 3.6;
 const HORSEPOWER: f32 = 745.7;
 const AIR_DENSITY: f32 = 1.225;
-/// The boats' water friction (mass-free figures, as their data has them) as
-/// a damping rate per second: the zodiac's thrust and friction then top out
-/// at 22 m/s, where we had tuned it.
-const WATER_DRAG: f32 = 5.45;
 /// The steering angle the boats' rudder force was tuned to (the engine's
 /// default high-speed angle, degrees).
 const RUDDER_REFERENCE: f32 = 30.0;
@@ -197,8 +193,10 @@ struct BoatTune {
     thrust: f32,
     reverse: f32,
     rev_time: f32,
-    /// The water's damping ahead and to the side (per second).
+    /// The water's damping ahead, astern and to the side (per second), with
+    /// the whole hull in the water.
     forward_drag: f32,
+    reverse_drag: f32,
     side_drag: f32,
     /// Rudder angle (degrees) at rest and at its top speed (m/s).
     rudder_low: f32,
@@ -208,7 +206,31 @@ struct BoatTune {
     /// the brake (m/s²).
     braking: f32,
     brake: f32,
+    /// The buoyancy spheres it floats on (Bevy, from its origin: its centre
+    /// of mass and their offsets; radius), and how many there are.
+    spheres: [(Vec3, f32); MAX_SPHERES],
+    sphere_count: usize,
+    /// Its centre of mass (Bevy, from its origin).
+    com: Vec3,
+    /// The spheres' drop at its speed (m per m/s).
+    sphere_drop: f32,
+    /// Gravity's factor in the water and out of it.
+    gravity: f32,
+    gravity_air: f32,
+    /// Per sphere in the water: friction on rising and falling, going down
+    /// into it, and turning about its yaw.
+    updown: f32,
+    down: f32,
+    yaw_friction: f32,
+    /// The stabiliser's turn rate past its angle (radians).
+    stabilizer: f32,
+    stabilizer_angle: f32,
 }
+
+/// Buoyancy spheres a boat may have.
+const MAX_SPHERES: usize = 8;
+/// The water's density (kg/m³), as the engine floats boats.
+const WATER_DENSITY: f32 = 1000.0;
 
 /// The wingsuit's flight, parachute and look limits (the game's data for
 /// its descriptor folder).
@@ -328,21 +350,43 @@ fn tuning(def: usize) -> Tuning {
             t.stabilizer = c.stabilizer;
         }
         (Kind::Boat, _, Some(b)) => {
-            let forward_drag = b.forward_friction * WATER_DRAG;
+            // (The engine applies each friction at each buoyancy sphere in
+            // the water: per unit of mass, against the speed.)
+            let wet = b.spheres.len().max(1) as f32;
+            let to_bevy = |v: [f32; 3]| Vec3::new(v[0], v[2], -v[1]);
+            let com = to_bevy(b.com);
+            let mut spheres = [(Vec3::ZERO, 0.0); MAX_SPHERES];
+            for (slot, (at, r)) in spheres.iter_mut().zip(&b.spheres) {
+                *slot = (com + to_bevy(*at), *r);
+            }
+            let forward_drag = b.forward_friction * wet;
             t.mass = h.mass;
             t.top_speed = b.forward / forward_drag;
-            t.reverse_speed = b.reverse / forward_drag;
+            let reverse_drag = if b.reverse_friction > 0.0 { b.reverse_friction * wet } else { forward_drag };
+            t.reverse_speed = b.reverse / reverse_drag;
             t.boat = Some(BoatTune {
                 thrust: b.forward,
                 reverse: b.reverse,
                 rev_time: if b.rev_up > 0.0 { b.max_rpm / b.rev_up } else { 0.0 },
                 forward_drag,
-                side_drag: b.side_friction * WATER_DRAG,
+                reverse_drag,
+                side_drag: b.side_friction * wet,
                 rudder_low: b.steer_low,
                 rudder_high: b.steer_high,
                 rudder_top: b.steer_top.max(1.0),
                 braking: b.engine_braking,
                 brake: b.brake,
+                spheres,
+                sphere_count: b.spheres.len().min(MAX_SPHERES),
+                com,
+                sphere_drop: if b.z_offset_speed > 0.0 { b.z_offset / b.z_offset_speed } else { 0.0 },
+                gravity: b.gravity,
+                gravity_air: b.gravity_air,
+                updown: b.updown_friction,
+                down: b.down_friction,
+                yaw_friction: b.up_rotate_friction,
+                stabilizer: b.stabilizer,
+                stabilizer_angle: b.stabilizer_angle.to_radians(),
             });
             t.angular_damping = b.angular_damping;
         }
@@ -1277,6 +1321,10 @@ fn build_vehicle_inner(commands: &mut Commands, def: usize, model: &Fc3Model, at
     if d.kind == Kind::Car {
         commands.entity(root).insert((CenterOfMass(Vec3::new(centre.x, min.y + 0.4, centre.z)), NoAutoCenterOfMass));
     }
+    // A boat that floats as the engine has it: about its own centre of mass.
+    if let Some(b) = tuning(def).boat.filter(|b| d.kind == Kind::Boat && b.sphere_count > 0) {
+        commands.entity(root).insert((CenterOfMass(b.com), NoAutoCenterOfMass));
+    }
     // Wheels and the steering wheel turn about their own node.
     let mut pivots: Vec<(String, Entity)> = Vec::new();
     for part in model.lods.first().map(|l| l.parts.as_slice()).unwrap_or(&[]) {
@@ -1299,16 +1347,34 @@ fn build_vehicle_inner(commands: &mut Commands, def: usize, model: &Fc3Model, at
             None => root,
         };
         let offset = part.pivot.as_ref().map(|p| -Vec3::from_array(p.at)).unwrap_or(Vec3::ZERO);
-        commands.spawn((
+        let mut e = commands.spawn((
             Mesh3d(part.mesh.clone()),
             MeshMaterial3d(placement.map(|(s, p)| s.part_material(p, part)).unwrap_or_else(|| part.material.clone())),
             crate::original_shaders::PropPart,
             Transform::from_translation(offset),
             ChildOf(parent),
         ));
+        if part.whole_only {
+            e.insert(WholeOnly);
+        }
+    }
+    // Its wreck's parts (burnt wheels, smashed windscreens), for when it
+    // blows up: all of them stay on it (its loose ones too).
+    let wreck: Vec<(Handle<Mesh>, Handle<StandardMaterial>)> =
+        model.lods.first().map(|l| l.broken.iter().map(|b| (b.part.mesh.clone(), b.part.material.clone())).collect()).unwrap_or_default();
+    if !wreck.is_empty() {
+        commands.entity(root).insert(WreckParts(wreck));
     }
     root
 }
+
+/// A part of a vehicle there only while it's whole.
+#[derive(Component)]
+struct WholeOnly;
+
+/// A vehicle's wreck parts: its model's broken state (mesh, material).
+#[derive(Component)]
+struct WreckParts(Vec<(Handle<Mesh>, Handle<StandardMaterial>)>);
 
 /// A mission placement keeps its actual model/material kit. Names such as
 /// JAS_060_080_100_Car are not enough to identify the vehicle archetype.
@@ -2313,16 +2379,61 @@ fn drive(
                     Vec3::new(v.max.x, v.min.y + 0.3, v.max.z),
                 ];
                 let mut wet = 0;
-                // On the sea or a river or lake.
-                let water = crate::water::surface_at(t.translation, &heights);
-                for h in hull {
-                    let p = t.transform_point(h);
-                    let depth = water - p.y;
-                    if depth > 0.0 {
-                        wet += 1;
-                        let pv = f.velocity_at_point(p);
-                        let lift = (depth.min(1.2) * m * 9.81 / 4.0 / 0.35) - pv.y * m * 0.6;
-                        f.apply_force_at_point(Vec3::Y * lift.max(0.0), p);
+                let mut afloat = hull.len();
+                match tune.boat.filter(|b| b.sphere_count > 0) {
+                    // As the engine floats it: on its buoyancy spheres
+                    // (dropping as it gets going, so the hull rises), each
+                    // one's cap in the water; the water's weight that much
+                    // less its mass, up at the centre of buoyancy; and, at
+                    // each one in the water, friction on its rising and
+                    // falling, and on going down into it.
+                    Some(b) => {
+                        afloat = b.sphere_count;
+                        let drop = Vec3::Y * b.sphere_drop * vel.length();
+                        let (mut volume, mut centre) = (0.0, Vec3::ZERO);
+                        for &(at, r) in &b.spheres[..b.sphere_count] {
+                            let c = t.transform_point(at + drop);
+                            let water = crate::water::surface_at(c, &heights);
+                            let h = (water - (c.y - r)).clamp(0.0, 2.0 * r);
+                            if h <= 0.0 {
+                                continue;
+                            }
+                            wet += 1;
+                            let sub = std::f32::consts::PI * h * h * (3.0 * r - h) / 3.0;
+                            volume += sub;
+                            centre += Vec3::new(c.x, c.y - r + h * 0.5, c.z) * sub;
+                            let vy = f.velocity_at_point(c).y;
+                            let full = 4.0 / 3.0 * std::f32::consts::PI * r * r * r;
+                            let into = if vy < 0.0 { b.down * (sub / full) * vy * vy } else { 0.0 };
+                            f.apply_force_at_point(Vec3::Y * (-b.updown * vy + into) * m, c);
+                        }
+                        if volume > 0.0 {
+                            f.apply_force_at_point(Vec3::Y * (WATER_DENSITY * volume - m).max(0.0), centre / volume);
+                        }
+                        let g = if wet > 0 { b.gravity } else { b.gravity_air };
+                        f.apply_force(Vec3::NEG_Y * m * 9.81 * (g - 1.0));
+                        if wet > 0 {
+                            let spin = f.angular_velocity();
+                            f.apply_torque(-up * spin.dot(up) * b.yaw_friction * wet as f32 * m);
+                        }
+                        // The stabiliser rights it past its angle.
+                        if b.stabilizer > 0.0 && up.angle_between(Vec3::Y) > b.stabilizer_angle {
+                            f.apply_torque(up.cross(Vec3::Y).normalize_or_zero() * m * b.stabilizer);
+                        }
+                    }
+                    None => {
+                        // On the sea or a river or lake.
+                        let water = crate::water::surface_at(t.translation, &heights);
+                        for h in hull {
+                            let p = t.transform_point(h);
+                            let depth = water - p.y;
+                            if depth > 0.0 {
+                                wet += 1;
+                                let pv = f.velocity_at_point(p);
+                                let lift = (depth.min(1.2) * m * 9.81 / 4.0 / 0.35) - pv.y * m * 0.6;
+                                f.apply_force_at_point(Vec3::Y * lift.max(0.0), p);
+                            }
+                        }
                     }
                 }
                 // The motor's revs come up with the throttle (the game's rate),
@@ -2355,7 +2466,10 @@ fn drive(
                             let k = (speed.abs() / b.rudder_top).min(1.0);
                             let rudder = (b.rudder_low + (b.rudder_high - b.rudder_low) * k) / RUDDER_REFERENCE;
                             f.apply_torque(Vec3::Y * v.steer * m * 1.6 * rudder * (0.3 + k).min(1.3));
-                            f.apply_force(-right * lat * m * b.side_drag - flat_fwd * speed * m * b.forward_drag);
+                            // (As much of the hull as is in the water.)
+                            let share = wet as f32 / afloat as f32;
+                            let drag = if speed >= 0.0 { b.forward_drag } else { b.reverse_drag };
+                            f.apply_force((-right * lat * b.side_drag - flat_fwd * speed * drag) * m * share);
                         }
                         None => {
                             if speed.abs() < d.top_speed || v.throttle * speed < 0.0 {
@@ -2367,8 +2481,11 @@ fn drive(
                             f.apply_force(-right * lat * m * 1.5 - flat_fwd * speed * m * 0.08);
                         }
                     }
-                    let tilt = up.cross(Vec3::Y);
-                    f.apply_torque(tilt * m * 6.0);
+                    // (Ours floats on its corners, righted by hand.)
+                    if tune.boat.is_none_or(|b| b.sphere_count == 0) {
+                        let tilt = up.cross(Vec3::Y);
+                        f.apply_torque(tilt * m * 6.0);
+                    }
                 }
             }
             Kind::Glider => {
@@ -2852,7 +2969,7 @@ fn drive_test(
             p.pitch = -0.15;
             commands.entity(pe).insert(ColliderDisabled);
             *start = Some(now);
-            info!("drive-test: in {} at {:?}", DEFS[v.def].name, vt.translation);
+            info!("drive-test: in {} at {:?}, bounds {:.2?}..{:.2?}", DEFS[v.def].name, vt.translation, v.min, v.max);
             // The ground ahead of the nose and behind the tail.
             let ground = |d: f32| heights.height_at(vt.translation + vt.rotation * Vec3::NEG_Z * d).map_or(f32::NAN, |h| h - vt.translation.y);
             info!(
@@ -3023,8 +3140,9 @@ fn vehicle_damage(
     time: Res<Time>,
     mut rng: ResMut<crate::weapons::Rng>,
     mut particles: ResMut<crate::particles::Particles>,
-    mut vehicles: Query<(Entity, &Transform, &mut Vehicle, &mut Health, &mut Wear, &Children)>,
+    mut vehicles: Query<(Entity, &Transform, &mut Vehicle, &mut Health, &mut Wear, &Children, Option<&WreckParts>)>,
     parts: Query<&Children>,
+    whole_only: Query<(), With<WholeOnly>>,
     mut mats: Query<&mut MeshMaterial3d<StandardMaterial>>,
     mut originals: Query<Entity, With<MeshMaterial3d<crate::original_shaders::OriginalMaterial>>>,
     mut explosions: MessageWriter<crate::weapons::Explosion>,
@@ -3038,7 +3156,7 @@ fn vehicle_damage(
     let charred = charred
         .get_or_insert_with(|| materials.add(StandardMaterial { base_color: Color::srgb(0.06, 0.055, 0.05), perceptual_roughness: 0.95, ..default() }))
         .clone();
-    for (e, t, mut v, mut h, mut w, children) in &mut vehicles {
+    for (e, t, mut v, mut h, mut w, children, wreck) in &mut vehicles {
         if w.wrecked {
             // A wreck smoulders.
             w.puff -= dt;
@@ -3097,6 +3215,11 @@ fn vehicle_damage(
         v.brake = true;
         v.parked = true;
         for c in children.iter().chain(children.iter().flat_map(|c| parts.get(c).into_iter().flatten().copied())) {
+            // What was there only whole goes; its wreck's own parts come.
+            if whole_only.contains(c) {
+                commands.entity(c).despawn();
+                continue;
+            }
             if let Ok(mut m) = mats.get_mut(c) {
                 m.0 = charred.clone();
             }
@@ -3107,6 +3230,9 @@ fn vehicle_damage(
                     .remove::<crate::original_shaders::OriginalSwap>()
                     .insert(MeshMaterial3d(charred.clone()));
             }
+        }
+        for (mesh, material) in wreck.map(|w| w.0.as_slice()).unwrap_or(&[]) {
+            commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), crate::original_shaders::PropPart, ChildOf(e)));
         }
         commands.entity(e).remove::<crate::patrols::PatrolDriver>();
         info!("a {} blew up at {centre:.0?}", DEFS[v.def].name);

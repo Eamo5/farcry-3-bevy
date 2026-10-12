@@ -618,18 +618,28 @@ fn apply_reward(
     }
 }
 
+/// An explosive barrel goes up: gone for good, its broken shell left for
+/// now where it has one.
+#[allow(clippy::too_many_arguments)]
 fn detonate_explosives(
     mut died: MessageReader<Died>,
     mut world: ResMut<WorldState>,
     mut explosions: MessageWriter<Explosion>,
     mut commands: Commands,
-    q: Query<(&Explosive, &GlobalTransform)>,
+    q: Query<(&Explosive, &GlobalTransform, Option<&crate::objects::WorldObject>)>,
+    models: Res<Assets<crate::cache_assets::Fc3Model>>,
+    mut breaks: ResMut<crate::breakables::Breaks>,
 ) {
     for d in died.read() {
-        let Ok((ex, gt)) = q.get(d.entity) else { continue };
+        let Ok((ex, gt, obj)) = q.get(d.entity) else { continue };
         world.removed.insert(ex.id);
         explosions.write(Explosion { at: gt.translation() + Vec3::Y * 0.5, radius: 9.0, damage: 220.0, instigator: d.killer });
-        commands.entity(d.entity).despawn();
+        if obj.and_then(|o| models.get(&o.model)).is_some_and(crate::breakables::has_broken_state) {
+            breaks.break_now(ex.id);
+            commands.entity(d.entity).remove::<(Explosive, crate::combat::Health)>();
+        } else {
+            commands.entity(d.entity).despawn();
+        }
     }
 }
 

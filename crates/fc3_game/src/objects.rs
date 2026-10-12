@@ -378,6 +378,10 @@ fn spawn_model(commands: &mut Commands, handle: &Handle<Fc3Model>, model: &Fc3Mo
 #[derive(Component, Clone, Copy)]
 pub struct PlacedId(pub u64);
 
+/// A placed object's own materials by slot (its placement's material set).
+#[derive(Component)]
+pub struct SlotMaterials(pub Vec<Handle<StandardMaterial>>);
+
 pub fn is_character(class: &str) -> bool {
     class.contains("Pawn")
 }
@@ -387,6 +391,10 @@ pub fn is_character(class: &str) -> bool {
 pub fn spawn_placement(commands: &mut Commands, root: Entity, sector: &Fc3Sector, p: &cache::Placement, handle: &Handle<Fc3Model>, model: &Fc3Model) -> Entity {
     let transform = Transform { translation: Vec3::from_array(p.translation), rotation: Quat::from_array(p.rotation), scale: Vec3::splat(p.scale) };
     let obj = commands.spawn((transform, Visibility::Visible, WorldObject { model: handle.clone(), entity_index: p.entity }, ChildOf(root))).id();
+    // (Its own material set: what its broken state's parts wear too.)
+    if let Some(set) = sector.material_sets.get(p.material_set as usize).filter(|_| p.material_set != cache::NO_MATERIAL_SET) {
+        commands.entity(obj).insert(SlotMaterials(set.clone()));
+    }
     let small = model.radius() < 1.5;
     for (li, lod) in model.lods.iter().enumerate() {
         let range = lod_range(model, li);

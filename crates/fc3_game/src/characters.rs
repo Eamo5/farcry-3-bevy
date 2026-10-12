@@ -345,6 +345,9 @@ pub struct CharacterRig {
     current: AnimKind,
     time: f32,
     previous: Option<(AnimKind, f32)>,
+    /// The clip it crossfades from when that was another set's
+    /// (`set_clips_blended`).
+    previous_clip: Option<Handle<Fc3Clip>>,
     blend: f32,
     /// Seconds between pose updates (distant characters update less often).
     accum: f32,
@@ -378,6 +381,17 @@ impl CharacterRig {
     pub fn set_clips(&mut self, set: Arc<ClipSet>) {
         self.set = set;
         self.previous = None;
+        self.previous_clip = None;
+        self.time = 0.0;
+    }
+
+    /// As `set_clips`, crossfading from the pose it was in (a guard getting
+    /// up from a spot's clip, or into it).
+    pub fn set_clips_blended(&mut self, set: Arc<ClipSet>) {
+        self.previous_clip = self.set.clips.get(&self.current).cloned();
+        self.previous = self.previous_clip.is_some().then_some((self.current, self.time));
+        self.blend = 0.0;
+        self.set = set;
         self.time = 0.0;
     }
 
@@ -672,7 +686,18 @@ pub(crate) fn spawn_dressed_rig(
         })
         .collect();
     commands.entity(rig_root).insert((
-        CharacterRig { set, nodes: Arc::new(nodes), joints, current: AnimKind::Idle, time: 0.0, previous: None, blend: 1.0, accum: 0.0, restarts: 0 },
+        CharacterRig {
+            set,
+            nodes: Arc::new(nodes),
+            joints,
+            current: AnimKind::Idle,
+            time: 0.0,
+            previous: None,
+            previous_clip: None,
+            blend: 1.0,
+            accum: 0.0,
+            restarts: 0,
+        },
         AnimRequest { kind: AnimKind::Idle, rate: 1.0 },
     ));
     Some(rig_root)
@@ -740,6 +765,7 @@ pub fn animate_characters(
         if req.kind != rig.current {
             let prev = (rig.current, rig.time);
             rig.previous = Some(prev);
+            rig.previous_clip = None;
             rig.current = req.kind;
             rig.time = 0.0;
             rig.blend = 0.0;
@@ -751,6 +777,7 @@ pub fn animate_characters(
         rig.blend = (rig.blend + dt / BLEND_TIME).min(1.0);
         if rig.blend >= 1.0 {
             rig.previous = None;
+            rig.previous_clip = None;
         }
         // Distant characters pose at a lower rate.
         let dist = gt.translation().distance(cam);
@@ -773,7 +800,7 @@ pub fn animate_characters(
         let t = wrap(rig.current, rig.time, clip.0.duration);
         let mut pose = sample(&rig, &skel.0, &clip.0, t);
         if let Some((pk, pt)) = rig.previous {
-            if let Some(pclip) = set.clips.get(&pk).and_then(|h| clips.get(h)) {
+            if let Some(pclip) = rig.previous_clip.as_ref().or_else(|| set.clips.get(&pk)).and_then(|h| clips.get(h)) {
                 let prev = sample(&rig, &skel.0, &pclip.0, wrap(pk, pt, pclip.0.duration));
                 let w = rig.blend;
                 for (cur, old) in pose.iter_mut().zip(prev.iter()) {

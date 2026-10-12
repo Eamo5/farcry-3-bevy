@@ -289,11 +289,29 @@ fn body_role(name: &str) -> BodyRole {
 /// A destruction state after the first (`STATE02_A`, `..._St2_B`): the
 /// intact model is its first state, as the render meshes keep it.
 fn later_state(lower: &str) -> bool {
-    lower.split('_').any(|tok| {
-        let Some(rest) = tok.strip_prefix("state").or_else(|| tok.strip_prefix("st")) else { return false };
+    state_number(lower).is_some_and(|n| n >= 2)
+}
+
+/// The destruction state a body or node belongs to, from its name
+/// (`STATE02_A__Remains`, `Rock01_St2_B`, `STATE001`: 2, 2, 1), if any.
+pub fn state_number(name: &str) -> Option<u8> {
+    name.to_ascii_lowercase().split('_').find_map(|tok| {
+        let rest = tok.strip_prefix("state").or_else(|| tok.strip_prefix("st"))?;
         let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-        digits.parse::<u32>().is_ok_and(|n| n >= 2)
+        digits.parse::<u8>().ok()
     })
+}
+
+/// Havok's motion types a body can have that don't move on their own.
+pub const MOTION_KEYFRAMED: u8 = 4;
+pub const MOTION_FIXED: u8 = 5;
+
+/// Each rigid body's name and motion type (`MOTION_FIXED`, or one that
+/// moves: dynamic, box or sphere inertia).
+pub fn body_motions(file: &[u8]) -> Result<Vec<(String, u8)>> {
+    let p = Packfile::parse(file)?;
+    // hkpEntity: its motion at 0xE0, whose type is the byte at 0x8.
+    Ok(p.of_class("hkpRigidBody").map(|o| (p.string(o + 0x78).unwrap_or_default().to_string(), p.u8(o + 0xE8))).collect())
 }
 
 /// Columns of a linear map and a translation.
@@ -760,6 +778,19 @@ impl ShapeWalker<'_, '_> {
     }
 }
 
+/// Each rigid body's name and the raw bytes of its entity from `from` to
+/// `to` (for working out field layouts).
+pub fn body_bytes(file: &[u8], from: u32, to: u32) -> Result<Vec<(String, Vec<u8>)>> {
+    let p = Packfile::parse(file)?;
+    Ok(p.of_class("hkpRigidBody")
+        .map(|o| {
+            let name = p.string(o + 0x78).unwrap_or_default().to_string();
+            let bytes = (from..to).step_by(4).flat_map(|i| p.u32(o + i).to_le_bytes()).collect();
+            (name, bytes)
+        })
+        .collect())
+}
+
 /// Every shape of a model's `.hkx` that characters collide with, as
 /// triangles in the model's (Dunia, Z-up) space.
 ///
@@ -769,7 +800,6 @@ impl ShapeWalker<'_, '_> {
 /// are left out.
 pub fn collision_geometry(file: &[u8]) -> Result<CollisionGeometry> {
     let p = Packfile::parse(file)?;
-    let mut out = CollisionGeometry::default();
     let bodies: Vec<(u32, String, BodyRole)> = p
         .of_class("hkpRigidBody")
         .map(|o| {
@@ -779,19 +809,50 @@ pub fn collision_geometry(file: &[u8]) -> Result<CollisionGeometry> {
         })
         .collect();
     let has_coarse = bodies.iter().any(|b| b.2 == BodyRole::Coarse);
-    let mut walker = ShapeWalker {
-        p: &p,
-        class_of: p.objects.iter().map(|(o, c)| (*o, c.as_str())).collect(),
-        soup: TriangleSoup::default(),
-        shapes: BTreeMap::new(),
-        unhandled: BTreeMap::new(),
-    };
-    for (o, name, role) in bodies {
+    let bodies = bodies.into_iter().map(|(o, name, role)| {
         let take = match role {
             BodyRole::Coarse => true,
             BodyRole::Detail => !has_coarse,
             BodyRole::Skip => false,
         };
+        (o, name, role, take)
+    });
+    Ok(gather(&p, bodies))
+}
+
+/// What characters collide with once the model is broken: its last state's
+/// bodies that stay put (the remains, not the pieces that fall), and the
+/// bodies it has in every state; coarse ones, else detailed. None for a
+/// model without destruction states.
+pub fn broken_collision(file: &[u8]) -> Result<Option<(u8, CollisionGeometry)>> {
+    let p = Packfile::parse(file)?;
+    let bodies: Vec<(u32, String, Option<u8>, bool, u8)> = p
+        .of_class("hkpRigidBody")
+        .map(|o| {
+            let name = p.string(o + 0x78).unwrap_or_default().to_string();
+            let base = name.strip_prefix("HIGH_").unwrap_or(&name);
+            let detail = base.len() != name.len();
+            (o, name.clone(), state_number(base), detail || base.to_ascii_lowercase().starts_with("nav_"), p.u8(o + 0xE8))
+        })
+        .collect();
+    let Some(last) = bodies.iter().filter_map(|b| b.2).max().filter(|&s| s >= 2) else { return Ok(None) };
+    let wanted = |b: &(u32, String, Option<u8>, bool, u8)| b.2.is_none_or(|s| s == last) && b.4 != MOTION_KEYFRAMED && (b.2.is_none() || b.4 == MOTION_FIXED);
+    let has_coarse = bodies.iter().any(|b| wanted(b) && !b.3);
+    let chosen = bodies.iter().map(|b| (b.0, b.1.clone(), if b.3 { BodyRole::Detail } else { BodyRole::Coarse }, wanted(b) && (!b.3 || !has_coarse)));
+    Ok(Some((last, gather(&p, chosen))))
+}
+
+/// The shapes of the bodies taken, placed by their motion states.
+fn gather(p: &Packfile, bodies: impl Iterator<Item = (u32, String, BodyRole, bool)>) -> CollisionGeometry {
+    let mut out = CollisionGeometry::default();
+    let mut walker = ShapeWalker {
+        p,
+        class_of: p.objects.iter().map(|(o, c)| (*o, c.as_str())).collect(),
+        soup: TriangleSoup::default(),
+        shapes: BTreeMap::new(),
+        unhandled: BTreeMap::new(),
+    };
+    for (o, name, role, take) in bodies {
         out.body_names.push((name, take));
         if !take {
             continue;
@@ -819,7 +880,7 @@ pub fn collision_geometry(file: &[u8]) -> Result<CollisionGeometry> {
     if let Some((at, n)) = p.of_class("nomadSurfaceTypePalette").next().and_then(|o| p.array(o + 8)) {
         out.palette = (0..n).map(|i| p.u32(at + i * 8 + 4)).collect();
     }
-    Ok(out)
+    out
 }
 
 /// Twice the triangle's area and its normal's vertical share.
@@ -1099,6 +1160,10 @@ mod tests {
     #[test]
     fn state_names() {
         assert!(later_state("state02_a__debris") && later_state("rock01_st2_b") && later_state("st2_base") && later_state("state03"));
+        assert_eq!(
+            [state_number("STATE02_A__Remains_Static"), state_number("STATE001"), state_number("Rock01_St2_B"), state_number("Stairs02")],
+            [Some(2), Some(1), Some(2), None]
+        );
         assert!(!later_state("state01__full") && !later_state("stairs02") && !later_state("st1_bbq") && !later_state("stone_wall2"));
         assert_eq!(body_role("HIGH_State02_B"), BodyRole::Skip);
         assert_eq!(body_role("NAV_Fence"), BodyRole::Skip);

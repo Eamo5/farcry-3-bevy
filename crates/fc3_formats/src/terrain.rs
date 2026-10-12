@@ -120,14 +120,25 @@ pub const NO_LAYER: u8 = 0xFF;
 /// Cells per sector side.
 pub const CELLS: usize = GRID - 1;
 
-/// Hole cells for a sector. Bit 0x10 of a sample's last byte looks like the
-/// game's hole flag: it is set in only 11 sectors, in tidy rectangles. One of
-/// them is a 10 x 7 m opening across sectors 22122/22282 next to a story scene's
-/// room placeholder, and no cave geometry was found beneath it. Cutting those
-/// cells shows the sky through the ground, so none are cut. The mesh, collider
-/// and height queries honour holes if this ever returns any.
-pub fn hole_cells(_data: &[u8]) -> Vec<bool> {
-    Vec::new()
+/// The cut-out mark on a sample: the top three bits of its last byte all
+/// set. Every sample of the placeholder sectors round the world's edge (all at
+/// 200 m, with no material) carries it, and inside the islands it lines the
+/// foot of the terrain where it rises over a cave's mouth (the doctor's cave
+/// opens to the west through a strip of them). Bit 0x10, an earlier guess, is
+/// set in only 11 sectors, in tidy rectangles with nothing beneath.
+const HOLE_MARK: u8 = 0xE0;
+
+/// Hole cells for a sector: those whose four corner samples all carry the
+/// cut-out mark. Empty when the sector has none.
+pub fn hole_cells(data: &[u8]) -> Vec<bool> {
+    let marked = |col: usize, row: usize| data.get(SAMPLES_OFFSET + 4 * (row * GRID + col) + 3).is_some_and(|b| b & HOLE_MARK == HOLE_MARK);
+    let cells: Vec<bool> =
+        (0..CELLS * CELLS).map(|i| (i % CELLS, i / CELLS)).map(|(c, r)| marked(c, r) && marked(c + 1, r) && marked(c, r + 1) && marked(c + 1, r + 1)).collect();
+    if cells.iter().any(|h| *h) {
+        cells
+    } else {
+        Vec::new()
+    }
 }
 
 /// A sector's water plane: the water level (Dunia height, metres) at +0x3C,
@@ -292,5 +303,27 @@ mod tests {
         assert_eq!(c.origin(), [0.0, 2048.0]);
         assert_eq!(SectorCoord::containing(13.0, 2076.0), c);
         assert_eq!(SectorCoord::from_id(18161).atlas_coord().id(), 18000);
+    }
+
+    #[test]
+    fn a_cell_is_cut_when_all_its_corners_are_marked() {
+        let mut data = vec![0u8; SAMPLES_OFFSET + GRID * GRID * 4];
+        let mut mark = |col: usize, row: usize, byte: u8| data[SAMPLES_OFFSET + 4 * (row * GRID + col) + 3] = byte;
+        // A 2 x 3 block of marked samples (other bits set too) cuts the two
+        // cells inside it; a lone mark, or one missing a bit, cuts none.
+        for (col, row) in [(10, 20), (11, 20), (10, 21), (11, 21), (10, 22), (11, 22)] {
+            mark(col, row, 0xE5);
+        }
+        mark(40, 40, 0xE0);
+        mark(30, 30, 0xC0);
+        mark(31, 30, 0xC0);
+        mark(30, 31, 0xC0);
+        mark(31, 31, 0xC0);
+        let holes = hole_cells(&data);
+        assert_eq!(holes.len(), CELLS * CELLS);
+        let cut: Vec<(usize, usize)> = (0..CELLS * CELLS).filter(|i| holes[*i]).map(|i| (i % CELLS, i / CELLS)).collect();
+        assert_eq!(cut, [(10, 20), (10, 21)]);
+        // None marked: no hole table at all.
+        assert!(hole_cells(&vec![0u8; SAMPLES_OFFSET + GRID * GRID * 4]).is_empty());
     }
 }

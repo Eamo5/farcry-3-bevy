@@ -759,6 +759,12 @@ pub struct CachedPart {
     pub indices: Vec<u32>,
     /// A part that turns on its own (a vehicle's wheel or steering wheel).
     pub pivot: Option<PartPivot>,
+    /// Its destruction state: 0 in every state, 1 whole, 2 and on broken
+    /// (`STATE02...` nodes: a wreck's burnt wheels, a bridge's remains).
+    pub state: u8,
+    /// A loose piece of a broken state, its body dynamic in the game's
+    /// physics: it falls (its pivot is the piece's node).
+    pub piece: bool,
 }
 
 /// The node a moving part hangs from: its name and model-space pose.
@@ -842,6 +848,19 @@ impl CachedModel {
                 }
             });
         }
+        // Destruction states, per LOD and part (files without them are whole).
+        if self.lods.iter().any(|l| l.parts.iter().any(|p| p.state != 0)) {
+            w.chunk(b"STAT", |w| {
+                w.u32(self.lods.len() as u32);
+                for lod in &self.lods {
+                    w.u32(lod.parts.len() as u32);
+                    for p in &lod.parts {
+                        w.u8(p.state);
+                        w.u8(p.piece as u8);
+                    }
+                }
+            });
+        }
         if !self.collision_indices.is_empty() {
             w.chunk(b"COLL", |w| {
                 w.u32(self.collision_positions.len() as u32);
@@ -908,6 +927,18 @@ impl CachedModel {
                             let rotation = c.vec4()?;
                             if let Some(p) = m.lods.get_mut(li).and_then(|l| l.parts.get_mut(pi)).filter(|_| !name.is_empty()) {
                                 p.pivot = Some(PartPivot { name, at, rotation });
+                            }
+                        }
+                    }
+                }
+                b"STAT" => {
+                    let lods = c.u32()?;
+                    for li in 0..lods as usize {
+                        let n = c.u32()?;
+                        for pi in 0..n as usize {
+                            let (state, piece) = (c.u8()?, c.u8()? != 0);
+                            if let Some(p) = m.lods.get_mut(li).and_then(|l| l.parts.get_mut(pi)) {
+                                (p.state, p.piece) = (state, piece);
                             }
                         }
                     }
@@ -1231,7 +1262,6 @@ pub const FX_TEXTURES: &[&str] = &[
     "fc3_gfx_impactdecal_metal_2x1",
     "fc3_gfx_impactdecal_sand_2x1",
     "fc3_gfx_bloodsplatters_4x1",
-    "fc3_gfx_waterdrops_01",
     // The sun's lens flare: its glow and six ghosts, side by side.
     "lens_flare",
 ];
@@ -2124,6 +2154,15 @@ pub fn collision_rel(model: &str) -> String {
     collision_rel_of_hash(path_hash(model))
 }
 
+/// What characters collide with once a model is broken (its last state's
+/// remains; see `havok::broken_collision`), by the model path's hash.
+pub fn broken_collision_rel_of_hash(hash: u64) -> String {
+    format!("collision/{hash:016x}.broken.col")
+}
+
+/// The models with a broken state's collision (one hash per line).
+pub const BROKEN_COLLISION_INDEX_REL: &str = "collision/broken.txt";
+
 /// [`collision_rel`] from the model path's hash (a model file's stem).
 pub fn collision_rel_of_hash(hash: u64) -> String {
     format!("collision/{hash:016x}.col")
@@ -2131,6 +2170,10 @@ pub fn collision_rel_of_hash(hash: u64) -> String {
 
 /// The models that have a `collision/<hash>.col`: one `hash_name` per line.
 pub const COLLISION_INDEX_REL: &str = "collision/index.txt";
+
+/// Placed entities with a model but no body (no physics component):
+/// decorations the player passes through. One id per line.
+pub const INTANGIBLE_REL: &str = "collision/intangible.txt";
 
 /// Triangle soup in Bevy model space, what characters collide with.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -2267,16 +2310,26 @@ mod tests {
             material_flags: vec![3],
             lods: vec![CachedLod {
                 distance: 10.0,
-                parts: vec![CachedPart {
-                    material: 0,
-                    positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-                    normals: vec![[0.0, 1.0, 0.0]; 3],
-                    uvs: vec![[0.0; 2]; 3],
-                    joints: vec![[1, 2, 3, 4]; 3],
-                    weights: vec![[1.0, 0.0, 0.0, 0.0]; 3],
-                    indices: vec![0, 1, 2],
-                    ..Default::default()
-                }],
+                parts: vec![
+                    CachedPart {
+                        material: 0,
+                        positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                        normals: vec![[0.0, 1.0, 0.0]; 3],
+                        uvs: vec![[0.0; 2]; 3],
+                        joints: vec![[1, 2, 3, 4]; 3],
+                        weights: vec![[1.0, 0.0, 0.0, 0.0]; 3],
+                        indices: vec![0, 1, 2],
+                        ..Default::default()
+                    },
+                    CachedPart {
+                        material: 0,
+                        positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                        indices: vec![0, 1, 2],
+                        state: 2,
+                        piece: true,
+                        ..Default::default()
+                    },
+                ],
             }],
             collision_positions: vec![[0.0; 3]; 3],
             collision_indices: vec![0, 1, 2],
@@ -2288,6 +2341,8 @@ mod tests {
         assert_eq!(m2.material_flags, m.material_flags);
         assert_eq!(m2.lods[0].parts[0].indices, vec![0, 1, 2]);
         assert_eq!(m2.lods[0].parts[0].joints[0], [1, 2, 3, 4]);
+        assert_eq!((m2.lods[0].parts[0].state, m2.lods[0].parts[0].piece), (0, false));
+        assert_eq!((m2.lods[0].parts[1].state, m2.lods[0].parts[1].piece), (2, true));
         assert_eq!(m2.bones[0].parent, -1);
         assert_eq!(m2.bones[0].inverse_bind[15], 1.0);
         assert_eq!(m2.collision_indices.len(), 3);

@@ -36,7 +36,7 @@ impl Plugin for TraversalPlugin {
                 ride.run_if(traversal_controls_available),
             )
                 .chain(),
-        ).add_systems(PreUpdate, traversal_test.after(crate::controls::update_actions)
+        ).add_systems(PreUpdate, traversal_test.after(crate::controls::update_actions).before(crate::controls::apply_action_maps)
             .run_if(traversal_controls_available));
     }
 }
@@ -71,11 +71,12 @@ mod ownership_tests {
             .init_resource::<ActionState>()
             .init_resource::<crate::mission_layers::MissionLayers>()
             .init_resource::<crate::vine::Vines>()
+            .init_resource::<crate::player::PlayerBody>()
             .insert_resource(Ways { data: Traversal {
                 ladders: vec![fc3_formats::traversal::Ladder {
                     id: 0, mission_layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
                     animation_package: 0,
-                    base: [0.0; 3], top: 3.0, facing: [0.0, 0.0, 1.0],
+                    base: [0.0; 3], top: 3.0, facing: [0.0, 0.0, 1.0], hand_over_hand: false,
                 }], ..default()
             }, ..default() })
             .insert_resource(Mount::Ladder { index: 0, side: Vec3::Z });
@@ -95,6 +96,41 @@ mod ownership_tests {
         assert!((app.world().get::<Transform>(e).unwrap().translation.y - (3.0 - 0.05 + HALF_HEIGHT)).abs() < 0.001);
         assert_eq!(app.world().get::<Player>(e).unwrap().velocity, Vec3::ZERO);
         assert!(matches!(*app.world().resource::<Mount>(), Mount::Ladder { .. }));
+    }
+
+    #[test]
+    fn walking_onto_a_ladder_at_its_top_turns_to_the_rungs_to_climb_down() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default(), bevy::mesh::MeshPlugin,
+            bevy::transform::TransformPlugin, avian3d::prelude::PhysicsPlugins::default()))
+            .init_resource::<ActionState>()
+            .init_resource::<crate::mission_layers::MissionLayers>()
+            .init_resource::<crate::vine::Vines>()
+            .init_resource::<crate::player::PlayerBody>()
+            .init_resource::<Mount>()
+            .insert_resource(Ways { data: Traversal {
+                ladders: vec![fc3_formats::traversal::Ladder {
+                    id: 0, mission_layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
+                    animation_package: 0,
+                    base: [0.0; 3], top: 4.0, facing: [0.0, 0.0, -1.0], hand_over_hand: false,
+                }], ..default()
+            }, ..default() });
+        // On top of the wall (the rungs face -z: it stands at -z), walking
+        // back towards the edge (+z), facing it.
+        let mut player = mounted_player();
+        player.driving = false;
+        player.yaw = std::f32::consts::PI;
+        let e = app.world_mut().spawn((Transform::from_xyz(0.0, 4.0 + HALF_HEIGHT, -0.6), Health::new(100.0), player)).id();
+        app.update();
+        app.world_mut().resource_mut::<ActionState>().movement.y = 1.0;
+        app.world_mut().run_system_once(climb).unwrap();
+        assert!(matches!(*app.world().resource::<Mount>(), Mount::Ladder { side, .. } if side == Vec3::Z));
+        let t = app.world().get::<Transform>(e).unwrap().translation;
+        assert!(t.abs_diff_eq(Vec3::new(0.0, 3.4 + HALF_HEIGHT, 0.45), 1e-4), "{t:?}");
+        // Facing the rungs (-z).
+        let yaw = app.world().get::<Player>(e).unwrap().yaw;
+        assert!(Vec3::new(-yaw.sin(), 0.0, -yaw.cos()).abs_diff_eq(Vec3::NEG_Z, 1e-4));
     }
 
     #[derive(Resource, Default)]
@@ -346,6 +382,9 @@ fn ride(
     }
 }
 
+/// Climbing speed on a ladder without the game's figures (m/s).
+const LADDER_SPEED: f32 = 3.0;
+
 /// Walking into a ladder grabs it; forward and back climb, jump lets go,
 /// and climbing past the top steps off onto whatever it leads to.
 fn climb(
@@ -358,6 +397,7 @@ fn climb(
     spatial: avian3d::prelude::SpatialQuery,
     mut mount: ResMut<Mount>,
     mut players: Query<(Entity, &mut Transform, &mut Player, &Health)>,
+    body: Res<crate::player::PlayerBody>,
     mut commands: Commands,
 ) {
     let Ok((e, mut t, mut p, h)) = players.single_mut() else { return };
@@ -375,19 +415,36 @@ fn climb(
             if h.dead || p.driving || p.noclip || p.swimming || actions.movement.y < 0.3 {
                 return;
             }
-            let near = ways.data.ladders.iter().enumerate().find(|(_, l)| {
-                if !available(l) { return false; }
+            let towards = |l: &fc3_formats::traversal::Ladder, reach: f32| {
                 let base = Vec3::from(l.base);
                 let to = Vec3::new(base.x - t.translation.x, 0.0, base.z - t.translation.z);
-                to.length() < 0.8 && feet > base.y - 0.4 && feet < l.top - 0.3 && forward.dot(to.normalize_or(forward)) > 0.2
+                to.length() < reach && forward.dot(to.normalize_or(forward)) > 0.2
+            };
+            let near = ways.data.ladders.iter().enumerate().find(|(_, l)| {
+                available(l) && towards(l, 0.8) && feet > l.base[1] - 0.4 && feet < l.top - 0.3
             });
-            let Some((i, l)) = near else { return };
+            // Or walking onto it at its top, to climb down.
+            let from_top = || ways.data.ladders.iter().enumerate().find(|(_, l)| available(l) && towards(l, 1.0) && (feet - l.top).abs() < 0.6);
+            let (i, l, top) = match near {
+                Some((i, l)) => (i, l, false),
+                None => match from_top() {
+                    Some((i, l)) => (i, l, true),
+                    None => return,
+                },
+            };
             let base = Vec3::from(l.base);
-            let side = Vec3::new(t.translation.x - base.x, 0.0, t.translation.z - base.z).normalize_or(-Vec3::from(l.facing));
+            let facing = Vec3::from(l.facing);
+            let side = if top { -facing } else { Vec3::new(t.translation.x - base.x, 0.0, t.translation.z - base.z).normalize_or(-facing) };
             *mount = Mount::Ladder { index: i, side };
             p.driving = true;
             p.velocity = Vec3::ZERO;
             commands.entity(e).insert(ColliderDisabled);
+            if top {
+                // Turned round to the rungs, just under the top.
+                p.yaw = (-facing.x).atan2(-facing.z);
+                t.translation = Vec3::new(base.x, l.top - 0.6 + HALF_HEIGHT, base.z) + side * 0.45;
+                info!("ladder: on {} from the top", l.id);
+            }
         }
         Mount::Ladder { index, side } => {
             let Some(l) = ways.data.ladders.get(index).filter(|l| available(l)) else {
@@ -399,7 +456,9 @@ fn climb(
             };
             let base = Vec3::from(l.base);
             let climb = actions.movement.y;
-            let mut y = feet + climb * 3.0 * dt;
+            // (The player's own pace on this kind of ladder.)
+            let speed = body.0.climb.map(|c| c.ladder[usize::from(l.hand_over_hand)][0]).filter(|s| *s > 0.0).unwrap_or(LADDER_SPEED);
+            let mut y = feet + climb * speed * dt;
             let release = |p: &mut Player, mount: &mut Mount, commands: &mut Commands| {
                 *mount = Mount::None;
                 p.driving = false;
@@ -443,12 +502,17 @@ fn climb(
     }
 }
 
+/// How far over a ladder's top its landing may stand.
+const LANDING_LIP: f32 = 1.2;
+
 fn climb_velocity(from: f32, to: f32, dt: f32) -> f32 {
     if dt > 0.0 { (to - from) / dt } else { 0.0 }
 }
 
 /// A ground hit alone is not a landing: the capsule also needs headroom
 /// and room beside the ladder. Reject steep rock faces and enclosed ledges.
+/// (The ground may stand a little over the ladder's top, a lip pulled up
+/// over: up to `LANDING_LIP` metres.)
 fn ladder_landing(
     spatial: &avian3d::prelude::SpatialQuery,
     base: Vec3,
@@ -458,8 +522,8 @@ fn ladder_landing(
 ) -> Option<(Vec3, Vec3)> {
     let capsule = avian3d::prelude::Collider::capsule(crate::player::CAPSULE_RADIUS, crate::player::CAPSULE_LENGTH);
     [-side, side].into_iter().find_map(|dir| {
-        let probe = Vec3::new(base.x, top + 1.0, base.z) + dir * 0.8;
-        let ground = spatial.cast_ray(probe, Dir3::NEG_Y, 2.6, true, filter)?;
+        let probe = Vec3::new(base.x, top + LANDING_LIP + 0.4, base.z) + dir * 0.8;
+        let ground = spatial.cast_ray(probe, Dir3::NEG_Y, LANDING_LIP + 2.0, true, filter)?;
         if ground.normal.y < crate::player::MIN_GROUND_NORMAL_Y { return None; }
         let centre = probe.with_y(probe.y - ground.distance + HALF_HEIGHT + 0.05);
         spatial.shape_intersections(&capsule, centre, Quat::IDENTITY, filter).is_empty().then_some((dir, centre))
@@ -528,7 +592,8 @@ fn traversal_test(
     mut next_log: Local<f32>,
     mut ladder_time: Local<f32>,
     mut walk_waypoint: Local<usize>,
-    mut next_walk_jump: Local<f32>,
+    (mut next_walk_jump, mut last_here, mut leg, mut press_until, mut stalled): (Local<f32>, Local<Option<Vec3>>, Local<u8>, Local<f32>, Local<f32>),
+    (nav, mut nav_route): (Res<crate::nav::NavMesh>, Local<Option<(u8, Vec<Vec2>)>>),
     mut players: Query<(&mut Transform, &mut Player, &Health)>,
     cameras: Query<&Transform, (With<crate::player::PlayerCamera>, Without<Player>)>,
     (mut spawns, td, npcs, heights): (
@@ -554,6 +619,18 @@ fn traversal_test(
         p.yaw = (-d.x).atan2(-d.z);
     };
     let base = if kind == "zip_takedown" { "zip" } else { kind.as_str() };
+    // The walk's legs: FC3_TRAVERSAL_WALK_TO from the ladder; then
+    // FC3_TRAVERSAL_WALK_AFTER once the story moves him elsewhere (a jump of
+    // over 20 m), ending on the interaction; then FC3_TRAVERSAL_WALK_THEN.
+    let moved = last_here.is_some_and(|l| l.distance(here) > TELEPORTED);
+    *last_here = Some(here);
+    let after = std::env::var("FC3_TRAVERSAL_WALK_AFTER").ok();
+    if base == "ladder" && moved && *stage >= 3 && *leg == 0 && after.is_some() {
+        *leg = 1;
+        *walk_waypoint = 0;
+        *stage = 3;
+        info!("traversal test: moved to {here:?}; walking on from there");
+    }
     match (*stage, base) {
         (0, "zip") => {
             // (For the takedown, one with room under it partway along.)
@@ -617,7 +694,8 @@ fn traversal_test(
                 return;
             };
             let base = Vec3::from(l.base);
-            let side = Vec3::from(l.facing);
+            // (A ladder faces its wall: the climber stands behind it.)
+            let side = -Vec3::from(l.facing);
             t.translation = base + side * 0.7 + Vec3::Y * (HALF_HEIGHT + 0.05);
             face(&mut p, t.translation, base);
             info!("ladder test: entity {}, foot {base:?}, top {:.1}", l.id, l.top);
@@ -646,7 +724,40 @@ fn traversal_test(
         (3, "ladder") => {
             // Optional post-dismount probe: ordinary look/walk controls only.
             // The initial ladder fixture is still a repositioned test setup.
-            if let Ok(target) = std::env::var("FC3_TRAVERSAL_WALK_TO") {
+            let route = match *leg {
+                0 => std::env::var("FC3_TRAVERSAL_WALK_TO").ok(),
+                1 => after.clone(),
+                // (Its legs, one after another, split by `|`.)
+                n => std::env::var("FC3_TRAVERSAL_WALK_THEN").ok().and_then(|s| s.split('|').nth(n as usize - 2).map(str::to_string)),
+            };
+            // (A leg `nav:<x>,<y>,<z>` goes the game's navigation mesh's way
+            // there from where it starts.)
+            let route = match route.as_deref().and_then(|r| r.strip_prefix("nav:")) {
+                Some(goal) => {
+                    if nav_route.as_ref().is_none_or(|(l, _)| *l != *leg) {
+                        let goal: Vec<f32> = goal.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+                        let goal = (goal.len() == 3).then(|| Vec3::new(goal[0], goal[1], goal[2]));
+                        // (From his feet: the mesh lies on the ground.)
+                        let feet = here - Vec3::Y * HALF_HEIGHT;
+                        let Some(path) = goal.and_then(|g| nav.path(feet, g)) else {
+                            if (now * 0.2).fract() < time.delta_secs() * 0.2 {
+                                info!(
+                                    "traversal test: no navigation mesh way to {goal:?} (mesh at him {:?}, at the goal {:?})",
+                                    nav.height_at(feet),
+                                    goal.and_then(|g| nav.height_at(g))
+                                );
+                            }
+                            return;
+                        };
+                        info!("traversal test: navigation mesh way, {} points: {path:.1?}", path.len());
+                        *nav_route = Some((*leg, path.iter().map(|p| Vec2::new(p.x, p.z)).collect()));
+                    }
+                    nav_route.as_ref().map(|(_, r)| r.iter().map(|p| format!("{},{}", p.x, p.y)).collect::<Vec<_>>().join(";"))
+                }
+                None => route,
+            };
+            if let Some(target) = route {
+                let target_text = target.clone();
                 if let Some(route) = walk_route(&target) {
                     let Some(target) = route.get(*walk_waypoint) else { *stage = 4; return };
                     // Narrow doorways need a tighter approach than the default
@@ -656,11 +767,23 @@ fn traversal_test(
                     let radius = std::env::var("FC3_TRAVERSAL_WALK_RADIUS").ok()
                         .and_then(|s| s.parse::<f32>().ok()).filter(|r| r.is_finite() && (0.05..=0.6).contains(r)).unwrap_or(0.6);
                     let radius = if *walk_waypoint + 1 >= precise_from { radius } else { 0.6 };
+                    // (The later legs end on their points: a trigger to use.)
+                    let radius = if *leg > 0 && *walk_waypoint + 1 == route.len() { AFTER_END_RADIUS } else { radius };
                     let crouch = std::env::var("FC3_TRAVERSAL_WALK_CROUCH_FROM").ok()
                         .and_then(|s| s.parse::<usize>().ok()).is_some_and(|from| from > 0 && *walk_waypoint + 1 >= from);
                     let crouch = crouch && std::env::var("FC3_TRAVERSAL_WALK_CROUCH_UNTIL").ok()
                         .and_then(|s| s.parse::<usize>().ok()).is_none_or(|until| *walk_waypoint < until);
+                    // (A point written `x,zc` is walked to crouched, one written
+                    // `x,zd` is gone to down any ladder taken on the way, and one
+                    // written `x,zp` is reached precisely: a doorway.)
+                    let mark = |m: char| target_text.split(';').nth(*walk_waypoint).is_some_and(|p| p.trim().ends_with(m));
+                    let radius = if mark('p') { radius.min(0.2) } else { radius };
+                    let crouch = crouch || mark('c');
                     if crouch { actions.hold(Action::Crouch); }
+                    if mark('d') && matches!(*mount, Mount::Ladder { .. }) {
+                        actions.movement.y = -1.0;
+                        return;
+                    }
                     let delta = Vec3::new(target.x - here.x, 0.0, target.y - here.z);
                     if delta.length() < radius {
                         *walk_waypoint += 1;
@@ -676,15 +799,62 @@ fn traversal_test(
                         actions.look.x = turn.clamp(-time.delta_secs() * 2.0, time.delta_secs() * 2.0);
                         if turn.abs() < 0.2 {
                             actions.movement.y = 1.0;
+                            // (Held up a moment while pushing on, not just
+                            // setting off from a standstill.)
+                            let slow = Vec2::new(p.velocity.x, p.velocity.z).length() < 0.5;
+                            *stalled = if slow { *stalled + time.delta_secs() } else { 0.0 };
                             if std::env::var("FC3_TRAVERSAL_WALK_JUMP").as_deref() == Ok("1")
-                                && !crouch && p.grounded && now >= *next_walk_jump
-                                && Vec2::new(p.velocity.x, p.velocity.z).length() < 0.5 {
+                                && !crouch && p.grounded && !p.driving && now >= *next_walk_jump
+                                && *stalled > 0.4 {
                                 actions.press(Action::Jump);
                                 *next_walk_jump = now + 1.0;
                                 info!("traversal test: ordinary jump probe at {here:?}");
                             }
                         }
                     }
+                }
+            }
+        }
+        // (With a route on, it waits to be moved there; the last leg ends
+        // the walk.)
+        (4, "ladder") if after.is_some() && *leg == 0 => {}
+        (4, "ladder") if *leg >= 2 => {
+            let legs = std::env::var("FC3_TRAVERSAL_WALK_THEN").map_or(0, |s| s.split('|').count());
+            if (*leg as usize - 1) < legs {
+                *leg += 1;
+                *walk_waypoint = 0;
+                *stage = 3;
+                info!("traversal test: walking on, leg {}", *leg);
+            } else {
+                *stage = 6;
+            }
+        }
+        (4, "ladder") => {
+            // Optional end-of-route interaction: aim at a world point and
+            // press the ordinary action once, without selecting an entity.
+            if let Some(target) = std::env::var("FC3_TRAVERSAL_INTERACT_AT").ok().and_then(|s| {
+                let values: Vec<f32> = s.split(',').filter_map(|v| v.parse().ok()).collect();
+                (values.len() == 3 && values.iter().all(|v| v.is_finite())).then(|| Vec3::new(values[0], values[1], values[2]))
+            }) {
+                let eye = here + Vec3::Y * (p.eye - HALF_HEIGHT);
+                face(&mut p, eye, target);
+                *stage = 5;
+            }
+        }
+        (5, "ladder") => {
+            // (Held a while, as using a mission trigger takes.)
+            if *press_until == 0.0 {
+                *press_until = now + INTERACT_HOLD;
+                info!("traversal test: ordinary end-of-route interaction");
+            }
+            actions.hold(Action::Interact);
+            if now >= *press_until {
+                *stage = 6;
+                if std::env::var_os("FC3_TRAVERSAL_WALK_THEN").is_some() {
+                    *leg = 2;
+                    *walk_waypoint = 0;
+                    *stage = 3;
+                    info!("traversal test: walking the last leg");
                 }
             }
         }
@@ -721,9 +891,16 @@ fn traversal_test(
 
 /// Test-only horizontal route; reject malformed points rather than silently
 /// dropping coordinates and steering to a different location.
+/// A move this far (m) in a frame is the story placing him elsewhere.
+const TELEPORTED: f32 = 20.0;
+/// How near (m) the route on's last point he stops.
+const AFTER_END_RADIUS: f32 = 0.2;
+/// How long (s) the end-of-route interaction is held.
+const INTERACT_HOLD: f32 = 1.0;
+
 fn walk_route(text: &str) -> Option<Vec<Vec2>> {
     text.split(';').map(|point| {
-        let (x, z) = point.split_once(',')?;
+        let (x, z) = point.trim().trim_end_matches(['c', 'd', 'p']).split_once(',')?;
         let point = Vec2::new(x.trim().parse().ok()?, z.trim().parse().ok()?);
         point.is_finite().then_some(point)
     }).collect()
@@ -736,6 +913,9 @@ mod route_tests {
     #[test]
     fn route_preserves_order_and_rejects_malformed_coordinates() {
         assert_eq!(walk_route("-1877,-2500; -1875, -2488"), Some(vec![Vec2::new(-1877.0, -2500.0), Vec2::new(-1875.0, -2488.0)]));
+        // A crouched point keeps its place.
+        assert_eq!(walk_route("1,2c;3,4"), Some(vec![Vec2::new(1.0, 2.0), Vec2::new(3.0, 4.0)]));
+        assert_eq!(walk_route("1,2p;3,4d"), Some(vec![Vec2::new(1.0, 2.0), Vec2::new(3.0, 4.0)]));
         for text in ["", "1,2;", "1,2,3", "1,no,2", "NaN,2", "1,inf", "1,2;;3,4"] {
             assert!(walk_route(text).is_none(), "accepted {text}");
         }

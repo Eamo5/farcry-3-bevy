@@ -549,12 +549,37 @@ is the story's own:
   for most cars, which then land however they come down; ours rights
   them at 4). A boat's motor pushes at its thrust (an acceleration per
   unit of mass) times its revs, which come up at the motor's rate; the
-  water damps it ahead and to the side by its friction figures (as a rate:
-  5.45 per unit, which tops the zodiac out at 22 m/s where we had tuned it,
-  as the engine's own friction formula isn't in the data: every boat's
-  `bSquareVelocityForLinearFriction` is 0, so it is linear in the speed,
-  and the notes say only that the frictions are mass-free and that 1.0
-  makes the water as hard to push through in any direction), and the rudder
+  water damps it ahead and to the side by its friction figures as the
+  engine does it (FC3.dll's boat update, with the params at 0x330 in its
+  physics object): for each of its buoyancy spheres in the water (those of
+  any size; the zodiac, jet ski and patrol boat float on four), it adds
+  minus the friction (`fForwardFriction` or `fReverseFriction` by the way it goes, side) times
+  the speed along that axis, and multiplies the sum by the mass, so the
+  frictions are rates per sphere, linear in the speed as
+  `bSquareVelocityForLinearFriction` is 0 for all. Ours scales the sum by
+  the share of the hull's corners in the water (`handling::Boat::spheres`),
+  which tops the zodiac out at 30 m/s, the jet ski at 28 and the patrol boat
+  at 20. It floats as the engine floats it, on the same spheres: each at
+  its offset from the engine's centre of mass (`vectorCenterOfMassOffset`,
+  ours too; `fSpheresZOffset` and `fVolumeScale` are, as their notes say,
+  not used with listed spheres), dropping by `fSpheresZOffsetMax` per
+  `fSpheresZOffsetMaxSpeed` of speed (unclamped, as the engine has it: the
+  hull rises as it gets going, 0.85 m for the zodiac at 22 m/s); each
+  one's submerged cap (pi h^2 (3r - h) / 3) is summed, and the water's
+  weight that much less the boat's mass (1000 kg/m^3 times the volume less
+  the mass, in newtons, as FC3.dll's boat update applies it through
+  Havok's `applyForce`) pushes up at the centre of buoyancy. Gravity takes
+  its `GravityModifier` with any sphere in the water, else
+  `GravityModifierAirborne`; at each sphere in the water, `fUpDownFriction`
+  damps its rising and falling and `fDownFriction` (with the speed squared,
+  as deep as it is in) its going down into the water, and
+  `fUpRotateFriction` its yaw; past `fStabilizerRollAngleActivation` the
+  stabiliser rights it at `StabilizerAccel`. So the zodiac rests with the
+  water 0.3 m under its origin (its tubes at the waterline), the jet ski on
+  the surface and the patrol boat as deep as its hull. A boat without
+  listed spheres still floats on its hull's corners. The drive test logs a
+  boat's bounds.
+  The rudder
   swings from its angle at rest to its angle at its top speed. Throttling
   against the way it goes, the motor pushes at `fEngineBrakingPower`
   instead; a boat with a `Brake` (the patrol boat's 5 m/s²) brakes on Space;
@@ -673,17 +698,73 @@ is the story's own:
   well as the story; a move named after its clips' folders, like
   `stp_guardcampspiratecomms_loop` in `guard_camps\pirate_comms`, is found
   by them), leaving out moves whose clips are civilians' (a mourner's). A
-  synced scene's actors (`SyncAnimLeadActor`/`SyncAnimExtraActor`) play
-  their parts of the scene's loop sequence (`clip:<path>`: the lead's names
-  its start, loop, end and wait `.cseq`, and each part is the clip of the
-  track group tagged `leadActor` or `extraActor1`; an extra's comes from
-  the nearest lead's), so a conversation's pair talk and listen with the
-  game's master and slave clips. The encounters' conversations are silent
+  synced scene's parts (`encounters::Part`, `prefab_parts`): each of its
+  points (`SyncAnimLeadActor`/`SyncAnimMaster` lead it, `SyncAnimExtraActor`/
+  `SyncAnimSlave` are extras, or the track their `cinemaEntityTrackTag`
+  names) plays its track of the scene's loop sequence (its own, its lead
+  point's, or the scene entity's), where the scene entity
+  (`cinemaEntityId`, else the lead's, else the nearest) puts it: the
+  scene's frame, then the clip's first root key (the start sequence puts
+  the looter exactly on his point this way, the beat-down's assailant within
+  6 cm). The point's group filter (`GroupFilter`, the CRC-32 of a group its
+  pawn's `CGroupComponent` lists) names who plays it: a guard bound to his
+  part takes only that spot (`guard_spots::OwnSpot`, even a heavy, and he
+  does no rounds), coming back to it once calm, and steps right onto it
+  (guards stop within 0.5 m of a spot, then close in); a part bound to no
+  one is any guard's (`clip:<path>`). A civilian's part plays where the
+  scene puts them (`villagers::ScenePart`): a captive's (a victim beaten, a
+  woman beaten up, a man used for target practice) while held and one of
+  their captors plays his part within 4 m (else they are only held), others
+  (two women chatting by a fire) while at ease, keeping to it. A track no
+  point names (a body being looted, a boar being skinned) is the nearest
+  body's within 4 m: it lies where the scene puts it, in its part, moving
+  while someone plays his part by it and still otherwise, and stays while
+  the encounter does (`wildlife::CarcassPart` for a carcass). Each part
+  starts with its track of the scene's start sequence (`..._start.cseq`
+  beside the loop; 67 of the 83 parts have one): a guard walks to where
+  that begins (his point), plays it once, and goes into the loop where it
+  has brought him (`guard_spots::Entering`); his body, carcass or victim
+  plays its own start track in step, then its loop (`PartClips::follow`),
+  and a body nobody has reached yet lies as its start has it. Each part's
+  clip moves its rig by its root motion about where it stands
+  (`guard_spots::PartMotion`, wrapped each loop); a loop that walks its
+  actor off (a hostage marched along, ending over a metre from its start)
+  has no place to be played and is left out. An alert breaks a scene off
+  at once, with no end sequence, as the original does with these points
+  (their `PlayFullNormalEnding` is 0). A guard alerted at a spot whose move
+  has an abort (`..._abort`: 29 do, e.g. drinking, cleaning a gun,
+  repairing a 4x4, searching debris) gets up with it first, where he is
+  (the startled `exitthreat` clip in a fight or alarmed, else the curious
+  `exitinterest`; `Npc::breaking_off`, no more than 1.5 s more once he is
+  fighting). A civilian scared off their own point gets up with its abort
+  the same way before running (`FC3_PART_SCARE=<s>` fires a shot by the
+  part test's civilian then). Every guard spot
+  whose point plays a move (the world's and the encounters' `move:` spots)
+  starts the same way, with the move's `..._start` clip (sitting down,
+  lighting up, leaning in) before its loop, unless the move table gives the
+  start only the loop's own clip; civilians' own points too. Getting into
+  or out of a spot's clips crossfades from the pose before
+  (`CharacterRig::set_clips_blended`) rather than snapping. A civilian's own single point (`SimpleAnimation`
+  bound to them: a mourner at a grave, a girl picking flowers, a mechanic
+  under a broken-down 4x4, a man searching debris) is their part too: its
+  loop move (`move:<name>`, its unarmed clip from the move table), where the
+  point stands. `FC3_PART_TEST=<s>` stands the player by the nearest such
+  civilian or body from then (with `--noclip`, unseen; `FC3_PART_SHOT=<file>`
+  takes a screenshot two seconds into its guard's start), and `fc3tool
+  scene-survey` and `civ-points` list the prefabs' scenes and civilians'
+  points. The encounters' conversations are silent
   in the original too: their `_Encounter` points set no
   `conversationTemplate` (the base archetype names `PiratesGenericConvo_
   MSM_A`, the CRC-32 that `dialog\conversationtable.dat`'s conversations
-  carry as `AnimTemplate`). The scenes' other sequences (start, end; looting
-  a body, skinning an animal, a hostage walked off) are not played. The
+  carry as `AnimTemplate`). The scenes' end sequences are not played (our
+  guards keep to their parts until something breaks them off). The hostage
+  walk (its points set `isPatrol`; their loops walk on, 4 m a loop) is a
+  march (`villagers::Marched`, `Escort`): each prisoner and the escort
+  nearest their part walk at the clip's pace (`Part::pace`, 1.17 m/s) along
+  the nearest road (the road network's way to a point 60 m ahead), or
+  straight ahead 12 m where there is none, to its end and back, the escort
+  a metre behind on his part (weapon put away); an alarm, or the escort
+  down, ends it and the prisoner is only held. The
   world's own posts do the same (`world/guard_spots.txt`, versioned by its
   first line): a fighters' point of no kind we know is kept as
   `move:<name>` (`world::WorldEntity::stp_moves`, its moves joining the move
@@ -733,9 +814,30 @@ is the story's own:
   the prefab's attack point by them (`AttackTarget_*`) and facing them (in
   a fight, from where he stands; he takes no guard spot); a shooter killed
   first leaves the rest to be freed (`villagers::Executioner`;
-  `FC3_EXECUTION_TEST` starts them from twice as far). The rest of their
-  scripts (chases, a captive escaping in a car) and their dialogue are not
-  run.
+  `FC3_EXECUTION_TEST` starts them from twice as far). Their dialogue
+  (`encounter_talk`): an encounter whose script is named for a conversation
+  in `dialog\conversationtable.dat` (`piratecivexecute_01.main.lua` plays
+  `PirateCivExecute_01`; the converter keeps the table as
+  `dialog/conversations.txt`, each line's variants by voice and sound
+  event) has its people say the lines once the player is within the
+  script's proximity radius (its `nearZone`, 8 to 34 m; 25 m, ours, for a
+  script with none): a fighter's line by the encounter's member with that
+  bark voice (else by turns), a victim's by one of its civilians in a voice
+  of their sex, each line after the last has been said (its sound's length
+  from the audio manifest's samples and rate, `sound::SoundBank::length`;
+  `FC3_TALK_TEST` starts them from twice as far). A script's radius is the
+  widest of its listeners' `nearZone`s (the narrower ones watch a civilian
+  reaching the player). Chases (`encounters::Chase`: the prefabs with a
+  `MoveAwayFromTarget_VictimRun` or `MoveToPlayer_CivRun` point): once the
+  player is within the script's radius, its civilian runs, away from the
+  nearest of its fighters or to the player (stopping by him), and its
+  fighters run after them (`npc::Npc::chase`, while idle) and fire a burst
+  every 2 s from within 12 m that finds its mark 40% of the time (ours, so
+  the player has a moment to step in); with the hunters dead the civilian
+  is free, and rewards as above (`villagers::Quarry`, `Hunter`;
+  `FC3_CHASE_TEST` starts them from twice as far). The captive slipping
+  away from his captors' car (`MoveAwayFromTarget_STPFlee`) runs as such a
+  chase.
 * **Animals' senses and behaviour** (`wildlife::animal_ai`,
   `fc3_formats::animals`): the converter writes each animal archetype's AI
   personality (`tmplPersonalityType`) and sensory system (`tmplSettings`)
@@ -2298,9 +2400,10 @@ fixed before the passing run. No machine execution policy was changed.
 Source inspection also identifies unfinished visual/gameplay work in the
 dead-tree section. `HK_Realtrees` initializes grouped trees with
 `UpdateRealTreeRegen(...,0)` and later invokes `SetRealTreeGrowthSpeed`.
-Procedural growth is not implemented in the game host. The current story
-native queues the growth callback during the same script pump, without waiting
-for rendered growth. `Core::call` queues work rather than re-entering Lua, so
+(Since then the trees are drawn and grow over time: see "The hallucination's
+trees grow" below.) At the time, procedural growth was not implemented in
+the game host, and the story native queued the growth callback during the
+same script pump, without waiting for rendered growth. `Core::call` queues work rather than re-entering Lua, so
 the group count is initialized before callback delivery (correcting the
 earlier claim of a group-initialization race). Actual growth completion still
 needs a host-driven lifecycle. These deficiencies remain; the new physical route bypasses the
@@ -2568,3 +2671,377 @@ action, yet the expected trigger progression did not follow. Its inspected
 final image still shows that objective. The older autopilot substitutes noise
 for rock impacts and some other interactions, so this evidence cannot establish
 uninterrupted real-input campaign progression.
+
+### Dark-room threshold under the game's own body figures
+
+With the player's walk, crouch, jump and gravity now taken from the game's
+body data, the `-DarkRoom` replay stalled at the second doorway, about
+(-1898.13,98.34,-2380.34), and never reached `CloseDoor`. Contact tracing
+showed no wall: the crouched capsule's rounded bottom met a 16 cm lip just
+inside the door, and that contact reads as a 59-degree slope (normal Y 0.51,
+below the 0.64 walkable limit). On such a contact the player counted as
+airborne, which also disabled the step-up, and gravity slid him back off the
+lip. The faster old figures had only carried him over it on momentum.
+
+A contact below the capsule's middle now counts as ground when a short ray
+just past it, from 5 cm in and 5 cm above, finds a walkable face. That
+covers the lip of a step or threshold. A genuinely steep slope offers no
+flat top beyond the contact, so it still doesn't count. The same check
+applies to walking contacts, settling onto a raised step and the ground
+probe. A physics regression puts a capsule on a 20 cm step's edge (contact
+normal Y below the limit: standing) and on a 60-degree ramp (not standing).
+
+The unmodified `-DarkRoom` replay passes again with the game's body figures:
+all six cues in order, the physical route completed, dark-room trigger
+occupancy and health 100, with no warnings. One earlier attempt was failed
+only by the audio library's `ERROR` when this machine's output device went
+away. Bevy's audio output is opened once and is private to `bevy_audio`, so
+the game doesn't yet recover from a lost device.
+
+The view-direction watch (`look:` warnings when the view fails to follow
+input) now counts only a captured mouse or an active gamepad. The traversal
+probe turns the view itself without either, and its turns had raised false
+warnings that failed this replay.
+
+### Leap of faith: the rock bridge, the fall and beat B30
+
+The dark room's trigger doesn't end the beat by itself. Its Enter handler
+destroys the compound object the player stands on, `RockBridge_02_0` (a
+breakable rock bridge: an intact state, then remains and five falling
+rocks). He drops into the black room below and through a 24 m-wide trigger
+about 2.5 m down. That trigger blacks out the screen, disables the beat's
+layer, sets the clock and completes `DOC_020_B20E`. `CAPI_Entity.DestroyCompoundObject`
+wasn't handled, so the bridge stayed. One earlier pass completed only
+because the idle player happened to drift into a gap; a longer run stood in
+the trigger for 90 s and nothing followed.
+
+`DestroyCompoundObject` now breaks the object (`fc3_game::breakables`, see
+`docs/physics.md`, "Destruction states"). The bridge's intact parts go, its
+static remains stay with the game's own collision for them, and its five
+falling rocks drop as physics bodies. The greenhouse objects the haunted
+greenhouse's scripts destroy earlier show their broken states too, instead
+of vanishing.
+
+Beat B30 then teleports the player into the cave, turns his view to an
+entity and plays `Pawn_Generic_FallFromExplosion` on him through the
+PlayerPlayAnim box. That box waits for `Domino_PlayAnim` events (`Started`,
+`FinishingSoon`, `Finished`, or `Interrupted` on a stop) that nothing
+raised, so B30 stalled after the teleport. The new `pawn_anims` module
+answers `CAPI_AI.StartPlayAnim`/`StopPlayAnim`. For the player it looks up
+the move in the engine's named move table and takes its first-person clip:
+the `Default` state's when that is one, else the first `1st...` clip. It
+plays the clip as a built scene from his feet and heading, the view
+following the clip's camera bone the way QTEs play, and raises the events as
+it goes. Characters' moves, and moves with no first-person clip, aren't
+played yet: they report Started and Finished at once so scripts carry on.
+`CAPI_Player.SetPlayerLookAngles` with an entity now turns the player to
+face it.
+
+The `-DarkRoom` replay now requires `DOC_020_B20E Completed` instead of a
+sampled trigger occupancy and the route's last point: the bridge gives way
+as the player steps on, before either is reliably seen. It passes with all
+six cues, no warnings and health 100. A longer run (170 s) shows B30 going
+on: the 1.4 s fall clip plays with the view low and rising, the HUD comes
+back, and the mushroom objective and its marker appear about 25 m away in
+the cave. The mushroom pickup (a usable trigger, then the pickup scene),
+the bats and the cave exit are next.
+
+### The mushroom pickup, action maps and clips named `sAnimation`
+
+**Controls during scenes.** B30's scene setup (`Lib_Narrative.NarrativeSceneSetup`)
+pushes the `narrative_interact_qte` input action map, and its cleanup pops it.
+Nothing honoured `CAPI_Player.Push/Remove/Set/Lock/UnlockPlayerActionMap`, so
+the player could walk off between the teleport and the fall. The engine's
+maps (`actionmaps\inputactionmap{common,single}.xml`) are named sets of
+signals that import each other and mask some out. The converter now resolves
+each map's signals into the cache (`story/actionmaps.txt`), following imports
+and applying masks; optional remap maps that aren't present add nothing. The
+game keeps the scripts' stack of maps, plus a locked map that overrides it
+until unlocked, and filters input each frame after it's gathered. An action
+gets through only if one of its signals is in the map in force: `move` for
+walking, `look` for the view, `startshooting` for fire, and so on. Use also
+goes by the narrative maps' `interact_*` signals. With no map pushed (or one
+the table lacks), everything gets through. `narrative_interact_qte` keeps
+look and use and drops moving, jumping, firing and the map. The stack resets
+with the story on a reload. A test covers push, lock, unlock and remove.
+
+**The pickup.** The mushroom (`DoctorMushroom_B04`) sits under the overhang
+of a `junglerockmedium_04` rock that has its own Havok shape. Its 1 m
+usable trigger must be used from inside, which the player's body overlap
+allows from the open ground just north of it. `FC3_GROUND_MAP=<x>,<z>,<half>,<step>,<top>,<secs>`
+logs a grid of heights (and too-steep slopes) under a point, cast down
+through the same physics the player walks on. That found the way round
+the rock's south face and up its west side.
+
+**Clips named `sAnimation`.** The pickup scene played with a still view:
+its player group was empty in the cache. Some sequences (23 of 947, 36 clips,
+this one included) name an animation clip `sAnimation`, not
+`sAnimationSource`, and the parser dropped them. It now reads either. A
+test covers it, and a new sequence stamp makes the converter refresh every
+cached sequence. The clips themselves were already converted.
+
+**The traversal probe.** `FC3_TRAVERSAL_WALK_AFTER=<route>` continues the
+walk with a second route when the story moves the player more than 20 m
+(B30's teleport). Its last point is held to 0.2 m. The end-of-route
+interaction (`FC3_TRAVERSAL_INTERACT_AT`) now holds use for a second: mission
+triggers take a 0.5 s hold, and a single tap never used one.
+
+**The run.** With the dark-room route, an after-route round the rock and an
+interaction at the mushroom, the replay goes on through B30:
+- the player stays put through the scene setup, and the fall clip starts
+  where the teleport left him;
+- the bats' ambush plays its own first-person reaction (3 s, through the
+  scripted-animation path);
+- holding use at the mushroom locks the controls and plays the 8 s pickup
+  scene, its view now following the clip down to the mushroom;
+- the controls come back, the marker goes, and the objective moves on to
+  returning to the doctor at the greenhouse.
+
+Health stays 100 with no warnings.
+
+### Decorations without a body, and water on the lens
+
+**Decorations.** After the pickup scene the player was left inside one of
+the cave's decorative mushrooms (`WhiteMushroom_01`, the `blackmushroom_01`
+model) and couldn't move. Our collision gave it a shape from its render
+mesh, since its model ships no `.hkx` and it's just big enough for that
+fallback. In the game an entity gets a body only from a physics component,
+and this one has only a graphic. The cave exit, the black room, the
+breakable bridge and the pickup all carry one.
+
+The world parser now marks entities with any body component as solid:
+static, compound, dynamic, rigid, character, the vehicles' (wheeled,
+floating, helicopter, paraglider, plane and generic), breakable and plain
+physics. Phantoms, particle physics and network sync don't count. The
+converter lists the placed entities with a model and no such component
+(`collision/intangible.txt`, 13,975 of them), and the game gives those no
+collider at all. They're collectible plants, hanging vines, wires, tarps,
+decals, flags, lamps, paper and bottle litter, and waterfall cascade
+planes. Sandbags and similar props carry rigid-body physics and still
+block. A test covers a listed entity getting no collider.
+
+**Water on the lens.** The white speckles near the mushroom were our screen
+droplets, laid over the view within 7 m of any placed waterfall spray. The
+cave's small `waterfall_hitsplash` counted. The engine keeps its screen
+droplets with the player's swimming and drowning settings (a droplet
+particle, count, duration, lifetime and size), plus a separate set for
+vehicles. Nothing ties them to standing near spray, so that trigger is gone
+and the lens gets wet only on coming out of the water. The drops are now the
+player's own effect, refracting the view (see "Lens drops" below).
+
+**The probe.** `FC3_TRAVERSAL_WALK_THEN=<route>` is a third leg, walked after
+the end-of-route interaction. It can hold several legs, split by `|`,
+walked one after another. A leg written `nav:<x>,<y>,<z>` asks the game's
+navigation mesh for its way from wherever it starts. The mesh doesn't cover
+the doctor's cave, so the walk from the mushroom to the cave exit (trigger
+2072792376048357627, about 35 m west and 6.6 m up) is a hand-made route.
+The input action map in force is logged when it changes
+(`farcry3::controls`).
+
+### Rocks the right way round, the vine's climbing side and its stand-up
+
+**Rocks.** Vegetation meshes turn yaw, then roll, then pitch, unlike
+entities (see `docs/vegetation.md`). With the cave's rocks turned that way,
+22 of the cave floor's 26 mushrooms rest on rock instead of 14, and 6 sit
+inside it instead of 14.
+
+**The vine's side.** The rock behind the opening vine then stood across the
+test's starting spot, which turned out to be on the wrong side. The fixture
+put the player 0.7 m along the ladder's forward from its foot. That spot is
+inside the rock with either rock order; the old order just happened to let
+the physics push him out within reach of the vine. The ladder's own data
+says where the climber stands: `CLadder.FixedParams.fDistFromLadderY` is
+-0.65, so 0.65 m behind the ladder along its forward, and the rock in front
+is its wall. The fixture now starts him behind it, which is the side
+`climb` already assumed.
+
+**The stand-up.** Climbing from that side turned the hallucination's
+stand-up upside down. The vine's first anchor stands at the vine's foot
+(yaw 119°). The second lies on the ground below the greenhouse path,
+pitched -90°: face down, head to the south. Carried from one to the other,
+the climber lies as the second anchor does, so the climb becomes a crawl.
+The stand-up clip starts upright, its root only turned. The relocation's
+quarter turn had been fitted to a climber facing away from the vine. Now
+the relocation sets only where he is, and the second anchor sets which way
+he stands: along its head, for a face-down anchor. He gets up facing south
+at 94.9 m. The climber's own 22° turn off the first anchor would otherwise
+tip him over by as much. A test covers a climber at four turns standing up
+level and facing the anchor's way.
+
+### Out of the cave: terrain holes and beat B30
+
+After the pickup, the beat adds a "cave exit" marker and arms trigger
+2072792376048357627 beyond the cave's western mouth: a 2 x 16 x 10 m box at
+x -1972.7, turned 10°. Reaching it completes B30 and starts B40 (the climb
+back up to the doctor).
+
+The walk goes from the mushroom south onto the cave floor (122 to 124 m),
+west across it, then up the slope to the 127 m ledge at x -1969. There the
+terrain closed the mouth. The cave runs under the terrain, whose surface
+drops from over 130 m to 125 m within a metre at x -1972 to -1971, so its
+underside was a wall at head height. The game cuts the terrain there (see
+`docs/terrain.md`, "Holes and caves": the `0xE0` mark). With that strip cut,
+the walk goes through and the trigger fires: "Removed cave exit marker",
+B30 completed, B40 running. Outside, the player stands on the coast at
+dusk, with B40's marker 140 m off.
+
+### Lens drops
+
+On coming up out of the water, the lens now shows the player's own droplet
+effect. The player prototype's `ScreenDropletParticle` names it in
+`psScreenDroplet` (`FC3_Gameplay_Water.Player.ScreenDropplets_Emerge`); its
+other values (count, duration, life, speed, size) look like defaults, as
+other pawns carry them with no effect named. The converter caches the
+effect (`particles/screen-droplets.xml`) with its drop atlas, normal map and
+reflection map (`fc3_gfx_waterdripplet_8x2_test` and `_n`,
+`fc3_gfx_environmentmap_02`).
+
+The effect is one emitter, one burst of 18 drops. They live 0.3 to 1.2 s,
+are 0.5 to 1.25 cm across, and are fully there for half their life before
+fading out. They start in a volume 0.2 m in front of the eye: 0.28 x 0.17 m
+once its `RotOffset` turns it, which is the view's own size at that
+distance. Their gravity (0.35, rising over their life) works in the eye's
+own axes, as the sky's rain splash shows (its two halves pull out to the
+sides and down). For these drops it points back at the eye, so they come
+closer, growing and spreading out as they fade. The emitter's `StaticSize`
+(17) can't be a scale: 17 times a drop's size is wider than the view.
+
+`fc3_game::lens_drops` works the drops out from the emitter each frame and
+draws them in a pass over the finished frame. The pass bends the view
+through each drop's normal map (`DistortionStrength`, in screen
+fractions), blurs it a little (`DistortionBlurStrength`), and lets the rims
+catch the reflection map (`EnvMapStrength`, by how far the surface turns
+away). The drops' own colour (`DiffuseMapStrength`, 4%) barely shows. The
+flat overlay of `fc3_gfx_waterdrops_01` is gone. `FC3_LENS_DROPS_TEST=<s>`
+sets the drops off that long into play, and `FC3_LENS_DROPS_CAPTURE=<png>`
+saves a frame a fifth of a second later. Tests cover the drops spreading,
+growing, fading and going, and the turned volume spanning the view.
+
+Rain doesn't wet the lens in this game. Its rain effect
+(`fc3_environment.weather_fx.fc3_rain`) is all in the world: drips and
+droplets falling through volumes metres across, 4 to 9 m over the camera.
+The other screen-droplet effects belong elsewhere. The sky library's
+`ScreenDropletsSplash`, a six-emitter version of the surfacing drops with
+splashes, is named by the skydiving gameplay (`CSkyDiving`'s
+`m_dropletParticlesEffect`). `SWaterDropsData` sits with the vehicles'
+data, for spray thrown at the view.
+
+### The hallucination's trees grow
+
+The trees along the hallucination path are placed RealTrees, which weren't
+drawn at all: the world parser only read models from graphic components.
+They are now (see `docs/realtree.md`, "Placed RealTrees and their growth").
+The beat sizes 23 of them to nothing, then grows each to full over 10 s as
+the player comes up the path. Its script also shrinks one dead tree by the
+greenhouse away, at 0.2 a second.
+The growth natives used to report every tree grown at once. Now each
+`UpdateRealTree` box hears its trees finish when they have finished, which
+is when its `GrowthCompleted` follows on.
+
+### The dark room's light: the shaft and the hands
+
+Frames taken in the dark room (`FC3_CAPTURE_NEAR`, see `docs/shaders.md`)
+show what it is: a black room with a light shaft (`godray_medium`) falling
+on the rock bridge, and an authored spot light 6.5 m over the bridge
+(inner radius 10 m, radius 15 m) lighting whoever stands in it. So lit hands
+against black is the intended look; two things were wrong with ours.
+
+- The shaft drew as a solid brown cone: the original shaders had taken its
+  additive `Unlit` material over with an opaque permutation. Blended `Unlit`
+  and `EffectLit` materials now stay off them, and additive `Unlit` ones are
+  drawn with their `HDRMul`, normal attenuation and UV scroll
+  (`unlit_effects.rs`). The shaft is now a soft beam.
+- Under the spot the hands were lit several times too brightly: the game's
+  light falloff is flat inside a light's inner radius, Bevy's isn't. Pooled
+  lamps are now dimmed to the game's falloff at the eye.
+
+The earlier frame with near-white arms came from code before both changes;
+the hands now take the beam's light with their own colour. The `-DarkRoom`
+replay also stalled at times on the second doorway's lip (the step up onto
+its rounded edge read as too steep and was undone; see `docs/physics.md`,
+"Steps"). It passes three runs out of three again.
+
+### B40: up the cliffs, and back to the doctor (B50C)
+
+B40 (the climb back up to the doctor) completes
+on a 70 x 62 m trigger over the cliff top at (-1956.1, 2400.6), 184 m up.
+From the cave mouth that's 150 m off and 56 m up. The way is authored, and
+the replay now walks it:
+
+* Out of the pit (124 m). The navigation mesh covers the pit as a closed
+  island (no off-mesh links), and the boulders round it stand about 3 m
+  over its floor with tops our probes find too steep. One of them,
+  `Rock_Costal_FlatMedium_01_285`, placed upside down, carries a
+  `CClimbableComponent` line: a ledge 127.5 m up on its east face, from
+  (-1990.5, -2511.8) to (-1990.0, -2510.6), its anchor 0.9 m in on top.
+  Jumping at it climbs onto the boulder (see `docs/physics.md`,
+  "Climbing", for authored ledges). 1512 such lines are now in the
+  traversal cache.
+* Over the boulder's top and up a gentle slope north (x -1994 to -1990,
+  128 to 147 m) to the first vine ladder's foot at (-1986.6, -2471.0).
+* The ladder (147.2 to 156.2 m) ends about a metre under the lip it pulls
+  up over (157.3 m). Its landing used to be looked for from 1 m over the
+  top only, so the climber hung there; it's now looked for from 1.6 m.
+* North along the shelf (x -1986, 157 to 162 m), west along the flat at
+  162 m to x -1994, up the slope north-west (x -2000 to -1996, 164 to
+  171 m) to the second vine ladder's foot at (-1993.0, -2424.8), up it
+  (171.9 to 180.9 m, again a metre under its lip) onto the cliff top. B40
+  completes as the player steps off it.
+
+B50C (the walk back to the doctor) completes on either of
+two small marker-removal triggers by the doctor at about (-1931, -2375),
+188 m. Entering one pushes the narrative action map and plays the doctor's
+43 s cutscene (`DOC_020_B60C_DoctorProtectsDaisy`); B60C (meeting
+Daisy) starts as it ends.
+
+That cutscene doesn't carry the player, so he stays where it found him.
+The story used to move him after any block ending in "C" to the next
+block's respawn point, a stand-in from before scenes played; that put him
+47 m back at the cliff top. Now it does so only when no scene held the view
+during that block.
+
+B60C (meeting Daisy) completes on a 1 x 1 x 1.5 m trigger at the top
+of the doctor's house's stair, (-1924.2, -2388.8), 190.6 m, beside Daisy
+and the doctor upstairs. The house stands on a ground floor at 187.3 m,
+its door on the north side at about (-1928.0, -2381.5); a stair rises north
+from (-1922.8, -2391.6) to a landing at 188.4 m and turns west up to the
+upper floor (190.3 m). The navigation mesh reaches the ground floor's
+south room but not the stair (its way to the trigger ends 5.7 m off,
+downstairs), so the rest is walked by hand. The south room's way north is
+a swing door (`DoctorHouse_DoorSet_2`, a `CDoor` on a mission layer), which
+stood shut: swing doors weren't handled. They now swing open when walked
+into (see `docs/physics.md`). North of the house
+the deck where B50C ends is railed, with its way in on the west, under a
+porch roof (189.7 to 191.8 m) that hangs low at its south edge. Walked
+straight at the house's door, the capsule met the railing; the walk's jump
+probe then jumped, and the jump climb caught the roof's edge, as the game's
+would. The route leaves the deck by the mesh instead. (The probe also no
+longer jumps as a leg sets off: it waits until the walk has been held up
+for 0.4 s.)
+
+Walk-test legs (`FC3_TRAVERSAL_WALK_THEN`, split by `|`) are lists of
+points `x,z;...` or a `nav:x,y,z` leg by the navigation mesh from the feet.
+A point written `x,zc` is walked to crouched, `x,zd` goes down any ladder
+taken on the way, and `x,zp` is reached to within 0.2 m rather than 0.6
+(a doorway). `FC3_GROUND_MAP` marks with `!` where the player's capsule
+wouldn't fit standing, which shows walls and doorways that its rays, started
+inside a wall, can't.
+
+B60C ends with the doctor's 168 s cutscene (`DOC_020_B80C`): the block
+completes when it finishes or is skipped, and DOC_020 with it; DEN_020
+starts. Its skip listener (`NarrativeSceneSkipListener`) waits for the
+default `InputDominoMove`, our `move` signal, and the scripted walk, still
+pushing on, skipped the cutscene the moment it began. The game takes no
+gameplay input under a cutscene, so the player's input signals now stop
+while a scene holds the view (the cutscene's own skip keys still skip it).
+
+`docs/validation/doc020-greenhouse.ps1 -Cliffs` walks the whole stretch
+from the dark-room checkpoint with ordinary inputs (its legs are listed
+there) and checks that B30, the authored climb, B40, B50C and B60C happen
+in order. One spot on the shelf after the first ladder, a
+steep crease at (-1987, -2456), can wedge the capsule; the route keeps to x
+-1986 there.
+
+Still open on this stretch:
+- A replay with B80C played through to its end (the skip fix above is not
+  yet run end to end), then DEN_020.

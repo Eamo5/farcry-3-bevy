@@ -55,6 +55,31 @@ fn game_lumens(l: &WorldLight, unit: f32) -> Option<f32> {
     Some(4.0 * std::f32::consts::PI * unit * a)
 }
 
+/// How much to dim a light so that it lights what is `d` metres from it as
+/// the game's does, never brighter. The game's light passes saturate their
+/// falloff (`a / d² + b`), so inside the inner radius a light stays at its
+/// full strength; Bevy's goes on rising as 1/d² (times its range window),
+/// several times over at the middle of a wide light. Matched at the eye's
+/// distance, what is near the eye (the hands, a wall beside it) is lit as in
+/// the game; 1 for lights without the game's radii.
+fn inner_clamp(l: &WorldLight, d: f32) -> f32 {
+    let (r, inner) = (l.params.radius, l.params.inner_radius);
+    if inner <= 0.0 || inner >= r {
+        return 1.0;
+    }
+    let a = inner * inner * r * r / (r * r - inner * inner);
+    let b = -inner * inner / (r * r - inner * inner);
+    let d2 = d.max(0.05).powi(2);
+    let game = (a / d2 + b).clamp(0.0, 1.0);
+    let window = (1.0 - (d2 / (r * r)).powi(2)).clamp(0.0, 1.0).powi(2);
+    let ours = a / d2 * window;
+    if ours <= 1e-6 || ours <= game {
+        1.0
+    } else {
+        game / ours
+    }
+}
+
 #[derive(Resource, Default)]
 struct Lamps {
     loaded: bool,
@@ -281,6 +306,8 @@ fn drive_lights(
         // Out by the game's radius with its falloff (Bevy's range window
         // lands close to its `b`); further, and spots brighter, as set by eye.
         let game = scene.unit.is_some() && game_lumens(l, 1.0).is_some();
+        // (Flat inside the inner radius, as the game's, where the eye is.)
+        let lumens = if game { lumens * inner_clamp(l, c.distance(Vec3::from(l.position))) } else { lumens };
         (l, Color::linear_rgb(tint.x, tint.y, tint.z), lumens, game)
     };
     for s in &lamps.points {
@@ -384,6 +411,26 @@ mod tests {
         assert_eq!(light_level(&light(LightKind::Fire, 5.0, [0.0, 0.05, 2.0]), 0, 1.3, None), 5.0);
         // A flickering effect's light can't be worked out without the wave.
         assert_eq!(light_level(&light(LightKind::Fire, 50.0, [1.0, 0.05, 2.0]), 0, 1.3, None), 0.0);
+    }
+
+    /// Inside a light's inner radius the game's stays at full strength:
+    /// ours is dimmed to match at the eye, and left alone further out.
+    #[test]
+    fn a_light_is_flat_inside_its_inner_radius() {
+        let mut l = light(LightKind::Omni, 1.0, [0.0; 3]);
+        (l.params.inner_radius, l.params.radius) = (10.0, 15.0);
+        let a = 100.0 * 225.0 / 125.0;
+        let window = |d: f32| (1.0 - (d * d / 225.0).powi(2)).powi(2);
+        // At 5 m ours would be 7.2 times full strength (times the window).
+        let k = inner_clamp(&l, 5.0);
+        assert!((k * a / 25.0 * window(5.0) - 1.0).abs() < 1e-4, "{k}");
+        // Just past the inner radius ours is a little over the game's, and
+        // near the radius they agree to within the window's shape.
+        assert!(inner_clamp(&l, 10.5) < 1.0 && inner_clamp(&l, 10.5) > 0.8);
+        assert_eq!(inner_clamp(&l, 14.0), 1.0);
+        // Lights without the game's radii are left as they are.
+        l.params.inner_radius = 0.0;
+        assert_eq!(inner_clamp(&l, 1.0), 1.0);
     }
 
     /// A lamp's flicker adds to its intensity and averages out.

@@ -11,7 +11,7 @@ use anyhow::{bail, Result};
 use crate::fcb::Object;
 
 pub const BODY_REL: &str = "characters/body.txt";
-const MAGIC: &str = "fc3-body 4";
+const MAGIC: &str = "fc3-body 5";
 
 /// Whether a cached table is in this version's form.
 pub fn is_current(text: &str) -> bool {
@@ -47,6 +47,33 @@ pub struct Body {
     pub oxygen: Option<Oxygen>,
     /// How much faster the sprint key swims (`fSwimSprintMaxMultiplier`).
     pub swim_sprint: f32,
+    /// Climbing ledges and ladders.
+    pub climb: Option<Climb>,
+}
+
+/// Climbing (`Body`). Standing, a ledge `ground` metres over the feet
+/// (`fGroundClimbMin/MaxHeight`). In a jump, one from `jump[0]` to `jump[1]`
+/// metres off the head (`fJumpClimbMin/MaxHeight`), and at least
+/// `jump_above_ground` over the ground (`fJumpClimbMinHeightAboveGround`).
+/// Ladders: up and sliding-down speeds (m/s), first hands on the side, then
+/// hand over hand (vines and ropes).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Climb {
+    pub ground: [f32; 2],
+    pub jump: [f32; 2],
+    pub jump_above_ground: f32,
+    pub ladder: [[f32; 2]; 2],
+}
+
+/// The first object named `name` at or below `o`.
+fn find<'a>(o: &'a Object, name: &str) -> Option<&'a Object> {
+    let mut out = None;
+    o.walk(&mut |c, _| {
+        if out.is_none() && c.is(name) {
+            out = Some(c);
+        }
+    });
+    out
 }
 
 /// Holding the breath through a scope (`HoldBreathAbility`): the seconds it
@@ -144,6 +171,15 @@ pub fn body(library: &Object, templates: &Object) -> Option<Body> {
                 shares: [f("fFallDistancePawnDamagePercentA"), f("fFallDistancePawnDamagePercentB"), f("fFallDistancePawnDamagePercentC")],
             }
         });
+        let ladder = |kind: &str| {
+            find(pawn, kind).map_or([0.0; 2], |l| [float(l, "fLadderClimbingSpeed").unwrap_or(0.0), float(l, "fLadderSlideDownSpeed").unwrap_or(0.0)])
+        };
+        let climb = Climb {
+            ground: [f("fGroundClimbMinHeight"), f("fGroundClimbMaxHeight")],
+            jump: [f("fJumpClimbMinHeight"), f("fJumpClimbMaxHeight")],
+            jump_above_ground: f("fJumpClimbMinHeightAboveGround"),
+            ladder: [ladder("HandsOnSide"), ladder("HandOverHand")],
+        };
         found = Some(Body {
             walk: f("fWalkingMaxSpeed"),
             crouch: f("fWalkingMaxSpeedCrouch"),
@@ -162,6 +198,7 @@ pub fn body(library: &Object, templates: &Object) -> Option<Body> {
             breath_hold: breath_hold.filter(|h| h.hold > 0.0),
             oxygen: None,
             swim_sprint: 0.0,
+            climb: (b.bool("bCanClimbLedges") == Some(true) && climb.ground[1] > 0.0).then_some(climb),
         });
     });
     let mut body = found?;
@@ -212,6 +249,12 @@ pub fn to_text(b: &Body) -> String {
     }) + &b.breath_hold.map_or(String::new(), |h| format!("breath_hold {},{},{},{},{}\n", h.steady, h.hold, h.catch, h.held_sway, h.out_sway))
         + &b.oxygen.map_or(String::new(), |o| format!("oxygen {},{},{},{}\n", o.max, o.drain, o.refill, o.drown))
         + &format!("swim_sprint {}\n", b.swim_sprint)
+        + &b.climb.map_or(String::new(), |c| {
+            format!(
+                "climb {},{},{},{},{},{},{},{},{}\n",
+                c.ground[0], c.ground[1], c.jump[0], c.jump[1], c.jump_above_ground, c.ladder[0][0], c.ladder[0][1], c.ladder[1][0], c.ladder[1][1]
+            )
+        })
 }
 
 pub fn from_text(text: &str) -> Result<Body> {
@@ -237,6 +280,7 @@ pub fn from_text(text: &str) -> Result<Body> {
         breath_hold: None,
         oxygen: None,
         swim_sprint: 0.0,
+        climb: None,
     };
     for l in lines {
         let Some((k, v)) = l.split_once(' ') else { continue };
@@ -248,6 +292,14 @@ pub fn from_text(text: &str) -> Result<Body> {
                 b.breath_hold = Some(BreathHold { steady: list[0], hold: list[1], catch: list[2], held_sway: list[3], out_sway: list[4] })
             }
             "oxygen" if list.len() == 4 => b.oxygen = Some(Oxygen { max: list[0], drain: list[1], refill: list[2], drown: list[3] }),
+            "climb" if list.len() == 9 => {
+                b.climb = Some(Climb {
+                    ground: [list[0], list[1]],
+                    jump: [list[2], list[3]],
+                    jump_above_ground: list[4],
+                    ladder: [[list[5], list[6]], [list[7], list[8]]],
+                })
+            }
             _ => {}
         }
         let v: f32 = v.trim().parse().unwrap_or(0.0);
@@ -429,6 +481,7 @@ mod tests {
             breath_hold: Some(BreathHold { steady: 0.5, hold: 3.0, catch: 3.0, held_sway: 0.0, out_sway: 2.5 }),
             oxygen: Some(Oxygen { max: 100.0, drain: 3.25, refill: 100.0, drown: 20.0 }),
             swim_sprint: 1.5,
+            climb: Some(Climb { ground: [0.3, 1.8], jump: [-2.5, 0.5], jump_above_ground: 2.2, ladder: [[2.5, 4.5], [1.25, 3.5]] }),
         };
         assert_eq!(from_text(&to_text(&b)).unwrap(), b);
         let fall = b.fall.unwrap();

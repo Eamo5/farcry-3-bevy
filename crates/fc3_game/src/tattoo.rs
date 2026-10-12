@@ -30,7 +30,8 @@ impl Plugin for TattooPlugin {
         app.add_plugins(MaterialPlugin::<TattooMaterial>::default())
             .init_resource::<TattooShown>()
             .init_resource::<TattooArt>()
-            .add_systems(Update, (load_art, update_reveal, swap_materials).chain());
+            .add_systems(Update, (load_art, update_reveal, swap_materials).chain())
+            .add_systems(PreUpdate, crate::original_shaders::finish_swaps::<TattooMaterial>);
         bevy::asset::embedded_asset!(app, "tattoo.wgsl");
     }
 }
@@ -226,10 +227,7 @@ fn swap_materials(
                     .add(TattooMaterial { base: base.clone(), extension: TattooExt { reveal: art.reveal, design: art.design.clone(), mask: art.mask.clone() } })
             })
             .clone();
-        commands
-            .entity(e)
-            .remove::<(MeshMaterial3d<StandardMaterial>, crate::original_shaders::OriginalSwap, MeshMaterial3d<crate::original_shaders::OriginalMaterial>)>()
-            .insert((MeshMaterial3d(handle), NoOriginal));
+        crate::original_shaders::swap_next_frame(&mut commands, e, handle);
     }
 }
 

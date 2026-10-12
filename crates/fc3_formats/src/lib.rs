@@ -1,5 +1,6 @@
 //! Readers for Far Cry 3 (Dunia 2 engine) data formats.
 
+pub mod actionmaps;
 pub mod aim;
 pub mod anim;
 pub mod animals;

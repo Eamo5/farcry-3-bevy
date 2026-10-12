@@ -33,6 +33,26 @@ fn standing_clearance(spatial: &SpatialQuery, centre: Vec3, filter: &SpatialQuer
     spatial.shape_intersections(&standing, centre, Quat::IDENTITY, filter).is_empty()
 }
 
+/// Whether a contact under the capsule is something to stand on: a walkable
+/// face, or the lip of one (a step, a threshold), whose contact on the
+/// capsule's rounded bottom reads as steep though the top past it is flat.
+/// (A steep slope has no flat top just past the contact.)
+fn stands_on(spatial: &SpatialQuery, point: Vec3, normal: Vec3, filter: &SpatialQueryFilter) -> bool {
+    if normal.y > MIN_GROUND_NORMAL_Y {
+        return true;
+    }
+    // (Only contacts on the bottom half: a lip, not a wall's face.)
+    if normal.y < 0.1 {
+        return false;
+    }
+    let inward = Vec3::new(-normal.x, 0.0, -normal.z).normalize_or_zero();
+    let from = point + inward * EDGE_PROBE + Vec3::Y * EDGE_PROBE;
+    spatial.cast_ray(from, Dir3::NEG_Y, EDGE_PROBE * 2.0, true, filter).is_some_and(|h| h.distance > 0.0 && h.normal.y > MIN_GROUND_NORMAL_Y)
+}
+
+/// How far past a lip, and above it, the top is looked for (m).
+const EDGE_PROBE: f32 = 0.05;
+
 #[cfg(test)]
 mod stance_tests {
     use super::*;
@@ -63,6 +83,96 @@ mod stance_tests {
                 assert!((floor.distance - 0.02).abs() < 0.002, "stance changed feet height: {}", floor.distance);
             }
         }).unwrap();
+    }
+
+    /// A capsule on a step's lip stands on it; on a steep ramp, it doesn't.
+    #[test]
+    fn a_lip_is_ground_and_a_steep_ramp_is_not() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::asset::AssetPlugin::default(),
+            bevy::mesh::MeshPlugin,
+            bevy::transform::TransformPlugin,
+            PhysicsPlugins::default(),
+        ))
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(20)));
+        // A step 0.2 m high from x = 0, and well off to the side, a ramp at
+        // 60 degrees.
+        app.world_mut().spawn((RigidBody::Static, Collider::cuboid(2.0, 0.2, 2.0), Transform::from_xyz(1.0, 0.1, 0.0)));
+        app.world_mut().spawn((
+            RigidBody::Static,
+            Collider::cuboid(4.0, 0.2, 2.0),
+            Transform::from_xyz(0.0, 0.0, 10.0).with_rotation(Quat::from_rotation_z(60f32.to_radians())),
+        ));
+        app.finish();
+        app.cleanup();
+        for _ in 0..3 {
+            app.update();
+        }
+        app.world_mut()
+            .run_system_once(|spatial: SpatialQuery| {
+                let filter = SpatialQueryFilter::default();
+                let collider = stance_collider(false);
+                let down = ShapeCastConfig::from_max_distance(5.0);
+                // Most of the capsule's radius back off the lip: its bottom
+                // meets the edge well round its curve.
+                let on_lip = spatial.cast_shape(&collider, Vec3::new(-CAPSULE_RADIUS * 0.85, 2.0, 0.0), Quat::IDENTITY, Dir3::NEG_Y, &down, &filter).unwrap();
+                let normal = -on_lip.normal2;
+                assert!(normal.y < MIN_GROUND_NORMAL_Y, "the lip should read as steep: {normal:?}");
+                assert!(stands_on(&spatial, on_lip.point1, normal, &filter));
+                let on_ramp = spatial.cast_shape(&collider, Vec3::new(0.0, 4.0, 10.0), Quat::IDENTITY, Dir3::NEG_Y, &down, &filter).unwrap();
+                assert!(!stands_on(&spatial, on_ramp.point1, -on_ramp.normal2, &filter));
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn an_authored_ledge_is_climbed_from_in_front_within_reach() {
+        use fc3_formats::traversal::Climb;
+        // A ledge 2.5 m up along z at x = 1, its anchor a metre beyond.
+        let ledge = Climb { mission_layer: 0, a: [1.0, 2.5, -1.0], b: [1.0, 2.5, 1.0], anchor: [2.0, 2.5, 0.0] };
+        let standing = Vec3::new(0.4, HALF_HEIGHT, 0.3);
+        let (edge, anchor) = authored_ledge([&ledge], standing, Vec3::X, (0.3, 3.0)).expect("in reach");
+        assert!(edge.distance(Vec3::new(1.0, 2.5, 0.3)) < 1e-4 && anchor == Vec3::new(2.0, 2.5, 0.0), "{edge:?}");
+        // Pressed to a face a little past the line, still.
+        assert!(authored_ledge([&ledge], Vec3::new(1.1, HALF_HEIGHT, 0.3), Vec3::X, (0.3, 3.0)).is_some());
+        // Not when facing away, from beyond it, too low a reach or too far.
+        assert!(authored_ledge([&ledge], standing, Vec3::NEG_X, (0.3, 3.0)).is_none());
+        assert!(authored_ledge([&ledge], Vec3::new(1.6, HALF_HEIGHT, 0.0), Vec3::NEG_X, (0.3, 3.0)).is_none());
+        assert!(authored_ledge([&ledge], standing, Vec3::X, (0.3, 2.0)).is_none());
+        assert!(authored_ledge([&ledge], Vec3::new(-1.0, HALF_HEIGHT, 0.0), Vec3::X, (0.3, 3.0)).is_none());
+    }
+
+    #[test]
+    fn a_tall_rock_is_out_of_reach_standing_but_caught_in_a_jump() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::asset::AssetPlugin::default(),
+            bevy::mesh::MeshPlugin,
+            bevy::transform::TransformPlugin,
+            PhysicsPlugins::default(),
+        ));
+        // A block 3.2 m tall from x = 1, its top at 3.2.
+        app.world_mut().spawn((RigidBody::Static, Collider::cuboid(4.0, 3.2, 4.0), Transform::from_xyz(3.0, 1.6, 0.0)));
+        app.finish();
+        app.cleanup();
+        for _ in 0..3 {
+            app.update();
+        }
+        app.world_mut()
+            .run_system_once(|spatial: SpatialQuery| {
+                let filter = SpatialQueryFilter::default();
+                let standing = Vec3::new(0.5, HALF_HEIGHT, 0.0);
+                // Standing, made-up reaches: 0.3 to 1.8 m over the feet.
+                assert!(find_ledge(&spatial, &filter, standing, Vec3::X, (0.3, 1.8)).is_none());
+                // A metre up in a jump, a reach round the head finds its top.
+                let head = 2.0 * HALF_HEIGHT;
+                let (top, h, vault) = find_ledge(&spatial, &filter, standing + Vec3::Y, Vec3::X, (head - 2.0, head + 0.5)).expect("caught");
+                assert!((top.y - 3.2).abs() < 0.05 && (h - 2.2).abs() < 0.05 && !vault, "{top:?} {h}");
+            })
+            .unwrap();
     }
 }
 /// The slide: eye height, the sprint speed it needs, the push it gives,
@@ -133,6 +243,7 @@ impl Default for PlayerBody {
             breath_hold: None,
             oxygen: None,
             swim_sprint: 1.0,
+            climb: None,
         })
     }
 }
@@ -213,7 +324,13 @@ pub struct Mantle {
 
 /// Something to climb onto in front of the player (capsule centre `pos`):
 /// the top's point, its height above the feet, and whether to vault over.
-fn find_ledge(sq: &SpatialQuery, filter: &SpatialQueryFilter, pos: Vec3, fwd: Vec3) -> Option<(Vec3, f32, bool)> {
+/// How high over the feet a ledge can be climbed standing, without the
+/// game's figures.
+const GROUND_CLIMB: (f32, f32) = (0.5, 2.3);
+
+/// A ledge ahead whose top is `reach` (lowest, highest) metres over the feet:
+/// its top, its height and whether to vault it.
+fn find_ledge(sq: &SpatialQuery, filter: &SpatialQueryFilter, pos: Vec3, fwd: Vec3, reach: (f32, f32)) -> Option<(Vec3, f32, bool)> {
     let feet = pos - Vec3::Y * HALF_HEIGHT;
     let dir = Dir3::new(fwd).ok()?;
     // A steep face in front (not just rising ground), somewhere between the
@@ -227,18 +344,22 @@ fn find_ledge(sq: &SpatialQuery, filter: &SpatialQueryFilter, pos: Vec3, fwd: Ve
     if face == f32::MAX {
         return None;
     }
-    // Its top, just beyond the face (thin fences have tops too).
-    let probe = feet + fwd * (face + 0.15) + Vec3::Y * 2.6;
-    let Some(down) = sq.cast_ray(probe, Dir3::NEG_Y, 2.6, true, filter) else {
-        debug!("ledge: face at {face:.2} but nothing below {probe:.1?}");
-        return None;
-    };
-    let top = probe - Vec3::Y * down.distance;
-    let h = top.y - feet.y;
-    if down.normal.y < 0.7 || !(0.5..=2.3).contains(&h) {
-        debug!("ledge: face at {face:.2}, top {h:.2} m up, normal {:.2}", down.normal.y);
-        return None;
-    }
+    // Its top, just beyond the face (thin fences have tops too), or a little
+    // further in past a rounded lip (a boulder's).
+    let (top, h) = [0.15, 0.45, 0.8].into_iter().find_map(|beyond| {
+        let probe = feet + fwd * (face + beyond) + Vec3::Y * (reach.1 + 0.3);
+        let Some(down) = sq.cast_ray(probe, Dir3::NEG_Y, reach.1 + 0.3 - reach.0.min(0.0), true, filter) else {
+            debug!("ledge: face at {face:.2} but nothing below {probe:.1?}");
+            return None;
+        };
+        let top = probe - Vec3::Y * down.distance;
+        let h = top.y - feet.y;
+        if down.normal.y < 0.7 || !(reach.0..=reach.1).contains(&h) {
+            debug!("ledge: face at {face:.2}, top {beyond} m in {h:.2} m up, normal {:.2}", down.normal.y);
+            return None;
+        }
+        Some((top, h))
+    })?;
     // Room to stand up there.
     if sq.cast_ray(top + Vec3::Y * 0.05, Dir3::Y, 1.8, true, filter).is_some() {
         debug!("ledge: no headroom over {h:.2} m");
@@ -248,6 +369,37 @@ fn find_ledge(sq: &SpatialQuery, filter: &SpatialQueryFilter, pos: Vec3, fwd: Ve
     let clear_ahead = sq.cast_ray(top + Vec3::Y * 0.4, dir, 1.2, true, filter).is_none();
     let drop = sq.cast_ray(top + fwd * 0.6 + Vec3::Y * 0.2, Dir3::NEG_Y, 3.0, true, filter).is_none_or(|d| d.distance > 0.45);
     Some((top, h, h < 1.3 && clear_ahead && drop))
+}
+
+/// The nearest authored ledge (`traversal::Climb`) ahead of a player
+/// (capsule centre `pos`, facing `fwd`), `reach` (lowest, highest) metres
+/// over the feet, faced from the side away from its anchor: the point on the
+/// ledge, and the anchor the climb ends at. (A line can sit on a rock's lip
+/// a little outside its collision, so a climber pressed to the face may
+/// stand a little past it.)
+fn authored_ledge<'a>(climbs: impl IntoIterator<Item = &'a fc3_formats::traversal::Climb>, pos: Vec3, fwd: Vec3, reach: (f32, f32)) -> Option<(Vec3, Vec3)> {
+    let feet = pos.y - HALF_HEIGHT;
+    climbs
+        .into_iter()
+        .filter_map(|c| {
+            let (a, b, anchor) = (Vec3::from(c.a), Vec3::from(c.b), Vec3::from(c.anchor));
+            let ab = (b - a).with_y(0.0);
+            let s = if ab.length_squared() > 1e-6 { ((pos - a).with_y(0.0).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+            let edge = a.lerp(b, s);
+            // Across the line towards the anchor; the climber's distance
+            // short of it (negative) or past it, and to one side of its ends.
+            let mut across = Vec3::new(-ab.z, 0.0, ab.x).normalize_or((anchor - edge).with_y(0.0).normalize_or(fwd));
+            if across.dot(anchor - edge) < 0.0 {
+                across = -across;
+            }
+            let off = (pos - edge).with_y(0.0);
+            let short = across.dot(off);
+            let aside = (off - across * short).length();
+            let near = short > -(CAPSULE_RADIUS + 0.8) && short < CAPSULE_RADIUS && aside < 0.3 && fwd.dot(across) > 0.3;
+            (near && (reach.0..=reach.1).contains(&(edge.y - feet))).then_some((short.abs() + aside, edge, anchor))
+        })
+        .min_by(|x, y| x.0.total_cmp(&y.0))
+        .map(|(_, edge, anchor)| (edge, anchor))
 }
 
 /// The wingsuit or parachute in flight, by the game's figures: the suit
@@ -490,8 +642,13 @@ pub(crate) fn player_look(
     // The mouse moving for a while in play with the view not turning (no
     // scene camera holding it): say once what holds it.
     let now = time.elapsed_secs();
-    // (At the wheel the head stops at the vehicle's limits.)
-    let input = actions.look.length() > 1e-4 && *state.get() == crate::menu::GameState::Playing && cinema.view.is_none() && !p.driving;
+    // (At the wheel the head stops at the vehicle's limits. Only a captured
+    // mouse or a pad counts: test automation turns the view itself.)
+    let input = actions.look.length() > 1e-4
+        && (captured.0 || actions.gamepad_active)
+        && *state.get() == crate::menu::GameState::Playing
+        && cinema.view.is_none()
+        && !p.driving;
     if stuck.note(now, input, yaw0, pitch0) {
         warn!(
                 "look: the mouse is moving but the view isn't turning (held {held}: scene hold {:.2}, cutscene {}, takedown {}; weapon wheel {}; on a gun {}; input captured {}; pad {})",
@@ -851,7 +1008,7 @@ pub(crate) fn player_move(
     progress: Res<crate::progression::Progress>,
     mut actions_out: MessageWriter<crate::fp::FpAction>,
     sway: Res<crate::weapons::ScopeSway>,
-    (scripted, collision_ids, mut next_collision_log, mut commands, body, mut stamina, mut flight): (
+    (scripted, collision_ids, mut next_collision_log, mut commands, body, mut stamina, mut flight, ways, layers): (
         Res<crate::story::ScriptedPlayer>,
         Query<(Option<&crate::objects::PlacedId>, Option<&Name>, Option<&ChildOf>)>,
         Local<f32>,
@@ -859,6 +1016,8 @@ pub(crate) fn player_move(
         Res<PlayerBody>,
         Local<Option<f32>>,
         Local<Flight>,
+        Res<crate::traversal::Ways>,
+        Res<crate::mission_layers::MissionLayers>,
     ),
 ) {
     let body = body.0;
@@ -925,9 +1084,48 @@ pub(crate) fn player_move(
     // FC3_CLIMB_TEST (with --walk): climb whatever is met.
     // (Not for the takedown from below, staged at the course's wall.)
     let climb_test = std::env::var("FC3_CLIMB_TEST").is_ok() && std::env::var("FC3_TAKEDOWN_MODE").as_deref() != Ok("below") && p.grounded;
-    if (input_ok && actions.just_pressed(Action::Jump) || climb_test) && !p.swimming && p.air == AirMode::None && (p.grounded || p.velocity.y.abs() < 3.0) {
+    let head = 2.0 * HALF_HEIGHT;
+    let climbs = || {
+        ways.data.climbs.iter().filter(|c| c.mission_layer == fc3_formats::world::DEFAULT_MISSION_LAYER || layers.present.contains(&c.mission_layer))
+    };
+    // A ledge authored to be climbed: up onto it and over to its anchor,
+    // standing (with the jump the climb starts with) or caught in the air.
+    let authored = |reach: (f32, f32)| authored_ledge(climbs(), t.translation, forward, reach);
+    let jump_pressed = input_ok && actions.just_pressed(Action::Jump);
+    let ledge = if jump_pressed && p.grounded && !p.swimming && p.air == AirMode::None {
+        let low = body.climb.map_or(GROUND_CLIMB.0, |c| c.ground[0].max(0.3));
+        authored((low, head + body.climb.map_or(0.5, |c| c.jump[1]) + body.jump_height))
+    } else if !p.grounded && p.velocity.y.abs() > 0.5 && p.air == AirMode::None && !p.swimming && axis.y > 0.3 {
+        body.climb.and_then(|c| authored(((head + c.jump[0]).max(GROUND_CLIMB.0), head + c.jump[1])))
+    } else {
+        None
+    };
+    if let Some((edge, anchor)) = ledge {
         let filter = SpatialQueryFilter::from_excluded_entities([entity]);
-        if let Some((top, h, vault)) = find_ledge(&move_and_slide.spatial_query, &filter, t.translation, forward) {
+        let from = t.translation;
+        let toward = (edge - from).with_y(0.0).normalize_or(forward);
+        let peak = Vec3::new(from.x, edge.y + HALF_HEIGHT + 0.1, from.z) + toward * 0.15;
+        // On whatever is under the anchor, looked for from over the ledge
+        // (some anchors sit inside the rock, below its top).
+        let over = anchor.with_y(anchor.y.max(edge.y) + 1.0);
+        let stand = move_and_slide
+            .spatial_query
+            .cast_ray(over, Dir3::NEG_Y, over.y - anchor.y + 1.5, true, &filter)
+            .filter(|g| g.normal.y > 0.5)
+            .map_or(anchor, |g| over - Vec3::Y * g.distance);
+        let to = stand + Vec3::Y * (HALF_HEIGHT + 0.02);
+        let h = edge.y - (from.y - HALF_HEIGHT);
+        let dur = 0.45 + h.max(0.0) * 0.3;
+        p.mantle = Some(Mantle { from, peak, to, t: 0.0, dur });
+        info!("climb: the authored ledge {h:.2} m over the feet, from {from:.1?} to {to:.1?}");
+        actions_out.write(crate::fp::FpAction::Climb { high: h > 1.3, secs: dur });
+        return;
+    }
+    if (jump_pressed || climb_test) && !p.swimming && p.air == AirMode::None && (p.grounded || p.velocity.y.abs() < 3.0) {
+        let filter = SpatialQueryFilter::from_excluded_entities([entity]);
+        // (The player's own reach standing: `fGroundClimbMin/MaxHeight`.)
+        let reach = body.climb.map_or(GROUND_CLIMB, |c| (c.ground[0].max(0.3), c.ground[1]));
+        if let Some((top, h, vault)) = find_ledge(&move_and_slide.spatial_query, &filter, t.translation, forward, reach) {
             let from = t.translation;
             let peak = Vec3::new(from.x, top.y + HALF_HEIGHT + 0.1, from.z) + forward * 0.15;
             let to = if vault { top + forward * 1.4 + Vec3::Y * HALF_HEIGHT } else { top + forward * 0.45 + Vec3::Y * (HALF_HEIGHT + 0.02) };
@@ -936,6 +1134,29 @@ pub(crate) fn player_move(
             info!("climb: {:.2} m up, vault {vault}, from {from:.1?} to {to:.1?}", h);
             actions_out.write(if vault { crate::fp::FpAction::Vault { secs: dur } } else { crate::fp::FpAction::Climb { high: h > 1.3, secs: dur } });
             return;
+        }
+    }
+    // Jumping or falling, pushing on, a high ledge within reach of the head:
+    // caught and climbed (the game's jump climb). It has to stand
+    // `jump_above_ground` over the ground below, from `jump[0]` to `jump[1]`
+    // metres off the head, and (ours) over the feet.
+    if let Some(c) = body.climb.filter(|c| c.jump_above_ground > 0.0) {
+        if !p.grounded && p.velocity.y.abs() > 0.5 && p.mantle.is_none() && p.air == AirMode::None && !p.swimming && axis.y > 0.3 {
+            let filter = SpatialQueryFilter::from_excluded_entities([entity]);
+            let reach = ((head + c.jump[0]).max(GROUND_CLIMB.0), head + c.jump[1]);
+            let ground = move_and_slide.spatial_query.cast_ray(t.translation, Dir3::NEG_Y, 50.0, true, &filter).map(|g| t.translation.y - g.distance);
+            if let Some((top, h, _)) = find_ledge(&move_and_slide.spatial_query, &filter, t.translation, forward, reach)
+                .filter(|(top, _, _)| ground.is_none_or(|g| top.y - g >= c.jump_above_ground))
+            {
+                let from = t.translation;
+                let peak = Vec3::new(from.x, top.y + HALF_HEIGHT + 0.1, from.z) + forward * 0.15;
+                let to = top + forward * 0.45 + Vec3::Y * (HALF_HEIGHT + 0.02);
+                let dur = 0.45 + h.max(0.0) * 0.3;
+                p.mantle = Some(Mantle { from, peak, to, t: 0.0, dur });
+                info!("climb: caught a ledge {h:.2} m over the feet in the air, from {from:.1?} to {to:.1?}");
+                actions_out.write(crate::fp::FpAction::Climb { high: true, secs: dur });
+                return;
+            }
         }
     }
     let feet = t.translation.y - HALF_HEIGHT;
@@ -1100,7 +1321,7 @@ pub(crate) fn player_move(
     let mut contacts = Vec::new();
     let out = move_and_slide.move_and_slide(&collider, start, Quat::IDENTITY, p.velocity, std::time::Duration::from_secs_f32(dt), &config, &filter, |hit| {
         if trace { contacts.push((hit.entity, hit.point, *hit.normal, hit.distance)); }
-        if hit.normal.y > MIN_GROUND_NORMAL_Y {
+        if stands_on(&move_and_slide.spatial_query, hit.point, hit.normal.as_vec3(), &filter) {
             ground_hit = true;
         }
         MoveAndSlideHitResponse::Accept
@@ -1165,10 +1386,17 @@ pub(crate) fn player_move(
                     &ShapeCastConfig::from_max_distance(STEP_HEIGHT + 0.05),
                     &filter,
                 );
-                if let Some(d) = down.filter(|d| d.normal1.y > MIN_GROUND_NORMAL_Y || -d.normal2.y > MIN_GROUND_NORMAL_Y) {
+                if let Some(d) = down.filter(|d| d.normal1.y > MIN_GROUND_NORMAL_Y || stands_on(&move_and_slide.spatial_query, d.point1, -d.normal2, &filter)) {
                     new_pos = step_out.position - Vec3::Y * (d.distance - 0.01).max(0.0);
                     new_vel = Vec3::new(step_out.projected_velocity.x, 0.0, step_out.projected_velocity.z);
                     ground_hit = true;
+                } else if let Some(d) = down.filter(|d| d.distance < STEP_HEIGHT - 0.02) {
+                    // Onto the rounded edge of a lip (a threshold's), whose
+                    // contact reads steep: kept, though not as ground, so
+                    // the next steps carry on over it rather than the
+                    // capsule sticking against it.
+                    new_pos = step_out.position - Vec3::Y * (d.distance - 0.01).max(0.0);
+                    new_vel = Vec3::new(step_out.projected_velocity.x, 0.0, step_out.projected_velocity.z);
                 }
             }
         }
@@ -1183,7 +1411,8 @@ pub(crate) fn player_move(
         &ShapeCastConfig::from_max_distance(if was_grounded { 0.25 } else { 0.05 }),
         &filter,
     );
-    let probe_ground = probe.as_ref().is_some_and(|h| h.normal1.y > MIN_GROUND_NORMAL_Y || -h.normal2.y > MIN_GROUND_NORMAL_Y);
+    let probe_ground =
+        probe.as_ref().is_some_and(|h| h.normal1.y > MIN_GROUND_NORMAL_Y || stands_on(&move_and_slide.spatial_query, h.point1, -h.normal2, &filter));
     if was_grounded && !ground_hit && new_vel.y <= 0.0 {
         if let Some(h) = &probe {
             if probe_ground {

@@ -349,14 +349,34 @@ uses triplanar mapping for cliff layers and the layers' normal maps up close.
 
 ## Holes and caves
 
-Bit 0x10 of a sample's last byte is set in only 11 sectors (`fc3tool sdat-bits 3 10`
-lists them), always in tidy rectangles. That makes it the likely terrain-hole flag.
-One such rectangle is a 10 x 7 m opening across sectors 22122 and 22282, beside a
-story scene's room placeholder. Nothing walkable was found under it, so cutting it
-shows the sky. The game's caves are separate meshes set into hillsides and
-under them. For example, the floor of the bear cave at -2599, -893 is 43 m below
-the terrain surface, and it opens on a cliff. They don't need holes, so the
-terrain is left closed. Instead, the player's safety clamp to the terrain surface
+A sample is marked cut out when the top three bits of its last byte are all
+set (`0xE0`; `fc3tool sdat-bits 3 e0 all` lists the sectors). The mark settles
+it:
+
+* Every sample of 397 placeholder sectors round the world's edge carries it.
+  Those sectors are flat at exactly 200 m with no material name, so the game
+  cuts them entirely.
+* In 386 island sectors it marks a few samples, at the foot of the terrain
+  where it rises steeply over a cave's mouth. The doctor's cave
+  (sector 19089) opens to the west through a one-cell strip of them, at
+  x -1972 to -1971, y 2548 to 2556, where the terrain climbs 6 to 7 m in a
+  metre. Its exit trigger stands just beyond. Elsewhere, slopes of 70° and
+  more carry no mark.
+
+A cell is cut when all four of its corner samples are marked
+(`terrain::hole_cells`). The cached sector keeps the hole table; the mesh,
+collider (then a triangle mesh) and height queries leave those cells open. A
+sector cut away entirely gets no collider. The converter rewrote the sectors
+with holes once (`terrain/stamp-holes.txt`).
+
+Bit 0x10, the earlier guess, is set in only 11 sectors, in tidy rectangles.
+One of them is a 10 x 7 m opening across sectors 22122 and 22282, beside a
+story scene's room placeholder, with nothing walkable under it.
+
+Most of the game's caves are separate meshes set into hillsides and under
+them, so they need no hole. For example, the floor of the bear cave at -2599,
+-893 is 43 m below the terrain surface, and it opens on a cliff. Besides
+that, the player's safety clamp to the terrain surface
 only acts within about a metre of it, and NPCs follow the navigation mesh's floor
 where it lies well below the terrain. `--pos x,y,z --underground` spawns on the
 floor just below z, for testing caves.

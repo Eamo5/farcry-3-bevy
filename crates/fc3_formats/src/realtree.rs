@@ -297,11 +297,14 @@ pub struct MeshOptions {
     pub max_sides: u32,
     /// Branches whose base radius is below this are skipped (0 keeps all).
     pub min_radius: f32,
+    /// Branches deeper than this are skipped (0: the trunk only; `None`
+    /// keeps all).
+    pub max_level: Option<u32>,
 }
 
 impl Default for MeshOptions {
     fn default() -> Self {
-        MeshOptions { lod: 0, tube_edge: 0.12, min_sides: 3, max_sides: 12, min_radius: 0.0 }
+        MeshOptions { lod: 0, tube_edge: 0.12, min_sides: 3, max_sides: 12, min_radius: 0.0, max_level: None }
     }
 }
 
@@ -343,7 +346,7 @@ impl RealTree {
             }
             let nodes = &self.nodes[first..=last];
             let r0 = nodes[0].radius.max(0.0);
-            if r0 < opts.min_radius {
+            if r0 < opts.min_radius || opts.max_level.is_some_and(|m| br.level > m) {
                 continue;
             }
             let wanted = (std::f32::consts::TAU * r0 / opts.tube_edge.max(1e-3)).round() as u32;
@@ -1061,6 +1064,10 @@ mod tests {
         // V follows tex_v (flipped), U wraps from 0 to the repeat count.
         assert_eq!(part.uvs[0], [0.0, 1.0]);
         assert_eq!(part.uvs[4], [2.0, 1.0]);
+        // The trunk alone: its 3 rings, without the branch.
+        let trunk = t.build_branches(&MeshOptions { max_level: Some(0), ..opts });
+        assert_eq!(trunk.positions.len(), 3 * 5);
+        assert_eq!(trunk.positions[..], part.positions[..15]);
     }
 
     #[test]

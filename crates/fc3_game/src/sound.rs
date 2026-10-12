@@ -76,6 +76,8 @@ pub mod ev {
 struct SoundFile {
     path: String,
     looping: bool,
+    /// How long it plays (s): its samples at its rate.
+    seconds: f32,
 }
 
 #[derive(Clone)]
@@ -135,8 +137,11 @@ impl SoundBank {
                 Some("sound") => {
                     let (Some(stem), Some(ext)) = (it.next(), it.next()) else { continue };
                     // codec, channels, rate, samples, then the loop flag.
-                    let looping = it.nth(4) == Some("1");
-                    bank.files.insert(stem.to_string(), SoundFile { path: format!("audio/{stem}.{ext}"), looping });
+                    let rest: Vec<&str> = it.collect();
+                    let looping = rest.get(4) == Some(&"1");
+                    let number = |i: usize| rest.get(i).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+                    let seconds = if number(2) > 0.0 { number(3) / number(2) } else { 0.0 };
+                    bank.files.insert(stem.to_string(), SoundFile { path: format!("audio/{stem}.{ext}"), looping, seconds });
                 }
                 Some("mod") => {
                     let (Some(token), Some(header), Some(gain)) =
@@ -186,6 +191,14 @@ impl SoundBank {
     /// to the same event without the gait, then without any switch.
     fn event(&self, event: u32) -> Option<&EventDef> {
         self.events.get(&event).or_else(|| self.events.get(&(event & 0x3FFF_FFFF))).or_else(|| self.events.get(&(event & 0x00FF_FFFF)))
+    }
+
+    /// How long `event` plays (s): its first voice's first sound (a line of
+    /// dialogue's length).
+    pub fn length(&self, event: u32) -> Option<f32> {
+        let (h, _) = self.event(event)?.voices.first()?.first()?;
+        let stem = format!("{h:08x}");
+        self.files.get(&stem).or_else(|| self.files.get(&format!("{stem}_l0"))).map(|f| f.seconds).filter(|s| *s > 0.0)
     }
 
     /// Whether everything `event` plays loops (an ambience bed rather than a

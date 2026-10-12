@@ -8,7 +8,7 @@
 
 use crate::fcb::Object;
 
-pub const CACHE_HEADER: &str = "# traversal 3: ladder identities, layers and animation packages";
+pub const CACHE_HEADER: &str = "# traversal 5: ladder identities, layers, animation packages and kinds; climbing lines";
 
 /// The installed CLadder package shared by the hand-over-hand vine ladders.
 pub const VINE_ANIMATION_PACKAGE: u64 = 0x95aea5a8ded23d2c;
@@ -85,6 +85,8 @@ pub struct Ladder {
     pub base: [f32; 3],
     pub top: f32,
     pub facing: [f32; 3],
+    /// Climbed hand over hand (vines, ropes) rather than hands on the side.
+    pub hand_over_hand: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -93,20 +95,47 @@ pub struct Traversal {
     pub ladders: Vec<Ladder>,
     /// Radio tower control panels.
     pub towers: Vec<[f32; 3]>,
+    /// Ledges authored to be climbed onto.
+    pub climbs: Vec<Climb>,
+}
+
+/// A ledge authored to be climbed onto (Bevy space): from `a` to `b`, the
+/// climber ending at `anchor`, while its mission layer is on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Climb {
+    pub mission_layer: u64,
+    pub a: [f32; 3],
+    pub b: [f32; 3],
+    pub anchor: [f32; 3],
 }
 
 impl Traversal {
     pub fn to_text(&self) -> String {
-        let mut s = format!("{CACHE_HEADER}\n# zip|wire ax ay az bx by bz / ladder-animation id layer package x y z top fx fy fz / tower x y z\n");
+        let mut s =
+            format!("{CACHE_HEADER}\n# zip|wire ax ay az bx by bz / ladder-animation id layer package x y z top fx fy fz hand-over-hand / tower x y z\n");
         let v = |p: [f32; 3]| format!("{:.2} {:.2} {:.2}", p[0], p[1], p[2]);
         for c in &self.cables {
             s += &format!("{} {} {}\n", if c.zipline { "zip" } else { "wire" }, v(c.a), v(c.b));
         }
         for l in &self.ladders {
-            s += &format!("ladder-animation {} {} {} {} {:.2} {:.3} {:.3} {:.3}\n", l.id, l.mission_layer, l.animation_package, v(l.base), l.top, l.facing[0], l.facing[1], l.facing[2]);
+            s += &format!(
+                "ladder-animation {} {} {} {} {:.2} {:.3} {:.3} {:.3} {}\n",
+                l.id,
+                l.mission_layer,
+                l.animation_package,
+                v(l.base),
+                l.top,
+                l.facing[0],
+                l.facing[1],
+                l.facing[2],
+                u8::from(l.hand_over_hand)
+            );
         }
         for t in &self.towers {
             s += &format!("tower {}\n", v(*t));
+        }
+        for c in &self.climbs {
+            s += &format!("climb {} {} {} {}\n", c.mission_layer, v(c.a), v(c.b), v(c.anchor));
         }
         s
     }
@@ -122,7 +151,7 @@ impl Traversal {
                 let Some(id) = it.next().and_then(|s| s.parse::<u64>().ok()) else { continue };
                 id
             } else { 0 };
-            let mission_layer = if matches!(kind, "ladder-entity" | "ladder-animation") {
+            let mission_layer = if matches!(kind, "ladder-entity" | "ladder-animation" | "climb") {
                 let Some(layer) = it.next().and_then(|s| s.parse::<u64>().ok()) else { continue };
                 layer
             } else { crate::world::DEFAULT_MISSION_LAYER };
@@ -133,8 +162,17 @@ impl Traversal {
             let v: Vec<f32> = it.filter_map(|s| s.parse().ok()).collect();
             match (kind, v.len()) {
                 ("zip" | "wire", 6) => t.cables.push(Cable { zipline: kind == "zip", a: [v[0], v[1], v[2]], b: [v[3], v[4], v[5]] }),
-                ("ladder" | "ladder-entity" | "ladder-animation", 7) => t.ladders.push(Ladder { id, mission_layer, animation_package, base: [v[0], v[1], v[2]], top: v[3], facing: [v[4], v[5], v[6]] }),
+                ("ladder" | "ladder-entity" | "ladder-animation", 7 | 8) => t.ladders.push(Ladder {
+                    id,
+                    mission_layer,
+                    animation_package,
+                    base: [v[0], v[1], v[2]],
+                    top: v[3],
+                    facing: [v[4], v[5], v[6]],
+                    hand_over_hand: v.get(7).is_some_and(|h| *h != 0.0),
+                }),
                 ("tower", 3) => t.towers.push([v[0], v[1], v[2]]),
+                ("climb", 9) => t.climbs.push(Climb { mission_layer, a: [v[0], v[1], v[2]], b: [v[3], v[4], v[5]], anchor: [v[6], v[7], v[8]] }),
                 _ => {}
             }
         }
@@ -149,9 +187,21 @@ mod tests {
     #[test]
     fn text_roundtrip() {
         let t = Traversal {
-            cables: vec![Cable { zipline: true, a: [1.0, 120.5, -3.0], b: [40.0, 101.25, 7.5] }, Cable { zipline: false, a: [0.0, 1.0, 2.0], b: [3.0, 4.0, 5.0] }],
-            ladders: vec![Ladder { id: 2078490335079601680, mission_layer: 0xa07db8c44bc1f1, animation_package: VINE_ANIMATION_PACKAGE, base: [5.0, 100.0, 5.0], top: 108.5, facing: [0.0, 0.0, -1.0] }],
+            cables: vec![
+                Cable { zipline: true, a: [1.0, 120.5, -3.0], b: [40.0, 101.25, 7.5] },
+                Cable { zipline: false, a: [0.0, 1.0, 2.0], b: [3.0, 4.0, 5.0] },
+            ],
+            ladders: vec![Ladder {
+                id: 2078490335079601680,
+                mission_layer: 0xa07db8c44bc1f1,
+                animation_package: VINE_ANIMATION_PACKAGE,
+                base: [5.0, 100.0, 5.0],
+                top: 108.5,
+                facing: [0.0, 0.0, -1.0],
+                hand_over_hand: true,
+            }],
             towers: vec![[10.0, 150.0, -20.0]],
+            climbs: vec![Climb { mission_layer: 0x64, a: [1.0, 2.5, 3.0], b: [2.0, 2.5, 3.5], anchor: [1.5, 2.5, 4.0] }],
         };
         assert_eq!(Traversal::from_text(&t.to_text()), t);
     }

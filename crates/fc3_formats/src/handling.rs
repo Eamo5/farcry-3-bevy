@@ -19,7 +19,7 @@
 use crate::fcb::Object;
 
 pub const HANDLING_REL: &str = "vehicles/handling.txt";
-const MAGIC: &str = "fc3-handling 9";
+const MAGIC: &str = "fc3-handling 12";
 
 /// Whether a cached table is this version's.
 pub fn is_current(text: &str) -> bool {
@@ -107,6 +107,33 @@ pub struct Boat {
     pub engine_braking: f32,
     pub brake: f32,
     pub angular_damping: f32,
+    /// The water's friction going astern.
+    pub reverse_friction: f32,
+    /// The buoyancy spheres it floats on (those of any size: Dunia offsets
+    /// from its centre of mass, radius). The water's friction acts at each
+    /// one in the water, so its frictions add up that many times over.
+    pub spheres: Vec<([f32; 3], f32)>,
+    /// Its centre of mass (Dunia, from its origin).
+    pub com: [f32; 3],
+    /// The spheres' drop (m, negative: down) at `z_offset_speed` (m/s), in
+    /// proportion to the speed: the hull rises as it gets going.
+    pub z_offset: f32,
+    pub z_offset_speed: f32,
+    /// Gravity's factor with any sphere in the water, and with none.
+    pub gravity: f32,
+    pub gravity_air: f32,
+    /// The water's friction on its rising and falling (per sphere, with the
+    /// speed), and going down into it (with the speed squared, as deep as
+    /// the sphere is in).
+    pub updown_friction: f32,
+    pub down_friction: f32,
+    /// Friction on its turning about its yaw, and on its rolling and
+    /// pitching going down into the water (per sphere).
+    pub up_rotate_friction: f32,
+    pub down_rotate_friction: f32,
+    /// The stabiliser's turn rate righting it, past its angle (degrees).
+    pub stabilizer: f32,
+    pub stabilizer_angle: f32,
 }
 
 /// A hang glider's flight (angles in radians, speeds in m/s, rates per
@@ -401,6 +428,22 @@ fn boat(b: &Object) -> Option<Boat> {
         engine_braking: f("fEngineBrakingPower"),
         brake: f("Brake"),
         angular_damping: f("fAngularDamping"),
+        reverse_friction: f("fReverseFriction"),
+        spheres: b
+            .child("BuoyancySphere")
+            .map(|s| s.children_named("Spheres").filter_map(|s| Some((vec3(s, "LocalPosition")?, float(s, "Radius")?))).filter(|(_, r)| *r > 0.0).collect())
+            .unwrap_or_default(),
+        com: vec3(b, "vectorCenterOfMassOffset").unwrap_or_default(),
+        z_offset: f("fSpheresZOffsetMax"),
+        z_offset_speed: f("fSpheresZOffsetMaxSpeed"),
+        gravity: float(b, "GravityModifier").unwrap_or(1.0),
+        gravity_air: float(b, "GravityModifierAirborne").unwrap_or(1.0),
+        updown_friction: f("fUpDownFriction"),
+        down_friction: f("fDownFriction"),
+        up_rotate_friction: f("fUpRotateFriction"),
+        down_rotate_friction: f("fDownRotateFriction"),
+        stabilizer: f("StabilizerAccel"),
+        stabilizer_angle: float(b, "fStabilizerRollAngleActivation").unwrap_or(45.0),
     };
     (boat.forward > 0.0 && boat.forward_friction > 0.0).then_some(boat)
 }
@@ -533,20 +576,40 @@ pub fn to_text(list: &[Handling]) -> String {
             format!("{};{};{}", nums(&v), gears.join(" "), wheels.join(" "))
         });
         let boat = h.boat.as_ref().map_or("-".to_string(), |b| {
-            nums(&[
-                b.forward,
-                b.reverse,
-                b.rev_up,
-                b.max_rpm,
-                b.forward_friction,
-                b.side_friction,
-                b.steer_low,
-                b.steer_high,
-                b.steer_top,
-                b.engine_braking,
-                b.brake,
-                b.angular_damping,
-            ])
+            nums(
+                &[
+                    b.forward,
+                    b.reverse,
+                    b.rev_up,
+                    b.max_rpm,
+                    b.forward_friction,
+                    b.side_friction,
+                    b.steer_low,
+                    b.steer_high,
+                    b.steer_top,
+                    b.engine_braking,
+                    b.brake,
+                    b.angular_damping,
+                    b.spheres.len() as f32,
+                    b.reverse_friction,
+                    b.com[0],
+                    b.com[1],
+                    b.com[2],
+                    b.z_offset,
+                    b.z_offset_speed,
+                    b.gravity,
+                    b.gravity_air,
+                    b.updown_friction,
+                    b.down_friction,
+                    b.up_rotate_friction,
+                    b.down_rotate_friction,
+                    b.stabilizer,
+                    b.stabilizer_angle,
+                ]
+                .into_iter()
+                .chain(b.spheres.iter().flat_map(|(p, r)| [p[0], p[1], p[2], *r]))
+                .collect::<Vec<_>>(),
+            )
         });
         let glider = h.glider.as_ref().map_or("-".to_string(), |g| nums(&g.values()));
         let chute = h.chute.as_ref().map_or("-".to_string(), |c| {
@@ -626,7 +689,7 @@ pub fn from_text(text: &str) -> anyhow::Result<Vec<Handling>> {
                     stabilizer: v[20],
                 })
             });
-            let boat = (f[4] != "-").then(|| floats(f[4])).filter(|v| v.len() >= 12).map(|v| Boat {
+            let boat = (f[4] != "-").then(|| floats(f[4])).filter(|v| v.len() >= 27 + 4 * v[12] as usize).map(|v| Boat {
                 forward: v[0],
                 reverse: v[1],
                 rev_up: v[2],
@@ -639,6 +702,19 @@ pub fn from_text(text: &str) -> anyhow::Result<Vec<Handling>> {
                 engine_braking: v[9],
                 brake: v[10],
                 angular_damping: v[11],
+                reverse_friction: v[13],
+                spheres: v[27..27 + 4 * v[12] as usize].chunks(4).map(|c| ([c[0], c[1], c[2]], c[3])).collect(),
+                com: [v[14], v[15], v[16]],
+                z_offset: v[17],
+                z_offset_speed: v[18],
+                gravity: v[19],
+                gravity_air: v[20],
+                updown_friction: v[21],
+                down_friction: v[22],
+                up_rotate_friction: v[23],
+                down_rotate_friction: v[24],
+                stabilizer: v[25],
+                stabilizer_angle: v[26],
             });
             let fov = floats(f[5]);
             let glider = (f[6] != "-").then(|| floats(f[6])).and_then(|v| Glider::from_values(&v));
@@ -734,6 +810,19 @@ mod tests {
                     engine_braking: 4.0,
                     brake: 3.0,
                     angular_damping: 0.25,
+                    reverse_friction: 0.5,
+                    spheres: vec![([1.0, 1.5, -0.25], 1.25), ([-1.0, 1.5, -0.25], 1.25), ([0.0, -1.5, 0.0], 1.0)],
+                    com: [0.0, -0.5, -0.25],
+                    z_offset: -0.5,
+                    z_offset_speed: 5.0,
+                    gravity: 1.5,
+                    gravity_air: 1.25,
+                    updown_friction: 1.25,
+                    down_friction: 0.5,
+                    up_rotate_friction: 0.75,
+                    down_rotate_friction: 4.0,
+                    stabilizer: 3.0,
+                    stabilizer_angle: 40.0,
                 }),
                 glider: None,
                 chute: None,

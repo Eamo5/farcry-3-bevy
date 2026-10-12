@@ -461,3 +461,54 @@ writes every generated module. `FC3_ORIG_STATS=1` logs coverage.
 prepass needs to match. `FC3_ORIG_WHITE=1` ignores mesh vertex colours. Converter:
 `FC3_DEBUG_INTERP=1` prints interpreter failures and static-UV rejections during
 `fc3tool pair-survey`.
+
+## Blended `Unlit` effects and the lights' falloff
+
+Light shafts, glows and lit spray are `Unlit` materials that blend as their
+`BlendingType` says (1 alpha, 2 additive, 4 premultiplied; see
+`engine\shaders\materialdescriptors\unlit.xml`), or `EffectLit` ones that add
+their light. The shader pair the converter finds for them is the opaque,
+deferred permutation (it writes the G-buffer), so drawn by the original
+shaders they came out as solid surfaces: the dark room's light shaft over the
+rock bridge (DOC_020) was a brown cone filling the view. They now keep their
+standard material (`original_shaders::keeps_standard_blend`), and the
+additive and premultiplied `Unlit` ones then go onto their own material
+(`unlit_effects.rs`), which draws them as the descriptor's parameters say:
+
+- the colour map dyed by `DiffuseColor1`, times `HDRMul` (0.3 for the shaft);
+- faded toward grazing angles by `NormalAttenuationPower`: |N·V| to that
+  power (3 for the shaft), which takes a cone's edges to nothing;
+- moved by `AnimType`: 1 and 2 scroll at `USpeed`/`VSpeed`, 3 goes back and
+  forth, 4 turns at `AngularSpeed`.
+
+They cast no shadow. What the game's eye adaptation does to `HDRMul` isn't
+modelled: the multiplier is taken as it is, as the other self-lit materials
+take their maps.
+
+The deferred omni and spot light passes (`PointLightAttenuation`,
+`SpotLightAttenuation`) compute their falloff with one `mad_sat`:
+`saturate(a / d² + b')`, where the engine sets `a = R²·Ri² / (R² − Ri²)` and
+`b = −Ri² / (R² − Ri²)` from the light's radius `R` and inner radius `Ri`
+(1 at `Ri`, 0 at `R`), and `b' = b − t / I` with the light's occlusion
+threshold `t` (`fOcclusionAttThreshold`, 0.07 unless set) over its live
+intensity `I`. So a light is flat at full strength inside its inner radius.
+Spots multiply in their cone, `saturate(cos θ · scale + bias)` squared, from
+their inner and outer angles. Bevy's lights fall off as 1/d² with a range
+window, which matches outside `Ri` but goes on rising inside it (7 times at
+5 m under the dark room's spot, inner radius 10 m). Each pooled lamp is
+dimmed to match the game's falloff at the eye's distance, never brightened
+(`lamps::inner_clamp`): what is near the eye (the hands, a wall beside it)
+is lit as in the game. The threshold `t` isn't read yet.
+
+Parts that leave the standard and original materials for one of another
+kind (the tattooed arm, these effects) are swapped over two frames
+(`original_shaders::swap_next_frame`): the old material comes off in one
+frame and the new one goes on in the next. Swapped within one frame, while
+the original shaders' own swap touched the same part, a part was drawn with
+the old kind's pipeline and the new kind's bind group, a GPU validation
+error that quits the game. It happened only with some system orders (a
+diagnostic system added was enough to bring it on every run).
+
+`FC3_CAPTURE_NEAR=x,z,radius,path[|...]` (game, tests) saves a frame when the
+player first comes within `radius` of each point, to look at a place along a
+scripted walk.

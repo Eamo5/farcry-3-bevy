@@ -24,7 +24,20 @@ impl Plugin for VillagersPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<PlaceVillager>().add_systems(OnExit(crate::menu::GameState::Loading), load_spots).add_systems(
             Update,
-            (place_villagers, spawn_villagers, despawn_villagers, execute, thank_player, villager_ai, spot_clips, villager_log)
+            (
+                place_villagers,
+                spawn_villagers,
+                despawn_villagers,
+                execute,
+                hunt,
+                thank_player,
+                villager_ai,
+                play_parts,
+                march,
+                spot_clips,
+                villager_log,
+                part_test,
+            )
                 .chain()
                 .before(crate::hud::HudSet)
                 .run_if(in_state(crate::menu::GameState::Playing)),
@@ -167,6 +180,9 @@ pub struct Villager {
     /// Their own clips while a spot's loop plays, and the tool in hand.
     base: Option<Arc<ClipSet>>,
     prop: Option<Entity>,
+    /// Seconds left of getting up from their own point, scared off it (its
+    /// move's abort, in the hit's slot): they stay put meanwhile.
+    getting_up: f32,
 }
 
 /// Ground under a point: the navigation mesh where it's loaded (village
@@ -310,12 +326,20 @@ fn spawn_at(commands: &mut Commands, chars: &CharacterAssets, models: &Assets<Fc
         spot: None,
         base: None,
         prop: None,
+        getting_up: 0.0,
     });
     root
 }
 
+impl Villager {
+    /// Whether they are a woman (for the voice they speak in).
+    pub(crate) fn female(&self) -> bool {
+        self.female
+    }
+}
+
 /// A civilian an encounter puts somewhere (dead: a body it leaves).
-#[derive(Message, Clone, Copy)]
+#[derive(Message, Clone)]
 pub struct PlaceVillager {
     pub at: Vec3,
     pub yaw: f32,
@@ -328,6 +352,423 @@ pub struct PlaceVillager {
     pub reward: u32,
     /// The encounter they belong to.
     pub group: u64,
+    /// Hunted by its fighters once the player comes near.
+    pub chase: Option<fc3_formats::encounters::Chase>,
+    /// Their part in its scene (its clip's archive path; `move:<name>`, their
+    /// own point's loop move), where they are put; and its start's clip,
+    /// where that begins.
+    pub part: Option<String>,
+    pub start: Option<(String, Vec3, f32)>,
+    /// Marched along (the hostage walk): the way, the pace and the pairing
+    /// with their escort.
+    pub march: Option<(Vec<Vec3>, f32, u64)>,
+}
+
+/// A prisoner marched along by an escort (the hostage walk): the way they
+/// go (to its end, then back), the leg they are on, the pace (the walk
+/// clip's), their pairing, and whether they are on the move.
+#[derive(Component)]
+pub struct Marched {
+    route: Vec<Vec3>,
+    leg: usize,
+    back: bool,
+    pace: f32,
+    pair: u64,
+    marching: bool,
+}
+
+/// One walking a prisoner along, this far behind them, on his part's
+/// clip (by path, loaded once he walks).
+#[derive(Component)]
+pub struct Escort {
+    pair: u64,
+    path: String,
+    clip: Option<Handle<Fc3Clip>>,
+    behind: f32,
+    base: Option<Arc<ClipSet>>,
+}
+
+impl Escort {
+    pub fn new(pair: u64, path: String, behind: f32) -> Escort {
+        Escort { pair, path, clip: None, behind: behind.max(0.6), base: None }
+    }
+}
+
+/// How far (m) a march goes along the road before it turns back; along no
+/// road, straight ahead.
+const MARCH_ROAD: f32 = 60.0;
+const MARCH_STRAIGHT: f32 = 12.0;
+/// A road this near (m) is the one they are marched along.
+const MARCH_ROAD_NEAR: f32 = 30.0;
+
+/// The way a march goes from `at`, facing `yaw`: along the nearest road
+/// (the road network's way to a point about [`MARCH_ROAD`] ahead), else
+/// straight ahead.
+pub(crate) fn march_route(roads: Option<&crate::splines::RoadGraph>, heights: &crate::terrain::Heightfield, at: Vec3, yaw: f32) -> Vec<Vec3> {
+    let ahead = Vec2::new(-yaw.sin(), -yaw.cos());
+    let here = Vec2::new(at.x, at.z);
+    let on_road = roads.and_then(|g| {
+        let a = g.nearest(here, MARCH_ROAD_NEAR)?;
+        let b = g.nearest(here + ahead * MARCH_ROAD, MARCH_ROAD)?;
+        g.route(a, b).filter(|r| r.len() >= 2)
+    });
+    let flat = on_road.unwrap_or_else(|| vec![here + ahead * MARCH_STRAIGHT]);
+    let mut out = vec![at];
+    out.extend(flat.into_iter().map(|p| Vec3::new(p.x, heights.height_at(Vec3::new(p.x, at.y, p.y)).unwrap_or(at.y), p.y)));
+    out
+}
+
+/// Marches: while their escort is calm and with them, a held prisoner walks
+/// the way at the walk's pace (to its end and back), playing their part of
+/// it, and he walks behind them playing his; anything else (an alarm, the
+/// escort down) ends it: the prisoner is only held, he is himself again.
+#[allow(clippy::too_many_arguments)]
+fn march(
+    time: Res<Time>,
+    server: Res<AssetServer>,
+    heights: Res<crate::terrain::Heightfield>,
+    mut prisoners: Query<(&mut Marched, &mut Villager, &mut Transform, &Health, Has<Hostage>), Without<crate::npc::Npc>>,
+    mut escorts: Query<(&mut Escort, &mut crate::npc::Npc, &mut Transform, &Health), Without<Villager>>,
+    mut rigs: Query<&mut CharacterRig>,
+    mut held: Query<(&ChildOf, &mut Visibility), With<crate::characters::HeldWeapon>>,
+) {
+    let dt = time.delta_secs();
+    let mut walking: Vec<u64> = Vec::new();
+    for (mut m, mut v, mut t, h, captive) in &mut prisoners {
+        let pos = t.translation;
+        let escort = escorts.iter_mut().find(|(e, _, _, _)| e.pair == m.pair);
+        let Some((mut e, mut npc, mut et, eh)) = escort else {
+            m.marching = false;
+            continue;
+        };
+        let calm = !eh.dead && npc.state == crate::npc::NpcState::Idle && npc.awareness < 0.25 && et.translation.distance(pos) < 6.0;
+        m.marching = !h.dead && captive && calm && m.route.len() >= 2;
+        if !m.marching {
+            continue;
+        }
+        walking.push(m.pair);
+        // On along the way: to its end, then back.
+        let next = if m.back { m.leg.saturating_sub(1) } else { (m.leg + 1).min(m.route.len() - 1) };
+        let to = m.route[next];
+        let flat = Vec3::new(to.x - pos.x, 0.0, to.z - pos.z);
+        if flat.length() < 0.3 {
+            m.leg = next;
+            if std::env::var_os("FC3_ENCOUNTER_DEBUG").is_some() {
+                info!("encounter: a prisoner marched to point {} of {} at {:.0?}", m.leg, m.route.len(), pos);
+            }
+            if m.leg == 0 || m.leg == m.route.len() - 1 {
+                m.back = m.leg != 0;
+            }
+            continue;
+        }
+        let dir = flat.normalize();
+        let want = (-dir.x).atan2(-dir.z);
+        let turn = (want - v.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        v.yaw += turn.clamp(-2.0 * dt, 2.0 * dt);
+        // (Round a bend, they turn before they walk on.)
+        if turn.abs() < 0.6 {
+            let step = dir * (m.pace * dt).min(flat.length());
+            let ground = heights.height_at(pos + step).unwrap_or(pos.y - HALF_HEIGHT);
+            t.translation = Vec3::new(pos.x + step.x, ground + HALF_HEIGHT, pos.z + step.z);
+            v.home = t.translation;
+        }
+        t.rotation = Quat::from_rotation_y(v.yaw);
+        // He walks behind them, on his own part.
+        let facing = Vec3::new(-v.yaw.sin(), 0.0, -v.yaw.cos());
+        let feet = t.translation - Vec3::Y * HALF_HEIGHT - facing * e.behind;
+        et.translation.x = feet.x;
+        et.translation.z = feet.z;
+        et.rotation = Quat::from_rotation_y(v.yaw);
+        (npc.post, npc.post_yaw, npc.yaw, npc.at_spot, npc.patrols) = (feet, v.yaw, v.yaw, true, false);
+        npc.velocity = Vec3::ZERO;
+        if e.base.is_none() {
+            let path = cache_path(&fc3_formats::cache::anim_rel(&e.path));
+            let clip = e.clip.get_or_insert_with(|| server.load(path)).clone();
+            if let Some(mut rig) = npc.rig.and_then(|r| rigs.get_mut(r).ok()) {
+                let base = rig.clips().clone();
+                let mut set = ClipSet::clone(&base);
+                set.clips.insert(AnimKind::Idle, clip);
+                rig.set_clips_blended(Arc::new(set));
+                crate::guard_spots::hold_weapon(&rig, &mut held, false);
+                e.base = Some(base);
+            }
+        }
+    }
+    // Escorts no longer walking anyone: themselves again.
+    for (mut e, mut npc, _, _) in &mut escorts {
+        if walking.contains(&e.pair) {
+            continue;
+        }
+        if let Some(base) = e.base.take() {
+            npc.at_spot = false;
+            if let Some(mut rig) = npc.rig.and_then(|r| rigs.get_mut(r).ok()) {
+                rig.set_clips_blended(base);
+                crate::guard_spots::hold_weapon(&rig, &mut held, true);
+            }
+        }
+    }
+}
+
+/// An encounter's civilian with a part in its scene (a victim being
+/// beaten, a body being looted, a chat by the fire) or a point of their own
+/// (a mourner at a grave): its clip, where they play it, and whether it is
+/// a captive's (played while held, and in a scene while one of their
+/// captors plays his part by them; else while they are at ease).
+#[derive(Component)]
+pub struct ScenePart {
+    clips: crate::guard_spots::PartClips,
+    at: Vec3,
+    group: u64,
+    captive: bool,
+    /// Their own point's, not a scene's: no one else's part goes with it.
+    alone: bool,
+    /// Its move's abort clip (getting up from it), if it has one.
+    abort: Option<Handle<Fc3Clip>>,
+}
+
+/// `FC3_PART_TEST=<s>` (tests): from that many seconds in, stands the
+/// player a few metres from the nearest civilian or body with a part in a
+/// scene, looking at them, and logs what they and their scene are doing.
+/// With `FC3_PART_SHOT=<file>`, a screenshot two seconds into their guard's
+/// start sequence; with `FC3_PART_SCARE=<s>`, a gunshot by them then.
+#[allow(clippy::too_many_arguments)]
+fn part_test(
+    time: Res<Time>,
+    mut done: Local<(bool, bool, bool)>,
+    mut noises: MessageWriter<crate::npc::Noise>,
+    starting: Query<&crate::npc::Npc, With<crate::guard_spots::Entering>>,
+    mut commands: Commands,
+    parts: Query<(&Transform, &ScenePart, &Villager, &Health), Without<Player>>,
+    actors: Query<(&Transform, &crate::npc::Npc), (With<crate::guard_spots::AtSpot>, Without<Player>, Without<Villager>)>,
+    people: Query<(&Transform, &crate::npc::Npc), (Without<Player>, Without<Villager>)>,
+    rigs: Query<&CharacterRig>,
+    mut players: Query<(&mut Transform, &mut Player), Without<Villager>>,
+) {
+    let Some(from) = std::env::var("FC3_PART_TEST").ok().and_then(|v| v.parse::<f32>().ok()) else { return };
+    let Ok((mut pt, mut p)) = players.single_mut() else { return };
+    if time.elapsed_secs() < from {
+        return;
+    }
+    let near = parts.iter().min_by(|a, b| a.0.translation.distance(pt.translation).total_cmp(&b.0.translation.distance(pt.translation)));
+    let Some((vt, part, v, h)) = near else { return };
+    let side = Vec3::new(-v.yaw.sin(), 0.0, -v.yaw.cos());
+    pt.translation = vt.translation + side * 5.0 + Vec3::Y * 2.0;
+    let to = vt.translation - pt.translation;
+    p.yaw = (-to.x).atan2(-to.z);
+    p.pitch = (to.y / Vec2::new(to.x, to.z).length().max(0.1)).atan();
+    if let Some(path) = std::env::var("FC3_PART_SHOT").ok().filter(|_| !done.1) {
+        let into = starting
+            .iter()
+            .filter(|n| n.marker_id == part.group)
+            .filter_map(|n| rigs.get(n.rig?).ok())
+            .map(|r| r.playing())
+            .find(|(k, _)| *k == AnimKind::Idle);
+        if let Some((_, t)) = into.filter(|(_, t)| *t >= 2.0) {
+            done.1 = true;
+            info!("part-test: screenshot {t:.1} s into the start, to {path}");
+            use bevy::render::view::window::screenshot::{save_to_disk, Screenshot};
+            commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+        }
+    }
+    if let Some(at) = std::env::var("FC3_PART_SCARE").ok().and_then(|v| v.parse::<f32>().ok()).filter(|at| !done.2 && time.elapsed_secs() >= *at) {
+        done.2 = true;
+        info!("part-test: a gunshot by them at {at} s");
+        noises.write(crate::npc::Noise { at: part.at + Vec3::new(6.0, 1.0, 0.0), radius: 60.0, kind: crate::npc::NoiseKind::Threatening });
+    }
+    if !done.0 {
+        done.0 = true;
+        let partner: Vec<String> =
+            actors.iter().map(|(t, n)| format!("{:.1} m (group {})", t.translation.distance(part.at), n.marker_id == part.group)).collect();
+        let playing = v.rig.and_then(|r| rigs.get(r).ok()).map(|r| r.summary()).unwrap_or_default();
+        info!("part-test: {} at {:.1?} ({:?}), playing {}; posted near: {partner:?}", if h.dead { "a body" } else { "a civilian" }, part.at, v.state, playing);
+        for (t, n) in people.iter().filter(|(t, n)| n.marker_id == part.group && t.translation.distance(part.at) < 30.0) {
+            let playing = n.rig.and_then(|r| rigs.get(r).ok()).map(|r| r.summary()).unwrap_or_default();
+            info!(
+                "part-test: one of theirs {:.1} m off ({:?}, awareness {:.2}, at spot {}), playing {playing}",
+                t.translation.distance(part.at),
+                n.state,
+                n.awareness,
+                n.at_spot
+            );
+        }
+    }
+}
+
+/// One of their people playing his part this near (m) keeps a scene going.
+const PART_REACH: f32 = 4.0;
+
+/// While one of their captors plays his part by them (its start, then its
+/// loop), a held civilian (or a body) plays theirs in step; with no one at
+/// it, a victim is only held again, and a body lies still in it. Others
+/// play theirs while at ease.
+#[allow(clippy::type_complexity)]
+fn play_parts(
+    clips: Res<Assets<Fc3Clip>>,
+    mut villagers: Query<(&mut Villager, &mut ScenePart, &Health, Has<Hostage>, &EncounterCivilian, Option<&Marched>)>,
+    actors: Query<(&Transform, &crate::npc::Npc, &Health, &crate::guard_spots::AtSpot, Option<&crate::guard_spots::Entering>), Without<Villager>>,
+    mut rigs: Query<(&mut CharacterRig, &mut AnimRequest, Option<&mut crate::guard_spots::PartMotion>)>,
+    mut commands: Commands,
+) {
+    use crate::guard_spots::Phase;
+    for (mut v, mut p, h, held, group, marched) in &mut villagers {
+        let Some(rig_e) = v.rig else { continue };
+        let Ok((mut rig, mut anim, motion)) = rigs.get_mut(rig_e) else { continue };
+        let phase = actors
+            .iter()
+            .filter(|(t, n, nh, at, _)| at.part() && n.marker_id == group.0 && !nh.dead && t.translation.distance(p.at) < PART_REACH)
+            .map(|(_, _, _, _, en)| Phase::of(en))
+            .max();
+        let worked = phase.is_some_and(|ph| ph != Phase::Coming) || marched.is_some_and(|m| m.marching);
+        let at_ease = v.state == State::Idle;
+        let on = (h.dead || if p.captive { held && (worked || p.alone) } else { at_ease }) && p.clips.ready(&clips);
+        if !on {
+            // Scared off their own point: up from it first.
+            let abort = p.abort.clone().filter(|_| p.alone && !h.dead && matches!(v.state, State::Flee | State::Cower));
+            let length = abort.as_ref().and_then(|a| clips.get(a)).map(|c| c.0.duration);
+            if p.clips.stop(&mut rig, abort.filter(|_| length.is_some())) {
+                v.getting_up = length.unwrap_or(0.0);
+                if std::env::var_os("FC3_ENCOUNTER_DEBUG").is_some() && v.getting_up > 0.0 {
+                    info!("encounter: a civilian gets up from their point ({:.1} s)", v.getting_up);
+                }
+            }
+            continue;
+        }
+        // (In step with their captor; else at their own pace.)
+        if p.captive && !p.alone || h.dead {
+            p.clips.follow(phase, h.dead, (rig_e, &mut rig, motion), &clips, &mut commands);
+        } else {
+            p.clips.own((rig_e, &mut rig, motion), &clips, &mut commands);
+        }
+        *anim = AnimRequest { kind: AnimKind::Idle, rate: if h.dead && !worked { 0.0 } else { 1.0 } };
+    }
+}
+
+/// An encounter's civilian its fighters hunt once the player comes near:
+/// they run from them (or to the player, for help) while any lives.
+#[derive(Component)]
+pub struct Quarry {
+    group: u64,
+    near: f32,
+    to_player: bool,
+    started: bool,
+}
+
+/// One of an encounter's hunters: he runs after its quarry and shoots them
+/// down once in range (unless he has the player to fight).
+#[derive(Component)]
+pub struct Hunter {
+    group: u64,
+    aim: f32,
+}
+
+impl Hunter {
+    pub fn new(group: u64) -> Hunter {
+        Hunter { group, aim: HUNT_AIM }
+    }
+}
+
+/// A chase starts this near (m) when the script names no radius (ours); a
+/// hunter fires from this near, a burst each so often (s), each finding
+/// its mark this often (running quarry are hard to hit: the player has a
+/// moment to step in); a quarry running to the player stops this near him.
+const CHASE_NEAR: f32 = 30.0;
+const HUNT_RANGE: f32 = 12.0;
+const HUNT_AIM: f32 = 2.0;
+const HUNT_HIT: f32 = 0.4;
+const SAFE_BY_PLAYER: f32 = 4.0;
+
+/// Chases: quarries run (from their hunters, or to the player); hunters
+/// run after them and shoot them down; with the hunters dead, they are
+/// free.
+#[allow(clippy::too_many_arguments)]
+fn hunt(
+    time: Res<Time>,
+    mut quarries: Query<(Entity, &mut Quarry, &mut Villager, &Transform, &Health), Without<crate::npc::Npc>>,
+    mut hunters: Query<(Entity, &mut Hunter, &mut crate::npc::Npc, &Transform, &Health)>,
+    players: Query<&Transform, (With<Player>, Without<Villager>, Without<crate::npc::Npc>)>,
+    mut damage: MessageWriter<crate::combat::DamageEvent>,
+    mut loops: MessageWriter<crate::sound::LoopSfx>,
+    mut particles: ResMut<crate::particles::Particles>,
+    mut rng: ResMut<Rng>,
+    mut commands: Commands,
+) {
+    let Ok(pt) = players.single() else { return };
+    let me = pt.translation;
+    let dt = time.delta_secs();
+    for (qe, mut q, mut v, qt, qh) in &mut quarries {
+        let pos = qt.translation;
+        let group = q.group;
+        let alive: Vec<Vec3> = hunters.iter().filter(|(_, h, _, _, hh)| h.group == group && !hh.dead).map(|(_, _, _, t, _)| t.translation).collect();
+        if qh.dead || alive.is_empty() {
+            // Over: the hunters call it off (or are dead, and they are free).
+            for (_, h, mut npc, _, _) in &mut hunters {
+                if h.group == group {
+                    npc.chase = None;
+                }
+            }
+            commands.entity(qe).remove::<Quarry>();
+            continue;
+        }
+        if !q.started {
+            let near = if std::env::var_os("FC3_CHASE_TEST").is_some() { q.near * 2.0 } else { q.near };
+            if me.distance(pos) > near {
+                continue;
+            }
+            q.started = true;
+            if std::env::var_os("FC3_ENCOUNTER_DEBUG").is_some() {
+                info!("encounter: the chase at {pos:.0?} begins ({})", if q.to_player { "to the player" } else { "away" });
+            }
+        }
+        // Running: from the nearest hunter, or to the player (and down by him).
+        let nearest = alive.iter().copied().min_by(|a, b| a.distance(pos).total_cmp(&b.distance(pos))).unwrap_or(pos);
+        if q.to_player && me.distance(pos) < SAFE_BY_PLAYER {
+            v.state = State::Cower;
+            v.timer = 1.0;
+        } else {
+            v.state = State::Flee;
+            v.timer = FLEE_TIME;
+            v.fear = if q.to_player { pos * 2.0 - me } else { nearest };
+        }
+        for (he, mut h, mut npc, ht, hh) in &mut hunters {
+            if h.group != group || hh.dead {
+                continue;
+            }
+            npc.chase = Some(pos);
+            let from = ht.translation;
+            if from.distance(pos) > HUNT_RANGE || npc.state != crate::npc::NpcState::Idle {
+                h.aim = HUNT_AIM;
+                continue;
+            }
+            h.aim -= dt;
+            if h.aim > 0.0 {
+                continue;
+            }
+            h.aim = HUNT_AIM;
+            // A burst into them.
+            let to = pos - from;
+            npc.yaw = (-to.x).atan2(-to.z);
+            let dir = to.normalize_or(Vec3::NEG_Z);
+            let muzzle = from + Vec3::Y * 0.35 + Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero() * 0.7;
+            crate::particles::fx::muzzle_flash(&mut particles, &mut rng, muzzle, dir, 1.1);
+            loops.write(crate::sound::LoopSfx { key: he.to_bits(), event: crate::sound::ev::RIFLE_3P, at: Some(muzzle), volume: 1.0, ..default() });
+            if rng.f32() > HUNT_HIT {
+                continue;
+            }
+            damage.write(crate::combat::DamageEvent {
+                target: qe,
+                amount: 10_000.0,
+                kind: crate::combat::DamageKind::Bullet,
+                source: Some(muzzle),
+                instigator: Some(he),
+                headshot: false,
+                hit: crate::combat::Hit::Whole,
+            });
+            if std::env::var_os("FC3_ENCOUNTER_DEBUG").is_some() {
+                info!("encounter: the quarry at {pos:.0?} shot down");
+            }
+            break;
+        }
+    }
 }
 
 /// A civilian of an encounter (by its id).
@@ -545,9 +986,10 @@ fn place_villagers(
     models: Res<Assets<Fc3Model>>,
     mut rng: ResMut<Rng>,
     mut commands: Commands,
+    moves: Option<Res<crate::story_actors::CaMoves>>,
 ) {
     let now = time.elapsed_secs();
-    pending.extend(requests.read().map(|r| (*r, now)));
+    pending.extend(requests.read().map(|r| (r.clone(), now)));
     let Some(chars) = chars.filter(|c| c.ready(&server)) else {
         pending.retain(|(_, since)| now - since < 30.0);
         return;
@@ -561,16 +1003,49 @@ fn place_villagers(
             commands.entity(e).insert(Hostage);
         }
         commands.entity(e).insert(EncounterCivilian(r.group));
+        // (Their own point's loop move: its unarmed clip.)
+        let alone = r.part.as_deref().is_some_and(|p| p.starts_with("move:"));
+        let unarmed = |mv: &str| moves.as_ref().and_then(|m| fc3_formats::moves::pick_clip(m.0.get(mv)?, false).cloned());
+        let base_move = r.part.as_deref().and_then(|p| p.strip_prefix("move:")).and_then(|mv| mv.strip_suffix("_loop").or_else(|| mv.strip_suffix("_wait")));
+        let abort = base_move.and_then(|b| unarmed(&format!("{b}_abort"))).map(|a| server.load(cache_path(&fc3_formats::cache::anim_rel(&a))));
+        let (clip, own_start) = match r.part.as_deref().map(|p| p.strip_prefix("move:").ok_or(p)) {
+            Some(Ok(mv)) => {
+                // (Unless it is only the loop's clip.)
+                let start = mv.strip_suffix("_loop").or_else(|| mv.strip_suffix("_wait")).and_then(|b| unarmed(&format!("{b}_start")));
+                let start = start.filter(|s| Some(s) != unarmed(mv).as_ref());
+                (unarmed(mv), start)
+            }
+            Some(Err(clip)) => (Some(clip.to_string()), None),
+            None => (None, None),
+        };
+        if let Some(clip) = clip {
+            let clip = server.load(cache_path(&fc3_formats::cache::anim_rel(&clip)));
+            let start = r
+                .start
+                .as_ref()
+                .map(|(s, at, yaw)| (server.load(cache_path(&fc3_formats::cache::anim_rel(s))), crate::guard_spots::start_from(r.at, r.yaw, *at, *yaw)))
+                .or_else(|| own_start.map(|s| (server.load(cache_path(&fc3_formats::cache::anim_rel(&s))), Transform::IDENTITY)));
+            let clips = crate::guard_spots::PartClips::new(clip, start);
+            commands.entity(e).insert(ScenePart { clips, at: r.at, group: r.group, captive: r.hostage, alone, abort });
+        }
+        if let Some((route, pace, pair)) = r.march.clone().filter(|_| !r.dead) {
+            commands.entity(e).insert(Marched { route, leg: 0, back: false, pace, pair, marching: false });
+        }
+        if let Some(c) = r.chase.filter(|_| !r.dead) {
+            let near = if c.near > 0.0 { c.near } else { CHASE_NEAR };
+            commands.entity(e).insert(Quarry { group: r.group, near, to_player: c.to_player, started: false });
+        }
         if r.reward > 0 && !r.dead {
             commands.entity(e).insert(Grateful { cash: r.reward, group: r.group, called: false });
         }
     }
 }
 
-fn despawn_villagers(players: Query<&Transform, With<Player>>, villagers: Query<(Entity, &Villager, &Transform)>, mut commands: Commands) {
+fn despawn_villagers(players: Query<&Transform, With<Player>>, villagers: Query<(Entity, &Villager, &Transform, Has<ScenePart>)>, mut commands: Commands) {
     let Ok(pt) = players.single() else { return };
-    for (e, v, t) in &villagers {
-        let gone = v.state == State::Dead && v.timer > CORPSE_TIME;
+    for (e, v, t, scene) in &villagers {
+        // (A scene's body stays while its encounter does.)
+        let gone = v.state == State::Dead && v.timer > CORPSE_TIME && !scene;
         if gone || t.translation.distance(pt.translation) > DESPAWN && v.home.distance(pt.translation) > DESPAWN {
             commands.entity(e).despawn();
         }
@@ -585,7 +1060,7 @@ fn villager_ai(
     mut damage: MessageReader<crate::combat::DamageEvent>,
     (nav, heights): (Res<crate::nav::NavMesh>, Res<crate::terrain::Heightfield>),
     mut rng: ResMut<Rng>,
-    mut villagers: Query<(Entity, &mut Villager, &mut Transform, &Health, Has<Hostage>, Has<Grateful>, Option<&EncounterCivilian>)>,
+    mut villagers: Query<(Entity, &mut Villager, &mut Transform, &Health, Has<Hostage>, Has<Grateful>, Option<&EncounterCivilian>, Has<ScenePart>)>,
     mut anims: Query<&mut AnimRequest>,
     mut commands: Commands,
     spots: Option<ResMut<VillagerSpots>>,
@@ -596,7 +1071,7 @@ fn villager_ai(
     spots.taken.retain(|_, e| villagers.contains(*e));
     let noises: Vec<crate::npc::Noise> = noises.read().copied().collect();
     let hurt: Vec<(Entity, Option<Vec3>)> = damage.read().map(|d| (d.target, d.source)).collect();
-    for (e, mut v, mut t, h, held, grateful, group) in &mut villagers {
+    for (e, mut v, mut t, h, held, grateful, group, scene) in &mut villagers {
         v.timer += if v.state == State::Dead { dt } else { 0.0 };
         if h.dead {
             if v.state != State::Dead {
@@ -670,9 +1145,16 @@ fn villager_ai(
         }
         let mut step = Vec3::ZERO;
         let (kind, rate) = match v.state {
+            _ if v.getting_up > 0.0 => {
+                v.getting_up -= dt;
+                (AnimKind::Hit, 1.0)
+            }
             State::Idle => {
                 v.timer -= dt;
-                if v.timer <= 0.0 {
+                // (One with a part in a scene keeps to it.)
+                if v.timer <= 0.0 && scene {
+                    v.timer = 5.0;
+                } else if v.timer <= 0.0 {
                     // Off to a free spot nearby now and then, else a stroll.
                     let home = v.home;
                     let female = v.female;
@@ -826,12 +1308,12 @@ fn spot_clips(
                 let base = rig.clips().clone();
                 let mut set = ClipSet { skeleton: base.skeleton.clone(), clips: base.clips.clone() };
                 set.clips.insert(AnimKind::Idle, clip);
-                rig.set_clips(Arc::new(set));
+                rig.set_clips_blended(Arc::new(set));
                 v.base = Some(base);
             }
             (None, true) => {
                 if let Some(base) = v.base.take() {
-                    rig.set_clips(base);
+                    rig.set_clips_blended(base);
                 }
                 if let Some(p) = v.prop.take() {
                     commands.entity(p).despawn();

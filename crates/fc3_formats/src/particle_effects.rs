@@ -5,6 +5,27 @@ use anyhow::{Context, Result, ensure};
 use crate::xml::Element;
 
 pub const VINE_CACHE_REL: &str = "particles/vine-puff.xml";
+/// The player's water on the lens (coming up out of the water): the effect
+/// the player prototype names in its `ScreenDropletParticle`.
+pub const SCREEN_DROPLETS_REL: &str = "particles/screen-droplets.xml";
+
+/// The particle effect the player's lens drops come from: the player
+/// prototype's `ScreenDropletParticle` `psScreenDroplet`.
+pub fn player_screen_droplets(library: &crate::fcb::Object) -> Option<String> {
+    let mut out = None;
+    library.walk(&mut |o, _| {
+        if out.is_some() || !o.is("EntityPrototype") {
+            return;
+        }
+        let Some(player) = o.child("Entity").filter(|e| e.str("hidName").as_deref() == Some("player:MainCharacter/PawnPlayer")) else { return };
+        player.walk(&mut |c, _| {
+            if out.is_none() && c.is("ScreenDropletParticle") {
+                out = c.str("psScreenDroplet").filter(|s| s.len() > 1);
+            }
+        });
+    });
+    out
+}
 
 /// Locate one complete definition without constructing the entire (45 MB)
 /// library tree. PartSys records are siblings in the installed library.
@@ -48,10 +69,20 @@ impl Emitter {
     }
 
     pub fn texture_path(&self) -> Result<String> {
-        let (stem, extension) = self.texture.rsplit_once('.').context("particle texture lacks extension")?;
-        ensure!(["png", "dds", "xbt"].iter().any(|e| extension.eq_ignore_ascii_case(e)), "unsupported particle texture extension");
-        Ok(format!("{}.xbt", stem.to_ascii_lowercase()))
+        archive_texture(&self.texture)
     }
+
+    /// The archive path of another of the emitter's textures (its
+    /// `NormalTexture`, `DistortionTexture`, `EnvMapTexture`), if it has one.
+    pub fn texture_of(&self, attribute: &str) -> Option<Result<String>> {
+        self.source.attr(attribute).filter(|t| !t.is_empty()).map(archive_texture)
+    }
+}
+
+fn archive_texture(texture: &str) -> Result<String> {
+    let (stem, extension) = texture.rsplit_once('.').context("particle texture lacks extension")?;
+    ensure!(["png", "dds", "xbt"].iter().any(|e| extension.eq_ignore_ascii_case(e)), "unsupported particle texture extension");
+    Ok(format!("{}.xbt", stem.to_ascii_lowercase()))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,6 +133,18 @@ mod tests {
         assert_eq!(effect_xml(xml, "PUFF").unwrap(), "<PartSys Name='puff'><Unknown a='1'/></PartSys>");
         assert!(effect_xml(xml, "puf").is_err());
         assert!(effect_xml("<PartSys Name='puff'>", "puff").is_err());
+    }
+
+    #[test]
+    fn an_emitter_names_its_other_textures_by_archive_path() {
+        let xml = r"<PartSys Name='drops' disLibItemId='1' Priority='2'><PartEmit Name='a' FrameCount='2' FrameCountY='1'
+            PosOffset='0,0.5,0' FramePerSecond='0' FramePerSecondVariant='0' EmitDuration='1' SpawnDelay='0' NbInitPart='3'
+            DiffuseTexture='fx\Drop.png' NormalTexture='fx\Drop_N.png' EnvMapTexture=''/></PartSys>";
+        let e = &Effect::parse(xml).unwrap().emitters[0];
+        assert_eq!(e.texture_path().unwrap(), r"fx\drop.xbt");
+        assert_eq!(e.texture_of("NormalTexture").unwrap().unwrap(), r"fx\drop_n.xbt");
+        assert!(e.texture_of("EnvMapTexture").is_none());
+        assert!(e.texture_of("DistortionTexture").is_none());
     }
 
     #[test]

@@ -188,19 +188,27 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
             true
         })?;
     }
-    // Asynchronous helpers whose completion the host doesn't report: done
-    // at once.
+    // A tree grows (or shrinks) to a size at a speed; the host reports when
+    // it's there (`Story::growth_finished`, with the id this returns).
     r.f("CAPI_Entity.SetRealTreeGrowthSpeed", |c, (entity, growth, speed, target, method): (Text, Num, Num, Value, Option<String>)| {
+        let id = c.next_id();
+        c.growths.insert(id, callback(target, method));
         c.emit(Command::Native {
             name: "CAPI_Entity.SetRealTreeGrowthSpeed".into(),
-            args: vec![entity.0, growth.or(1.0).to_string(), speed.or(1.0).to_string()],
+            args: vec![entity.0, growth.or(1.0).to_string(), speed.or(1.0).to_string(), id.to_string()],
         });
-        let id = c.next_id();
-        if let Some(cb) = callback(target, method) {
-            c.call(cb, vec![]);
-        }
         id.to_string()
     })?;
+    // (Stopped, it never calls back.)
+    r.f("CAPI_Entity.StopRealTreeGrowth", |c, (entity, id): (Text, Text)| {
+        if let Ok(n) = id.0.parse::<u64>() {
+            c.growths.remove(&n);
+        }
+        c.emit(Command::Native { name: "CAPI_Entity.StopRealTreeGrowth".into(), args: vec![entity.0, id.0] });
+        true
+    })?;
+    // Asynchronous helpers whose completion the host doesn't report: done
+    // at once.
     r.f("CRecastNavmeshDynamicManager:RegenerateShape", |c, (_region, target, method): (Text, Value, Option<String>)| {
         let id = c.next_id();
         if let Some(cb) = callback(target, method) {

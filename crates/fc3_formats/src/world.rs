@@ -20,8 +20,19 @@ pub mod h {
     pub const NPC_WEAPON_COMPONENT: u32 = 0xD5CB8253;
     pub const PHYSICS_COMPONENT: u32 = 0x037FB709;
     pub const PHYSICS_PATH: u32 = 0x527E7674;
+    /// Components that give an entity a body: static, compound, dynamic,
+    /// rigid, character, the vehicles' (wheeled, floating, helicopter,
+    /// paraglider, plane and generic), breakable and plain physics
+    /// (`C*PhysComponent`; phantoms, particles and network sync aren't).
+    pub const BODY_COMPONENTS: [u32; 13] = [
+        0x037FB709, 0xAA13F142, 0x7FFE4439, 0x40B958BA, 0x39B1CE18, 0x87458482, 0x51A9185C, 0x60C6A0F4, 0xAB72CDCE, 0xAB8C754C, 0xA5D64270, 0x5CB06534,
+        0x7EA0E3DD,
+    ];
     pub const SKELETON_COMPONENT: u32 = 0x09D5E1B2;
     pub const SKELETON_PATH: u32 = 0xF9F2D5F4;
+    /// A `CRealtreeComponent`'s tree (`.rtx`): the same field as a skeleton's
+    /// path.
+    pub const REALTREE_PATH: u32 = 0xF9F2D5F4;
     pub const ARCHETYPE_COMPONENT: u32 = 0x049C7D70;
     pub const ARCHETYPE_PATH: u32 = 0x2A7BCA49;
     pub const SECTOR_X: u32 = 0xB7B2364B;
@@ -76,6 +87,9 @@ pub struct WorldEntity {
     pub graphic_class: String,
     pub skeleton: Option<String>,
     pub physics: Option<String>,
+    /// It has a physics component: the engine gives it a body. (An entity
+    /// with only a graphic is passed through.)
+    pub solid: bool,
     pub archetype: Option<String>,
     /// Material names (`graphics\_materials\<name>.material.bin`) overriding the mesh's slots, in order.
     pub material_overrides: Vec<String>,
@@ -88,6 +102,12 @@ pub struct WorldEntity {
     pub cable: Option<crate::traversal::CableAnchor>,
     /// CLadder's authored first-person animation package.
     pub ladder_animation_package: u64,
+    /// `CLadder`'s `selLadderType`: 1 is climbed hand over hand (vines).
+    pub ladder_type: u32,
+    /// Ledges authored to be climbed onto (`CClimbableComponent`'s `Lines`),
+    /// in the entity's own axes: the ledge from one end to the other, and
+    /// where the climber ends up.
+    pub climb_lines: Vec<ClimbLine>,
     /// The sound event a sound point plays (its sound component's event).
     pub sound_event: Option<u32>,
     /// The particle effect a placed effect plays, by its library name
@@ -131,11 +151,29 @@ pub fn parse_entity(e: &Object) -> WorldEntity {
     out.light = crate::lights::parse_light(components);
     out.cable = crate::traversal::parse_anchor(components);
     out.ladder_animation_package = components.child("CLadder").and_then(|c| c.u64("sAnimationPackage")).unwrap_or(0);
+    out.ladder_type = components.child("CLadder").and_then(|c| c.u32("selLadderType")).unwrap_or(0);
+    if let Some(lines) = components.child("CClimbableComponent").filter(|c| c.bool("bCanClimbFromLand") != Some(false)).and_then(|c| c.child("Lines")) {
+        for l in lines.children_named("Lines") {
+            let (Some(start), Some(end), Some(anchor)) = (l.vec3("disVectorLineStart"), l.vec3("disVectorLineEnd"), l.vec3("disVectorAnchor")) else { continue };
+            if start != end {
+                out.climb_lines.push(ClimbLine { start, end, anchor });
+            }
+        }
+    }
     out.spline = crate::splines::parse(components);
     if let Some(params) = components.child("CAIContextualActionComponent").and_then(|c| c.child("Parameters")) {
         out.stp_moves = crate::moves::move_names(params);
     }
+    out.solid = components.children.iter().any(|c| h::BODY_COMPONENTS.contains(&c.name_hash));
     for c in &components.children {
+        // A placed RealTree (the ones the story grows) is its own model, and
+        // its trunk stands in the way as a planted tree's does.
+        if c.is("CRealtreeComponent") {
+            if let Some(p) = str_field(c, h::REALTREE_PATH).filter(|p| p.to_ascii_lowercase().ends_with(".rtx")) {
+                out.meshes.insert(0, p);
+                out.solid = true;
+            }
+        }
         match c.name_hash {
             h::EFFECT_COMPONENT => {
                 out.effect = str_field(c, h::EFFECT_NAME).map(|s| s.to_ascii_lowercase());
@@ -203,8 +241,19 @@ pub fn parse_entity(e: &Object) -> WorldEntity {
             _ => {}
         }
     }
-    out.meshes.retain(|m| m.to_ascii_lowercase().ends_with(".xbg"));
+    out.meshes.retain(|m| {
+        let m = m.to_ascii_lowercase();
+        m.ends_with(".xbg") || m.ends_with(".rtx")
+    });
     out
+}
+
+/// A ledge authored to be climbed onto (Dunia axes, metres).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ClimbLine {
+    pub start: [f32; 3],
+    pub end: [f32; 3],
+    pub anchor: [f32; 3],
 }
 
 /// Parses top-level entities of a world sector (prefab children are references, not copies).
@@ -298,6 +347,47 @@ pub fn angles_to_bevy_quat(a: [f32; 3]) -> [f32; 4] {
     let pitch = axis_quat([1.0, 0.0, 0.0], rx);
     let roll = axis_quat([0.0, 0.0, 1.0], -ry);
     quat_mul(quat_mul(yaw, pitch), roll)
+}
+
+/// A vegetation mesh's rotation from its stored angles (degrees, the same
+/// axes as an entity's), which the game applies yaw, then roll, then pitch
+/// (Z·Y·X), not as entities above. It matters only with both pitch and roll
+/// (rocks thrown in at all angles). Scattered with the other order, the
+/// rocks in the doctor's cave put 14 of its 26 floor mushrooms inside rock
+/// and left 14 resting on a surface; with this order, 6 and 22.
+pub fn vegetation_angles_to_bevy_quat(a: [f32; 3]) -> [f32; 4] {
+    let [rx, ry, rz] = a.map(f32::to_radians);
+    let yaw = axis_quat([0.0, 1.0, 0.0], rz);
+    let pitch = axis_quat([1.0, 0.0, 0.0], rx);
+    let roll = axis_quat([0.0, 0.0, 1.0], -ry);
+    quat_mul(quat_mul(yaw, roll), pitch)
+}
+
+#[cfg(test)]
+mod vegetation_order_tests {
+    use super::*;
+
+    fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
+        let p = quat_mul(quat_mul(q, [v[0], v[1], v[2], 0.0]), [-q[0], -q[1], -q[2], q[3]]);
+        [p[0], p[1], p[2]]
+    }
+
+    /// Pitch then roll differ from roll then pitch; with either alone, or
+    /// yaw alone, the two orders agree.
+    #[test]
+    fn vegetation_applies_roll_before_pitch() {
+        let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5);
+        for a in [[30.0, 0.0, 70.0], [0.0, 40.0, -20.0], [0.0, 0.0, 135.0]] {
+            assert!(close(rotate(vegetation_angles_to_bevy_quat(a), [0.3, 0.5, 0.7]), rotate(angles_to_bevy_quat(a), [0.3, 0.5, 0.7])));
+        }
+        // Both at 90 degrees: a vegetation mesh's up (Bevy +Y) is pitched
+        // onto +Z first, which the roll about Z then leaves; an entity's is
+        // rolled onto -X first, which the pitch about X then leaves.
+        let up = rotate(vegetation_angles_to_bevy_quat([90.0, -90.0, 0.0]), [0.0, 1.0, 0.0]);
+        assert!(close(up, [0.0, 0.0, 1.0]), "{up:?}");
+        let up = rotate(angles_to_bevy_quat([90.0, -90.0, 0.0]), [0.0, 1.0, 0.0]);
+        assert!(close(up, [-1.0, 0.0, 0.0]), "{up:?}");
+    }
 }
 
 /// Entities whose meshes belong to gameplay systems (weapon pickups) rather than static scenery.

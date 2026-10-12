@@ -71,6 +71,32 @@ pub struct PropPart;
 #[derive(Component)]
 pub struct SkinnedPart;
 
+/// A material of another kind to put on a part next frame, once its old one
+/// has gone. Swapping a part between material kinds within one frame, while
+/// another swap touched it too, has had it drawn with the old kind's
+/// pipeline and the new kind's bind group: a GPU validation error, which
+/// quits. Taken off one frame and put on the next, the render world sees
+/// each change on its own.
+#[derive(Component)]
+pub struct SwapNextFrame<M: Material>(pub Handle<M>);
+
+/// Takes a part off its standard and original materials (and the original
+/// shaders), to put `next` on it next frame.
+pub fn swap_next_frame<M: Material>(commands: &mut Commands, part: Entity, next: Handle<M>) {
+    commands
+        .entity(part)
+        .remove::<(MeshMaterial3d<StandardMaterial>, OriginalSwap, MeshMaterial3d<OriginalMaterial>)>()
+        .insert((crate::tattoo::NoOriginal, SwapNextFrame(next)));
+}
+
+/// Puts on the materials `swap_next_frame` set aside (in `PreUpdate`, so a
+/// frame after they were taken off in `Update`).
+pub fn finish_swaps<M: Material>(mut commands: Commands, parts: Query<(Entity, &SwapNextFrame<M>)>) {
+    for (e, next) in &parts {
+        commands.entity(e).remove::<SwapNextFrame<M>>().insert(MeshMaterial3d(next.0.clone()));
+    }
+}
+
 /// A prop part that can switch between its standard and original material.
 #[derive(Component)]
 pub struct OriginalSwap {
@@ -474,6 +500,13 @@ impl AssetLoader for OriginalMaterialLoader {
         // them on the standard material.
         let blended = cm.flags & mat_flags::ALPHA_BLEND != 0;
         if blended && (cm.diffuse.is_empty() || std::env::var("FC3_NO_BLEND").is_ok()) {
+            return Ok(mat);
+        }
+        // Effects that add their light or blend as their `Unlit` material
+        // says (light shafts, glows, lit spray) keep the standard material,
+        // which blends them as authored; the paired shader would draw them
+        // opaque.
+        if !keeps_standard_blend(&cm).is_none_or(|mode| blended && mode == AlphaMode::Blend) {
             return Ok(mat);
         }
         // Cut-out surfaces (rags, tarps, fences): D3D9 tests the colour
@@ -1087,6 +1120,20 @@ fn attach_swaps(
     }
 }
 
+/// The blending a material's standard stand-in gives it that the paired
+/// shaders don't: an `Unlit` material's authored `BlendingType`, or an
+/// `EffectLit` one's added light (neither when cut out).
+fn keeps_standard_blend(cm: &CachedMaterial) -> Option<AlphaMode> {
+    if cm.flags & mat_flags::ALPHA_TEST != 0 {
+        return None;
+    }
+    match crate::cache_assets::unlit_blend(&cm.shader, &cm.params) {
+        Some(AlphaMode::Opaque) => None,
+        Some(mode) => Some(mode),
+        None => (cm.shader == "EffectLit").then_some(AlphaMode::Add),
+    }
+}
+
 /// How near the eye (m) props use the original shaders; beyond, the standard
 /// materials stand in. Each original material draws on its own (they don't
 /// batch as the standard ones do), so drawing every prop with them halved the
@@ -1218,5 +1265,23 @@ fn update_globals(
     }
     if let Some(mut buffer) = buffers.get_mut(handle) {
         buffer.set_data(g);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn light_shafts_and_lit_effects_keep_their_standard_blending() {
+        let blending = |kind: u32| vec![(fc3_formats::hash::name_hash("BlendingType"), kind.to_le_bytes().to_vec())];
+        let material = |shader: &str, params, flags| CachedMaterial { shader: shader.into(), params, flags, ..Default::default() };
+        assert_eq!(keeps_standard_blend(&material("Unlit", blending(2), 0)), Some(AlphaMode::Add));
+        assert_eq!(keeps_standard_blend(&material("Unlit", blending(4), 0)), Some(AlphaMode::Premultiplied));
+        assert_eq!(keeps_standard_blend(&material("Unlit", blending(0), 0)), None);
+        assert_eq!(keeps_standard_blend(&material("EffectLit", Vec::new(), 0)), Some(AlphaMode::Add));
+        assert_eq!(keeps_standard_blend(&material("Generic_FC3", blending(2), 0)), None);
+        // Cut out, they're surfaces after all.
+        assert_eq!(keeps_standard_blend(&material("Unlit", blending(2), mat_flags::ALPHA_TEST)), None);
     }
 }

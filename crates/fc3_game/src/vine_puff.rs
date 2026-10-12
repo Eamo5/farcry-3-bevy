@@ -70,7 +70,7 @@ fn curve_points(e: &Element, name: &str) -> Vec<Vec2> {
         }).filter(|p| p.is_finite()).collect()
 }
 
-fn curve(e: &Element, name: &str, t: f32, fallback: f32) -> f32 {
+pub(crate) fn curve(e: &Element, name: &str, t: f32, fallback: f32) -> f32 {
     let points = curve_points(e, name);
     let Some(first) = points.first() else { return fallback };
     if t <= first.x { return first.y; }
@@ -105,11 +105,11 @@ fn integrals(points: &[Vec2], t: f32, fallback: f32) -> Vec2 {
     Vec2::new(area, t * area - moment)
 }
 
-fn curve_integrals(e: &Emitter, name: &str, t: f32, fallback: f32) -> Vec2 {
+pub(crate) fn curve_integrals(e: &Emitter, name: &str, t: f32, fallback: f32) -> Vec2 {
     integrals(&curve_points(&e.source, name), t, fallback)
 }
 
-fn variant(e: &Emitter, name: &str) -> f32 {
+pub(crate) fn variant(e: &Emitter, name: &str) -> f32 {
     e.source.child(name).and_then(|c| c.child("VariantKF")).and_then(|c| c.f32("Value")).unwrap_or(0.0)
 }
 
@@ -134,20 +134,20 @@ fn displacement(e: &Emitter, index: u32, age: f32, life: f32, origin: Quat) -> V
         * curve_integrals(e, "PartGravityKF", t, 1.0).y
 }
 
-fn colour(e: &Emitter) -> Vec3 {
+pub(crate) fn colour(e: &Emitter) -> Vec3 {
     let values: Vec<f32> = e.source.child("PartColorKF").and_then(|c| c.child("Key")).and_then(|c| c.attr("Value"))
         .unwrap_or("1,1,1").split(',').filter_map(|s| s.parse().ok()).collect();
     if values.len() == 3 { Vec3::from_slice(&values) } else { Vec3::ONE }
 }
 
 // Deterministic per-particle variation makes fixture comparisons repeatable.
-fn random(index: u32, lane: u32) -> f32 {
+pub(crate) fn random(index: u32, lane: u32) -> f32 {
     let mut x = index.wrapping_add(1).wrapping_mul(0x9e3779b9) ^ lane.wrapping_mul(0x85ebca6b);
     x ^= x >> 16; x = x.wrapping_mul(0x7feb352d); x ^= x >> 15;
     (x & 0xffffff) as f32 / 16777216.0
 }
 
-fn births(e: &Emitter, elapsed: f32) -> Vec<f32> {
+pub(crate) fn births(e: &Emitter, elapsed: f32) -> Vec<f32> {
     if elapsed < e.delay { return Vec::new(); }
     let mut out = vec![e.delay; e.initial_count.min(256) as usize];
     let rate = e.base_value("EmitRateKF").unwrap_or(0.0);

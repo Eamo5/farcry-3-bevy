@@ -151,6 +151,9 @@ pub struct Core {
     /// Specific gameplays running (minigames, QTEs, boss fights): id ->
     /// name.
     pub gameplays: BTreeMap<u64, String>,
+    /// RealTree growths the host is running (`SetRealTreeGrowthSpeed`): id
+    /// -> what to call when the tree reaches its size.
+    pub growths: BTreeMap<u64, Option<Callback>>,
     pub dialogs: crate::natives::dialog::Dialogs,
     /// Script control requests the engine answers next frame.
     pub control_answers: Vec<(u64, String)>,
@@ -211,6 +214,7 @@ impl Core {
             world_ready_at: None,
             last_player: None,
             gameplays: BTreeMap::new(),
+            growths: BTreeMap::new(),
             dialogs: Default::default(),
             control_answers: Vec::new(),
             dead: HashSet::new(),

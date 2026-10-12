@@ -438,15 +438,17 @@ fn main() -> Result<()> {
             println!("texture  {}", fc3_formats::cache::texture_rel(p));
         }
         "sdat-bits" => {
-            // Sectors whose height samples set a given bit in a byte of the sample:
-            // sdat-bits <byte 0-3> <mask>
-            let byte: usize = args.get(1).and_then(|v| v.parse().ok()).context("usage: sdat-bits <byte> <mask>")?;
+            // Sectors whose height samples set a given bit in a byte of the sample
+            // (with `all`, every bit of the mask): sdat-bits <byte 0-3> <mask> [all]
+            let byte: usize = args.get(1).and_then(|v| v.parse().ok()).context("usage: sdat-bits <byte> <mask> [all]")?;
             let mask = args.get(2).and_then(|v| u8::from_str_radix(v.trim_start_matches("0x"), 16).ok()).context("mask (hex)")?;
+            let all = args.get(3).is_some_and(|a| a == "all");
             let mut hits = 0;
             for id in 0..(160 * 160) {
                 let c = fc3_formats::terrain::SectorCoord::from_id(id);
                 let Ok(d) = vfs.read(&c.sdat_path("fc3_main")) else { continue };
-                let n = (0..65 * 65).filter(|i| d.get(0x258 + 4 * i + byte).is_some_and(|b| b & mask != 0)).count();
+                let set = |b: &u8| if all { b & mask == mask } else { b & mask != 0 };
+                let n = (0..65 * 65).filter(|i| d.get(0x258 + 4 * i + byte).is_some_and(set)).count();
                 if n > 0 {
                     hits += 1;
                     let o = c.origin();
@@ -862,6 +864,47 @@ fn main() -> Result<()> {
                     );
                 }
             }
+        }
+        "hkx-bodies" => {
+            // A model's rigid bodies and their entity bytes: hkx-bodies <hkx> [from] [to]
+            let path = args.get(1).context("usage: hkx-bodies <hkx> [from] [to]")?;
+            let hex = |i: usize, d: u32| args.get(i).and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok()).unwrap_or(d);
+            let (from, to) = (hex(2, 0xC0), hex(3, 0xF0));
+            for (name, bytes) in fc3_formats::havok::body_bytes(&vfs.read(path)?, from, to)? {
+                let words: Vec<String> = bytes.chunks(4).map(|c| format!("{:02x}{:02x}{:02x}{:02x}", c[0], c[1], c[2], c[3])).collect();
+                println!("{name:40} {}", words.join(" "));
+            }
+        }
+        "veg-near" => {
+            // Vegetation meshes within r metres of Dunia (x, y), with their
+            // stored angles (degrees): veg-near <x> <y> <r>
+            let num = |i: usize| args.get(i).and_then(|v| v.parse::<f32>().ok());
+            let (Some(x), Some(y), Some(r)) = (num(1), num(2), num(3)) else { bail!("usage: veg-near <x> <y> <r>") };
+            let c = fc3_formats::terrain::SectorCoord::containing(x, y);
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let s = fc3_formats::terrain::SectorCoord::new(c.x + dx, c.y + dy);
+                    let Ok(plants) = fc3_formats::vegetation::sector_vegetation(&vfs, s.id()) else { continue };
+                    for p in plants.iter().filter(|p| ((p.pos[0] - x).powi(2) + (p.pos[1] - y).powi(2)).sqrt() <= r) {
+                        println!("{:?} {} at {:.2?} angles {:.1?} scale {}", p.kind, p.model, p.pos, p.angles, p.scale);
+                    }
+                }
+            }
+        }
+        "state-survey" => {
+            // Models with destruction states (nodes named `STATE02...`):
+            // their state nodes, and how many models have them.
+            let mut n = 0;
+            for name in vfs.names.values().filter(|n| n.ends_with(".xbg")) {
+                let Ok(bytes) = vfs.read(name) else { continue };
+                let Ok(skin) = fc3_formats::anim::skin_info(&bytes) else { continue };
+                let states: Vec<&str> = skin.nodes.iter().map(|n| n.name.as_str()).filter(|n| n.to_ascii_uppercase().starts_with("STATE0")).collect();
+                if states.iter().any(|s| !s.to_ascii_uppercase().starts_with("STATE01")) {
+                    n += 1;
+                    println!("{name}\t{}", states.join(" "));
+                }
+            }
+            eprintln!("{n} models with destruction states");
         }
         "model-survey" => {
             let mut errs = 0;
@@ -1550,7 +1593,10 @@ fn main() -> Result<()> {
                         let d = ((e.pos[0] - x).powi(2) + (e.pos[1] - y).powi(2)).sqrt();
                         if d <= r {
                             let mesh = e.meshes.first().map_or(String::new(), |m| format!("  {m}"));
-                            println!("{d:6.1}  {:28} {} at ({:.1}, {:.1}, {:.1}){mesh}", e.class, e.name, e.pos[0], e.pos[1], e.pos[2]);
+                            println!(
+                                "{d:6.1}  {:28} {} at ({:.1}, {:.1}, {:.1}){mesh}  angles [{:.1}, {:.1}, {:.1}]",
+                                e.class, e.name, e.pos[0], e.pos[1], e.pos[2], e.angles[0], e.angles[1], e.angles[2]
+                            );
                         }
                     }
                 }
@@ -1681,7 +1727,7 @@ fn main() -> Result<()> {
                 let Ok(bytes) = vfs.read_hash(*h) else { continue };
                 let Ok(ents) = fc3_formats::world::parse_all_entities(&bytes) else { continue };
                 for e in ents {
-                    let hay = format!("{} {} {}", e.name, e.class, e.meshes.join(" ")).to_ascii_lowercase();
+                    let hay = format!("{} {} {} id:{}", e.name, e.class, e.meshes.join(" "), e.id).to_ascii_lowercase();
                     if hay.contains(&needle) {
                         n += 1;
                         if n <= 400 {
@@ -2572,6 +2618,124 @@ fn main() -> Result<()> {
                     }
                 }
             }
+        }
+        "scene-survey" => {
+            // Every encounter prefab's synced scenes: its smart terrain
+            // points naming sequences, its scene entities, and each loop
+            // sequence's parts (track name, tag, clip): scene-survey [name filter]
+            let filter = args.get(1).map(|s| s.to_ascii_lowercase()).unwrap_or_default();
+            let mut ids: Vec<u64> = vfs.names.values().filter_map(|n| n.strip_prefix(r"generated\encounters\")?.strip_suffix(".fcb")?.parse().ok()).collect();
+            ids.sort();
+            ids.dedup();
+            let mut seen = std::collections::BTreeSet::new();
+            for id in ids {
+                let Ok(bytes) = vfs.read(&fc3_formats::encounters::prefab_path(id)) else { continue };
+                let Ok(root) = fc3_formats::encounters::parse(&bytes) else { continue };
+                let mut lines = Vec::new();
+                let mut loops = Vec::new();
+                for e in root.children.iter().filter(|c| c.is("Entity")) {
+                    let name = e.str("hidName").unwrap_or_default();
+                    let at = e.vec3("hidPos").unwrap_or_default();
+                    let yaw = e.vec3("hidAngles").map_or(0.0, |a| a[2]);
+                    let mut seqs = Vec::new();
+                    e.walk(&mut |o, _| {
+                        for (_, v) in &o.fields {
+                            if v.last() == Some(&0) && v.len() > 5 {
+                                let s = fc3_formats::fcb::bytes_to_string(v);
+                                if s.to_ascii_lowercase().ends_with(".cseq") && !seqs.contains(&s) {
+                                    seqs.push(s);
+                                }
+                            }
+                        }
+                    });
+                    let lower = name.to_ascii_lowercase();
+                    if seqs.is_empty() && !lower.starts_with("corpses/") && !lower.contains("civilian") && !lower.contains("hostage") {
+                        continue;
+                    }
+                    lines.push(format!("  {name} at [{:.2}, {:.2}, {:.2}] yaw {yaw:.1}", at[0], at[1], at[2]));
+                    for s in &seqs {
+                        lines.push(format!("      {s}"));
+                        if s.to_ascii_lowercase().contains("loop") && !loops.contains(s) {
+                            loops.push(s.clone());
+                        }
+                    }
+                }
+                if loops.is_empty() || (!filter.is_empty() && !lines.iter().any(|l| l.to_ascii_lowercase().contains(&filter))) {
+                    continue;
+                }
+                println!("{id}");
+                for l in lines {
+                    println!("{l}");
+                }
+                for s in loops.iter().filter(|s| seen.insert(s.to_ascii_lowercase())) {
+                    let Ok(b) = vfs.read(s) else {
+                        println!("  ! {s} missing");
+                        continue;
+                    };
+                    let text = String::from_utf8_lossy(&b);
+                    println!("  = {s}");
+                    let Some(x) = fc3_formats::xml::parse(&text) else { continue };
+                    x.walk(&mut |g| {
+                        if g.name == "CCharacterTrackGroup" {
+                            let mut clip = None;
+                            g.walk(&mut |c| {
+                                if clip.is_none() && c.name == "CAnimationClip" {
+                                    clip = c.attr("sAnimationSource").map(|p| p.rsplit('\\').next().unwrap_or(p).to_string());
+                                }
+                            });
+                            println!(
+                                "      {} tag {:?}: {}",
+                                g.attr("sName").unwrap_or_default(),
+                                g.attr("sTag").unwrap_or_default(),
+                                clip.unwrap_or_default()
+                            );
+                        }
+                    });
+                }
+            }
+        }
+        "civ-points" => {
+            // Every encounter prefab's single-actor points (SimpleAnimation)
+            // whose group filter names one of its civilians: the point, its
+            // moves, and who.
+            let mut ids: Vec<u64> = vfs.names.values().filter_map(|n| n.strip_prefix(r"generated\encounters\")?.strip_suffix(".fcb")?.parse().ok()).collect();
+            ids.sort();
+            ids.dedup();
+            let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+            for id in ids {
+                let Ok(bytes) = vfs.read(&fc3_formats::encounters::prefab_path(id)) else { continue };
+                let Ok(root) = fc3_formats::encounters::parse(&bytes) else { continue };
+                let entities: Vec<_> = root.children.iter().filter(|c| c.is("Entity")).collect();
+                let groups = |e: &fc3_formats::fcb::Object| -> Vec<u32> {
+                    e.child("Components")
+                        .and_then(|c| c.child("CGroupComponent"))
+                        .and_then(|c| c.child("Groups"))
+                        .map(|g| g.children_named("group").filter_map(|o| o.u32("group")).collect())
+                        .unwrap_or_default()
+                };
+                for e in &entities {
+                    let Some(name) = e.str("hidName") else { continue };
+                    if !name.to_ascii_lowercase().contains("simpleanimation") {
+                        continue;
+                    }
+                    let Some(c) = e.child("Components").and_then(|c| c.child("CAIContextualActionComponent")) else { continue };
+                    let Some(filter) = c.u32("GroupFilter").filter(|h| *h != 0 && *h != u32::MAX) else { continue };
+                    let who: Vec<String> = entities
+                        .iter()
+                        .filter(|p| p.str("hidName").is_some_and(|n| n.starts_with("Outsiders/")) && groups(p).contains(&filter))
+                        .filter_map(|p| p.str("hidName"))
+                        .collect();
+                    if who.is_empty() {
+                        continue;
+                    }
+                    let moves = c.child("Parameters").map(|p| fc3_formats::moves::move_names(p)).unwrap_or_default();
+                    println!("{id} {name} -> {who:?}: {moves:?}");
+                    *kinds
+                        .entry(name.split('.').last().unwrap_or_default().trim_end_matches(|c: char| c.is_ascii_digit() || c == '_').to_string())
+                        .or_default() += 1;
+                }
+            }
+            println!("{kinds:#?}");
         }
         "domino-survey" => {
             // Creates every single-player graph from the cache's script pack

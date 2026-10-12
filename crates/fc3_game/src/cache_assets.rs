@@ -171,6 +171,19 @@ pub struct ModelPart {
     pub flags: u32,
     /// A part that turns about its own node (vehicle wheels).
     pub pivot: Option<fc3_formats::cache::PartPivot>,
+    /// Shown only while the model is whole (its first destruction state).
+    pub whole_only: bool,
+}
+
+/// A part of a breakable model's broken state (`BrokenPart::piece`: a loose
+/// piece that falls, its pivot the piece's node).
+#[derive(Clone)]
+pub struct BrokenPart {
+    pub part: ModelPart,
+    pub state: u8,
+    pub piece: bool,
+    /// A piece's points (model space), for its body's hull.
+    pub points: Vec<Vec3>,
 }
 
 impl ModelPart {
@@ -188,7 +201,10 @@ impl ModelPart {
 #[derive(Clone)]
 pub struct ModelLod {
     pub distance: f32,
+    /// What shows of the model whole.
     pub parts: Vec<ModelPart>,
+    /// Its broken states' parts, kept apart (they show once it's broken).
+    pub broken: Vec<BrokenPart>,
 }
 
 /// Triangle soup for physics, in model space.
@@ -217,12 +233,23 @@ fn has_havok_collision(hash: u64) -> bool {
     INDEX.contains(&hash)
 }
 
+/// Whether the model has a broken state's collision (the converter's index).
+fn has_broken_collision(hash: u64) -> bool {
+    static INDEX: std::sync::LazyLock<std::collections::HashSet<u64>> = std::sync::LazyLock::new(|| {
+        let path = cache::default_cache_root().join(cache::BROKEN_COLLISION_INDEX_REL);
+        std::fs::read_to_string(&path).map(|t| cache::collision_index(&t)).unwrap_or_default()
+    });
+    INDEX.contains(&hash)
+}
+
 #[derive(Asset, TypePath)]
 pub struct Fc3Model {
     pub lods: Vec<ModelLod>,
     pub aabb_min: Vec3,
     pub aabb_max: Vec3,
     pub collision: Option<Arc<CollisionMesh>>,
+    /// What's left to collide with once it's broken (the game's own).
+    pub broken_collision: Option<Arc<CollisionMesh>>,
     pub bones: Vec<CachedBone>,
     /// True when every LOD-0 part is foliage (no collision, cheaper shadows).
     pub is_vegetation: bool,
@@ -264,15 +291,26 @@ impl AssetLoader for ModelLoader {
         let mut bytes = 0;
         for (li, lod) in m.lods.iter().enumerate() {
             let mut parts = Vec::with_capacity(lod.parts.len());
+            let mut broken = Vec::new();
             for (pi, p) in lod.parts.iter().enumerate() {
+                // (A broken state's parts only matter close up.)
+                if p.state >= 2 && li > 0 {
+                    continue;
+                }
                 let flags = m.material_flags.get(p.material as usize).copied().unwrap_or(0);
                 let mesh = build_mesh(p, settings.skinned);
                 bytes += mesh.get_vertex_buffer_size() + mesh.get_index_buffer_bytes().map_or(0, |b| b.len());
                 let mesh = ctx.add_labeled_asset(format!("lod{li}_part{pi}"), mesh);
                 let material = materials.get(p.material as usize).cloned().unwrap_or_default();
-                parts.push(ModelPart { mesh, material, slot: p.material, flags, pivot: p.pivot.clone() });
+                let part = ModelPart { mesh, material, slot: p.material, flags, pivot: p.pivot.clone(), whole_only: p.state == 1 };
+                if p.state >= 2 {
+                    let points = if p.piece { p.positions.iter().map(|v| Vec3::from_array(*v)).collect() } else { Vec::new() };
+                    broken.push(BrokenPart { part, state: p.state, piece: p.piece, points });
+                } else {
+                    parts.push(part);
+                }
             }
-            lods.push(ModelLod { distance: lod.distance, parts });
+            lods.push(ModelLod { distance: lod.distance, parts, broken });
         }
         let is_vegetation = lods.first().is_some_and(|l| !l.parts.is_empty() && l.parts.iter().all(|p| p.flags & mat_flags::VEGETATION != 0));
         // The game's own collision where the model ships one (static props
@@ -326,6 +364,23 @@ impl AssetLoader for ModelLoader {
                 })
             }),
         };
+        // What's left to collide with once broken.
+        let broken_collision = match hash.filter(|&h| !settings.skinned && has_broken_collision(h)) {
+            Some(h) => ctx
+                .read_asset_bytes(cache_path(&cache::broken_collision_rel_of_hash(h)))
+                .await
+                .ok()
+                .and_then(|b| cache::CachedCollision::from_bytes(&b).ok())
+                .filter(|c| !c.indices.is_empty())
+                .map(|c| {
+                    Arc::new(CollisionMesh {
+                        positions: c.positions.iter().map(|p| Vec3::from_array(*p)).collect(),
+                        triangles: c.indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect(),
+                        from_havok: true,
+                    })
+                }),
+            None => None,
+        };
         let inverse_bindposes = (settings.skinned && !m.bones.is_empty()).then(|| {
             let mats: Vec<Mat4> = m.bones.iter().map(|b| Mat4::from_cols_array(&b.inverse_bind)).collect();
             ctx.add_labeled_asset("inverse_bindposes".to_string(), SkinnedMeshInverseBindposes::from(mats))
@@ -337,6 +392,7 @@ impl AssetLoader for ModelLoader {
             aabb_min: Vec3::from_array(m.aabb_min),
             aabb_max: Vec3::from_array(m.aabb_max),
             collision,
+            broken_collision,
             bones: m.bones,
             is_vegetation,
             inverse_bindposes,
@@ -423,7 +479,7 @@ pub fn flow_materials(
     });
 }
 
-fn unlit_blend(shader: &str, params: &[(u32, Vec<u8>)]) -> Option<AlphaMode> {
+pub(crate) fn unlit_blend(shader: &str, params: &[(u32, Vec<u8>)]) -> Option<AlphaMode> {
     if shader != "Unlit" { return None; }
     let bytes = &params.iter().find(|(id, _)| *id == fc3_formats::hash::name_hash("BlendingType"))?.1;
     // Installed engine/shaders/materialdescriptors/unlit.xml defines these

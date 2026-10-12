@@ -78,10 +78,21 @@ The grass fields were derived as follows:
   The sign and axis convention is **unverified**. It only matters for grass
   meshes that are not rotationally symmetric.
 
-Geometry blocks rotate with `R = Rz(rz) * Rx(rx) * Ry(ry)` in Dunia space. This
-is the same convention as entity `hidAngles`, except that the values are in
-radians. Terrain-hugging meshes such as roots match the terrain normal with a
-median error of 2.5° under this convention, against 10° with no tilt.
+Geometry blocks rotate with `R = Rz(rz) * Ry(ry) * Rx(rx)` in Dunia space: yaw,
+then roll, then pitch, in radians (`world::vegetation_angles_to_bevy_quat`).
+Entity `hidAngles` turn yaw, pitch, roll instead (`Rz * Rx * Ry`). The order
+matters only when both pitch and roll are large, as on rocks thrown in at all
+angles. Terrain-hugging meshes such as roots, nearly level, match the terrain
+normal with a median error of 2.5° either way, against 10° with no tilt.
+
+The rocks in the doctor's cave settle it. Its 26 floor mushrooms are placed
+entities, set down on the rock. With the entities' order the rocks put 14 of
+them inside rock and 14 resting on a surface; with this order, 6 and 22. No
+other order or sign scores near it. With this order the rock behind the cave's
+vine (`baselavarockcliff_01`) also stands where the vine's own data puts the
+wall (see `docs/story.md`, "The vine's climbing side"). The converter rewrote
+the vegetation with meshes once (`vegetation/stamp-mesh-order.txt`).
+
 Geometry instances carry no scale.
 
 Positions sit on the terrain. For grass and trees, `|z - sdat height|`

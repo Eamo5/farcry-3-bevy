@@ -342,19 +342,19 @@ fn clip_of(e: &Element) -> Option<Clip> {
     }
     let start = e.f32("timeStartTime")?;
     let duration = e.f32("timeDuration").unwrap_or(0.0).max(0.0);
+    // (Some sequences name the clip `sAnimation`.)
+    let animation = || e.attr("sAnimationSource").or_else(|| e.attr("sAnimation")).map(|s| s.to_ascii_lowercase());
     let kind = match e.name.as_str() {
         "CAnimationClip" | "CAnimationLoopClip" => ClipKind::Animation {
-            source: e.attr("sAnimationSource")?.to_ascii_lowercase(),
+            source: animation()?,
             from: e.u32("nAnimStartFrame").unwrap_or(0),
             to: e.u32("nAnimStopFrame").unwrap_or(0),
             blend: e.f32("fBlendTime").unwrap_or(0.0),
             anchored: e.bool("bEnableAnchor").unwrap_or(false),
         },
-        "CSimpleAnimationClip" => ClipKind::SimpleAnimation {
-            source: e.attr("sAnimationSource")?.to_ascii_lowercase(),
-            from: e.u32("nAnimStartFrame").unwrap_or(0),
-            to: e.u32("nAnimStopFrame").unwrap_or(0),
-        },
+        "CSimpleAnimationClip" => {
+            ClipKind::SimpleAnimation { source: animation()?, from: e.u32("nAnimStartFrame").unwrap_or(0), to: e.u32("nAnimStopFrame").unwrap_or(0) }
+        }
         "CFacialClip" => ClipKind::Facial {
             source: e.attr("fileFacial")?.to_ascii_lowercase(),
             from: e.u32("nAnimStartFrame").unwrap_or(0),
@@ -898,6 +898,14 @@ mod tests {
         assert!((mid.steering + 0.25).abs() < 1e-4);
         assert!(matches!(seq.groups[1].clips[0].kind, ClipKind::Animation { anchored: true, .. }));
         assert_eq!(Sequence::from_text(&seq.to_text()).unwrap(), seq);
+        // A clip named the other way, on the player.
+        let seq = parse(
+            r#"<CCinematicSequence><CSequenceTrackGroup><CPlayerTrackGroup><CAnimationSequenceTrack>
+            <CAnimationClip timeStartTime="0" timeDuration="3" sAnimation="Y.mab" nAnimStopFrame="90"/>
+            </CAnimationSequenceTrack></CPlayerTrackGroup></CSequenceTrackGroup></CCinematicSequence>"#,
+        )
+        .unwrap();
+        assert!(matches!(&seq.groups[0].clips[0].kind, ClipKind::Animation { source, to: 90, .. } if source == "y.mab"));
     }
 
     #[test]

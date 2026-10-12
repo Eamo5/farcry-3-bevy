@@ -12,6 +12,7 @@ mod controls;
 mod crafting;
 mod data;
 mod dof;
+mod encounter_talk;
 mod explosives;
 mod far_terrain;
 mod fire;
@@ -23,6 +24,7 @@ mod guard_spots;
 mod horizon;
 mod hud;
 mod lamps;
+mod lens_drops;
 mod lens_flare;
 mod light_shafts;
 mod map;
@@ -40,6 +42,7 @@ mod original_shaders;
 mod outposts;
 mod particles;
 mod patrols;
+mod pawn_anims;
 mod physics;
 mod pickups;
 mod player;
@@ -48,7 +51,10 @@ mod profile;
 mod progression;
 mod faces;
 mod tattoo;
+mod unlit_effects;
+mod doors;
 mod barks;
+mod breakables;
 mod shake;
 mod aim_assist;
 mod qte;
@@ -73,6 +79,7 @@ mod surfaces;
 mod syringes;
 mod terrain;
 mod traversal;
+mod tree_growth;
 mod turrets;
 mod ui_nav;
 mod upload_budget;
@@ -415,7 +422,14 @@ fn main() {
         .add_plugins(barks::BarksPlugin)
         .add_plugins(shake::ShakePlugin)
         .add_plugins(aim_assist::AimAssistPlugin)
+        .add_plugins(pawn_anims::PawnAnimsPlugin)
+        .add_plugins(breakables::BreakablesPlugin)
+        .add_plugins(lens_drops::LensDropsPlugin)
+        .add_plugins(unlit_effects::UnlitEffectsPlugin)
+        .add_plugins(doors::DoorsPlugin)
+        .add_plugins(tree_growth::TreeGrowthPlugin)
         .add_plugins(overlays::OverlaysPlugin)
+        .add_plugins(encounter_talk::EncounterTalkPlugin)
         .add_plugins((
             lamps::LampsPlugin,
             particles::ParticlesPlugin,

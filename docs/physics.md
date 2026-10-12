@@ -14,6 +14,18 @@ static colliders are built from it.
   undrawn, water or foliage materials.
 * Models drawn entirely as foliage, and models whose bounds are under 0.35 m
   in radius, never block, whatever their collision.
+* A RealTree, planted or placed (`CRealtreeComponent`), blocks by its trunk
+  alone: the trunk's tube (level-0 branches) at the coarsest detail. Its
+  branches are walked under or through, and a RealTree bush (by its file
+  name) doesn't block at all. Until 2026-10-12 every branch tube collided,
+  so low boughs and bushes stopped the player. The converter rewrote the
+  RealTree models once (`models/stamp-realtree-trunks.txt`).
+* Placed entities with no physics component (only a graphic) never block,
+  whatever their model: the engine gives a body only through a component
+  such as `CStaticPhysComponent`, `CCompoundPhysComponent` or
+  `CRigidPhysComponent` (`world::h::BODY_COMPONENTS`). The converter lists
+  them in `collision/intangible.txt` (about 14,000: collectible plants,
+  vines, wires, tarps, decals, litter, waterfall planes).
 * Models whose `.hkx` surfaces are all the logic material that leaves no
   impact (found by its name in `logicmaterials.lib`) and whose render
   mesh has nothing solid stay walk-through: the medicinal plant pickups, kelp
@@ -22,8 +34,72 @@ static colliders are built from it.
   characters (the collision filter info is zero everywhere). The same
   material on models that were solid already (invisible player walls, some
   volumes) keeps them solid.
+* Swing doors (`CDoor`, found in the story's entity data): the leaf is
+  its own placed entity, hinged at its origin and lying along its model's
+  x. Walked into (the player heading at it, within reach of the leaf), it
+  swings a quarter turn away from them over about 0.4 s, its collision with
+  it, plays its `sndPushDoor` and stays open (`doors.rs`). A script's
+  `Door` box locks and unlocks it (`CDoor_Disable`, `CDoor_Enable`). Doors
+  moved by cutscenes (the greenhouse's) are other entities, not `CDoor`s.
 * `FC3_RENDER_COLLISION=1` ignores the game's collision and builds every
   collider from the render meshes, for comparisons.
+
+## Climbing
+
+The player prototype's `CPawn` `Body` gives the climb, cached in
+`characters/body.txt` (`body::Climb`):
+
+* Standing, jump at a ledge `fGroundClimbMinHeight` to
+  `fGroundClimbMaxHeight` over the feet (0.25 to 1.78 m) to climb it, or vault
+  it when it's low with a drop beyond. A steep face has to be in front,
+  between the knees and the head, and a top level enough to stand on
+  (normal 0.7 or more) 0.15 m past it, or 0.45 or 0.8 m past a boulder's
+  rounded lip. We start at 0.3 m (lower ones are steps). Without the figures
+  the reach is 0.5 to 2.3 m.
+* Jumping or falling, while pushing on, a ledge from `fJumpClimbMinHeight`
+  to `fJumpClimbMaxHeight` off the head (-2 to 0.43 m) is caught and climbed,
+  provided it stands `fJumpClimbMinHeightAboveGround` (2 m) over the ground.
+  That reaches rocks a standing climb can't, about 3.5 m up from a jump. (We
+  also ask for some vertical speed and a ledge over the feet, so landing on
+  a slope isn't a catch.)
+* Ladders run at `fLadderClimbingSpeed`: 2 m/s with hands on the side, 1.5
+  hand over hand (vines and ropes, `CLadder`'s `selLadderType` 1, kept in
+  the traversal cache). The slide-down speeds (4 and 3) are kept but not
+  used yet. Walking onto a ladder at its top (within a metre of it, at its
+  height, heading for it) gets on facing the rungs just under the top, to
+  climb down; walking into it at its foot gets on as before.
+* Over a ladder's top the climber steps onto the landing beyond it (or back
+  on its own side). The landing may stand a little over the top: vine
+  ladders up the coastal cliffs end about a metre under the lip they pull
+  up over, so the landing is looked for from up to 1.2 m over the top.
+* Ledges authored to be climbed: an entity's `CClimbableComponent` (when
+  `bCanClimbFromLand` isn't off) lists `Lines`, each a ledge from
+  `disVectorLineStart` to `disVectorLineEnd` and a `disVectorAnchor` on the
+  side climbed onto, in the entity's own axes. The converter places them in
+  the world (`climb` lines in `world/traversal.txt`, kept with the entity's
+  mission layer). Jumping at one, facing across it towards its anchor and
+  within reach, climbs onto it: standing, up to the head plus
+  `fJumpClimbMaxHeight` plus the jump's height (3.5 m); in the air, the jump
+  climb's reach. The climber ends on whatever is under the anchor. The lines
+  sit on the rock's visible lip, a little outside its collision, so a
+  climber pressed to the face may stand just past one. This is what gets
+  the player out of the pit below the doctor's cliffs (DOC_020 B40): a
+  boulder placed upside down whose top our probes find too steep.
+
+The figures for `fJumpClimbMin/MaxVelocity` (1.65, 5) and
+`fClimbWidthNeeded` (0.5 m) aren't used: what speed they bound is unknown.
+
+## Steps
+
+Walking into something low while on the ground, the capsule tries the move
+again 0.45 m higher and, if that gets further, settles back down onto what is
+there. A contact below the capsule's middle counts as ground when a short ray
+just past it finds a walkable face (a threshold's lip). Settling onto the
+rounded edge of a lip can still read steep; the step is then kept, though not
+as ground, when it ended on something higher than it started (by 2 cm or
+more), and the walk carries on over the lip. Before, it was undone, and the
+capsule stuck against the second doorway of the doctor's greenhouse in some
+runs.
 
 ## Havok packfiles (`<model stem>.hkx`)
 
@@ -148,6 +224,43 @@ model file, but are applied anyway.
   shapes keep their vertices (their radius is small).
 * Constraints, ragdolls and the surface palette don't affect the geometry.
 
+## Destruction states
+
+About 70 models break: they have nodes `STATE01…` (whole), `STATE02…` and on
+(broken), each state's meshes hanging from its node. Examples are rock
+bridges, shelters' drapes, fences, cage doors, explosive barrels, propane
+tanks, alarm panels and windows, and vehicles' wheels, doors and
+windscreens. In the `.hkx`, a broken state's bodies that stay put are fixed
+(motion type 5): the remains. The loose pieces' bodies are dynamic (box or
+sphere inertia: 3, 2).
+
+* The converter keeps every state's meshes. Each cached part carries its
+  state (0 in every state, 1 whole, 2+ broken) and whether it's a loose
+  piece (its node's coarse body is dynamic). A loose piece is its own part,
+  pivoted on its node. The tags are a `STAT` chunk in the `.fcm`, which
+  readers of old files simply lack. Models with states are rewritten once
+  (`models/stamp-states.txt`). Broken parts stay out of the render-derived
+  collision.
+* `havok::broken_collision` takes the last state's fixed bodies and the
+  stateless ones, coarse before detailed: `collision/<hash>.broken.col`, with
+  `collision/broken.txt` as the index.
+* The model loader puts broken parts aside (`ModelLod::broken`, LOD 0 only),
+  so everything that spawns models shows them whole without knowing about
+  states. Parts that exist only whole are marked `whole_only`.
+* `fc3_game::breakables` breaks a placed object. The parts that exist only
+  whole go, the remains come (in the placement's own material set), and the
+  collider becomes the broken collision (or none). Loose pieces fall as
+  dynamic bodies on their vertices' convex hull, pushed out and spun a
+  little, and are cleared after 30 s. Broken ids are kept, so an object
+  streamed in again comes back broken, without falling twice. A model with
+  no broken state just goes.
+* What breaks things: a script's `CAPI_Entity.DestroyCompoundObject`, a blast
+  whose reach covers the object's middle (half the blast radius plus half
+  the object's size), an explosive barrel going up, and a cage door shot
+  open. A vehicle's wreck swaps its whole-only parts for all its broken parts
+  (burnt wheels, hood), kept on the wreck.
+* `FC3_BREAK_TEST=<id>:<secs>` breaks a placed entity that long into a run.
+
 ## Survey
 
 `fc3tool hkx-collision [substr]` prints, per model, the bodies taken, shapes by
@@ -180,6 +293,9 @@ decorative parts (antennas, rails, debris).
   surface in the file's palette is the no-impact material.
 * `collision/index.txt` (`cache::COLLISION_INDEX_REL`): the hashes of the
   models that have one, one per line.
+* `collision/<hash>.broken.col` and `collision/broken.txt`: the same, for a
+  breakable model's broken state.
+* `collision/intangible.txt`: placed entities (decimal ids) with no body.
 
 The converter step (`convert_collision`) runs whenever the index is missing
 and keeps `.col` files already there, so it fits into an incremental

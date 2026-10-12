@@ -489,6 +489,8 @@ pub struct Npc {
     pub engaged: f32,
     /// Running to this alarm box to raise the alarm.
     pub alarm_target: Option<Vec3>,
+    /// Running after someone there (an encounter's quarry), while idle.
+    pub chase: Option<Vec3>,
     /// Running clear of a grenade it has seen: to here, for so many seconds
     /// more at most.
     pub dodge: Option<(Vec3, f32)>,
@@ -519,6 +521,9 @@ pub struct Npc {
     cover_search: f32,
     /// Seconds left of a flinch from a hit.
     flinch: f32,
+    /// Seconds left of getting up from a guard spot, startled (its move's
+    /// abort clip, in the hit's slot): he stands where he is meanwhile.
+    pub(crate) breaking_off: f32,
 }
 
 /// How an enemy was moving, where it was hit and from which side, for its
@@ -927,7 +932,8 @@ fn spawn_from_sectors(
     models: Res<Assets<Fc3Model>>,
     server: Res<AssetServer>,
     mut outposts: ResMut<crate::outposts::Outposts>,
-    (area, encounters, mut park, mut set_out, mut props, mut beasts, mut civilians, mut circling, mut fires): (
+    roads: Option<Res<crate::splines::RoadGraph>>,
+    (area, encounters, mut park, mut set_out, mut props, mut beasts, mut civilians, mut circling, mut fires, mut talks): (
         Res<crate::story::MissionArea>,
         Res<EncounterMarkers>,
         MessageWriter<crate::vehicles::PlaceVehicle>,
@@ -937,6 +943,7 @@ fn spawn_from_sectors(
         MessageWriter<crate::villagers::PlaceVillager>,
         MessageWriter<crate::birds::CircleOver>,
         MessageWriter<crate::world_fx::PlaceFire>,
+        MessageWriter<crate::encounter_talk::StartTalk>,
     ),
 ) {
     // FC3_PEACEFUL (tests): no enemies.
@@ -1025,30 +1032,94 @@ fn spawn_from_sectors(
             let mut reward = if table.rewards.contains(&pick) { table.reward_cash } else { 0 };
             // Its shooters execute its captives once the player comes near.
             let execution = table.executions.get(&pick).cloned();
-            for p in pawns {
+            // Its fighters hunt its civilian once he comes near.
+            let chase = table.chases.get(&pick).copied();
+            // Its people say its conversation's lines as he comes near.
+            if let Some((name, near)) = table.talks.get(&pick) {
+                talks.write(crate::encounter_talk::StartTalk { group: id, at: pos, name: name.clone(), near: *near });
+            }
+            // Its scenes' parts: who plays which, where the scene puts them.
+            use fc3_formats::encounters::{Part, Who};
+            let parts = table.parts.get(&pick).map(Vec::as_slice).unwrap_or_default();
+            let part_of = |who: Who| parts.iter().find(|p| p.who == who);
+            let placed = |o: &[f32; 3], yaw: f32| {
+                let at = pos + Quat::from_rotation_y(yaw0) * Vec3::new(o[0], o[2], -o[1]);
+                let ground = heights.height_at(at).unwrap_or(at.y);
+                (Vec3::new(at.x, at.y.max(ground), at.z), yaw0 + yaw.to_radians())
+            };
+            let part_at = |p: &Part| placed(&p.offset, p.yaw);
+            // (And its start's clip, where that begins.)
+            let part_start = |p: &Part| {
+                p.start.as_ref().map(|(clip, o, yaw)| {
+                    let (at, yaw) = placed(o, *yaw);
+                    (clip.clone(), at, yaw)
+                })
+            };
+            // (A civilian's part among its fighters is a captive's.)
+            let fighters = pawns.iter().any(|p| pawn_identity(&p.archetype).is_some_and(|(f, _)| f.hostile_to_player()));
+            // A march (the hostage walk): each walking prisoner and the
+            // escort nearest their part, by the prisoner's pawn.
+            let march_pair = |pi: usize| id ^ ((pi as u64 + 1) << 32);
+            let escorted = |escort: &Part| {
+                parts
+                    .iter()
+                    .filter(|q| q.pace > 0.0)
+                    .filter_map(|q| match q.who {
+                        Who::Pawn(j) if pawns.get(j).is_some_and(|p| pawn_identity(&p.archetype).is_none()) => Some((j, q)),
+                        _ => None,
+                    })
+                    .map(|(j, q)| (j, (q.offset[0] - escort.offset[0]).hypot(q.offset[1] - escort.offset[1])))
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+            };
+            for (pi, p) in pawns.iter().enumerate() {
                 let at = pos + Quat::from_rotation_y(yaw0) * Vec3::new(p.offset[0], p.offset[2], -p.offset[1]);
                 let ground = heights.height_at(at).unwrap_or(at.y);
                 let feet = Vec3::new(at.x, at.y.max(ground), at.z);
+                let part = part_of(Who::Pawn(pi));
                 let Some((faction, role)) = pawn_identity(&p.archetype) else {
                     // Its civilians: hostages (prisoners, victims) and passers-by.
                     if p.archetype.contains("Outsider") {
                         let n = p.archetype.to_ascii_lowercase();
-                        let hostage = ["hostage", "prisoner", "victim"].iter().any(|w| n.contains(w));
-                        let yaw = yaw0 + p.yaw.to_radians();
+                        let hostage = ["hostage", "prisoner", "victim"].iter().any(|w| n.contains(w)) || part.is_some() && fighters;
+                        let (at, yaw) = part.map(part_at).unwrap_or((feet, yaw0 + p.yaw.to_radians()));
+                        let march =
+                            part.filter(|p| p.pace > 0.0).map(|p| (crate::villagers::march_route(roads.as_deref(), &heights, at, yaw), p.pace, march_pair(pi)));
                         civilians.write(crate::villagers::PlaceVillager {
-                            at: feet,
+                            at,
                             yaw,
                             female: n.contains("female"),
                             dead: false,
-                            hostage,
+                            hostage: hostage && chase.is_none(),
                             reward,
                             group: id,
+                            chase,
+                            part: part.map(|p| p.clip.clone()),
+                            start: part.and_then(part_start),
+                            march,
                         });
                         reward = 0;
                     }
                     continue;
                 };
                 let npc = spawn_npc(&mut commands, &assets, chars.as_deref(), &models, faction, role, feet, yaw0 + p.yaw.to_radians(), id, &mut rng, None);
+                match part {
+                    // Walking a prisoner along, behind them.
+                    Some(part) if part.pace > 0.0 => {
+                        if let Some((j, behind)) = escorted(part) {
+                            commands
+                                .entity(npc)
+                                .insert((crate::villagers::Escort::new(march_pair(j), part.clip.clone(), behind), crate::guard_spots::SpotChecked));
+                        }
+                    }
+                    Some(part) => {
+                        let (at, yaw) = part_at(part);
+                        commands.entity(npc).insert(crate::guard_spots::OwnSpot { clip: part.clip.clone(), at, yaw, start: part_start(part) });
+                    }
+                    None => {}
+                }
+                if chase.is_some() && faction.hostile_to_player() {
+                    commands.entity(npc).insert(crate::villagers::Hunter::new(id));
+                }
                 if let Some(x) = execution.as_ref().filter(|_| fc3_formats::encounters::is_shooter(&p.archetype)) {
                     // (His points, placed as the prefab is; he keeps to them
                     // rather than taking a guard spot.)
@@ -1116,13 +1187,26 @@ fn spawn_from_sectors(
             for (bi, o) in brought.iter().enumerate().filter(|(_, b)| !b.archetype.to_ascii_lowercase().contains("vulture")) {
                 let (at, yaw) = place(o);
                 let cage = doors.get(&bi).copied();
-                beasts.write(crate::wildlife::PlaceAnimal { archetype: o.archetype.clone(), at, yaw, handled: handled && cage.is_none(), cage, dead: false });
+                beasts.write(crate::wildlife::PlaceAnimal {
+                    archetype: o.archetype.clone(),
+                    at,
+                    yaw,
+                    handled: handled && cage.is_none(),
+                    cage,
+                    dead: false,
+                    part: None,
+                    start: None,
+                });
             }
             // The bodies it leaves: pirates, privateers and rebels fall as if
             // killed (lootable, those the player fights), civilians lie dead,
             // animals are carcasses.
             for (ci, o) in table.corpses.get(&pick).into_iter().flatten().enumerate() {
-                let (at, yaw) = place(o);
+                // (One its scene plays lies where the scene has it.)
+                let part = part_of(Who::Corpse(ci));
+                let (at, yaw) = part.map(part_at).unwrap_or_else(|| place(o));
+                let start = part.and_then(part_start);
+                let part = part.map(|p| p.clip.clone());
                 match corpse_identity(&o.archetype) {
                     Some(Ok((faction, role))) => {
                         let body =
@@ -1130,13 +1214,25 @@ fn spawn_from_sectors(
                         commands.entity(body).insert(crate::combat::DieOnSpawn);
                     }
                     Some(Err(female)) => {
-                        civilians.write(crate::villagers::PlaceVillager { at, yaw, female, dead: true, hostage: false, reward: 0, group: id });
+                        civilians.write(crate::villagers::PlaceVillager {
+                            at,
+                            yaw,
+                            female,
+                            dead: true,
+                            hostage: false,
+                            reward: 0,
+                            group: id,
+                            chase: None,
+                            part,
+                            start,
+                            march: None,
+                        });
                     }
                     // (`Corpses/Corpse.STP_Boar`: a boar's.)
                     None => {
                         let kind = o.archetype.split_once('.').map_or("", |(_, k)| k).trim_start_matches("STP_");
                         let archetype = format!("Corpses/{kind}");
-                        beasts.write(crate::wildlife::PlaceAnimal { archetype, at, yaw, handled: false, cage: None, dead: true });
+                        beasts.write(crate::wildlife::PlaceAnimal { archetype, at, yaw, handled: false, cage: None, dead: true, part, start });
                     }
                 }
             }
@@ -1149,7 +1245,12 @@ fn spawn_from_sectors(
                     kind: s.archetype.clone(),
                     at: Vec3::new(at.x, at.y.max(ground), at.z),
                     yaw: yaw0 + s.yaw.to_radians(),
+                    start: None,
                 });
+            }
+            for p in parts.iter().filter(|p| p.who == Who::Anyone && p.pace == 0.0) {
+                let (at, yaw) = part_at(p);
+                set_out.write(crate::guard_spots::AddGuardSpot { kind: format!("clip:{}", p.clip), at, yaw, start: part_start(p) });
             }
             for (i, v) in table.vehicles.get(&pick).into_iter().flatten().enumerate() {
                 let at = pos + Quat::from_rotation_y(yaw0) * Vec3::new(v.offset[0], v.offset[2], -v.offset[1]);
@@ -1348,6 +1449,7 @@ pub(crate) fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker
         step_timer: 0.0,
         engaged: 0.0,
         alarm_target: None,
+        chase: None,
         dodge: None,
         throw_cooldown: rng.range(4.0, 12.0),
         stuck: 0.0,
@@ -1364,6 +1466,7 @@ pub(crate) fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker
         cover: None,
         cover_search: rng.range(0.0, 2.0),
         flinch: 0.0,
+        breaking_off: 0.0,
     }
 }
 
@@ -1910,8 +2013,13 @@ fn act(
             goal = Some(to);
             speed = 4.2;
         }
+        let chasing = npc.chase.filter(|_| npc.state == NpcState::Idle && running_to.is_none() && dodging.is_none());
+        if let Some(to) = chasing {
+            goal = Some(to);
+            speed = 4.2;
+        }
         match npc.state {
-            _ if running_to.is_some() || dodging.is_some() => {}
+            _ if running_to.is_some() || dodging.is_some() || chasing.is_some() => {}
             NpcState::Idle if npc.patrols => {
                 // Walk between spots around the post, pausing at each.
                 match npc.wander {
@@ -1942,7 +2050,9 @@ fn act(
             NpcState::Idle => {
                 // Slowly scan around the post (at a guard spot, face its way).
                 face = Some(if npc.at_spot { npc.post_yaw } else { npc.post_yaw + (npc.state_time * 0.35).sin() * 0.9 });
-                if flat_distance(pos, npc.post) > 1.5 {
+                // (Onto a guard spot itself: a scene's actors stand where it
+                // has them.)
+                if flat_distance(pos, npc.post) > if npc.at_spot { SPOT_SETTLE } else { 1.5 } {
                     goal = Some(npc.post);
                     speed = 1.4;
                 }
@@ -2150,6 +2260,9 @@ fn act(
                 }
             }
         }
+        if npc.breaking_off > 0.0 {
+            vel = Vec3::ZERO;
+        }
         npc.velocity = npc.velocity.lerp(vel, (dt * 6.0).min(1.0));
         // Pinned against something: give up on this goal.
         let moving = Vec2::new(npc.velocity.x, npc.velocity.z).length();
@@ -2206,6 +2319,12 @@ fn act(
                 next.y = ground + HALF_HEIGHT;
             }
         }
+        if npc.at_spot && npc.state == NpcState::Idle {
+            let off = Vec3::new(npc.post.x - next.x, 0.0, npc.post.z - next.z);
+            if off.length() < SPOT_SETTLE + 0.1 {
+                next += off.clamp_length_max(dt * 1.2);
+            }
+        }
         t.translation = next;
         if log_nav && goal.is_some() {
             debug!("npc {}: {:?} at {next:.3?}, target {:?}, {} waypoints, next {goal:.3?}, velocity {:.3?}",
@@ -2219,8 +2338,13 @@ fn act(
         if let Some(mut req) = npc.rig.and_then(|r| anims.get_mut(r).ok()) {
             let speed = Vec2::new(npc.velocity.x, npc.velocity.z).length();
             npc.flinch = (npc.flinch - dt).max(0.0);
+            // (In a fight, he is up and at it soon, whatever the clip.)
+            let cap = if npc.state == NpcState::Combat { BREAK_OFF_FIGHTING } else { f32::MAX };
+            npc.breaking_off = (npc.breaking_off - dt).clamp(0.0, cap);
             *req = if npc.flinch > 0.0 {
                 AnimRequest { kind: AnimKind::Hit, rate: 1.3 }
+            } else if npc.breaking_off > 0.0 {
+                AnimRequest { kind: AnimKind::Hit, rate: 1.0 }
             } else if npc.reload > 0.0 {
                 AnimRequest { kind: AnimKind::Reload, rate: 1.0 }
             } else if speed > 2.6 {
@@ -2240,6 +2364,12 @@ fn act(
         animate_limbs(children, &mut limbs, npc.velocity.length(), time.elapsed_secs(), npc.state == NpcState::Combat);
     }
 }
+
+/// The longest (s) a guard in a fight still spends getting up from a spot.
+const BREAK_OFF_FIGHTING: f32 = 1.5;
+
+/// A guard walks to within this (m) of his spot, then steps onto it.
+pub(crate) const SPOT_SETTLE: f32 = 0.5;
 
 /// Who an enemy (or rebel) is shooting at this frame.
 struct Target {
