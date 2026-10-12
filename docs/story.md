@@ -3034,6 +3034,8 @@ default `InputDominoMove`, our `move` signal, and the scripted walk, still
 pushing on, skipped the cutscene the moment it began. The game takes no
 gameplay input under a cutscene, so the player's input signals now stop
 while a scene holds the view (the cutscene's own skip keys still skip it).
+The `-Cliffs` replay now plays it through: B60C completes 167.7 s after it
+starts.
 
 `docs/validation/doc020-greenhouse.ps1 -Cliffs` walks the whole stretch
 from the dark-room checkpoint with ordinary inputs (its legs are listed
@@ -3043,5 +3045,4 @@ steep crease at (-1987, -2456), can wedge the capsule; the route keeps to x
 -1986 there.
 
 Still open on this stretch:
-- A replay with B80C played through to its end (the skip fix above is not
-  yet run end to end), then DEN_020.
+- DEN_020, which starts as DOC_020 completes.
