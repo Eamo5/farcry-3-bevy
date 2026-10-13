@@ -39,6 +39,90 @@ pub const ENTITIES_REL: &str = "story/entities.bin";
 /// shop name), from the entity library.
 pub const SHOP_ITEMS_REL: &str = "story/shop_items.txt";
 
+/// The library archetypes the engine spawns characters from (a
+/// reinforcement point's mercs), as story entities: each prototype's
+/// components under its library id, named as the library names it.
+pub const ARCHETYPES_REL: &str = "story/archetypes.bin";
+
+/// The materials archetypes put on their models' slots, where they differ
+/// from the model's own: `library id (hex)<TAB>material rel<TAB>...` per
+/// slot, one archetype per line.
+pub const ARCHETYPE_MATERIALS_REL: &str = "story/archetype_materials.txt";
+
+/// Reads [`ARCHETYPE_MATERIALS_REL`].
+pub fn archetype_materials_from_text(text: &str) -> std::collections::HashMap<u64, Vec<String>> {
+    text.lines()
+        .filter_map(|l| {
+            let mut f = l.split('\t');
+            let id = u64::from_str_radix(f.next()?, 16).ok()?;
+            Some((id, f.map(str::to_string).collect()))
+        })
+        .collect()
+}
+
+/// The archetypes story entities have the engine spawn (a reinforcement
+/// point's `arkMerc` and `arkVehicle`).
+pub fn spawned_archetypes(entities: &[StoryEntity]) -> std::collections::HashSet<u64> {
+    let mut out = std::collections::HashSet::new();
+    for e in entities {
+        e.components.walk(&mut |o, _| {
+            for field in ["arkMerc", "arkVehicle"] {
+                if let Some(ark) = o.u64(field).filter(|&k| k != 0 && k != u64::MAX) {
+                    out.insert(ark);
+                }
+            }
+        });
+    }
+    out
+}
+
+/// The archetype names scripts spawn from (`SpawnEntityFromArchetype`
+/// takes a library name, `Library:Path.Name`): every quoted text in the
+/// scripts that looks like one, lower case.
+pub fn archetype_names_in(texts: impl Iterator<Item = String>) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for text in texts {
+        for quoted in text.split('"').skip(1).step_by(2) {
+            let Some((library, rest)) = quoted.split_once(':') else { continue };
+            if !library.is_empty() && !rest.is_empty() && library.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !quoted.contains(' ') {
+                out.insert(quoted.to_ascii_lowercase());
+            }
+        }
+    }
+    out
+}
+
+/// The entity library's prototypes among `wanted` (by library id, or by
+/// lower-case library name), as story entities.
+pub fn archetype_entities(library: &Object, wanted: &std::collections::HashSet<u64>, names: &std::collections::HashSet<String>) -> Vec<StoryEntity> {
+    let mut out = Vec::new();
+    library.walk(&mut |o, _| {
+        if !o.is("EntityPrototype") {
+            return;
+        }
+        let Some(id) = o.u64("disLibItemId") else { return };
+        let Some(entity) = o.child("Entity") else { return };
+        let named = entity.str("hidName").is_some_and(|n| names.contains(&n.to_ascii_lowercase()));
+        if !wanted.contains(&id) && !named {
+            return;
+        }
+        out.push(StoryEntity {
+            id,
+            layer: crate::world::DEFAULT_MISSION_LAYER,
+            source: Source::Sector(0),
+            name: entity.str("hidName").or_else(|| o.str("Name")).unwrap_or_default(),
+            class: String::new(),
+            pos: [0.0; 3],
+            angles: [0.0; 3],
+            components: entity.child("Components").cloned().unwrap_or_default(),
+            fields: Arc::default(),
+        });
+    });
+    out.sort_by_key(|e| e.id);
+    out.dedup_by_key(|e| e.id);
+    out
+}
+
 /// The shop items table from the entity library: weapon archetypes
 /// (`weapons:<name>`, whose model is field `C230E653`) joined with their
 /// properties (`WeaponProperties:<name>`, `locidDisplayName`).
@@ -283,6 +367,50 @@ mod tests {
         assert_eq!((back[0].id, back[0].source, back[0].name.as_str(), back[0].angles), (e.id, e.source, "Zone", e.angles));
         assert!(has_story_component(&back[0].components));
         assert_eq!(back[0].fields.child("Children").unwrap().children[0].u64("ID"), Some(99));
+    }
+
+    /// A reinforcement point names its mercs' archetypes; the library's
+    /// prototype for one comes out as a story entity under its library id,
+    /// with its components, and the others are left out.
+    #[test]
+    fn spawned_archetypes_come_from_the_library() {
+        let obj = |name: &str, fields: Vec<(&str, Vec<u8>)>, children: Vec<Arc<Object>>| {
+            Arc::new(Object {
+                name_hash: crate::hash::name_hash(name),
+                fields: fields.into_iter().map(|(n, v)| (crate::hash::name_hash(n), v)).collect(),
+                children,
+            })
+        };
+        let merc = |ark: u64| obj("MercNameEntry", vec![("arkMerc", ark.to_le_bytes().to_vec())], vec![]);
+        let vehicle = obj("VehicleNameEntry", vec![("arkVehicle", 9u64.to_le_bytes().to_vec())], vec![]);
+        let point = StoryEntity {
+            id: 1,
+            layer: 2,
+            source: Source::Sector(3),
+            name: "Reinforcement_01".into(),
+            class: "CEntity".into(),
+            pos: [0.0; 3],
+            angles: [0.0; 3],
+            components: obj("Components", vec![], vec![obj("MercNames", vec![], vec![merc(7), merc(7), merc(0)]), obj("VehicleNames", vec![], vec![vehicle])]),
+            fields: Arc::default(),
+        };
+        let wanted = spawned_archetypes(&[point]);
+        assert_eq!(wanted, [7, 9].into_iter().collect());
+        let prototype = |id: u64, name: &str| {
+            let kit = obj("CGraphicKitComponent", vec![("kitidGraphicKit", 42u64.to_le_bytes().to_vec())], vec![]);
+            let entity = obj("Entity", vec![("hidName", format!("{name}\0").into_bytes())], vec![obj("Components", vec![], vec![kit])]);
+            obj("EntityPrototype", vec![("disLibItemId", id.to_le_bytes().to_vec())], vec![entity])
+        };
+        let library = obj("Library", vec![], vec![prototype(7, "FC3_NPC:Merc/A"), prototype(8, "FC3_NPC:Merc/B")]);
+        let found = archetype_entities(&library, &wanted, &Default::default());
+        assert_eq!(found.len(), 1);
+        assert_eq!((found[0].id, found[0].name.as_str()), (7, "FC3_NPC:Merc/A"));
+        assert_eq!(found[0].components.child("CGraphicKitComponent").and_then(|k| k.u64("kitidGraphicKit")), Some(42));
+        // By the name a script spawns it under.
+        let names = archetype_names_in([r#"x = SpawnEntityFromArchetype("FC3_NPC:Merc/B", 0, 0, 0); y = "not one: text""#.to_string()].into_iter());
+        assert_eq!(names, ["fc3_npc:merc/b".to_string()].into_iter().collect());
+        let found = archetype_entities(&library, &Default::default(), &names);
+        assert_eq!(found.iter().map(|e| e.id).collect::<Vec<_>>(), vec![8]);
     }
 
     #[test]

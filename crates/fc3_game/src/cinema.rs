@@ -159,6 +159,14 @@ impl Cinema {
     pub fn owns_entity(&self, id: u64) -> bool {
         self.playing.iter().any(|p| p.bindings.values().any(|&entity| entity == id))
     }
+
+    /// A scene plays the player's own body (a player group with tracks)
+    /// and doesn't have this vehicle in it: he's out of it for the scene.
+    pub fn plays_player_without(&self, vehicle: u64) -> bool {
+        self.playing
+            .iter()
+            .any(|p| p.seq.groups.iter().any(|g| g.kind == GroupKind::Player && !g.clips.is_empty()) && !p.bindings.values().any(|&e| e == vehicle))
+    }
 }
 
 struct Playing {
@@ -872,12 +880,34 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Cinema>().init_resource::<crate::settings::Settings>().init_resource::<crate::player::SceneHeadLook>().add_systems(Update, scene_view);
         let start = Vec3::new(-110.0, 154.0, -2270.0);
-        let player = app.world_mut().spawn((Transform::from_translation(start), Player {
-            velocity: Vec3::ZERO, yaw: 0.4, pitch: 0.0, grounded: true, crouching: false, swimming: false, noclip: false,
-            spawning: false, keep_height: false, last_landing_speed: 0.0, sprinting: false, spawned_at: 0.0,
-            driving: false, eye: crate::player::EYE_HEIGHT, air: crate::player::AirMode::None,
-            mantle: None, mounted: None, sliding: None, dragging: false,
-        })).id();
+        let player = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(start),
+                Player {
+                    velocity: Vec3::ZERO,
+                    yaw: 0.4,
+                    pitch: 0.0,
+                    grounded: true,
+                    crouching: false,
+                    swimming: false,
+                    noclip: false,
+                    spawning: false,
+                    keep_height: false,
+                    last_landing_speed: 0.0,
+                    sprinting: false,
+                    spawned_at: 0.0,
+                    driving: false,
+                    armed_passenger: false,
+                    eye: crate::player::EYE_HEIGHT,
+                    air: crate::player::AirMode::None,
+                    mantle: None,
+                    mounted: None,
+                    sliding: None,
+                    dragging: false,
+                },
+            ))
+            .id();
         let camera = app.world_mut().spawn((PlayerCamera, Transform::default(), Projection::Perspective(PerspectiveProjection::default()))).id();
         let shot = Transform::from_xyz(-140.0, 170.0, -2290.0);
         app.world_mut().resource_mut::<Cinema>().view = Some((shot, 55.0));

@@ -1388,7 +1388,7 @@ pub struct Scripted;
 
 /// The AI of a story character fighting as this faction and role (its kit
 /// and rig are the story's), posted where it stands.
-pub fn story_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, id: u64, rig: Option<Entity>, rng: &mut Rng) -> impl Bundle {
+pub fn story_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, id: u64, rig: Option<Entity>, rng: &mut Rng) -> (Npc, HeadPos, crate::combat::Armour) {
     let stats = role.stats(faction);
     let mut npc = new_npc(faction, role, feet, yaw, id, rng);
     npc.rig = rig;

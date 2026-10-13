@@ -372,12 +372,26 @@ mod tests {
 
     fn player() -> Player {
         Player {
-            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: true,
-            crouching: false, swimming: false, noclip: false, spawning: false,
-            keep_height: false, last_landing_speed: 0.0, sprinting: false,
-            spawned_at: 0.0, driving: false, eye: crate::player::EYE_HEIGHT,
-            air: crate::player::AirMode::None, mantle: None, mounted: None,
-            sliding: None, dragging: false,
+            velocity: Vec3::ZERO,
+            yaw: 0.0,
+            pitch: 0.0,
+            grounded: true,
+            crouching: false,
+            swimming: false,
+            noclip: false,
+            spawning: false,
+            keep_height: false,
+            last_landing_speed: 0.0,
+            sprinting: false,
+            spawned_at: 0.0,
+            driving: false,
+            armed_passenger: false,
+            eye: crate::player::EYE_HEIGHT,
+            air: crate::player::AirMode::None,
+            mantle: None,
+            mounted: None,
+            sliding: None,
+            dragging: false,
         }
     }
 

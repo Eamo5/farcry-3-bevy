@@ -24,7 +24,7 @@ impl Plugin for WeaponsPlugin {
             .init_resource::<PaintTable>()
             .init_resource::<TestScript>()
             .init_resource::<ScopeSway>()
-            .add_systems(Update, (fire_test_setup, fire_test_log, scope_sway))
+            .add_systems(Update, (fire_test_setup, fire_test_log, scope_sway, test_ammo))
             .add_message::<Explosion>()
             .add_message::<HitMarker>()
             .add_systems(Startup, load_weapon_stats)
@@ -1243,6 +1243,33 @@ fn fire_test_log(
     );
 }
 
+/// `FC3_TEST_AMMO` (tests, like `FC3_GOD` for health): the player's guns
+/// never run dry; their spare ammunition stays full. `FC3_TEST_LOADOUT`
+/// (weapon names, comma separated): he carries those too, whatever a save
+/// gave him.
+fn test_ammo(mut players: Query<&mut Inventory, With<Player>>) {
+    let Ok(mut inv) = players.single_mut() else { return };
+    let inv = &mut *inv;
+    if let Ok(names) = std::env::var("FC3_TEST_LOADOUT") {
+        for name in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            let Some(def) = inv.defs.iter().position(|d| d.name.eq_ignore_ascii_case(name)) else { continue };
+            if !inv.slots.iter().any(|s| s.def == def) {
+                let d = &inv.defs[def];
+                inv.slots.push(WeaponSlot { def, mag: d.magazine, reserve: d.max_reserve });
+            }
+        }
+    }
+    if std::env::var("FC3_TEST_AMMO").is_err() {
+        return;
+    }
+    for slot in &mut inv.slots {
+        let d = &inv.defs[slot.def];
+        if d.class != WeaponClass::Melee {
+            slot.reserve = slot.reserve.max(d.max_reserve.max(d.magazine * 3));
+        }
+    }
+}
+
 fn switch_weapon(
     args: Res<crate::Args>,
     mut script: ResMut<TestScript>,
@@ -1428,7 +1455,13 @@ fn fire(
     parents: Query<&ChildOf>,
     writers: (MessageWriter<DamageEvent>, MessageWriter<HitMarker>, MessageWriter<crate::npc::Noise>),
     sounds: (MessageWriter<crate::sound::PlaySfx>, MessageWriter<crate::sound::LoopSfx>, crate::surfaces::SurfaceProbe),
-    (mut shot_fx, boosts, mount): (crate::particles::ShotFx, Option<Res<crate::syringes::Boosts>>, Res<crate::traversal::Mount>),
+    (mut shot_fx, boosts, mount, driving, vehicles): (
+        crate::particles::ShotFx,
+        Option<Res<crate::syringes::Boosts>>,
+        Res<crate::traversal::Mount>,
+        Res<crate::vehicles::Driving>,
+        Query<&crate::vehicles::Vehicle>,
+    ),
 ) {
     use crate::controls::Action;
     use crate::particles::fx;
@@ -1470,7 +1503,7 @@ fn fire(
         && !health.dead
         && !player.noclip
         && !player.swimming
-        && !player.driving
+        && (!player.driving || player.armed_passenger)
         && bino.blend < 0.3
         && !busy.busy()
         && !wheel.open
@@ -1532,8 +1565,12 @@ fn fire(
     let forward = assist.correct(origin, cam.forward().as_vec3(), inv.aim_blend > 0.5, d.aim.as_ref());
     let right = cam.right().as_vec3();
     let up = cam.up().as_vec3();
-    let filter = SpatialQueryFilter::from_excluded_entities([player_e]);
+    // (Not the vehicle he's riding in: shots from a seat go past its sides.)
+    let riding = driving.vehicle.and_then(|v| vehicles.get(v).ok().map(|vh| [v, vh.body()]));
+    let filter = SpatialQueryFilter::from_excluded_entities(std::iter::once(player_e).chain(riding.into_iter().flatten()));
     let muzzle_pos = muzzle.single().map(|m| m.translation()).unwrap_or(origin + forward * 0.6 - up * 0.1);
+    // (The weapon held small near the eye in a seat: its flash too.)
+    let flash = if player.armed_passenger { SEATED_VIEW_SCALE } else { 1.0 };
 
     if d.class == WeaponClass::Launcher {
         commands.spawn((
@@ -1555,7 +1592,7 @@ fn fire(
             ProjectileModel(fx.rocket.clone()),
         ));
         spawn_muzzle_light(&mut commands, muzzle_pos);
-        fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, 1.8);
+        fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, 1.8 * flash);
         for _ in 0..4 {
             fx::barrel_smoke(&mut shot_fx.particles, &mut rng, muzzle_pos);
         }
@@ -1596,7 +1633,7 @@ fn fire(
         ));
         if !bow {
             spawn_muzzle_light(&mut commands, muzzle_pos);
-            fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, 1.3);
+            fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, 1.3 * flash);
             crate::npc::player_noise(&mut noise, origin, 120.0, crate::npc::NoiseKind::Threatening);
         }
         player.pitch += d.recoil;
@@ -1737,7 +1774,7 @@ fn fire(
         // game's suppressor makes).
         let heard = if d.noise < 1.0 { 120.0 * d.noise } else { 18.0 };
         crate::npc::player_noise(&mut noise, origin, heard, crate::npc::NoiseKind::Threatening);
-        fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, 0.35);
+        fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, 0.35 * flash);
         inv.spread_bloom = match d.spread_steps() {
             Some((step, _)) => (inv.spread_bloom + step).min(1.0),
             None => (inv.spread_bloom + 0.3).min(2.5),
@@ -1756,7 +1793,7 @@ fn fire(
             WeaponClass::Sniper | WeaponClass::Lmg => 1.3,
             _ => 1.0,
         };
-        fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, scale);
+        fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, scale * flash);
         if rng.f32() < 0.35 {
             fx::barrel_smoke(&mut shot_fx.particles, &mut rng, muzzle_pos);
         }
@@ -2210,6 +2247,9 @@ fn fade_effects(time: Res<Time>, mut commands: Commands, mut q: Query<(Entity, &
 }
 
 /// Positions the view model: hold pose, ADS, bob, sway, recoil, reload and switch motion.
+/// The held weapon's size seated in a vehicle (see `update_view_model`).
+pub(crate) const SEATED_VIEW_SCALE: f32 = 0.3;
+
 fn update_view_model(
     game_state: Res<State<crate::menu::GameState>>,
     time: Res<Time>,
@@ -2230,7 +2270,7 @@ fn update_view_model(
     let in_menu = *game_state.get() != crate::menu::GameState::Playing;
     // Weapons are stowed while swimming, as in the original.
     // Swimming and driving put the weapon away; the arms may still show what they're doing.
-    let busy = (player.swimming || player.driving) && !fp.in_context();
+    let busy = (player.swimming || (player.driving && !player.armed_passenger)) && !fp.in_context();
     *vis = if in_menu || health.dead || player.noclip || busy || bino.blend > 0.5 || inv.scoped() { Visibility::Hidden } else { Visibility::Visible };
     let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
     if player.grounded {
@@ -2273,6 +2313,13 @@ fn update_view_model(
         t.translation = pos;
         t.rotation = rot;
     }
+    // In a seat the vehicle's own parts (a seat back, the bed's walls) come
+    // nearer the eye than the weapon held out in front: drawn smaller toward
+    // the eye it looks the same and stays in front of them, as the game
+    // draws its weapon over the world.
+    let k = if player.armed_passenger { SEATED_VIEW_SCALE } else { 1.0 };
+    t.translation *= k;
+    t.scale = Vec3::splat(k);
     if let Ok(mut proj) = cams.single_mut() {
         if let Projection::Perspective(p) = &mut *proj {
             // Aiming narrows from the player's FOV toward the weapon's.

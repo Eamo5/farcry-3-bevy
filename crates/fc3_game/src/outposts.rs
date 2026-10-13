@@ -159,8 +159,8 @@ impl Outposts {
 
 /// The alarm box's sounds (`CombatHelpers/AlarmPoint`): the two-tone alarm it
 /// sounds while raised, and the crackle as it's switched off.
-const ALARM_LOOP: u32 = 0x0013_DA46;
-const ALARM_OFF: u32 = 0x0013_DA49;
+pub(crate) const ALARM_LOOP: u32 = 0x0013_DA46;
+pub(crate) const ALARM_OFF: u32 = 0x0013_DA49;
 
 fn load_outposts(info: Res<CacheInfo>, mut outposts: ResMut<Outposts>) {
     if outposts.loaded {

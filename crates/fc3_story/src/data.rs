@@ -111,6 +111,11 @@ pub struct Reward {
 #[derive(Default)]
 pub struct StoryData {
     pub entities: HashMap<u64, Entry>,
+    /// Library archetypes the engine spawns characters from, by library id
+    /// (placed nowhere: their position is the origin).
+    pub archetypes: HashMap<u64, Entry>,
+    /// Their library names (lower case) -> library id.
+    pub archetype_names: HashMap<String, u64>,
     pub blocks: HashMap<u64, Block>,
     pub layers: HashMap<u64, Layer>,
     /// Blocks active at the start of a new game.
@@ -191,6 +196,30 @@ impl StoryData {
                 components: e.components,
                 fields: e.fields,
             });
+        }
+        if let Ok(b) = std::fs::read(root.join(story::ARCHETYPES_REL)) {
+            match story::from_bytes(&b) {
+                Ok(list) => {
+                    for e in list {
+                        d.archetype_names.insert(e.name.to_ascii_lowercase(), e.id);
+                        d.archetypes.insert(
+                            e.id,
+                            Entry {
+                                id: e.id,
+                                name: e.name,
+                                class: e.class,
+                                pos: e.pos,
+                                angles: e.angles,
+                                layer: e.layer,
+                                origin: Origin::Global,
+                                components: e.components,
+                                fields: e.fields,
+                            },
+                        );
+                    }
+                }
+                Err(e) => eprintln!("story: archetypes: {e:#}"),
+            }
         }
         // The always-loaded entities: map data (race checkpoints, some
         // zones), safehouses, the master graph's host.
@@ -300,6 +329,11 @@ impl StoryData {
                 self.group_names.entry(hash).or_insert(name);
             }
         }
+        // An alarm box is in the group its alarm names (its own
+        // `CGroupComponent` is usually empty).
+        if let Some(hash) = e.component("CAlarmPoint").and_then(|a| a.u32("AlarmGroup")).filter(|&h| h != 0 && h != u32::MAX) {
+            self.groups.entry(hash).or_default().push(e.id);
+        }
         self.by_name.entry(e.name.to_ascii_lowercase()).or_insert(e.id);
         // Sector copies and global copies of one entity: keep the first.
         self.entities.entry(e.id).or_insert(e);
@@ -396,6 +430,11 @@ impl StoryData {
     /// The layer something with this id belongs to.
     pub fn layer_of(&self, id: u64) -> Option<u64> {
         self.entities.get(&id).map(|e| e.layer).or_else(|| self.spawn_points.get(&id).map(|s| s.layer)).or_else(|| self.markers.get(&id).map(|m| m.layer))
+    }
+
+    /// A library archetype by the name scripts spawn it under.
+    pub fn archetype_named(&self, name: &str) -> Option<&Entry> {
+        self.archetype_names.get(&name.to_ascii_lowercase()).and_then(|id| self.archetypes.get(id))
     }
 
     pub fn name_of(&self, id: u64) -> Option<&str> {

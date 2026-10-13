@@ -281,6 +281,9 @@ pub struct Player {
     pub spawned_at: f32,
     /// In a vehicle (positioned by the vehicle, not by walking).
     pub driving: bool,
+    /// Riding as a passenger, weapon in hand (not at the wheel or a mounted
+    /// gun): he aims and fires from the seat.
+    pub armed_passenger: bool,
     pub eye: f32,
     /// Flying the wingsuit or under the parachute.
     pub air: AirMode,
@@ -528,6 +531,7 @@ fn spawn_player(mut commands: Commands, args: Res<Args>) {
                 sprinting: false,
                 spawned_at: 0.0,
                 driving: false,
+                armed_passenger: false,
                 eye: EYE_HEIGHT,
                 air: AirMode::None,
                 mantle: None,
@@ -1670,6 +1674,7 @@ pub(crate) fn test_player() -> Player {
         sprinting: false,
         spawned_at: 0.0,
         driving: false,
+        armed_passenger: false,
         eye: EYE_HEIGHT,
         air: AirMode::None,
         mantle: None,

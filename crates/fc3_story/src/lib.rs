@@ -465,6 +465,7 @@ impl Story {
             }
             c.update_media(dt as f64);
             c.update_dialogs(dt as f64);
+            c.update_moves(dt as f64);
             // The world streamed in round a teleported player.
             if c.world_ready_at.is_some_and(|at| c.time >= at) {
                 c.world_ready_at = None;
@@ -498,6 +499,22 @@ impl Story {
     pub fn entity_event(&mut self, entity: u64, event: &str, args: Vec<Arg>) {
         self.core.borrow_mut().raise(&Listen::Entity(entity, event.to_string()), args);
         self.pump();
+    }
+
+    /// An alarm box changed state (1 set off, 0 quiet again, 2 switched off,
+    /// 3 destroyed) by `user` (the guard or the player): the groups it is in
+    /// hear `Alarm_Activated` / `..Deactivated` / `..Disabled` /
+    /// `..Destroyed` with the user and the alarm, and
+    /// `CAPI_Entity.GetAlarmState` tells it from now on.
+    pub fn alarm_event(&mut self, alarm: u64, state: u8, user: u64) {
+        let event = match state {
+            0 => "Alarm_Deactivated",
+            1 => "Alarm_Activated",
+            2 => "Alarm_Disabled",
+            _ => "Alarm_Destroyed",
+        };
+        self.core.borrow_mut().alarms.insert(alarm, (state, user));
+        self.group_event(alarm, event, vec![Arg::id(user), Arg::id(alarm)]);
     }
 
     /// An event about an entity for the scripts listening on the groups it
@@ -561,30 +578,52 @@ impl Story {
     /// script's use/inside/look/angle restrictions and current placement.
     pub fn use_target(&self, player: [f32; 3], eye: [f32; 3], look: [f32; 3]) -> Option<UseTarget> {
         let c = self.core.borrow();
-        let ids: std::collections::BTreeSet<u64> = c.listeners.values().filter_map(|l| match &l.on {
-            Listen::Entity(id, event) if event == "Use" => Some(*id),
-            _ => None,
-        }).collect();
-        ids.into_iter().filter_map(|id| {
-            if !c.is_loaded(id) || !c.trigger_on(id) {
-                return None;
-            }
-            let mut e = c.data.entities.get(&id)?.clone();
-            if let Some(pose) = c.pose(id) {
-                e.pos = pose.position;
-                e.angles = pose.angles;
-            }
-            if !triggers::can_use(&e, c.use_rules.get(&id).copied().unwrap_or_default(), player, eye, look) {
-                return None;
-            }
-            let prox = e.component("CProximityTriggerComponent")?;
-            let text = prox.u32("locidDisplayInteractionString").and_then(|id| c.data.strings.get(id)).map(str::to_string)
-                .or_else(|| prox.str("sUsageString").filter(|s| !s.is_empty())).unwrap_or_else(|| "Interact".into());
-            Some(UseTarget { entity: id, position: e.pos, text })
-        }).min_by(|a, b| {
-            let distance = |p: [f32; 3]| (0..3).map(|i| (p[i] - player[i]).powi(2)).sum::<f32>();
-            distance(a.position).total_cmp(&distance(b.position))
-        })
+        let ids: std::collections::BTreeSet<u64> = c
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Entity(id, event) if event == "Use" => Some(*id),
+                _ => None,
+            })
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| {
+                if !c.is_loaded(id) || !c.trigger_on(id) {
+                    return None;
+                }
+                // Spawned from an archetype (a bomb's spot): used standing by it.
+                if let Some(archetype) = c.spawned.get(&id).and_then(|name| c.data.archetype_named(name)) {
+                    let at = c.position(id)?;
+                    let near = (at[0] - player[0]).hypot(at[1] - player[1]) < 1.6 && (at[2] - player[2]).abs() < 2.0;
+                    let text = ["CUsableComponent", "CPickupMissionItem", "CTriggerComponent"]
+                        .iter()
+                        .filter_map(|c| archetype.component(c))
+                        .find_map(|comp| comp.u32("locidDisplayString").filter(|&id| id != 0 && id != u32::MAX))
+                        .and_then(|loc| c.data.strings.get(loc))
+                        .map_or_else(|| "Interact".to_string(), str::to_string);
+                    return near.then_some(UseTarget { entity: id, position: at, text });
+                }
+                let mut e = c.data.entities.get(&id)?.clone();
+                if let Some(pose) = c.pose(id) {
+                    e.pos = pose.position;
+                    e.angles = pose.angles;
+                }
+                if !triggers::can_use(&e, c.use_rules.get(&id).copied().unwrap_or_default(), player, eye, look) {
+                    return None;
+                }
+                let prox = e.component("CProximityTriggerComponent")?;
+                let text = prox
+                    .u32("locidDisplayInteractionString")
+                    .and_then(|id| c.data.strings.get(id))
+                    .map(str::to_string)
+                    .or_else(|| prox.str("sUsageString").filter(|s| !s.is_empty()))
+                    .unwrap_or_else(|| "Interact".into());
+                Some(UseTarget { entity: id, position: e.pos, text })
+            })
+            .min_by(|a, b| {
+                let distance = |p: [f32; 3]| (0..3).map(|i| (p[i] - player[i]).powi(2)).sum::<f32>();
+                distance(a.position).total_cmp(&distance(b.position))
+            })
     }
 
     /// The entities scripts have removed (saves keep them).
@@ -622,6 +661,22 @@ impl Story {
             }
         }
         self.group_event(id, "Die", vec![Arg::id(PLAYER), Arg::Num(0.0), Arg::id(id), Arg::Str(String::new())]);
+    }
+
+    /// A pawn's health went from `old` to `new` (hurt by `by`): the groups it
+    /// is in hear `CCounterEvent` on its health counter, as `HealthListener`
+    /// boxes read it (counter, old, new, instigator, source, victim,
+    /// emitter).
+    pub fn health_changed(&mut self, pawn: u64, old: f32, new: f32, by: u64) {
+        if old == new {
+            return;
+        }
+        let counter = fc3_formats::hash::crc32(b"health") as f64;
+        self.group_event(
+            pawn,
+            "CCounterEvent",
+            vec![Arg::Num(counter), Arg::Num(old as f64), Arg::Num(new as f64), Arg::id(by), Arg::Num(0.0), Arg::id(pawn), Arg::Str(String::new())],
+        );
     }
 
     /// A character reached its contextual action and began it.
@@ -681,6 +736,11 @@ impl Story {
     pub fn gameplay_ended(&mut self, id: u64) {
         self.core.borrow_mut().end_gameplay(id);
         self.pump();
+    }
+
+    /// Whether a character is saying a scripted line.
+    pub fn is_speaking(&self, id: u64) -> bool {
+        self.core.borrow().dialogs.speaking.contains_key(&id)
     }
 
     /// Whether a character has died (or was removed).
@@ -743,12 +803,12 @@ impl Story {
         }
     }
 
-    /// A sound scripts started has ended (`reason` as the engine gives it:
-    /// 0 finished, 1 stopped).
-    pub fn sound_finished(&mut self, id: u64, reason: f64) {
+    /// A sound scripts started has ended: its box hears "finished" (the
+    /// reason `SoundModifier` waits for; "started" went when it began).
+    pub fn sound_finished(&mut self, id: u64) {
         let cb = self.core.borrow_mut().media.sounds.remove(&id);
         if let Some(cb) = cb {
-            self.core.borrow_mut().call(cb, vec![Arg::Num(reason)]);
+            self.core.borrow_mut().call(cb, vec![Arg::Str("finished".into())]);
             self.pump();
         }
     }
@@ -806,20 +866,18 @@ impl Story {
             if !matches!(e.as_str(), "Enter" | "Use" | "EnterFOV") || !c.is_loaded(*t) {
                 continue;
             }
-            if let Some(needle) = &graph {
-                let mut table = l.callback.target.clone();
-                let mut matched = false;
-                for _ in 0..16 {
-                    if table.get::<Table>("_type").and_then(|ty| ty.get::<String>("_path"))
-                        .is_ok_and(|path| path.to_ascii_lowercase().contains(needle)) {
-                        matched = true;
-                        break;
-                    }
-                    let Ok(parent) = table.get::<Table>("_graph") else { break };
-                    if parent == table { break; }
-                    table = parent;
+            // A spot a script spawned to be used (a bomb's): where it stands.
+            if e == "Use" && c.spawned.contains_key(t) && !c.data.entities.contains_key(t) {
+                if graph.as_deref().is_some_and(|needle| !in_graph(&l.callback.target, needle)) {
+                    continue;
                 }
-                if !matched { continue; }
+                if let Some(at) = c.position(*t) {
+                    out.push((*t, e.clone(), at, c.trigger_on(*t)));
+                }
+                continue;
+            }
+            if graph.as_deref().is_some_and(|needle| !in_graph(&l.callback.target, needle)) {
+                continue;
             }
             let Some(entry) = c.data.entities.get(t) else { continue };
             let point = match triggers::shape_of(entry) {
@@ -834,6 +892,38 @@ impl Story {
         }
         out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         out.dedup();
+        out
+    }
+
+    /// The places scripts wait for the player to come near
+    /// (`ProximityRadiusListener` boxes polling their distance with a plugged
+    /// `Near`), optionally only in graphs whose path contains `graph`: the
+    /// place's entity, the radius and where it is now (Dunia).
+    pub fn watched_proximity_in_graph(&self, graph: Option<&str>) -> Vec<(u64, f32, [f32; 3])> {
+        let c = self.core.borrow();
+        let graph = graph.map(str::to_ascii_lowercase);
+        let dummy = self.domino.lua().globals().get::<mlua::Function>("DummyFunction").ok();
+        let mut out = Vec::new();
+        for d in c.delays.values().filter(|d| d.running && d.callback.method == "CheckDistance") {
+            let t = &d.callback.target;
+            if graph.as_deref().is_some_and(|needle| !in_graph(t, needle)) {
+                continue;
+            }
+            let near = t.get::<mlua::Function>("Near").ok();
+            if near.is_none() || near == dummy {
+                continue;
+            }
+            let Some(place) = t.get::<values::Text>("id2").ok().and_then(|x| x.id()) else { continue };
+            if !t.get::<values::Text>("Entities").is_ok_and(|e| c.groups(&e).contains(&PLAYER)) {
+                continue;
+            }
+            let radius = t.get::<f64>("nearZone").ok().unwrap_or(2.0) as f32;
+            if let Some(at) = c.position(place) {
+                out.push((place, radius, at));
+            }
+        }
+        out.sort_by_key(|w| w.0);
+        out.dedup_by_key(|w| w.0);
         out
     }
 
@@ -892,6 +982,64 @@ impl Story {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Where an entity is now and how it's turned, as the scripts see it
+    /// (the host's live position, a script's placement, or its own).
+    pub fn pose(&self, id: u64) -> Option<Pose> {
+        self.core.borrow().pose(id)
+    }
+
+    /// The things scripts wait to see destroyed (`CDestroyEvent`), and where
+    /// they are.
+    pub fn watched_destructibles(&self) -> Vec<(u64, [f32; 3])> {
+        let c = self.core.borrow();
+        let mut ids: Vec<u64> = c
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Entity(id, e) if e == "CDestroyEvent" && !c.dead.contains(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids.into_iter().filter(|&id| c.is_loaded(id)).filter_map(|id| Some((id, c.position(id)?))).collect()
+    }
+
+    /// Something was destroyed (a blast, a script's word): the scripts
+    /// waiting on it hear `CDestroyEvent` (its final state), once.
+    pub fn destroyed(&mut self, id: u64) {
+        let n = {
+            let mut c = self.core.borrow_mut();
+            if !c.dead.insert(id) {
+                return;
+            }
+            c.raise(&Listen::Entity(id, "CDestroyEvent".into()), vec![Arg::Num(1.0)])
+        };
+        if n > 0 {
+            self.pump();
+        }
+    }
+
+    /// Whether a script listens for a group event (`Alarm_Disabled`, ...).
+    pub fn awaits_group_event(&self, event: &str) -> bool {
+        self.core.borrow().listeners.values().any(|l| matches!(&l.on, Listen::Group(_, e) if e == event))
+    }
+
+    /// The living members of the groups scripts count (`CGroupSizeEvent`
+    /// listeners: "kill them all"), for tools that drive the story.
+    pub fn counted_members(&self) -> std::collections::HashSet<u64> {
+        let c = self.core.borrow();
+        let groups: std::collections::BTreeSet<_> = c
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Group(g, event) if event == "CGroupSizeEvent" => Some(g.clone()),
+                _ => None,
+            })
+            .collect();
+        groups.into_iter().flat_map(|g| c.groups(&values::Text(g))).filter(|&id| c.is_loaded(id) && !c.dead.contains(&id)).collect()
     }
 
     /// What scripts wait on now, one line each (what, and the box method
@@ -1013,6 +1161,7 @@ impl Story {
         for _ in 0..200_000 {
             let next = self.core.borrow_mut().actions.pop_front();
             let Some(action) = next else { return };
+            self.core.borrow_mut().step_listeners.clear();
             match action {
                 Action::Call(cb, args) => {
                     if let Err(e) = self.domino.call_with(&cb.target, &cb.method, mlua::MultiValue::from_iter(args.into_iter().map(|a| self.arg(a)))) {
@@ -1121,6 +1270,28 @@ fn in_sectors(e: &data::Entry, sectors: Option<&HashSet<u32>>) -> bool {
     }
 }
 
+/// Whether a box belongs to a graph whose script path contains `needle`
+/// (lower case; any of several split by `|`): the box's own, or one it is
+/// nested in.
+fn in_graph(target: &Table, needle: &str) -> bool {
+    let mut table = target.clone();
+    for _ in 0..16 {
+        if table
+            .get::<Table>("_type")
+            .and_then(|ty| ty.get::<String>("_path"))
+            .is_ok_and(|path| needle.split('|').any(|n| !n.is_empty() && path.to_ascii_lowercase().contains(n)))
+        {
+            return true;
+        }
+        let Ok(parent) = table.get::<Table>("_graph") else { break };
+        if parent == table {
+            break;
+        }
+        table = parent;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1227,6 +1398,142 @@ mod tests {
         story.killed(10);
         assert_eq!(listener.get::<u32>("starts").unwrap(), 1);
         assert_eq!(listener.get::<u32>("members").unwrap(), 1);
+        assert_eq!(story.errors(), 0);
+    }
+
+    /// An alarm box switched off: the boxes listening on its group hear who
+    /// and which, and its state reads disabled from then on.
+    #[test]
+    fn a_disabled_alarm_tells_its_group_and_reads_disabled() {
+        let mut data = StoryData::default();
+        data.groups.insert(0x3E17_E227, vec![77]);
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        story.domino().lua().load(r##"
+            heard = {}
+            local box = { _type = { Got = function(self, event, user, alarm) heard[#heard + 1] = event .. " " .. tostring(user) .. " " .. tostring(alarm) end } }
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("#3E17E227", "Alarm_Disabled", box, "Got")
+        "##).exec().unwrap();
+        story.update(0.0, View::default());
+        story.alarm_event(77, 2, PLAYER);
+        let heard: Vec<String> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        assert_eq!(heard, ["Alarm_Disabled 1 77"]);
+        let state: f64 = story.domino().lua().load("return CAPI_Entity.GetAlarmState('77')").eval().unwrap();
+        assert_eq!(state, 2.0);
+    }
+
+    /// A move a script plays on the player runs a while (not cut short
+    /// meanwhile), brings the markup registered with it halfway, and a shut
+    /// down state machine stands stunned.
+    #[test]
+    fn a_played_move_brings_its_markup_and_ends() {
+        let mut story = empty_story();
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            heard = {}
+            local box = { _type = { Got = function(self) heard[#heard + 1] = "markup" end, Stun = function(self) heard[#heard + 1] = "stun" end } }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("1", box, "Got", "SomeMarkup")
+            CAPI_Pawn.PlayAnimation("1", "123", 1, true)
+            playing = CAPI_Pawn.GetCurrentMoveName("1", 1)
+            cut_at_once = CAPI_Pawn.IsAnimationCutable("1", "123", 1)
+            CGOStateMachineScriptCallbackSystem_GetInstance():RegisterStateCallback("1", box, "Stun", "::Main Avatar/Common/Stun")
+            CAPI_Pawn.ShutdownGOSM("1")
+        "#,
+            )
+            .exec()
+            .unwrap();
+        let lua = story.domino().lua();
+        assert_eq!(lua.globals().get::<String>("playing").unwrap(), "123");
+        assert!(!lua.globals().get::<bool>("cut_at_once").unwrap());
+        story.update(core::MOVE_SECS as f32 * 0.6, View::default());
+        let heard: Vec<String> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        assert_eq!(heard, ["stun", "markup"]);
+        story.update(core::MOVE_SECS as f32, View::default());
+        let cut: bool = story.domino().lua().load(r#"return CAPI_Pawn.IsAnimationCutable("1", "123", 1)"#).eval().unwrap();
+        assert!(cut);
+    }
+
+    /// A proximity listener polling for the player with its `Near` plugged
+    /// shows up with its place and radius; one with `Near` unplugged doesn't.
+    #[test]
+    fn proximity_listeners_waiting_on_the_player_are_listed() {
+        let mut story = empty_story();
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            local function listen(near)
+                local box = { Near = near, Entities = "1", id2 = "1", nearZone = 4 }
+                local timer = CDominoDelayManager_GetInstance():CreateDelay(1, box, "CheckDistance")
+                CDominoDelayManager_GetInstance():SendCommand(timer, "start")
+            end
+            listen(function() end)
+            listen(DummyFunction)
+        "#,
+            )
+            .exec()
+            .unwrap();
+        story.update(0.0, View { player: [5.0, 6.0, 7.0], ..View::default() });
+        assert_eq!(story.watched_proximity_in_graph(None), vec![(PLAYER, 4.0, [5.0, 6.0, 7.0])]);
+        assert!(story.watched_proximity_in_graph(Some("some_other_graph")).is_empty());
+    }
+
+    /// A pawn's health change reaches `HealthListener`-style callbacks on its
+    /// groups: hurt, then killed.
+    #[test]
+    fn health_changes_reach_counter_listeners() {
+        let mut data = StoryData::default();
+        data.groups.insert(0x0BAD_F00D, vec![42]);
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        story
+            .domino()
+            .lua()
+            .load(
+                r##"
+            heard = {}
+            local health = GetNoCaseStringID("health")
+            local box = { _type = { Got = function(self, event, counter, old, new, by, source, victim)
+                if counter == health and source ~= nil then heard[#heard + 1] = string.format("%s %d->%d by %s", event, old, new, tostring(by)) end
+            end } }
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("#0BADF00D", "CCounterEvent", box, "Got")
+        "##,
+            )
+            .exec()
+            .unwrap();
+        story.update(0.0, View::default());
+        story.health_changed(42, 100.0, 40.0, PLAYER);
+        story.health_changed(42, 40.0, 0.0, PLAYER);
+        story.health_changed(42, 0.0, 0.0, PLAYER);
+        let heard: Vec<String> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        assert_eq!(heard, ["CCounterEvent 100->40 by 1", "CCounterEvent 40->0 by 1"]);
+    }
+
+    /// A sound a box plays says "started", then "finished" when the host
+    /// reports its end, by name, as `SoundModifier` compares them.
+    #[test]
+    fn a_played_sound_reports_started_then_finished() {
+        let mut story = empty_story();
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            heard = {}
+            local target = { _type = { Callback_Sound = function(self, reason) heard[#heard + 1] = reason end } }
+            sound = CDominoSoundManager_GetInstance():PlaySound("1", "0x001b83ba", 20, target, "Callback_Sound")
+        "#,
+            )
+            .exec()
+            .unwrap();
+        story.update(0.0, View::default());
+        let lua = story.domino().lua();
+        let id: u64 = lua.globals().get::<String>("sound").unwrap().parse().unwrap();
+        story.sound_finished(id);
+        let heard: Vec<String> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        assert_eq!(heard, ["started", "finished"]);
         assert_eq!(story.errors(), 0);
     }
 

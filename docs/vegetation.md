@@ -79,10 +79,9 @@ The grass fields were derived as follows:
   meshes that are not rotationally symmetric.
 
 Geometry blocks rotate with `R = Rz(rz) * Ry(ry) * Rx(rx)` in Dunia space: yaw,
-then roll, then pitch, in radians (`world::vegetation_angles_to_bevy_quat`).
-Entity `hidAngles` turn yaw, pitch, roll instead (`Rz * Rx * Ry`). The order
-matters only when both pitch and roll are large, as on rocks thrown in at all
-angles. Terrain-hugging meshes such as roots, nearly level, match the terrain
+then roll, then pitch, in radians (`world::angles_to_bevy_quat`, which entity
+`hidAngles` share; see below). The order matters only when both pitch and roll
+are large, as on rocks thrown in at all angles. Terrain-hugging meshes such as roots, nearly level, match the terrain
 normal with a median error of 2.5° either way, against 10° with no tilt.
 
 The rocks in the doctor's cave settle it. Its 26 floor mushrooms are placed
@@ -92,6 +91,16 @@ other order or sign scores near it. With this order the rock behind the cave's
 vine (`baselavarockcliff_01`) also stands where the vine's own data puts the
 wall (see `docs/story.md`, "The vine's climbing side"). The converter rewrote
 the vegetation with meshes once (`vegetation/stamp-mesh-order.txt`).
+
+Placed entities turn the same way. They had been turned yaw, pitch, roll.
+Across the world's placed models turned more than 25° in both pitch and roll
+(702 with small entities nearby), that order put 240 small entities (markers
+and props under 2.5 m) more than 0.3 m inside the model; yaw, roll, pitch put
+67, the fewest of the six orders. The other way, a cliff in JAS_130 stood
+across the road its convoy drives, 27 of 63 samples of the road inside it;
+this way the road clears it by 5.8 m. The converter rewrote the sectors and
+the spots, ladders and lights taken from them once
+(`sectors/stamp-entity-order.txt`).
 
 Geometry instances carry no scale.
 

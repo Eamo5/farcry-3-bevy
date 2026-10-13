@@ -95,6 +95,8 @@ pub const RECIPE_TYPE_LIB: &str = r"generated\databases\generic\craftingrecipety
 pub const RECIPE_SUBTYPE_LIB: &str = r"generated\databases\generic\craftingrecipesubtype.lib";
 pub const SHOP_ITEMS_LIB: &str = r"generated\databases\generic\shoppingitems.lib";
 pub const LOOT_GROUPS: &str = r"generated\databases\generic\lootinggroups_default.obj";
+/// The key prefix of missions' items (`Quest items/...`).
+pub const QUEST_ITEMS: &str = "Quest items/";
 pub const ENTITY_LIBRARY: &str = r"worlds\fc3_main\generated\entitylibrary_full.fcb";
 
 /// `CRecipe` kinds (`selRecipeType`; also the crafting event's type).
@@ -663,7 +665,10 @@ pub fn crafting(f: &CraftingFiles, strings: &dyn Fn(u32) -> String) -> Crafting 
         let supply = category == SHOP_CATEGORY_GEAR && (shop == SHOP_AMMO || shop == SHOP_CONSUMABLES);
         let loot = e.bool("bIsLootItem").unwrap_or(false);
         let collectible = text(e, "text_hidName").starts_with("Collectibles/");
-        if id == NONE || !(ingredients.contains(&id) || supply || collectible || (loot && category == SHOP_CATEGORY_LOOT)) {
+        // Missions' items (keys, codes, documents), carried by their
+        // characters through mission loot groups.
+        let quest = text(e, "text_hidName").starts_with(QUEST_ITEMS);
+        if id == NONE || !(ingredients.contains(&id) || supply || collectible || quest || (loot && category == SHOP_CATEGORY_LOOT)) {
             continue;
         }
         wanted.insert(id);
@@ -971,7 +976,7 @@ impl Handbook {
 // ------------------------------------------------------------ text form ---
 
 const SKILLS_MAGIC: &str = "fc3-skills 1";
-const RECIPES_MAGIC: &str = "fc3-recipes 6";
+const RECIPES_MAGIC: &str = "fc3-recipes 7";
 
 /// A string as one tab-free, newline-free field.
 fn esc(s: &str) -> String {

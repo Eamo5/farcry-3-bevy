@@ -350,7 +350,9 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     // ---- sounds
     r.f("CDominoSoundManager:PlaySound", |c, (entity, sound, kind, target, method): (Text, Text, Num, Value, Option<String>)| {
         let id = c.next_id();
+        // (The box hears "started" now, and "finished" when the host says.)
         if let Some(cb) = callback(target, method) {
+            c.call(cb.clone(), vec![Arg::Str("started".into())]);
             c.media.sounds.insert(id, cb);
         }
         c.emit(Command::Native { name: "PlaySound".into(), args: vec![id.to_string(), entity.0, sound.0, kind.or(0.0).to_string()] });

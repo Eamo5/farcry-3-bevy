@@ -56,6 +56,20 @@ impl CraftCatalog {
         Some(self.roll(source, rng))
     }
 
+    /// Rolls a character's own loot groups (`pickups::OwnLoot`).
+    pub fn roll_groups(&self, groups: &[(u32, f32)], rng: &mut crate::weapons::Rng) -> BodyLoot {
+        let source = fc3_formats::progression::Source {
+            skeleton: false,
+            key: String::new(),
+            prototype: String::new(),
+            items: Vec::new(),
+            groups: groups.to_vec(),
+            kit: 0,
+            xp: 0,
+        };
+        self.roll(&source, rng)
+    }
+
     /// Rolls what a placed container holds, by its name (its prototype's,
     /// with the placement's number after it).
     pub fn roll_container(&self, name: &str, rng: &mut crate::weapons::Rng) -> Option<BodyLoot> {

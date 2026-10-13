@@ -429,12 +429,34 @@ mod tests {
         v.settings.upper_look = 10.0;
         v.settings.look_up_time = 0.4;
         app.world_mut().resource_mut::<Vines>().active = Some(v);
-        let body = app.world_mut().spawn((Transform::from_xyz(1.0, 94.0, 2.0), Player {
-            velocity: Vec3::ZERO, yaw: start.x, pitch: start.y, grounded: false, crouching: false, swimming: false,
-            noclip: false, spawning: false, keep_height: false, last_landing_speed: 0.0, sprinting: false,
-            spawned_at: 0.0, driving: true, eye: crate::player::EYE_HEIGHT, air: crate::player::AirMode::None,
-            mantle: None, mounted: None, sliding: None, dragging: false,
-        })).id();
+        let body = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(1.0, 94.0, 2.0),
+                Player {
+                    velocity: Vec3::ZERO,
+                    yaw: start.x,
+                    pitch: start.y,
+                    grounded: false,
+                    crouching: false,
+                    swimming: false,
+                    noclip: false,
+                    spawning: false,
+                    keep_height: false,
+                    last_landing_speed: 0.0,
+                    sprinting: false,
+                    spawned_at: 0.0,
+                    driving: true,
+                    armed_passenger: false,
+                    eye: crate::player::EYE_HEIGHT,
+                    air: crate::player::AirMode::None,
+                    mantle: None,
+                    mounted: None,
+                    sliding: None,
+                    dragging: false,
+                },
+            ))
+            .id();
         let camera = app.world_mut().spawn((PlayerCamera, Transform::from_xyz(0.0, 0.72, 0.0))).id();
         app.update();
         let at = *app.world().get::<Transform>(camera).unwrap();
@@ -522,12 +544,36 @@ mod tests {
             let pack = fc3_formats::scripts::ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap();
             let story = fc3_story::Story::new(pack, fc3_story::data::StoryData::default()).unwrap();
             app.insert_non_send(StoryHost::new(story, None));
-            let entity = app.world_mut().spawn((Transform::from_xyz(1.0, 94.0, 2.0), Player {
-                velocity: Vec3::Y, yaw: 0.0, pitch: 0.0, grounded: false, crouching: false, swimming: false,
-                noclip: false, spawning: false, keep_height: false, last_landing_speed: 0.0, sprinting: false,
-                spawned_at: 0.0, driving: true, eye: crate::player::EYE_HEIGHT, air: crate::player::AirMode::None,
-                mantle: None, mounted: None, sliding: None, dragging: false,
-            }, crate::combat::Health::new(100.0), avian3d::prelude::ColliderDisabled)).id();
+            let entity = app
+                .world_mut()
+                .spawn((
+                    Transform::from_xyz(1.0, 94.0, 2.0),
+                    Player {
+                        velocity: Vec3::Y,
+                        yaw: 0.0,
+                        pitch: 0.0,
+                        grounded: false,
+                        crouching: false,
+                        swimming: false,
+                        noclip: false,
+                        spawning: false,
+                        keep_height: false,
+                        last_landing_speed: 0.0,
+                        sprinting: false,
+                        spawned_at: 0.0,
+                        driving: true,
+                        armed_passenger: false,
+                        eye: crate::player::EYE_HEIGHT,
+                        air: crate::player::AirMode::None,
+                        mantle: None,
+                        mounted: None,
+                        sliding: None,
+                        dragging: false,
+                    },
+                    crate::combat::Health::new(100.0),
+                    avian3d::prelude::ColliderDisabled,
+                ))
+                .id();
             let mut vines = app.world_mut().resource_mut::<Vines>();
             vines.active = Some(active_vine());
             if cancel { vines.cancelled.push(408); }

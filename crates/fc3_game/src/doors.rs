@@ -1,9 +1,10 @@
 //! Swing doors (`CDoor`): a leaf hinged at its entity's origin and lying
 //! along its model's x swings a quarter turn away from the player who walks
 //! into it, its collision with it, and stays open; it sounds its
-//! `sndPushDoor`. A script's `Door` box locks and unlocks one
-//! (`CDoor_Disable`, `CDoor_Enable`). Doors are found in the story's entity
-//! data, so they swing where the story runs.
+//! `sndPushDoor` and tells the story it was pushed (from its front) or
+//! pulled (from behind), which a script's `Door` box hears. The box locks
+//! and unlocks one (`CDoor_Disable`, `CDoor_Enable`). Doors are found in the
+//! story's entity data, so they swing where the story runs.
 
 use std::collections::{HashMap, HashSet};
 
@@ -96,8 +97,9 @@ fn tag_doors(
 /// The leaf of a door at `hinge` turned `closed`, `width` long: whether a
 /// player at `pos` (capsule centre) heading `wish` (the way they're trying
 /// to go: a closed door stops them dead) walks into it, and if so the turn
-/// about the vertical that swings it away from them.
-fn push_turn(hinge: Vec3, closed: Quat, width: f32, pos: Vec3, wish: Vec3) -> Option<f32> {
+/// about the vertical that swings it away from them, and whether they came
+/// at it from its front (its +z).
+fn push_turn(hinge: Vec3, closed: Quat, width: f32, pos: Vec3, wish: Vec3) -> Option<(f32, bool)> {
     let along = closed * Vec3::X;
     let across = closed * Vec3::Z;
     let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z);
@@ -112,7 +114,10 @@ fn push_turn(hinge: Vec3, closed: Quat, width: f32, pos: Vec3, wish: Vec3) -> Op
     }
     // Away from the side the player stands on.
     let side = off.dot(across).signum();
-    [std::f32::consts::FRAC_PI_2, -std::f32::consts::FRAC_PI_2].into_iter().find(|turn| (Quat::from_rotation_y(*turn) * along).dot(across * side) < 0.0)
+    [std::f32::consts::FRAC_PI_2, -std::f32::consts::FRAC_PI_2]
+        .into_iter()
+        .find(|turn| (Quat::from_rotation_y(*turn) * along).dot(across * side) < 0.0)
+        .map(|turn| (turn, side > 0.0))
 }
 
 fn push_doors(
@@ -123,6 +128,7 @@ fn push_doors(
     players: Query<(&Transform, &Player), Without<Door>>,
     placed: Query<(Entity, &Door, &WorldObject, &GlobalTransform, &Transform), Without<Swing>>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
+    mut host: Option<NonSendMut<crate::story::StoryHost>>,
 ) {
     let Ok((pt, p)) = players.single() else { return };
     if p.driving || p.noclip {
@@ -138,8 +144,11 @@ fn push_doors(
         }
         let width = models.get(&object.model).map_or(1.0, |m| m.aabb_max.x * t.scale.x).clamp(0.4, 3.0);
         let closed = global.to_scale_rotation_translation().1;
-        let Some(turn) = push_turn(hinge, closed, width, pt.translation, wish) else { continue };
+        let Some((turn, front)) = push_turn(hinge, closed, width, pt.translation, wish) else { continue };
         debug!("doors: {} swings {:.0} degrees", door.id, turn.to_degrees());
+        if let Some(host) = host.as_mut() {
+            host.story.entity_event(door.id, if front { "Push" } else { "Pull" }, vec![]);
+        }
         commands.entity(e).insert(Swing { closed: t.rotation, angle: 0.0, target: turn });
         if door.sound != 0 {
             sfx.write(crate::sound::PlaySfx { event: door.sound, at: Some(hinge), volume: 1.0 });
@@ -167,11 +176,13 @@ mod tests {
     #[test]
     fn a_door_swings_away_from_whoever_pushes_it() {
         let at = |x: f32, z: f32| Vec3::new(x, HALF_HEIGHT, z);
-        let from_front = push_turn(Vec3::ZERO, Quat::IDENTITY, 1.2, at(0.6, 0.5), Vec3::new(0.0, 0.0, -2.0)).expect("pushed");
+        let (from_front, front) = push_turn(Vec3::ZERO, Quat::IDENTITY, 1.2, at(0.6, 0.5), Vec3::new(0.0, 0.0, -2.0)).expect("pushed");
         // The leaf ends up on the far side (negative z).
         assert!((Quat::from_rotation_y(from_front) * Vec3::X).z < -0.99);
-        let from_back = push_turn(Vec3::ZERO, Quat::IDENTITY, 1.2, at(0.6, -0.5), Vec3::new(0.0, 0.0, 2.0)).expect("pushed");
+        assert!(front);
+        let (from_back, front) = push_turn(Vec3::ZERO, Quat::IDENTITY, 1.2, at(0.6, -0.5), Vec3::new(0.0, 0.0, 2.0)).expect("pulled");
         assert!((Quat::from_rotation_y(from_back) * Vec3::X).z > 0.99);
+        assert!(!front);
         // Walking along it, or away, or too far off.
         assert!(push_turn(Vec3::ZERO, Quat::IDENTITY, 1.2, at(0.6, 0.5), Vec3::new(2.0, 0.0, 0.0)).is_none());
         assert!(push_turn(Vec3::ZERO, Quat::IDENTITY, 1.2, at(0.6, 0.5), Vec3::new(0.0, 0.0, 2.0)).is_none());

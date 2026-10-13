@@ -25,6 +25,10 @@ struct FollowPath {
     stop_on_arrival: bool,
     arrived: bool,
     reported: bool,
+    /// How long it has pushed on without getting anywhere, and how long it
+    /// has left backing off after that (s).
+    stuck: f32,
+    backing: f32,
 }
 
 impl StoryVehiclePaths {
@@ -55,12 +59,72 @@ impl StoryVehiclePaths {
                 }
                 let points: Vec<Vec3> = points.into_iter().map(crate::data::to_bevy).collect();
                 info!("vehicle path {vehicle}: start shape {path}, {} points, speed {speed}", points.len());
+                debug!("vehicle path {vehicle}: points {:?}", points.iter().map(|p| [p.x.round(), p.y.round(), p.z.round()]).collect::<Vec<_>>());
                 self.stops.remove(&vehicle);
-                self.paths.insert(vehicle, FollowPath { path, points, next: 0, speed, looped: flag(3, false),
-                    avoidance: flag(4, false), interruptible: flag(5, false), stop_on_arrival: flag(6, true), arrived: false, reported: false });
+                self.paths.insert(
+                    vehicle,
+                    FollowPath {
+                        path,
+                        points,
+                        next: 0,
+                        speed,
+                        looped: flag(3, false),
+                        avoidance: flag(4, false),
+                        interruptible: flag(5, false),
+                        stop_on_arrival: flag(6, true),
+                        arrived: false,
+                        reported: false,
+                        stuck: 0.0,
+                        backing: 0.0,
+                    },
+                );
             }
             _ => {}
         }
+    }
+
+    /// A vehicle the game itself sends along a path (a reinforcement's way
+    /// in): avoiding what moves, stopping at the end.
+    pub(crate) fn follow(&mut self, vehicle: u64, path: u64, points: Vec<Vec3>, speed: f32) {
+        if points.len() < 2 {
+            return;
+        }
+        info!("vehicle path {vehicle}: follow shape {path}, {} points, speed {speed}", points.len());
+        self.stops.remove(&vehicle);
+        self.paths.insert(
+            vehicle,
+            FollowPath {
+                path,
+                points,
+                next: 0,
+                speed,
+                looped: false,
+                avoidance: true,
+                interruptible: false,
+                stop_on_arrival: true,
+                arrived: false,
+                reported: false,
+                stuck: 0.0,
+                backing: 0.0,
+            },
+        );
+    }
+
+    /// The vehicle stops where it is (its path given up).
+    pub(crate) fn stop(&mut self, vehicle: u64) {
+        if self.paths.remove(&vehicle).is_some() {
+            self.stops.insert(vehicle);
+        }
+    }
+
+    /// The vehicle is on its way along a path.
+    pub(crate) fn following(&self, vehicle: u64) -> bool {
+        self.paths.get(&vehicle).is_some_and(|p| !p.arrived)
+    }
+
+    /// The vehicle got to the end of its path.
+    pub(crate) fn arrived(&self, vehicle: u64) -> bool {
+        self.paths.get(&vehicle).is_some_and(|p| p.arrived)
     }
 
     /// A noninterruptible path retains driver controls if the player boards.
@@ -91,10 +155,35 @@ pub(crate) fn story_paths(mut paths: ResMut<StoryVehiclePaths>, host: Option<Non
 }
 
 const REACHED: f32 = 2.5;
+/// Pushing on this long at a crawl (s), a driver backs off for `BACK_OFF`
+/// (steering the other way) and tries the turn again.
+const STUCK_AFTER: f32 = 2.0;
+const BACK_OFF: f32 = 1.6;
 
 fn flat(v: Vec3) -> Vec2 { Vec2::new(v.x, v.z) }
 
 impl FollowPath {
+    /// A driver caught on something (a rock at a tight bend) backs off and
+    /// tries again rather than pushing into it for good: the controls to use
+    /// this step, given the route's and how fast the car is going.
+    fn recover(&mut self, dt: f32, speed: f32, (throttle, steer, brake): (f32, f32, bool)) -> (f32, f32, bool) {
+        if self.backing > 0.0 {
+            self.backing -= dt;
+            return (-0.7, -steer, false);
+        }
+        if throttle > 0.2 && !brake && speed < 0.6 {
+            self.stuck += dt;
+            if self.stuck > STUCK_AFTER {
+                self.stuck = 0.0;
+                self.backing = BACK_OFF;
+                debug!("vehicle path {}: caught short of node {}; backing off", self.path, self.next);
+            }
+        } else {
+            self.stuck = 0.0;
+        }
+        (throttle, steer, brake)
+    }
+
     fn advance(&mut self, at: Vec3) {
         if self.arrived { return; }
         // Consume coincident or already crossed points, but never skip a turn
@@ -135,8 +224,14 @@ impl FollowPath {
 
 /// Reuse the normal suspension/engine simulation. Cinematic ownership has
 /// priority; a stopped/dead/driverless car cannot generate route progress.
-pub(crate) fn drive_paths(mut paths: ResMut<StoryVehiclePaths>, cinema: Res<crate::cinema::Cinema>, spatial: SpatialQuery,
-    mut vehicles: Query<(Entity, &Transform, &LinearVelocity, &RigidBody, &mut Vehicle, Option<&crate::combat::Health>)>) {
+pub(crate) fn drive_paths(
+    time: Res<Time>,
+    mut paths: ResMut<StoryVehiclePaths>,
+    cinema: Res<crate::cinema::Cinema>,
+    spatial: SpatialQuery,
+    mut vehicles: Query<(Entity, &Transform, &LinearVelocity, &RigidBody, &mut Vehicle, Option<&crate::combat::Health>)>,
+    (colliders, bodies, cars): (Query<&ColliderOf>, Query<&RigidBody, Without<Vehicle>>, Query<(), With<Vehicle>>),
+) {
     let mut interrupted = Vec::new();
     for (entity, pose, velocity, body, mut vehicle, health) in &mut vehicles {
         let id = vehicle.story_id();
@@ -148,17 +243,51 @@ pub(crate) fn drive_paths(mut paths: ResMut<StoryVehiclePaths>, cinema: Res<crat
         let previous = path.next;
         path.advance(pose.translation);
         if previous != path.next { info!("vehicle path {id}: reached node {previous}, next {} at {:?}", path.next, pose.translation); }
-        let (mut throttle, steer, mut brake) = path.controls(pose, velocity.0);
+        let (mut throttle, mut steer, mut brake) = path.controls(pose, velocity.0);
+        // Round a fixed obstacle between it and the next node (a corner of
+        // rock the straight line cuts across, as the road bends round it):
+        // the nearest heading either side that's clear for a while.
+        if !path.arrived {
+            let filter = SpatialQueryFilter::from_excluded_entities([entity, vehicle.body()]);
+            let origin = pose.transform_point(Vec3::new(0.0, 1.2, vehicle.bounds().0.z - 0.2));
+            let to = path.points[path.next] - pose.translation;
+            let reach = flat(to).length().clamp(3.0, 8.0);
+            // (A slope it can drive up isn't in the way.)
+            let clear = |d: Vec3| Dir3::new(d).map_or(true, |dir| spatial.cast_ray(origin, dir, reach, true, &filter).is_none_or(|h| h.normal.y > 0.6));
+            let want = Vec3::new(to.x, 0.0, to.z).normalize_or_zero();
+            if want != Vec3::ZERO && !clear(want) {
+                let around =
+                    (1..=4).flat_map(|k| [1.0, -1.0].map(|side| Quat::from_rotation_y(side * k as f32 * 20f32.to_radians()) * want)).find(|d| clear(*d));
+                if let Some(d) = around {
+                    let forward = pose.rotation * Vec3::NEG_Z;
+                    let forward = Vec3::new(forward.x, 0.0, forward.z).normalize_or(Vec3::NEG_Z);
+                    steer = (forward.cross(d).y.atan2(forward.dot(d)) * 2.0).clamp(-1.0, 1.0);
+                }
+            }
+        }
         if path.avoidance && throttle > 0.0 {
-            // Conservative obstacle avoidance: brake for a blocked driving
-            // corridor. Dynamic detours are not yet implemented.
+            // Conservative obstacle avoidance: brake for something moving in
+            // the driving corridor (a car, a body, a character). The route
+            // itself keeps clear of the world's fixed shapes (a rock at a
+            // bend it turns before), so those don't stop it. Dynamic
+            // detours are not yet implemented.
             let origin = pose.transform_point(Vec3::new(0.0, 1.0, vehicle.bounds().0.z - 0.2));
             let forward = pose.rotation * Vec3::NEG_Z;
             let filter = SpatialQueryFilter::from_excluded_entities([entity, vehicle.body()]);
-            if spatial.cast_ray(origin, Dir3::new(forward).unwrap(), (velocity.0.length() * 1.5 + 3.0).min(25.0), true, &filter).is_some() {
+            let hit = spatial.cast_ray(origin, Dir3::new(forward).unwrap(), (velocity.0.length() * 1.5 + 3.0).min(25.0), true, &filter);
+            let moving = hit.is_some_and(|h| {
+                let body = colliders.get(h.entity).map_or(h.entity, |c| c.body);
+                // (A vehicle's own parts count: it can move.)
+                cars.get(body).is_ok() || bodies.get(body).is_ok_and(|b| *b != RigidBody::Static)
+            });
+            if moving {
                 throttle = 0.0; brake = true;
+                if let Some(h) = hit {
+                    debug!("vehicle path {id}: braking for {:?} {:.1} m ahead", h.entity, h.distance);
+                }
             }
         }
+        (throttle, steer, brake) = path.recover(time.delta_secs(), velocity.0.length(), (throttle, steer, brake));
         vehicle.control(throttle, steer, brake);
     }
     for id in interrupted { paths.paths.remove(&id); }
@@ -169,8 +298,44 @@ mod tests {
     use super::*;
 
     fn route() -> FollowPath {
-        FollowPath { path: 1, points: vec![Vec3::ZERO, Vec3::new(0.0, 0.0, -10.0), Vec3::new(-10.0, 0.0, -10.0)],
-            next: 0, speed: 11.0, looped: false, avoidance: false, interruptible: false, stop_on_arrival: true, arrived: false, reported: false }
+        FollowPath {
+            path: 1,
+            points: vec![Vec3::ZERO, Vec3::new(0.0, 0.0, -10.0), Vec3::new(-10.0, 0.0, -10.0)],
+            next: 0,
+            speed: 11.0,
+            looped: false,
+            avoidance: false,
+            interruptible: false,
+            stop_on_arrival: true,
+            arrived: false,
+            reported: false,
+            stuck: 0.0,
+            backing: 0.0,
+        }
+    }
+
+    /// Pushing on at a crawl for a while, the driver backs off, steering the
+    /// other way, then drives on; moving freely, he never does.
+    #[test]
+    fn a_driver_caught_at_a_bend_backs_off_and_tries_again() {
+        let mut p = route();
+        let ahead = (1.0, 0.8, false);
+        for _ in 0..19 {
+            assert_eq!(p.recover(0.1, 0.1, ahead), ahead);
+        }
+        // Past two seconds caught: back off.
+        p.recover(0.2, 0.1, ahead);
+        let (throttle, steer, brake) = p.recover(0.1, 0.1, ahead);
+        assert!(throttle < 0.0 && steer < 0.0 && !brake);
+        for _ in 0..20 {
+            p.recover(0.1, 0.5, ahead);
+        }
+        assert_eq!(p.recover(0.1, 3.0, ahead), ahead);
+        // Moving: no backing off however long.
+        let mut q = route();
+        for _ in 0..100 {
+            assert_eq!(q.recover(0.1, 5.0, ahead), ahead);
+        }
     }
 
     #[test]

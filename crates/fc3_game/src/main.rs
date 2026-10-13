@@ -75,6 +75,9 @@ mod splines;
 mod stealth;
 mod story;
 mod story_actors;
+mod story_alarms;
+mod story_props;
+mod story_rides;
 mod surfaces;
 mod syringes;
 mod terrain;
@@ -427,6 +430,9 @@ fn main() {
         .add_plugins(lens_drops::LensDropsPlugin)
         .add_plugins(unlit_effects::UnlitEffectsPlugin)
         .add_plugins(doors::DoorsPlugin)
+        .add_plugins(story_alarms::StoryAlarmsPlugin)
+        .add_plugins(story_props::StoryPropsPlugin)
+        .add_plugins(story_rides::StoryRidesPlugin)
         .add_plugins(tree_growth::TreeGrowthPlugin)
         .add_plugins(overlays::OverlaysPlugin)
         .add_plugins(encounter_talk::EncounterTalkPlugin)

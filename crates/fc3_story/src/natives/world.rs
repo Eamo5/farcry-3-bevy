@@ -159,8 +159,10 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.f("GetMissionAckTriggerState", |c, trigger: Text| trigger.id().is_some_and(|t| c.contacts(t).contains(&PLAYER)))?;
     r.f("CAPI_Entity.IsEntityTagged", |c, id: Text| id.id().is_some_and(|i| c.view.tagged.contains(&i)))?;
     r.constant("CAPI_Entity.GetScale", 1.0)?;
-    r.constant("CAPI_Entity.GetAlarmState", 0.0)?;
-    r.constant("CAPI_Entity.GetAlarmUserId", fc3_domino::INVALID_ID)?;
+    r.f("CAPI_Entity.GetAlarmState", |c, alarm: Text| alarm.id().and_then(|a| c.alarms.get(&a)).map_or(0.0, |s| s.0 as f64))?;
+    r.f("CAPI_Entity.GetAlarmUserId", |c, alarm: Text| {
+        alarm.id().and_then(|a| c.alarms.get(&a)).map_or(fc3_domino::INVALID_ID.to_string(), |s| s.1.to_string())
+    })?;
     r.f("CAPI_Entity.GetLookAtTriggerState", |c, trigger: Text| trigger.id().is_some_and(|t| c.looked_at.contains(&t)))?;
     r.constant("CAPI_Entity.IsEntityBurnedOut", false)?;
     r.constant("CAPI_Entity.IsEntityBurning", false)?;
@@ -256,13 +258,18 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     })?;
     // Reinforcements: a point's mercs (by archetype) come in under ids of
     // their own, join the point's groups, and the box hears who came
-    // (`OnSpawned(mercs, vehicles)`); the host puts them in the world.
+    // (`OnSpawned(mercs, vehicles)`); the host puts them in the world
+    // (`point, mode, battlefield, id=archetype...`).
     r.f("SpawnReinforcement", |c, args: mlua::Variadic<Value>| {
         let a: Vec<Value> = args.into_iter().collect();
         let text = |i: usize| a.get(i).and_then(|v| v.to_string().ok()).unwrap_or_default();
         let Some(point) = text(0).parse::<u64>().ok() else { return false };
         let mode = text(1);
+        let battlefield = text(2).parse::<u64>().unwrap_or(u64::MAX);
         let (mut archetypes, mut groups) = (Vec::new(), Vec::new());
+        // The vehicle that brings them (the first the point names), when it
+        // has a way in, and the groups it joins.
+        let (mut vehicle, mut vehicle_groups) = (None, Vec::new());
         if let Some(rp) = c
             .data
             .entities
@@ -271,12 +278,19 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
             .and_then(|ai| ai.child("AIObject"))
             .and_then(|o| o.child("CReinforcementPoint"))
         {
+            let path = rp.u64("entVehiclePathId").filter(|&p| p != 0 && p != u64::MAX);
             rp.walk(&mut |o, _| {
                 if let Some(ark) = o.u64("arkMerc").filter(|&k| k != 0 && k != u64::MAX) {
                     archetypes.push(ark);
                 }
                 if let Some(g) = o.u32("MercGroupName").filter(|&g| g != 0 && g != u32::MAX) {
                     groups.push(format!("#{g:08X}"));
+                }
+                if let Some(ark) = o.u64("arkVehicle").filter(|&k| k != 0 && k != u64::MAX && path.is_some()) {
+                    vehicle.get_or_insert(ark);
+                }
+                if let Some(g) = o.u32("VehicleGroupName").filter(|&g| g != 0 && g != u32::MAX) {
+                    vehicle_groups.push(format!("#{g:08X}"));
                 }
             });
         }
@@ -287,7 +301,14 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
                 c.group_added.insert((g.clone(), *id));
             }
         }
-        let mut out = vec![point.to_string(), mode];
+        let vehicle = vehicle.map(|ark| (c.next_id() | 0x7FFE_0000_0000_0000, ark));
+        if let Some((id, ark)) = vehicle {
+            c.spawned.insert(id, format!("{ark:016x}"));
+            for g in &vehicle_groups {
+                c.group_added.insert((g.clone(), id));
+            }
+        }
+        let mut out = vec![point.to_string(), mode, battlefield.to_string(), vehicle.map_or(String::new(), |(i, k)| format!("{i}={k:016x}"))];
         out.extend(ids.iter().zip(&archetypes).map(|(i, k)| format!("{i}={k:016x}")));
         c.emit(Command::Native { name: "SpawnReinforcement".into(), args: out });
         let cb = a.iter().position(|v| matches!(v, Value::Table(_))).and_then(|i| {
@@ -295,13 +316,16 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
             callback(a[i].clone(), method)
         });
         if let Some(cb) = cb {
-            c.actions.push_back(crate::core::Action::Call(cb, vec![Arg::Ids(ids), Arg::Ids(Vec::new())]));
+            c.actions.push_back(crate::core::Action::Call(cb, vec![Arg::Ids(ids), Arg::Ids(vehicle.map(|v| v.0).into_iter().collect())]));
         }
         true
     })?;
     r.f("SpawnEntityFromArchetype", |c, (archetype, x, y, z, ax, ay, az): (Text, Num, Num, Num, Num, Num, Num)| {
         let id = c.next_id() | 0x7FFE_0000_0000_0000;
         c.spawned.insert(id, archetype.0.clone());
+        // (Where it stands, for the scripts and for using it.)
+        let v = |n: Num| n.or(0.0) as f32;
+        c.poses.insert(id, crate::Pose { position: [v(x), v(y), v(z)], angles: [v(ax), v(ay), v(az)] });
         let f = |n: Num| n.or(0.0).to_string();
         c.emit(Command::Native { name: "SpawnEntityFromArchetype".into(), args: vec![id.to_string(), archetype.0, f(x), f(y), f(z), f(ax), f(ay), f(az)] });
         id.to_string()

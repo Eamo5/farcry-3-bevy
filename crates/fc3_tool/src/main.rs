@@ -406,7 +406,7 @@ fn main() -> Result<()> {
         }
         "library-dump" => {
             // Full FCB tree of the first entity-library prototype whose name contains a substring.
-            let needle = args.get(1).context("usage: library-dump <substr>")?.to_ascii_lowercase();
+            let needle = args.get(1).context("usage: library-dump <substr | 0x library id>")?.to_ascii_lowercase();
             let bytes = vfs.read(r"worlds\fc3_main\generated\entitylibrary_full.fcb")?;
             let start = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
             let root = fc3_formats::fcb::parse(&bytes[start..])?;
@@ -419,9 +419,16 @@ fn main() -> Result<()> {
                     names.add_identifiers_from(&b);
                 }
             }
+            // (Or by the prototype's library id, in hex.)
+            let id = u64::from_str_radix(needle.trim_start_matches("0x"), 16).ok().filter(|_| needle.starts_with("0x"));
             let mut found = None;
             root.walk(&mut |o, _| {
-                if found.is_none() && o.is("Entity") && o.str("hidName").is_some_and(|s| s.to_ascii_lowercase().contains(&needle)) {
+                if found.is_some() {
+                    return;
+                }
+                if id.is_some() && o.is("EntityPrototype") && o.u64("disLibItemId") == id {
+                    found = o.child("Entity").map(|e| (**e).clone());
+                } else if o.is("Entity") && o.str("hidName").is_some_and(|s| s.to_ascii_lowercase().contains(&needle)) {
                     found = Some(o.clone());
                 }
             });
@@ -1578,6 +1585,42 @@ fn main() -> Result<()> {
                 println!("{c:6} {n}");
             }
         }
+        "entity-export" => {
+            // Every placed entity of fc3_main, one per line (tab separated):
+            // id, class, name, Dunia pos, angles, solid, first mesh and its
+            // path hash: entity-export <out.tsv>
+            let out = args.get(1).context("usage: entity-export <out.tsv>")?;
+            let world = fc3_formats::terrain::WORLD_SECTORS;
+            let mut text = String::new();
+            for y in 0..world {
+                for x in 0..world {
+                    let s = fc3_formats::terrain::SectorCoord::new(x, y);
+                    let Ok(bytes) = vfs.read(&s.entities_path("fc3_main")) else { continue };
+                    let Ok(ents) = fc3_formats::world::parse_all_entities(&bytes) else { continue };
+                    for e in ents {
+                        let mesh = e.meshes.first().cloned().unwrap_or_default();
+                        let hash = if mesh.is_empty() { String::new() } else { fc3_formats::cache::hash_name(&mesh) };
+                        text.push_str(&format!(
+                            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                            e.id,
+                            e.class,
+                            e.name,
+                            e.pos[0],
+                            e.pos[1],
+                            e.pos[2],
+                            e.angles[0],
+                            e.angles[1],
+                            e.angles[2],
+                            e.solid as u8,
+                            mesh,
+                            hash,
+                            s.id()
+                        ));
+                    }
+                }
+            }
+            std::fs::write(out, text)?;
+        }
         "entities-near" => {
             // Entities within r metres of Dunia (x, y): entities-near <x> <y> <r>
             let num = |i: usize| args.get(i).and_then(|v| v.parse::<f32>().ok());
@@ -2279,7 +2322,7 @@ fn main() -> Result<()> {
                 while due.first().is_some_and(|d| d.0 <= t) {
                     match due.remove(0).1 {
                         Due::Sequence(scene, file, event) => story.sequence_event(&scene, &file, event, None),
-                        Due::Sound(id) => story.sound_finished(id, 0.0),
+                        Due::Sound(id) => story.sound_finished(id),
                         Due::Answer(id) => story.box_answered(id, true),
                         Due::Group(pawn, _event, ca) => {
                             if let Some(p) = data.position(ca) {

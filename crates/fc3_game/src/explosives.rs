@@ -27,7 +27,7 @@ impl Plugin for ExplosivesPlugin {
 pub const EXPLOSIVE_CAP: u32 = 3;
 /// Holding the C4 key this long sets the charges off.
 const DETONATE_HOLD: f32 = 0.4;
-const C4: (f32, f32) = (7.0, 260.0);
+pub(crate) const C4: (f32, f32) = (7.0, 260.0);
 const MINE: (f32, f32) = (5.0, 220.0);
 /// A mine arms this long after it's laid, then trips within this distance.
 const MINE_ARMING: f32 = 1.5;

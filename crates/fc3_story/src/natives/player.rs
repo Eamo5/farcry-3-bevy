@@ -160,8 +160,27 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.f("CAPI_Pawn.GetPawnVehicleType", |c, pawn: Text| pawn.id().and_then(|id| c.vehicle_occupant(id)).map_or(7.0, |o| o.vehicle_type as f64))?;
     r.f("CAPI_Pawn.GetPawnStance", |c, _p: Text| c.view.player_state.stance as f64)?;
     r.f("CAPI_Pawn.IsPawnOnZipline", |c, _a: mlua::Variadic<Value>| c.view.player_state.on_zipline)?;
-    r.constant("CAPI_Pawn.GetCurrentMoveName", "")?;
-    r.constant("CAPI_Pawn.IsAnimationCutable", true)?;
+    // Moves a script plays on a pawn: the host plays them; the story times
+    // them and their markups.
+    r.f("CAPI_Pawn.PlayAnimation", |c, args: mlua::Variadic<Text>| {
+        let args: Vec<String> = args.into_iter().map(|t| t.0).collect();
+        if let (Some(pawn), Some(name)) = (Text(args.first().cloned().unwrap_or_default()).id(), args.get(1)) {
+            c.play_move(pawn, name);
+        }
+        c.emit(Command::Native { name: "CAPI_Pawn.PlayAnimation".into(), args });
+    })?;
+    r.f("CAPI_Pawn.GetCurrentMoveName", |c, (pawn, _layer): (Text, Num)| pawn.id().and_then(|p| c.current_move(p)).unwrap_or_default().to_string())?;
+    r.f("CAPI_Pawn.IsAnimationCutable", |c, (pawn, name, _layer): (Text, Text, Num)| pawn.id().and_then(|p| c.current_move(p)) != Some(name.0.as_str()))?;
+    // A pawn's state machine shut down (it stands stunned) and restored
+    // (back to idle): the callbacks waiting for those states.
+    r.f("CAPI_Pawn.ShutdownGOSM", |c, pawn: Text| {
+        c.emit(Command::Native { name: "CAPI_Pawn.ShutdownGOSM".into(), args: vec![pawn.0.clone()] });
+        c.enter_state(pawn.id().unwrap_or(PLAYER), "Stun");
+    })?;
+    r.f("CAPI_Pawn.RestoreGOSM", |c, (pawn, how): (Text, Text)| {
+        c.emit(Command::Native { name: "CAPI_Pawn.RestoreGOSM".into(), args: vec![pawn.0.clone(), how.0] });
+        c.enter_state(pawn.id().unwrap_or(PLAYER), "Idle");
+    })?;
     r.constant("CAPI_Pawn.BelongToGOSMGroup", false)?;
     r.f("GetPlayerInSlot", |_, slot: Num| if slot.or(0.0) as i64 == 0 { PLAYER.to_string() } else { fc3_domino::INVALID_ID.to_string() })?;
     r.constant("GetNumberOfPlayers", 1.0)?;

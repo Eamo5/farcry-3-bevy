@@ -56,7 +56,7 @@ mod ownership_tests {
         Player {
             velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: false, crouching: false,
             swimming: false, noclip: false, spawning: false, keep_height: false,
-            last_landing_speed: 0.0, sprinting: false, spawned_at: 0.0, driving: true,
+            last_landing_speed: 0.0, sprinting: false, spawned_at: 0.0, driving: true, armed_passenger: false,
             eye: 1.7, air: default(), mantle: None, mounted: None, sliding: None, dragging: false,
         }
     }

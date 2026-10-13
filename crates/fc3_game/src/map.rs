@@ -1091,11 +1091,34 @@ mod travel_tests {
         window.set_cursor_position(Some(Vec2::new(400.0, 300.0)));
         app.world_mut().spawn((window, PrimaryWindow));
         app.world_mut().spawn((FullMap, ComputedNode { size: Vec2::new(800.0, 600.0), inverse_scale_factor: 1.0, ..default() }));
-        let player = app.world_mut().spawn((Transform::default(), Player {
-            velocity: Vec3::X, yaw: 0.0, pitch: 0.0, grounded: false, crouching: false, swimming: false, noclip: false,
-            spawning: false, keep_height: false, last_landing_speed: 0.0, sprinting: false, spawned_at: 0.0,
-            driving: false, eye: 0.0, air: crate::player::AirMode::None, mantle: None, mounted: None, sliding: None, dragging: false,
-        })).id();
+        let player = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                Player {
+                    velocity: Vec3::X,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    grounded: false,
+                    crouching: false,
+                    swimming: false,
+                    noclip: false,
+                    spawning: false,
+                    keep_height: false,
+                    last_landing_speed: 0.0,
+                    sprinting: false,
+                    spawned_at: 0.0,
+                    driving: false,
+                    armed_passenger: false,
+                    eye: 0.0,
+                    air: crate::player::AirMode::None,
+                    mantle: None,
+                    mounted: None,
+                    sliding: None,
+                    dragging: false,
+                },
+            ))
+            .id();
         (app, player)
     }
 

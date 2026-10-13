@@ -210,6 +210,12 @@ impl Story {
         self.core.borrow().listeners.values().any(|l| matches!(&l.on, Listen::Entity(p, event) if *p == pawn && event == "IsInVehicle"))
     }
 
+    /// A script listens for something of this entity's (a vehicle's
+    /// health, its arrival).
+    pub fn watches_entity(&self, id: u64) -> bool {
+        self.core.borrow().listeners.values().any(|l| matches!(&l.on, Listen::Entity(p, _) if *p == id))
+    }
+
     pub fn awaits_vehicle_exit(&self, pawn: u64) -> bool {
         self.core.borrow().listeners.values().any(|l| matches!(&l.on, Listen::Entity(p, event) if *p == pawn && event == "IsOutVehicle"))
     }

@@ -343,8 +343,22 @@ fn place_props(
 
 /// Spawns a model on its own (not from a sector), in its own materials,
 /// as a world object at `transform`.
-fn spawn_model(commands: &mut Commands, handle: &Handle<Fc3Model>, model: &Fc3Model, transform: Transform) -> Entity {
+pub(crate) fn spawn_model(commands: &mut Commands, handle: &Handle<Fc3Model>, model: &Fc3Model, transform: Transform) -> Entity {
+    spawn_model_wearing(commands, handle, model, transform, &[])
+}
+
+/// As [`spawn_model`], its slots wearing these materials (where given).
+pub(crate) fn spawn_model_wearing(
+    commands: &mut Commands,
+    handle: &Handle<Fc3Model>,
+    model: &Fc3Model,
+    transform: Transform,
+    slots: &[Handle<StandardMaterial>],
+) -> Entity {
     let obj = commands.spawn((transform, Visibility::Visible, WorldObject { model: handle.clone(), entity_index: u32::MAX })).id();
+    if !slots.is_empty() {
+        commands.entity(obj).insert(SlotMaterials(slots.to_vec()));
+    }
     let small = model.radius() < 1.5;
     for (li, lod) in model.lods.iter().enumerate() {
         let range = lod_range(model, li);
@@ -355,13 +369,8 @@ fn spawn_model(commands: &mut Commands, handle: &Handle<Fc3Model>, model: &Fc3Mo
             use_aabb: false,
         };
         for part in &lod.parts {
-            let mut e = commands.spawn((
-                Mesh3d(part.mesh.clone()),
-                MeshMaterial3d(part.material.clone()),
-                vis.clone(),
-                crate::original_shaders::PropPart,
-                ChildOf(obj),
-            ));
+            let material = slots.get(part.slot as usize).unwrap_or(&part.material).clone();
+            let mut e = commands.spawn((Mesh3d(part.mesh.clone()), MeshMaterial3d(material), vis.clone(), crate::original_shaders::PropPart, ChildOf(obj)));
             if small || li > 1 {
                 e.insert(NotShadowCaster);
             } else {

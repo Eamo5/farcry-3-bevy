@@ -340,22 +340,16 @@ fn axis_quat(axis: [f32; 3], angle: f32) -> [f32; 4] {
 }
 
 /// Entity orientation from `hidAngles` (degrees) as a Bevy-space quaternion (x, y, z, w).
-/// Yaw is about Dunia +Z (Bevy +Y), pitch about Dunia +X, roll about Dunia +Y (Bevy -Z).
+/// Yaw is about Dunia +Z (Bevy +Y), pitch about Dunia +X, roll about Dunia +Y (Bevy -Z),
+/// applied yaw, then roll, then pitch (Z·Y·X). Vegetation meshes turn the
+/// same way. The order matters only with both pitch and roll (rocks thrown
+/// in at all angles). With yaw, pitch, roll instead, the rocks in the
+/// doctor's cave put 14 of its 26 floor mushrooms inside rock and left 14
+/// resting on a surface (with this order, 6 and 22); across the world's
+/// rocks turned over 25° both ways, 240 small entities sat deep inside rock
+/// (67 with this order, the fewest of the six orders); and a cliff stood
+/// across a scripted convoy's road.
 pub fn angles_to_bevy_quat(a: [f32; 3]) -> [f32; 4] {
-    let [rx, ry, rz] = a.map(f32::to_radians);
-    let yaw = axis_quat([0.0, 1.0, 0.0], rz);
-    let pitch = axis_quat([1.0, 0.0, 0.0], rx);
-    let roll = axis_quat([0.0, 0.0, 1.0], -ry);
-    quat_mul(quat_mul(yaw, pitch), roll)
-}
-
-/// A vegetation mesh's rotation from its stored angles (degrees, the same
-/// axes as an entity's), which the game applies yaw, then roll, then pitch
-/// (Z·Y·X), not as entities above. It matters only with both pitch and roll
-/// (rocks thrown in at all angles). Scattered with the other order, the
-/// rocks in the doctor's cave put 14 of its 26 floor mushrooms inside rock
-/// and left 14 resting on a surface; with this order, 6 and 22.
-pub fn vegetation_angles_to_bevy_quat(a: [f32; 3]) -> [f32; 4] {
     let [rx, ry, rz] = a.map(f32::to_radians);
     let yaw = axis_quat([0.0, 1.0, 0.0], rz);
     let pitch = axis_quat([1.0, 0.0, 0.0], rx);
@@ -364,7 +358,7 @@ pub fn vegetation_angles_to_bevy_quat(a: [f32; 3]) -> [f32; 4] {
 }
 
 #[cfg(test)]
-mod vegetation_order_tests {
+mod angle_order_tests {
     use super::*;
 
     fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
@@ -372,21 +366,17 @@ mod vegetation_order_tests {
         [p[0], p[1], p[2]]
     }
 
-    /// Pitch then roll differ from roll then pitch; with either alone, or
-    /// yaw alone, the two orders agree.
+    /// Roll is applied before pitch: with both at 90 degrees, the mesh's up
+    /// (Bevy +Y) is pitched onto +Z first, which the roll about Z then
+    /// leaves. (Rolled first, it would end on -X.) With yaw alone the
+    /// turn is about up.
     #[test]
-    fn vegetation_applies_roll_before_pitch() {
+    fn angles_apply_roll_before_pitch() {
         let close = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5);
-        for a in [[30.0, 0.0, 70.0], [0.0, 40.0, -20.0], [0.0, 0.0, 135.0]] {
-            assert!(close(rotate(vegetation_angles_to_bevy_quat(a), [0.3, 0.5, 0.7]), rotate(angles_to_bevy_quat(a), [0.3, 0.5, 0.7])));
-        }
-        // Both at 90 degrees: a vegetation mesh's up (Bevy +Y) is pitched
-        // onto +Z first, which the roll about Z then leaves; an entity's is
-        // rolled onto -X first, which the pitch about X then leaves.
-        let up = rotate(vegetation_angles_to_bevy_quat([90.0, -90.0, 0.0]), [0.0, 1.0, 0.0]);
-        assert!(close(up, [0.0, 0.0, 1.0]), "{up:?}");
         let up = rotate(angles_to_bevy_quat([90.0, -90.0, 0.0]), [0.0, 1.0, 0.0]);
-        assert!(close(up, [-1.0, 0.0, 0.0]), "{up:?}");
+        assert!(close(up, [0.0, 0.0, 1.0]), "{up:?}");
+        let ahead = rotate(angles_to_bevy_quat([0.0, 0.0, 90.0]), [0.0, 0.0, -1.0]);
+        assert!(close(ahead, [-1.0, 0.0, 0.0]), "{ahead:?}");
     }
 }
 

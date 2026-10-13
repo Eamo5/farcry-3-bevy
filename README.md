@@ -442,7 +442,8 @@ showed 15 to 30 ms runs, so they are not yet pinned on this game.
 --drive-test       drive the nearest car (FC3_DRIVE_KIND=boat|glider for others), logging speed;
                    try at --pos -982,-205,107 (beside a technical), and it says why if there is none;
                    a glider launches, banks left, dives and pulls up (try --pos -1746.5,-589.3,351.5),
-                   FC3_DRIVE_EXIT=secs gets out that far in and logs the fall
+                   FC3_DRIVE_EXIT=secs gets out that far in and logs the fall;
+                   FC3_DRIVE_SEAT=passenger sits beside the driver's seat instead, weapon in hand
 --patrol-test      start road and boat patrols near the player (even close by), logging their progress
 --open-map         open the full map once playing; --journal / --options likewise
 --shop tab         open the shop once playing on a tab (0 supplies .. 7 bows, 8 attachments)

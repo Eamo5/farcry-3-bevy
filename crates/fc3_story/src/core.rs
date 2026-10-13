@@ -60,6 +60,20 @@ pub struct Delay {
     pub callback: Callback,
 }
 
+/// How long a move a script plays on a pawn runs (the move tables' own
+/// lengths aren't read).
+pub const MOVE_SECS: f64 = 1.5;
+
+/// Whether an event a script listens for on a pawn can be one of a move's
+/// markups: not one the engine raises itself (dialogue, triggers, doors,
+/// `C...Event`s).
+fn is_markup(event: &str) -> bool {
+    let engine_event = event.starts_with("Domino_")
+        || (event.starts_with('C') && event.chars().nth(1).is_some_and(|c| c.is_ascii_uppercase()))
+        || matches!(event, "Use" | "Enter" | "Leave" | "Die" | "Push" | "Pull" | "Closed" | "EnterFOV" | "LeaveFOV");
+    !engine_event
+}
+
 /// Work for the scripts, done outside any native call.
 pub enum Action {
     /// Call a script method with arguments.
@@ -109,6 +123,10 @@ pub struct Core {
     next_id: u64,
     pub listeners: BTreeMap<u64, Listener>,
     pub delays: BTreeMap<u64, Delay>,
+    /// Alarm boxes that have changed state: (state, who), the state as
+    /// `CAPI_Entity.GetAlarmState` gives it (0 idle, 1 active, 2 disabled,
+    /// 3 destroyed).
+    pub alarms: HashMap<u64, (u8, u64)>,
     pub ticks: BTreeMap<u64, Callback>,
     pub missions: Missions,
     pub layers: HashMap<u64, LayerState>,
@@ -134,6 +152,13 @@ pub struct Core {
     pub item_ids: HashMap<u64, String>,
     /// Entities scripts spawned (archetype by id).
     pub spawned: HashMap<u64, String>,
+    /// The move each pawn plays at a script's word (`CAPI_Pawn.PlayAnimation`)
+    /// and how long it has left.
+    pub moves: HashMap<u64, (String, f64)>,
+    /// Markup events due on pawns (seconds left, pawn, event).
+    pub markups: Vec<(f64, u64, String)>,
+    /// Listeners registered during the script step being run.
+    pub step_listeners: Vec<u64>,
     /// Group membership scripts changed: (group text, entity) added / removed.
     pub group_added: HashSet<(String, u64)>,
     pub group_removed: HashSet<(String, u64)>,
@@ -189,6 +214,7 @@ impl Core {
             next_id: 1,
             listeners: BTreeMap::new(),
             delays: BTreeMap::new(),
+            alarms: HashMap::new(),
             ticks: BTreeMap::new(),
             missions: Missions::default(),
             layers: HashMap::new(),
@@ -206,6 +232,9 @@ impl Core {
             media: Default::default(),
             item_ids: HashMap::new(),
             spawned: HashMap::new(),
+            moves: HashMap::new(),
+            markups: Vec::new(),
+            step_listeners: Vec::new(),
             group_added: HashSet::new(),
             group_removed: HashSet::new(),
             trigger_contacts: HashMap::new(),
@@ -237,7 +266,60 @@ impl Core {
     pub fn listen(&mut self, on: Listen, callback: Callback) -> u64 {
         let id = self.next_id();
         self.listeners.insert(id, Listener { on, callback });
+        self.step_listeners.push(id);
         id
+    }
+
+    /// A pawn plays a move (`CAPI_Pawn.PlayAnimation`): it runs `MOVE_SECS`,
+    /// and the markup events scripts registered on the pawn in the step that
+    /// started it (the move's own, like a bomb leaving the hand) come halfway.
+    pub fn play_move(&mut self, pawn: u64, name: &str) {
+        self.moves.insert(pawn, (name.to_string(), MOVE_SECS));
+        let markups: Vec<String> = self
+            .step_listeners
+            .iter()
+            .filter_map(|id| match self.listeners.get(id).map(|l| &l.on) {
+                Some(Listen::Entity(p, event)) if *p == pawn && is_markup(event) => Some(event.clone()),
+                _ => None,
+            })
+            .collect();
+        for event in markups {
+            self.markups.push((MOVE_SECS * 0.5, pawn, event));
+        }
+    }
+
+    /// The move a pawn is playing (until it ends).
+    pub fn current_move(&self, pawn: u64) -> Option<&str> {
+        self.moves.get(&pawn).filter(|m| m.1 > 0.0).map(|m| m.0.as_str())
+    }
+
+    /// Moves run on; their markups come when due.
+    pub fn update_moves(&mut self, dt: f64) {
+        for m in self.moves.values_mut() {
+            m.1 -= dt;
+        }
+        self.moves.retain(|_, m| m.1 > 0.0);
+        let mut due = Vec::new();
+        self.markups.retain_mut(|m| {
+            m.0 -= dt;
+            if m.0 <= 0.0 {
+                due.push((m.1, m.2.clone()));
+            }
+            m.0 > 0.0
+        });
+        for (pawn, event) in due {
+            self.raise(&Listen::Entity(pawn, event), vec![]);
+        }
+    }
+
+    /// A pawn's state machine enters a state: the callbacks waiting for a
+    /// state of that name (its path's last part, as `::Main Avatar/Common/Stun`
+    /// ends in `Stun`).
+    pub fn enter_state(&mut self, pawn: u64, leaf: &str) {
+        self.raise_where(
+            |l| matches!(l, Listen::State(p, s) if *p == pawn && s.rsplit('/').next().is_some_and(|last| last.eq_ignore_ascii_case(leaf))),
+            vec![],
+        );
     }
 
     pub fn unlisten(&mut self, id: u64) {
@@ -315,6 +397,11 @@ impl Core {
             return false;
         }
         if self.view.spawned.contains_key(&id) {
+            return true;
+        }
+        // Spawned by the engine at a script's word (reinforcements): there
+        // until removed.
+        if self.spawned.contains_key(&id) {
             return true;
         }
         if let Some(name) = self.item_ids.get(&id) {

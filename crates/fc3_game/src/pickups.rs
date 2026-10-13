@@ -62,6 +62,25 @@ pub struct LootableBody {
     pub rig: Option<Entity>,
 }
 
+/// A character's own loot groups (its entity's `CFCXPawnLootComponent`:
+/// group and chance in percent), which its body gives instead of its kit's:
+/// a mission's operator carries the codes the mission wants.
+#[derive(Component, Clone, Debug, PartialEq)]
+pub struct OwnLoot(pub Vec<(u32, f32)>);
+
+impl OwnLoot {
+    /// The groups a loot component names (none for the unset ones).
+    pub fn from_component(loot: &fc3_formats::fcb::Object) -> Option<OwnLoot> {
+        let groups: Vec<(u32, f32)> = loot
+            .child("LootGroups")
+            .iter()
+            .flat_map(|l| l.children_named("Group"))
+            .filter_map(|g| Some((g.u32("lootGroup").filter(|&id| id != 0 && id != u32::MAX)?, g.f32("percent").unwrap_or(100.0).clamp(0.0, 100.0))))
+            .collect();
+        (!groups.is_empty()).then_some(OwnLoot(groups))
+    }
+}
+
 /// Searching a body: cash, ammo for the guns carried, and sometimes what the
 /// enemy fought with.
 #[allow(clippy::too_many_arguments)]
@@ -73,28 +92,31 @@ pub(crate) fn loot_bodies(
     perks: Res<crate::progression::Perks>,
     mut rng: ResMut<Rng>,
     mut commands: Commands,
-    bodies: Query<(Entity, &LootableBody, &GlobalTransform)>,
+    bodies: Query<(Entity, &LootableBody, &GlobalTransform, Option<&OwnLoot>)>,
     mut players: Query<(&Transform, &Player, &mut Inventory, &Health, &mut PlayerStats)>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
-    (busy, mut gestures): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>),
+    (busy, mut gestures, mut looted): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>, MessageWriter<crate::progression::ItemLooted>),
     (crafting, kits, auto): (Option<Res<crate::crafting::CraftCatalog>>, Query<&crate::characters::KitId>, Query<(), With<AutoLoot>>),
 ) {
     use crate::npc::Role;
     let Ok((pt, player, mut inv, health, mut stats)) = players.single_mut() else { return };
     // A takedown's victim is searched as he falls, with no prompt.
-    let taken = bodies.iter().find(|(e, _, _)| auto.contains(*e));
+    let taken = bodies.iter().find(|(e, _, _, _)| auto.contains(*e));
     // Another interaction is on offer (a pickup is nearer).
     if taken.is_none() && (hud.prompt.is_some() || health.dead || player.noclip || player.driving || player.swimming || busy.busy()) {
         return;
     }
     // (Bodies, like the player, are placed by their capsule's centre.)
     let centre = pt.translation;
-    let Some((e, body, _)) = taken.map(|(e, b, _)| (e, b, 0.0)).or_else(|| {
+    let Some((e, body, own)) = taken.map(|(e, b, _, own)| (e, b, own)).or_else(|| {
         bodies
             .iter()
-            .map(|(e, b, gt)| (e, b, Vec2::new(gt.translation().x - centre.x, gt.translation().z - centre.z).length() + (gt.translation().y - centre.y).abs() * 0.5))
-            .filter(|(_, _, d)| *d < 2.4)
-            .min_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(e, b, gt, own)| {
+                (e, b, own, Vec2::new(gt.translation().x - centre.x, gt.translation().z - centre.z).length() + (gt.translation().y - centre.y).abs() * 0.5)
+            })
+            .filter(|(_, _, _, d)| *d < 2.4)
+            .min_by(|a, b| a.3.total_cmp(&b.3))
+            .map(|(e, b, own, _)| (e, b, own))
     }) else {
         return;
     };
@@ -108,8 +130,17 @@ pub(crate) fn loot_bodies(
     *progress.stats.entry(crate::progression::stat::BODIES_LOOTED).or_insert(0) += 1;
     // What the game gives this kind of enemy: cash, loot to sell, ammunition.
     let kit = body.rig.and_then(|r| kits.get(r).ok()).map_or(0, |k| k.0);
-    if let Some(loot) = crafting.as_ref().and_then(|c| c.roll_body(kit, &mut rng)) {
-        let (found, full) = take_loot(&loot, crafting.as_ref().unwrap(), &mut progress, &mut inv, &mut stats, &perks);
+    // (Its own loot when its entity names some, else its kit's.)
+    let rolled = crafting.as_ref().and_then(|c| match own {
+        Some(own) => Some(c.roll_groups(&own.0, &mut rng)),
+        None => c.roll_body(kit, &mut rng),
+    });
+    if let Some(loot) = rolled {
+        let (found, full, items) = take_loot(&loot, crafting.as_ref().unwrap(), &mut progress, &mut inv, &mut stats, &perks);
+        // The story hears of each item taken (`CPawnLootItemEvent`).
+        for id in items {
+            looted.write(crate::progression::ItemLooted(crate::progression::LootKind::Item(id)));
+        }
         let mut note = if found.is_empty() { "Nothing useful".to_string() } else { format!("Found {}", found.join(", ")) };
         if full {
             note += " (rucksack full)";
@@ -154,7 +185,8 @@ pub(crate) fn loot_bodies(
 
 /// Takes what was rolled: the cash (doubled by `SP_LootDoubleCash`), loot items
 /// into the rucksack as far as it holds, and ammunition and gadgets as far as
-/// there is room. Returns what was found, and whether the rucksack filled.
+/// there is room. Returns what was found, whether the rucksack filled, and
+/// the items taken.
 fn take_loot(
     loot: &crate::crafting::BodyLoot,
     crafting: &crate::crafting::CraftCatalog,
@@ -162,19 +194,25 @@ fn take_loot(
     inv: &mut Inventory,
     stats: &mut PlayerStats,
     perks: &crate::progression::Perks,
-) -> (Vec<String>, bool) {
+) -> (Vec<String>, bool, Vec<u32>) {
     let mut found = Vec::new();
+    let mut items = Vec::new();
     let cash = progress.add_money(loot.cash * if perks.double_cash { 2 } else { 1 });
     if cash > 0 {
         found.push(format!("${cash}"));
     }
     let room = crafting.loot_capacity(progress).saturating_sub(crate::crafting::loot_count(progress));
     let mut full = false;
-    for (i, id) in loot.items.iter().enumerate() {
-        if i as u32 >= room {
+    let mut taken = 0;
+    for id in &loot.items {
+        // (A mission's items take no room.)
+        let quest = crafting.item(*id).is_some_and(|i| i.key.starts_with(fc3_formats::progression::QUEST_ITEMS));
+        if !quest && taken >= room {
             full = true;
-            break;
+            continue;
         }
+        taken += u32::from(!quest);
+        items.push(*id);
         *progress.loot.entry(*id).or_insert(0) += 1;
         found.extend(crafting.item(*id).map(|i| i.name.clone()).filter(|n| !n.is_empty()));
     }
@@ -185,7 +223,7 @@ fn take_loot(
             found.push(if item.gadget != 0 || n == 1 { item.name.clone() } else { format!("{got} rounds") });
         }
     }
-    (found, full)
+    (found, full, items)
 }
 
 /// Persistent world changes made by the player.
@@ -477,7 +515,7 @@ fn interact(
         _ => None,
     };
     let msg = if let Some((loot, c)) = rolled {
-        let (found, full) = take_loot(&loot, c, &mut progress, &mut inv, &mut stats, &perks);
+        let (found, full, _) = take_loot(&loot, c, &mut progress, &mut inv, &mut stats, &perks);
         let mut note = if found.is_empty() { "Nothing useful".to_string() } else { format!("Found {}", found.join(", ")) };
         if full {
             note += " (rucksack full)";
@@ -672,18 +710,48 @@ mod tests {
             attachments: Vec::new(), attachment_models: Vec::new(), mounted_from: None,
             auto_tail: 0, arrow_kind: 0, special_arrows: [0; 2], paints: Vec::new(), paint_options: Vec::new(),
         };
-        let player = app.world_mut().spawn((Player {
-            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: true,
-            crouching: false, swimming: false, noclip: false, spawning: false,
-            keep_height: false, last_landing_speed: 0.0, sprinting: false,
-            spawned_at: 0.0, driving: false, eye: crate::player::EYE_HEIGHT,
-            air: crate::player::AirMode::None, mantle: None, mounted: None,
-            sliding: None, dragging: false,
-        }, Transform::from_xyz(0.0, crate::player::HALF_HEIGHT, 0.0), inv, Health::new(100.0), PlayerStats {
-            medkits: 0, kills: 0, deaths: 0, respawn_timer: 0.0, spawn_point: Vec3::ZERO,
-            hurt_dir: None, burning: 0.0, last_hurt: crate::combat::DamageKind::Bullet,
-        })).id();
-        let pickup = app.world_mut().spawn((Pickup { kind: PickupKind::Plant(Plant::ScrewPine), id: 42, visual: None }, GlobalTransform::from_xyz(0.0, 0.0, -1.0))).id();
+        let player = app
+            .world_mut()
+            .spawn((
+                Player {
+                    velocity: Vec3::ZERO,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    grounded: true,
+                    crouching: false,
+                    swimming: false,
+                    noclip: false,
+                    spawning: false,
+                    keep_height: false,
+                    last_landing_speed: 0.0,
+                    sprinting: false,
+                    spawned_at: 0.0,
+                    driving: false,
+                    armed_passenger: false,
+                    eye: crate::player::EYE_HEIGHT,
+                    air: crate::player::AirMode::None,
+                    mantle: None,
+                    mounted: None,
+                    sliding: None,
+                    dragging: false,
+                },
+                Transform::from_xyz(0.0, crate::player::HALF_HEIGHT, 0.0),
+                inv,
+                Health::new(100.0),
+                PlayerStats {
+                    medkits: 0,
+                    kills: 0,
+                    deaths: 0,
+                    respawn_timer: 0.0,
+                    spawn_point: Vec3::ZERO,
+                    hurt_dir: None,
+                    burning: 0.0,
+                    last_hurt: crate::combat::DamageKind::Bullet,
+                },
+            ))
+            .id();
+        let pickup =
+            app.world_mut().spawn((Pickup { kind: PickupKind::Plant(Plant::ScrewPine), id: 42, visual: None }, GlobalTransform::from_xyz(0.0, 0.0, -1.0))).id();
         let mut cursor = bevy::ecs::message::MessageCursor::<ItemLooted>::default();
         app.world_mut().resource_mut::<ActionState>().press(Action::Interact);
         app.world_mut().resource_mut::<crate::story::ScriptedPlayer>().plant_looting = false;

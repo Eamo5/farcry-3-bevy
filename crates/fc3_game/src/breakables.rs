@@ -16,9 +16,13 @@ use crate::objects::{PlacedId, SlotMaterials, WorldObject};
 
 pub struct BreakablesPlugin;
 
+/// Where objects break (blasts read, broken states shown).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BreakablesSet;
+
 impl Plugin for BreakablesPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Breaks>().add_systems(Update, (break_test, blasts, break_objects, clear_pieces).chain());
+        app.init_resource::<Breaks>().add_systems(Update, (break_test, blasts, break_objects, clear_pieces).chain().in_set(BreakablesSet));
     }
 }
 
@@ -28,6 +32,8 @@ impl Plugin for BreakablesPlugin {
 pub struct Breaks {
     pub broken: HashSet<u64>,
     fresh: HashSet<u64>,
+    /// Placed entities broken since the story last heard.
+    pub news: Vec<u64>,
     /// Objects with no placed id broken now (an encounter's cage door).
     objects: Vec<Entity>,
 }
@@ -37,6 +43,7 @@ impl Breaks {
     pub fn break_now(&mut self, id: u64) {
         if self.broken.insert(id) {
             self.fresh.insert(id);
+            self.news.push(id);
         }
     }
 
@@ -49,6 +56,7 @@ impl Breaks {
     pub fn reset(&mut self) {
         self.broken.clear();
         self.fresh.clear();
+        self.news.clear();
         self.objects.clear();
     }
 }

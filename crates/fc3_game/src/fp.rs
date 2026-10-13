@@ -1618,7 +1618,7 @@ fn drive_arms(
     // Swimming, climbing, on a zip line or at the wheel: the arms do that
     // instead, with the weapon put away.
     let speed = Vec2::new(p.velocity.x, p.velocity.z).length();
-    let context = if p.driving && driving.first_person {
+    let context = if p.driving && driving.first_person && !p.armed_passenger {
         driving.vehicle.and_then(|v| vehicles.get(v).ok()).and_then(|v| v.first_person_clip(driving.seat)).map(Context::Vehicle)
     } else {
         match *holding {
@@ -1648,6 +1648,19 @@ fn drive_arms(
             _ => None,
         }
     };
+    // FC3_FP_DEBUG: what the arms show, once a second.
+    if std::env::var("FC3_FP_DEBUG").is_ok() && time.elapsed_secs() as u32 != (time.elapsed_secs() - time.delta_secs()) as u32 {
+        info!(
+            "fp: context {context:?} (was {:?}), active {}, weapon {:?}, rig {:?}, mount {:?}, driving {} passenger {}",
+            state.context,
+            state.active,
+            state.weapon,
+            mounts.get(rig).ok(),
+            state.mount.and_then(|m| mounts.get(m).ok()),
+            p.driving,
+            p.armed_passenger
+        );
+    }
     if context != state.context {
         debug!("first-person context: {:?} -> {context:?}", state.context);
         debug!("fp context {:?} -> {context:?} (active {})", state.context, state.active);

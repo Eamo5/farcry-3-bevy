@@ -4,6 +4,11 @@
 //! them by their editor ids; their positions go back to the story each frame
 //! and their deaths become the story's `Die` events.
 //!
+//! Reinforcements the story calls in (`SpawnReinforcement`) are a point's
+//! mercs, made from their library archetypes. With the point's vehicle they
+//! ride in on it (`story_rides`); otherwise they come ashore where the
+//! point's vehicle path meets land. Then they search the battlefield.
+//!
 //! Armed characters hostile to the player fight with the enemy AI (`npc`).
 //! While the story drives one (`npc::Scripted`: a contextual action, or the
 //! AI starting under script control) it still sees and hears; once it
@@ -38,12 +43,237 @@ impl Plugin for StoryActorsPlugin {
             .add_systems(Update, note_dressed)
             .add_systems(OnExit(crate::menu::GameState::Loading), (load_story_kits, load_ca_moves))
             .init_resource::<ActorOrders>()
+            .init_resource::<Arrivals>()
+            .init_resource::<CalledIn>()
             .add_systems(
                 Update,
-                (spawn_actors, despawn_actors, actor_tasks, actor_alerts, actor_idle, actor_deaths).chain()
-                    .in_set(ActorSet).after(crate::story::EntityPosesSet).run_if(in_state(crate::menu::GameState::Playing)),
+                (land_reinforcements, spawn_actors, despawn_actors, actor_tasks, actor_alerts, ai_events, actor_idle, actor_health, actor_deaths)
+                    .chain()
+                    .in_set(ActorSet)
+                    .after(crate::story::EntityPosesSet)
+                    .run_if(in_state(crate::menu::GameState::Playing)),
             );
     }
+}
+
+/// Mercs the story has called in at a reinforcement point, under the ids it
+/// gave them, with their archetypes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Reinforcement {
+    pub point: u64,
+    pub battlefield: Option<u64>,
+    /// The vehicle bringing them (its id and archetype), if the point has one.
+    pub vehicle: Option<(u64, u64)>,
+    pub mercs: Vec<(u64, u64)>,
+}
+
+/// Called-in characters, placed and waiting to be spawned like the story's
+/// own, and where they head (the battlefield).
+#[derive(Resource, Default)]
+pub struct Arrivals(pub Vec<(fc3_story::data::Entry, Option<Vec3>)>);
+
+/// Called-in characters in the world, as they were called in: one left
+/// behind out of range waits to come back where it was (the story still
+/// counts it).
+#[derive(Resource, Default)]
+struct CalledIn(HashMap<u64, fc3_story::data::Entry>);
+
+/// Where a reinforcement comes ashore: along from the end of the point's
+/// vehicle path (or the point itself) toward the battlefield, the first spot
+/// whose ground stands clear of the sea. None while that ground isn't loaded.
+fn landing(start: Vec3, toward: Option<Vec3>, ground: impl Fn(Vec3) -> Option<f32>) -> Option<Vec3> {
+    let dir = toward.map(|t| (t - start).with_y(0.0)).filter(|d| d.length() > 1.0).map_or(Vec3::ZERO, Vec3::normalize);
+    for step in 0..=120 {
+        let at = start + dir * step as f32;
+        let g = ground(at)?;
+        if g > crate::sky::SEA_LEVEL + 0.3 {
+            return Some(at.with_y(g));
+        }
+        if dir == Vec3::ZERO {
+            break;
+        }
+    }
+    None
+}
+
+/// Turns the story's reinforcement orders into placed characters (and the
+/// vehicles that bring them).
+fn land_reinforcements(
+    host: Option<NonSendMut<StoryHost>>,
+    heights: Res<crate::terrain::Heightfield>,
+    mut arrivals: ResMut<Arrivals>,
+    mut rides: ResMut<crate::story_rides::Rides>,
+    players: Query<&Transform, With<Player>>,
+) {
+    let Some(mut host) = host else { return };
+    if host.reinforcements.is_empty() {
+        return;
+    }
+    let Ok(player) = players.single().map(|t| t.translation) else { return };
+    let orders = std::mem::take(&mut host.reinforcements);
+    let data = host.story.data();
+    let mut waiting = Vec::new();
+    for order in orders {
+        let Some(point) = data.entities.get(&order.point) else {
+            warn!("story: reinforcement point {} isn't in the story's data", order.point);
+            continue;
+        };
+        let rp = point.component("CFCXAIComponent").and_then(|ai| ai.child("AIObject")).and_then(|o| o.child("CReinforcementPoint"));
+        // The vehicle's way in, when it has one: its end is where it lands.
+        let path_id = rp.and_then(|rp| rp.u64("entVehiclePathId").or_else(|| rp.u64("entPathId")).filter(|&p| p != u64::MAX));
+        let points = path_id.and_then(|p| data.entities.get(&p)).and_then(|p| shape_points(&p.fields)).unwrap_or_default();
+        let field = order.battlefield.and_then(|b| data.entities.get(&b)).map(|b| to_bevy(b.pos));
+        // Riding in: from where its way comes into reach of the player (the
+        // crew are only in the world that near), the crew beside the vehicle.
+        let def = order.vehicle.and_then(|(_, ark)| data.archetypes.get(&ark)).and_then(crate::story_rides::vehicle_def);
+        let begin = points.iter().position(|p| p.distance(player) < SPAWN - 15.0).filter(|&i| i + 1 < points.len());
+        if let (Some((vehicle, ark)), Some(def), Some(path), Some(begin)) = (order.vehicle, def, path_id, begin) {
+            let way = points[begin..].to_vec();
+            let speed = rp.and_then(|rp| rp.f32("VehicleMaxSpeed")).filter(|s| *s > 0.0).unwrap_or(12.0);
+            let ahead = (way[1] - way[0]).with_y(0.0).normalize_or(Vec3::NEG_Z);
+            let side = Vec3::new(-ahead.z, 0.0, ahead.x);
+            let mut crew = Vec::new();
+            for (i, (id, ark)) in order.mercs.iter().enumerate() {
+                let Some(archetype) = data.archetypes.get(ark) else {
+                    warn!("story: reinforcement archetype {ark:016x} isn't in the cache (reconvert)");
+                    continue;
+                };
+                let at = way[0] + side * (3.0 + i as f32 * 1.2);
+                let ground = heights.height_at(at).unwrap_or(way[0].y).max(crate::sky::SEA_LEVEL);
+                let mut e = archetype.clone();
+                e.id = *id;
+                e.pos = crate::data::to_dunia(at.with_y(ground));
+                arrivals.0.push((e, None));
+                crew.push(*id);
+            }
+            debug!("story: reinforcement vehicle {vehicle} ({ark:016x}) rides in along {path} from node {begin}, {} aboard", crew.len());
+            rides.0.push(crate::story_rides::Ride::new(vehicle, ark, def, path, way, speed, crew, field));
+            continue;
+        }
+        if order.vehicle.is_some() {
+            debug!("story: reinforcement vehicle of {} not ridden (no model or no way in near the player); the mercs come ashore", order.point);
+        }
+        let start = points.last().copied().unwrap_or_else(|| to_bevy(point.pos));
+        let Some(ashore) = landing(start, field, |p| heights.height_at(p)) else {
+            waiting.push(order);
+            continue;
+        };
+        let face = field.map(|f| f - ashore).filter(|d| d.with_y(0.0).length() > 0.5).map_or(0.0, |d| (-d.x).atan2(-d.z));
+        let side = Vec3::new(face.cos(), 0.0, -face.sin());
+        for (i, (id, ark)) in order.mercs.iter().enumerate() {
+            let Some(archetype) = data.archetypes.get(ark) else {
+                warn!("story: reinforcement archetype {ark:016x} isn't in the cache (reconvert)");
+                continue;
+            };
+            let at = ashore + side * (i as f32 - (order.mercs.len() as f32 - 1.0) * 0.5) * 1.5;
+            let at = at.with_y(heights.height_at(at).unwrap_or(ashore.y));
+            let mut e = archetype.clone();
+            e.id = *id;
+            e.pos = crate::data::to_dunia(at);
+            e.angles = [0.0, 0.0, -face.to_degrees()];
+            debug!("story: reinforcement {} ({id}) ashore at {at:.1}", e.name);
+            arrivals.0.push((e, field));
+        }
+    }
+    host.reinforcements = waiting;
+}
+
+/// An event a script logged in the army's diary (`LogEventInAIDiary` on a
+/// `CAIEventPoint`): for its lifetime, the army's soldiers within its reach
+/// take the state it names about its threat (the player, unless it names
+/// one): on to him in combat (3) or alerted (2), to the point when
+/// suspicious (1).
+#[derive(Clone, Debug, PartialEq)]
+struct AiEvent {
+    at: Vec3,
+    army: u32,
+    state: u32,
+    reach: f32,
+    left: f32,
+    threat: Option<u64>,
+}
+
+impl AiEvent {
+    fn from_point(e: &fc3_story::data::Entry) -> Option<AiEvent> {
+        let ai = e.component("CAIComponent")?.child("AIObject")?;
+        Some(AiEvent {
+            at: to_bevy(e.pos),
+            army: ai.u32("selArmy").unwrap_or(1),
+            state: ai.u32("selState").unwrap_or(3),
+            reach: ai.f32("fDistEffect").unwrap_or(50.0),
+            left: ai.f32("fLifetime").unwrap_or(10.0),
+            threat: ai.u64("entThreatId").filter(|&t| t != u64::MAX),
+        })
+    }
+
+    /// Whether a soldier of `faction` belongs to its army: 1 is Red, the
+    /// pirates' and privateers' (the player's foes).
+    fn takes(&self, faction: crate::npc::Faction) -> bool {
+        match self.army {
+            1 => faction.hostile_to_player(),
+            _ => false,
+        }
+    }
+
+    /// What a soldier at `pos` makes of it: the state to take and where to
+    /// look, or nothing (out of reach, or a state it doesn't raise).
+    fn order(&self, pos: Vec3, threat: Vec3) -> Option<(crate::npc::NpcState, Vec3)> {
+        if pos.distance(self.at) > self.reach {
+            return None;
+        }
+        match self.state {
+            2 | 3 => Some((crate::npc::NpcState::Search, threat)),
+            1 => Some((crate::npc::NpcState::Suspicious, self.at)),
+            _ => None,
+        }
+    }
+}
+
+/// Puts the army's soldiers on the events scripts log.
+fn ai_events(
+    host: Option<NonSendMut<StoryHost>>,
+    time: Res<Time>,
+    players: Query<&Transform, With<Player>>,
+    targets: Query<(&StoryActor, &Transform), Without<crate::npc::Npc>>,
+    mut npcs: Query<(&Transform, &mut crate::npc::Npc)>,
+    mut active: Local<Vec<AiEvent>>,
+) {
+    let Some(mut host) = host else { return };
+    for id in std::mem::take(&mut host.ai_events) {
+        match host.story.data().entities.get(&id).and_then(AiEvent::from_point) {
+            Some(event) => {
+                debug!("story: AI event {id}: army {} state {} within {} m for {} s", event.army, event.state, event.reach, event.left);
+                active.push(event);
+            }
+            None => warn!("story: AI event point {id} isn't one"),
+        }
+    }
+    if active.is_empty() {
+        return;
+    }
+    let Ok(player) = players.single() else { return };
+    for event in active.iter() {
+        let threat = match event.threat {
+            Some(t) => targets.iter().find(|(a, _)| a.id == t).map_or(event.at, |(_, at)| at.translation),
+            None => player.translation,
+        };
+        for (at, mut npc) in &mut npcs {
+            if !event.takes(npc.faction) || matches!(npc.state, crate::npc::NpcState::Combat) {
+                continue;
+            }
+            if let Some((state, look)) = event.order(at.translation, threat) {
+                if npc.state != state || npc.last_known != Some(look) {
+                    npc.state = state;
+                    npc.last_known = Some(look);
+                }
+            }
+        }
+    }
+    let dt = time.delta_secs();
+    active.retain_mut(|e| {
+        e.left -= dt;
+        e.left > 0.0
+    });
 }
 
 /// Characters spawn within this distance and go beyond `DESPAWN`.
@@ -199,8 +429,7 @@ fn spawn_actors(
     existing: Query<&StoryActor>,
     mut rng: ResMut<Rng>,
     mut commands: Commands,
-    mut last: Local<f32>,
-    time: Res<Time>,
+    (mut last, time, mut arrivals, mut called): (Local<f32>, Res<Time>, ResMut<Arrivals>, ResMut<CalledIn>),
     faces: Option<ResMut<crate::faces::FaceLibrary>>,
     placements: Res<crate::story::EntityPlacements>,
     damage: Res<crate::combat::DamageTable>,
@@ -216,11 +445,17 @@ fn spawn_actors(
     let have: HashSet<u64> = existing.iter().map(|a| a.id).collect();
     let data = host.story.data();
     let mut budget = 3;
-    for e in data.entities.values() {
+    let mut arrived = HashSet::new();
+    let called_in = arrivals.0.iter().map(|(e, field)| (e, Some(*field)));
+    for (e, field) in data.entities.values().map(|e| (e, None)).chain(called_in) {
         if budget == 0 {
             break;
         }
         let Some(kit_id) = kit_of(e) else { continue };
+        if field.is_some() && (have.contains(&e.id) || host.story.is_dead(e.id)) {
+            arrived.insert(e.id);
+            continue;
+        }
         if have.contains(&e.id) || !host.story.is_loaded(e.id) || host.story.is_dead(e.id) {
             continue;
         }
@@ -288,17 +523,35 @@ fn spawn_actors(
             }
         }
         commands.entity(root).insert(StoryActor::new(e.id, rig, fighter.is_some()));
+        // Its own loot (a mission's operator and his codes).
+        if let Some(own) = e.component("CFCXPawnLootComponent").and_then(|c| crate::pickups::OwnLoot::from_component(c)) {
+            commands.entity(root).insert(own);
+        }
         if let (Some(species), Some(animals)) = (animal, animals.as_ref()) {
             animals.bind_story(&mut commands, root, species, rig, at, yaw, &mut rng);
             debug!("story animal {} ({}) bound to wildlife", e.name, e.id);
         }
         if let Some(f) = fighter {
-            commands.entity(root).insert(crate::npc::story_npc(f.faction, f.role, at, yaw, e.id, rig, &mut rng));
+            let mut npc = crate::npc::story_npc(f.faction, f.role, at, yaw, e.id, rig, &mut rng);
+            // Called in: they come looking.
+            if let Some(Some(field)) = field {
+                npc.0.state = crate::npc::NpcState::Search;
+                npc.0.last_known = Some(field);
+                arrived.insert(e.id);
+            }
+            commands.entity(root).insert(npc);
             if f.scripted {
                 commands.entity(root).insert(crate::npc::Scripted);
             }
         }
+        if field.is_some() {
+            arrived.insert(e.id);
+            called.0.insert(e.id, e.clone());
+        }
         debug!("story actor {} ({}) at {:.0} m, rig {}, fighter {:?}", e.name, e.id, at.distance(pt.translation), rig.is_some(), fighter);
+    }
+    if !arrived.is_empty() {
+        arrivals.0.retain(|(e, _)| !arrived.contains(&e.id));
     }
 }
 
@@ -306,17 +559,26 @@ fn despawn_actors(
     host: Option<NonSend<StoryHost>>,
     layers: Res<MissionLayers>,
     players: Query<&Transform, With<Player>>,
-    actors: Query<(Entity, &StoryActor, &Transform)>,
+    actors: Query<(Entity, &StoryActor, &Transform, Option<&crate::npc::Npc>)>,
+    mut called: ResMut<CalledIn>,
+    mut arrivals: ResMut<Arrivals>,
     mut commands: Commands,
 ) {
     let Some(host) = host else { return };
     let Ok(pt) = players.single() else { return };
     let data = host.story.data();
-    for (e, a, t) in &actors {
+    for (e, a, t, npc) in &actors {
         let layer = data.entities.get(&a.id).map(|x| x.layer).unwrap_or(fc3_formats::world::DEFAULT_MISSION_LAYER);
         let gone = layer != fc3_formats::world::DEFAULT_MISSION_LAYER && !layers.present.contains(&layer);
-        if gone || !host.story.is_loaded(a.id) || t.translation.distance(pt.translation) > DESPAWN {
+        let loaded = host.story.is_loaded(a.id);
+        if gone || !loaded || t.translation.distance(pt.translation) > DESPAWN {
             commands.entity(e).despawn();
+            // Called in and left behind alive: back when the player is.
+            if let Some(mut entry) = called.0.remove(&a.id).filter(|_| loaded && !a.dead && !host.story.is_dead(a.id)) {
+                entry.pos = crate::data::to_dunia(t.translation - Vec3::Y * HALF_HEIGHT);
+                debug!("story: called-in {} ({}) left behind at {:.0}", entry.name, a.id, t.translation);
+                arrivals.0.push((entry, npc.and_then(|n| n.last_known)));
+            }
         }
     }
 }
@@ -597,6 +859,24 @@ fn actor_idle(
     }
 }
 
+/// Health changes of the story's characters and the player: the story hears
+/// them on the health counter (`CCounterEvent`), before any death.
+fn actor_health(
+    host: Option<NonSendMut<StoryHost>>,
+    actors: Query<(&StoryActor, &Health), Changed<Health>>,
+    players: Query<&Health, (With<Player>, Changed<Health>)>,
+    mut seen: Local<HashMap<u64, f32>>,
+) {
+    let Some(mut host) = host else { return };
+    let changes = actors.iter().map(|(a, h)| (a.id, h.current)).chain(players.iter().map(|h| (fc3_story::PLAYER, h.current)));
+    for (id, now) in changes {
+        let before = seen.insert(id, now);
+        if let Some(before) = before.filter(|b| *b != now) {
+            host.story.health_changed(id, before, now.max(0.0), fc3_story::PLAYER);
+        }
+    }
+}
+
 /// A character killed: the story hears of it (group `Die` events, as the
 /// engine raises them for every group the victim is in).
 fn actor_deaths(host: Option<NonSendMut<StoryHost>>, mut actors: Query<(&mut StoryActor, &Health)>) {
@@ -610,5 +890,42 @@ fn actor_deaths(host: Option<NonSendMut<StoryHost>>, mut actors: Query<(&mut Sto
             }
             host.story.killed(id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An event point puts its army's soldiers within reach on to the
+    /// player (combat), or sends them to the point (suspicious); others it
+    /// leaves be.
+    #[test]
+    fn an_ai_event_rouses_its_army_within_reach() {
+        use crate::npc::{Faction, NpcState};
+        let combat = AiEvent { at: Vec3::ZERO, army: 1, state: 3, reach: 150.0, left: 25.0, threat: None };
+        let player = Vec3::new(10.0, 0.0, 0.0);
+        assert!(combat.takes(Faction::Pirate) && combat.takes(Faction::Privateer) && !combat.takes(Faction::Rebel));
+        assert_eq!(combat.order(Vec3::new(100.0, 0.0, 0.0), player), Some((NpcState::Search, player)));
+        assert_eq!(combat.order(Vec3::new(200.0, 0.0, 0.0), player), None);
+        let suspicious = AiEvent { state: 1, ..combat.clone() };
+        assert_eq!(suspicious.order(Vec3::new(5.0, 0.0, 0.0), player), Some((NpcState::Suspicious, Vec3::ZERO)));
+        assert_eq!(AiEvent { state: 0, ..combat }.order(Vec3::ZERO, player), None);
+    }
+
+    /// Ashore where the way toward the battlefield first leaves the sea;
+    /// nowhere while the ground there isn't loaded, or when there's no way
+    /// out of the water.
+    #[test]
+    fn reinforcements_come_ashore_toward_the_battlefield() {
+        let sea = crate::sky::SEA_LEVEL;
+        let beach = |p: Vec3| Some(if p.x < 10.0 { sea - 2.0 } else { sea + 1.0 });
+        let at = landing(Vec3::new(0.0, sea, 0.0), Some(Vec3::new(50.0, sea, 0.0)), beach).expect("ashore");
+        assert!((at - Vec3::new(10.0, sea + 1.0, 0.0)).length() < 1e-3, "{at}");
+        // Already on land: there.
+        assert_eq!(landing(Vec3::new(20.0, 0.0, 5.0), None, beach), Some(Vec3::new(20.0, sea + 1.0, 5.0)));
+        // At sea with nowhere to head, or the ground not loaded.
+        assert_eq!(landing(Vec3::ZERO, None, beach), None);
+        assert_eq!(landing(Vec3::ZERO, Some(Vec3::new(50.0, 0.0, 0.0)), |_| None), None);
     }
 }

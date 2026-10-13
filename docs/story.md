@@ -2840,8 +2840,8 @@ The input action map in force is logged when it changes
 
 ### Rocks the right way round, the vine's climbing side and its stand-up
 
-**Rocks.** Vegetation meshes turn yaw, then roll, then pitch, unlike
-entities (see `docs/vegetation.md`). With the cave's rocks turned that way,
+**Rocks.** Vegetation meshes turn yaw, then roll, then pitch (as entities
+turn too, it later turned out; see `docs/vegetation.md`). With the cave's rocks turned that way,
 22 of the cave floor's 26 mushrooms rest on rock instead of 14, and 6 sit
 inside it instead of 14.
 
@@ -3044,5 +3044,236 @@ in order. One spot on the shelf after the first ladder, a
 steep crease at (-1987, -2456), can wedge the capsule; the route keeps to x
 -1986 there.
 
-Still open on this stretch:
-- DEN_020, which starts as DOC_020 completes.
+## DEN_020: the radio operators (B10)
+
+B10 sends the player after three patrolling radio operators
+(`DEN_020_VIP_01..03`), each carrying one of the mission's items: two
+frequency codes and the control room's key. Its `VIP` graph enables a
+`LootItemListener` per operator, filtered on the item's name id; a
+`StateListener` on the operator's group marks his body when he dies, and
+taking his item removes the marker, sets the mission's `VIP_n_Killed`
+global and ticks a three-way `MultipleAND`. When all three are in, the
+player says a closing line (`PlayDialog`, ForcePlay); as it finishes, the
+objective marker goes and the block completes.
+
+* **Characters' own loot.** The operators' entities carry a
+  `CFCXPawnLootComponent` naming a mission loot group each (100 %), whose
+  one item is a "Quest items/..." shop item. The recipes table now keeps
+  those items (format 7), a story character spawns with its own groups
+  (`pickups::OwnLoot`), and searching its body rolls them instead of its
+  kit's. A mission's item takes no room in the rucksack. Each item taken
+  raises `CPawnLootItemEvent` on the player with its name id, which the
+  listeners match.
+* **The autopilot** takes a mission's character carrying such an item
+  once the story has gone quiet: it moves behind him, takes the machete out
+  (Melee) and swings it (Fire), then searches the body (Interact). The
+  checkpoint's player hasn't the takedown skill, so Melee only draws the
+  blade. It holds off while the player is on a scripted line (see below).
+* **The opening call.** DEN_020_MAIN rings the player as the mission starts
+  (`Lib_Common.PhoneCall`), a chain of ForcePlay lines on the player, each
+  started as the last finishes *or is interrupted*. Under the engine's
+  arbitration (an equal unqueued priority interrupts; see "Greenhouse
+  dialogue priority deadlock") a ForcePlay line said during the call cuts
+  the call's line, and the call's next line then cuts it. B10's opening
+  line goes this way (as it would in the game), and so did its closing
+  line when the autopilot took the last item about 30 s into the call: that line
+  waits only for Finished, so B10 never completed. A player can't reach
+  the three operators that quickly; the autopilot now waits for the call
+  to end.
+
+B10 completes, and B20C starts (the control room), when the last item is
+taken after the call (checkpoint run from `DEN_020_B10`, autopilot only).
+
+## DEN_020: the control room (B20C) and the beach (B30)
+
+B20C opens the Medusa's control room door, walks the player in on a
+proximity trigger and has him use the radio (a `Use` trigger); a chain of
+his lines with the radio as their target ends the block. It needed nothing
+new, only the autopilot kept to the mission (`FC3_STORY_AUTOPILOT_GRAPH=
+DEN_020`): unrestricted, it wandered off to the lab side missions' triggers
+nearby.
+
+B30 (the reinforcements on the beach) is a spawn manager: three
+`SpawnReinforcement` waves (`SpawnInCautious`) at reinforcement points,
+an `AIEventLog` that logs an event in the army's diary, and a
+`GroupSizeListener` on the mission's main group; when no member is left
+alive, the block calls in the Rakyat, Dennis phones, and the block
+completes as the call ends. Four things were missing:
+
+* **Reinforcements.** A point (`CReinforcementPoint`) names its mercs'
+  archetypes (`arkMerc`), the groups they join, and a vehicle bringing them
+  in along a path (here a Zodiac along a shape path to the beach). The
+  story gave them ids and groups but the game never put them in the world.
+  The converter now writes the archetypes story points spawn from to
+  `story/archetypes.bin` (the library prototypes' components, in the story
+  entity format, 91 KB); the game makes each merc a story character from
+  its archetype under the story's id, where the vehicle's path (or the
+  point) first meets land toward the battlefield, searching toward the
+  battlefield. Engine-spawned ids now count as loaded for the scripts until
+  removed. The boat ride itself isn't played: the mercs start ashore.
+* **The army's diary** (`LogEventInAIDiary` on a `CAIEventPoint`): for the
+  event's lifetime (here 25 s), soldiers of its army (1, Red: pirates and
+  privateers) within its reach (150 m) take its state about its threat
+  (the player): searching toward him for alert/combat, toward the point
+  when suspicious. This brings the B10 guards still standing into the
+  fight, as their deaths count too.
+* **Sounds' callbacks.** `SoundModifier` waits for its sound to report
+  "started" and "finished" by name; the story passed the number 0, so a
+  call's hang-up tone never ended and the call never finished. The story
+  now sends the names ("started" as the sound begins, "finished" when the
+  host reports its end).
+* **The autopilot** also takes down hostile story characters that are out
+  after the player or in a group a block counts down (`CGroupSizeEvent`
+  listeners), and may do so while held where a high trigger was stepped
+  into (B30's trigger is on the Medusa's deck, 15 m over the terrain).
+
+From the `DEN_020_B30` checkpoint the autopilot clears the beach (seven
+mercs, three guards, one more of the group) and B30 completes 52 s after
+its trigger, with DEN_020; DEN_040's briefing starts.
+
+## DEN_040: Dennis's briefing, the logging camp's alarm and its weapon cache
+
+* **The briefing** takes script control of Dennis and waits for the player
+  to come within 4 m of a spot by him (`ProximityRadiusListener`, which
+  polls the distance on a one-second delay). The story now lists such
+  listeners waiting on the player (`watched_proximity_in_graph`: the box's
+  `id2`, its `nearZone`, its `Near` plugged), and the autopilot walks up;
+  the 51 s briefing scene plays and DEN_040 starts.
+* **The alarm (B10).** The camp's alarm box is a `CAlarmPoint` entity on a
+  mission layer; the mission wants it switched off before a guard sets it
+  off. Story alarm boxes are now in the game (`story_alarms`): up close the
+  player disables one (Interact, the outposts' prompt, sound and XP); a
+  story guard in combat within 45 m runs for a working one and sets it off,
+  and it sounds for 50 s. The story hears `Alarm_Disabled` /
+  `Alarm_Activated` / `Alarm_Deactivated` on the box's groups with who and
+  which, and `CAPI_Entity.GetAlarmState` / `GetAlarmUserId` read its state
+  (they were constants). A box's group is the one its `CAlarmPoint` names
+  (`AlarmGroup`); its own group component is empty. The autopilot goes for
+  a working box once a script waits for `Alarm_Disabled`, before any
+  takedown. B10 completes as it's switched off.
+* **The bomb (B20)** is the `MissionBomb` box: it spawns a "ghost" charge
+  from an archetype at the spot, waits for the player to use it, plays the
+  planting move (with markups that place the charge), shuts the player's
+  state machine down and restores it (stun, then idle) to arm it; a 15 s
+  timer then sets it off, which spawns the IED and sends it the detonate
+  event. What it needed:
+  * archetypes scripts spawn by name: the converter now also keeps every
+    library prototype a script names in quotes (`Library:Path.Name`), 336
+    KB in all; a spawned entity stands where the script put it, and one with
+    a `Use` listener is used standing by it (1.6 m);
+  * moves a script plays on a pawn (`CAPI_Pawn.PlayAnimation`): they run
+    1.5 s (`GetCurrentMoveName` names it, `IsAnimationCutable` says no
+    meanwhile), and the markup events the script registered on the pawn in
+    the same step come halfway (the move tables' lengths and markups aren't
+    read: the markup names aren't stored as text in the move files we read);
+  * `ShutdownGOSM` / `RestoreGOSM` bring the state callbacks waiting for a
+    stun or idle state (by their path's last part);
+  * a detonate event (`CAPI_Entity.SendDetonateEvent`) is a C4 charge's
+    blast where the explosive is; a blast breaks what scripts wait to see
+    destroyed within its reach, and anything broken (by a blast, a script's
+    `DestroyCompoundObject`, a nearby breakable) raises `CDestroyEvent` on
+    it once.
+
+From the `DEN_040_B20` checkpoint the autopilot plants the bomb, the cache
+blows (three of its parts break, the chimney's scene plays) and B20
+completes with DEN_040; JAS_110 starts. The charge, its "ghost" and the
+remote aren't drawn yet, and the planting move isn't animated.
+Script-spawned archetypes (the bomb's spot, the charge, the remote) are now
+drawn with their archetype's model where the script puts them, under the
+story's id, so its placements, hiding and removal reach them like any placed
+object's (`story_props`). They also wear the materials their archetype puts
+on the model's slots: the "ghost" spot is the charge's model under a
+material of its own (`MaterialOverrides`). The converter resolves each
+archetype's slots as a placement's are (`story/archetype_materials.txt`)
+and converts those materials with the rest.
+
+## JAS_110 and JAS_130: the camp operator's key, Liza and the truck
+
+* **Health counters.** `HealthListener` boxes (an objective "kill the
+  operator", a block's tutorial on being hurt) wait for `CCounterEvent` on
+  the pawn's groups: the health counter (`GetNoCaseStringID("health")`),
+  old and new values, instigator, a source type (not nil: nil is the
+  boxes' "garbage" filter), victim and emitter. The game now raises it for
+  each health change of a story character and of the player, before a
+  death's own events.
+* **Takedowns at the head.** A seated operator's head is low; a level swing
+  passes over it (and the hit test calls that a miss). The autopilot aims
+  its swing at the target's head.
+* JAS_110 then runs through: the operator falls, his body gives the cell
+  key, the prison door is used and the closing scene plays; JAS_130 starts
+  (Liza's rescue, 133 s and 26 s scenes, untying her, pushing the truck).
+* **Shooting as a passenger.** JAS_130 seats the player in the back of the
+  4x4 (seat type 3) while Liza drives a scripted path and pirates attack.
+  A passenger in the seat's own view now keeps his weapon: he aims and fires
+  from the seat (the fire gate, the view model and the arms' seat pose all
+  let him), as the game's back seat allows (its passenger look limits turn
+  a full circle). The autopilot shoots the nearest hostile from the seat
+  with its longest-reaching gun.
+* **Scripted paths and obstacles.** The path follower braked for anything
+  straight ahead, so a rock at a bend stopped the truck for good. It now
+  brakes only for something that moves (a car, a character), steers round
+  a fixed shape between it and the next node, and backs off and tries
+  again when caught. The authored route keeps clear of the world's fixed
+  shapes once they are turned the game's way (below).
+* Test switches: `FC3_TEST_AMMO` keeps the player's spare ammunition full
+  and `FC3_TEST_LOADOUT` adds weapons to a save's inventory (the replay
+  chain's saves carry a machete and a 1911 with a magazine; the ambush
+  holds 55 m off, past a pistol's reach).
+
+With them B50 (the drive, the truck under attack) completes, and B60's ambush is cleared;
+the truck then sets off on its last path.
+
+* **The cliff in the road.** The truck stopped between the last path's
+  ninth and tenth nodes, against a large cliff rock turned hard on all
+  three axes. Entities had been turned yaw, pitch, roll; the game turns
+  them yaw, roll, pitch, as it does vegetation (`docs/vegetation.md` has
+  the survey). Turned that way the road clears the rock by 5.8 m, and the
+  truck drives on to the block's end. B70C's scene plays and JAS_130
+  completes; DOC_030 starts.
+* **Reinforcements by vehicle.** A reinforcement point that names a vehicle
+  (`VehicleNames`' `arkVehicle`) with a way in (`entVehiclePathId`) now
+  sends it: `SpawnReinforcement` gives the vehicle an id of its own (its
+  groups from `VehicleGroupName`, and the callback's second list), the
+  converter keeps vehicle archetypes with the mercs', and `story_rides`
+  makes it where its path comes within the characters' reach of the
+  player, boards the mercs (the first at the wheel), drives the path at
+  `VehicleMaxSpeed`, and lets them out at its end to search the
+  battlefield. A boat run up the beach its path carries on over, or a car
+  held up for 5 s, lets them out where it is; a vehicle that can't be made
+  leaves them on foot. Library prototypes carry no seats (the editor fills
+  `SeatsInfo` where a vehicle is placed), so a ride takes them from a
+  placed vehicle drawn with the same model. In DEN_020 B30 the pirates'
+  two boats and then the rebels' come in that way and the block completes.
+* **Called-in characters left behind.** A called-in character beyond the
+  despawn range was gone for good while the story still counted it; it
+  now waits to come back where it was when the player returns.
+* **Out of the truck at the end.** JAS_130's scripts disable getting out of
+  the truck and never enable it again. Its closing scene (B70C) plays the
+  player's own body and doesn't have the truck in it; a scene like that now
+  takes the player out of his vehicle, so when it ends he's where it left
+  him, on foot. (B50's scene, played just after he's seated, has no player
+  group and leaves him be.)
+* **Autopilot.** It no longer goes off to a proximity spot (a quest giver's)
+  while a block's counted foes are within 200 m, and leaves riders in
+  their seats alone until they land. Out of a mission ridden in a vehicle,
+  it gets out once the story no longer listens to the vehicle, it isn't on
+  a path and getting out is allowed (JAS_130 leaves the player in the
+  truck; DOC_030's first trigger is 2 km off).
+
+* **The weapon in a seat.** Seated, the weapon was there but hidden: the
+  vehicle's own parts (the bed's walls, a seat back, the dashboard) come
+  nearer the eye than a weapon held out in front, and the game draws its
+  weapon over the world. Seated, the weapon (arms and all) is now drawn at
+  0.3 of its size toward the eye, which looks the same and stays in front
+  of them; its muzzle flash is scaled with it. The camera's near plane is
+  0.01 m. (`FC3_DRIVE_SEAT=passenger` with `--drive-test` sits the player
+  beside the driver to check it.)
+* **Shooting from the seat.** The autopilot shoots a block's counted foes
+  first, and leaves one it hasn't hurt in 8 s (out of sight, behind cover)
+  for 20 s.
+
+Swing doors now also tell the story they were pushed or pulled
+(`Push` from the door's front, its +z, `Pull` from behind); the `Door`
+box raises its `OnPush`/`OnPull` on them. B30 shows a tutorial on the
+control room's door that way. Which side the game calls the front is
+assumed; both outputs lead to the same place in the graphs seen so far.

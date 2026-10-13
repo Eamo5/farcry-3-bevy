@@ -219,7 +219,7 @@ pub struct PlantInstance {
     pub yaw: f32,
     pub scale: f32,
     /// Full orientation in the entity `hidAngles` convention (degrees,
-    /// `[2]` = yaw), usable with `world::angles_to_bevy_quat`. Only meshes
+    /// `[2]` = yaw), turned by `world::angles_to_bevy_quat`. Only meshes
     /// carry pitch/roll; trees and grass have `[0, 0, yaw]`.
     pub angles: [f32; 3],
     /// Grass only: terrain normal at the instance (Dunia space), for aligning

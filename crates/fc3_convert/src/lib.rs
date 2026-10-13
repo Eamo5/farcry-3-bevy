@@ -557,9 +557,12 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     }
 
     // ---- sectors
-    // (Sectors with placed RealTrees are written again once, now they're read.)
+    // (Sectors with placed RealTrees are written again once, now they're read.
+    // Everything placed is written again once with entities turned yaw, roll,
+    // pitch: sectors and the spots, ladders and lights taken from them.)
     let refresh_realtrees = !exists(job.root(), REALTREE_ENTITIES_STAMP);
-    let sector_results: Vec<SectorResult> = job.run(Stage::Sectors, &sectors, |&id| match convert_sector(&job, id, refresh_realtrees) {
+    let reorder = opts.only_sectors.is_none() && !exists(job.root(), ENTITY_ORDER_STAMP);
+    let sector_results: Vec<SectorResult> = job.run(Stage::Sectors, &sectors, |&id| match convert_sector(&job, id, refresh_realtrees, reorder) {
         Ok(r) => r,
         Err(e) => {
             job.error(format!("sector {id}: {e:#}"));
@@ -647,7 +650,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     }
     let traversal_current = std::fs::read_to_string(job.root().join(cache::TRAVERSAL_REL))
         .is_ok_and(|text| text.lines().next() == Some(fc3_formats::traversal::CACHE_HEADER));
-    if opts.only_sectors.is_none() && (job.should_write(cache::TRAVERSAL_REL) || !traversal_current) {
+    if opts.only_sectors.is_none() && (job.should_write(cache::TRAVERSAL_REL) || !traversal_current || reorder) {
         traversal.cables = resolve_cables(&anchors);
         let keep = |p: &[f32; 3]| !fc3_formats::worldmap::in_test_area(p[0], -p[2]);
         traversal.cables.retain(|c| keep(&c.a) && keep(&c.b));
@@ -658,7 +661,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
     let spots_current = std::fs::read_to_string(job.root().join(cache::GUARD_SPOTS_REL)).is_ok_and(|t| t.lines().next() == Some(cache::GUARD_SPOTS_HEADER));
-    if opts.only_sectors.is_none() && (job.should_write(cache::GUARD_SPOTS_REL) || !spots_current) {
+    if opts.only_sectors.is_none() && (job.should_write(cache::GUARD_SPOTS_REL) || !spots_current || reorder) {
         guard_spots.retain(|(_, p, _)| !fc3_formats::worldmap::in_test_area(p[0], -p[2]));
         let mut text = format!("{}\n", cache::GUARD_SPOTS_HEADER);
         text.extend(guard_spots.iter().map(|(k, p, q)| format!("{k} {} {} {} {} {} {} {}\n", p[0], p[1], p[2], q[0], q[1], q[2], q[3])));
@@ -666,7 +669,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             job.error(format!("guard spots: {e:#}"));
         }
     }
-    if opts.only_sectors.is_none() && job.should_write(cache::VILLAGER_SPOTS_REL) {
+    if opts.only_sectors.is_none() && (job.should_write(cache::VILLAGER_SPOTS_REL) || reorder) {
         let text: String = villager_spots.iter().map(|(k, p, q)| format!("{k} {} {} {} {} {} {} {}\n", p[0], p[1], p[2], q[0], q[1], q[2], q[3])).collect();
         if let Err(e) = write_atomic(job.root(), cache::VILLAGER_SPOTS_REL, text.as_bytes(), job.ctx) {
             job.error(format!("villager spots: {e:#}"));
@@ -686,10 +689,15 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             job.error(format!("sound points: {e:#}"));
         }
     }
-    if opts.only_sectors.is_none() && job.should_write(cache::LIGHTS_REL) {
+    if opts.only_sectors.is_none() && (job.should_write(cache::LIGHTS_REL) || reorder) {
         lights.retain(|l: &fc3_formats::lights::WorldLight| !fc3_formats::worldmap::in_test_area(l.position[0], -l.position[2]));
         if let Err(e) = write_atomic(job.root(), cache::LIGHTS_REL, fc3_formats::lights::to_text(&lights).as_bytes(), job.ctx) {
             job.error(format!("lights: {e:#}"));
+        }
+    }
+    if reorder {
+        if let Err(e) = write_atomic(job.root(), ENTITY_ORDER_STAMP, b"entities turned yaw, roll, pitch\n", job.ctx) {
+            job.error(format!("entity order stamp: {e:#}"));
         }
     }
     // The lights' flicker, as the engine's code has it.
@@ -849,7 +857,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
-    let material_paths: Vec<String> = material_paths.into_iter().collect();
+    let mut material_paths: Vec<String> = material_paths.into_iter().collect();
 
     // ---- Domino scripts: the missions' and side activities' Lua graphs
     if job.should_write(fc3_formats::scripts::DOMINO_PACK_REL) {
@@ -930,6 +938,65 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
                 }
             }
             Err(e) => job.error(format!("shop items: {e:#}")),
+        }
+    }
+
+    // ---- the archetypes the engine spawns characters from
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::story::ARCHETYPES_REL) {
+        let archetypes = (|| -> Result<_> {
+            let entities = fc3_formats::story::from_bytes(&std::fs::read(job.root().join(fc3_formats::story::ENTITIES_REL))?)?;
+            let wanted = fc3_formats::story::spawned_archetypes(&entities);
+            let pack = fc3_formats::scripts::ScriptPack::from_bytes(&std::fs::read(job.root().join(fc3_formats::scripts::DOMINO_PACK_REL))?)?;
+            let names = fc3_formats::story::archetype_names_in(pack.paths().filter_map(|p| pack.get(p)));
+            let library = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
+            let at = library.windows(4).position(|w| w == b"nbCF").context("no entity library FCB header")?;
+            let library = fc3_formats::fcb::parse(&library[at..])?;
+            Ok(fc3_formats::story::archetype_entities(&library, &wanted, &names))
+        })();
+        match archetypes {
+            Ok(a) => {
+                if let Err(e) = write_atomic(job.root(), fc3_formats::story::ARCHETYPES_REL, &fc3_formats::story::to_bytes(&a), job.ctx) {
+                    job.error(format!("archetypes: {e:#}"));
+                }
+            }
+            Err(e) => job.error(format!("archetypes: {e:#}")),
+        }
+    }
+    // The materials archetypes put on their models' slots (a mission's ghost
+    // charge wears its own over the charge's), resolved per slot as a
+    // placement's are, and converted with the rest.
+    if opts.only_sectors.is_none() {
+        let table = (|| -> Result<String> {
+            if exists(job.root(), fc3_formats::story::ARCHETYPE_MATERIALS_REL) {
+                return Ok(std::fs::read_to_string(job.root().join(fc3_formats::story::ARCHETYPE_MATERIALS_REL))?);
+            }
+            let archetypes = fc3_formats::story::from_bytes(&std::fs::read(job.root().join(fc3_formats::story::ARCHETYPES_REL))?)?;
+            let mut text = String::new();
+            for a in &archetypes {
+                let entity =
+                    fc3_formats::fcb::Object { name_hash: fc3_formats::hash::name_hash("Entity"), fields: Vec::new(), children: vec![a.components.clone()] };
+                let w = fw::parse_entity(&entity);
+                let Some(mesh) = w.meshes.first().map(|m| m.to_ascii_lowercase()).filter(|m| job.vfs.exists(m)) else { continue };
+                let own = job.model_materials(&mesh);
+                let raw = if w.material_replacements.is_empty() { Vec::new() } else { job.model_materials_raw(&mesh) };
+                let resolved = resolve_overrides(&mesh, &own, &raw, &w.material_overrides, &w.material_replacements);
+                if resolved != *own {
+                    text.push_str(&format!("{:016x}\t{}\n", a.id, resolved.join("\t")));
+                }
+            }
+            write_atomic(job.root(), fc3_formats::story::ARCHETYPE_MATERIALS_REL, text.as_bytes(), job.ctx)?;
+            Ok(text)
+        })();
+        match table {
+            Ok(text) => {
+                let mut seen: HashSet<String> = material_paths.iter().cloned().collect();
+                for m in fc3_formats::story::archetype_materials_from_text(&text).into_values().flatten() {
+                    if seen.insert(m.clone()) {
+                        material_paths.push(m);
+                    }
+                }
+            }
+            Err(e) => job.error(format!("archetype materials: {e:#}")),
         }
     }
 
@@ -2616,8 +2683,11 @@ fn resolve_cables(anchors: &[(u64, u64, [f32; 3], bool)]) -> Vec<fc3_formats::tr
 
 /// Marks the sectors as written with their placed RealTrees.
 const REALTREE_ENTITIES_STAMP: &str = "sectors/stamp-realtree-entities.txt";
+/// Written once sectors place entities turned yaw, roll, pitch
+/// (`world::angles_to_bevy_quat`).
+const ENTITY_ORDER_STAMP: &str = "sectors/stamp-entity-order.txt";
 
-fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool) -> Result<Option<SectorResult>> {
+fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool, reorder: bool) -> Result<Option<SectorResult>> {
     let c = SectorCoord::from_id(id);
     let path = c.entities_path(&job.opts.world);
     if !job.vfs.exists(&path) {
@@ -2803,7 +2873,7 @@ fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool) -> Result<Option<
     }
     let rel = cache::sector_rel(id);
     let realtrees = || data.entities.iter().any(|e| e.meshes.first().is_some_and(|m| m.to_ascii_lowercase().ends_with(".rtx")));
-    if job.should_write(&rel) || (refresh_realtrees && realtrees()) {
+    if job.should_write(&rel) || reorder || (refresh_realtrees && realtrees()) {
         write_atomic(job.root(), &rel, &s.to_bytes(), job.ctx)?;
     }
     Ok(Some(SectorResult {
@@ -2883,7 +2953,7 @@ fn convert_vegetation(job: &Job, lib: &fc3_formats::vegetation::ClusterLibrary, 
                 let tilt = quat_from_to([0.0, 1.0, 0.0], up);
                 quat_mul(tilt, fw::angles_to_bevy_quat([0.0, 0.0, p.yaw.to_degrees()]))
             }
-            (PlantKind::Mesh, _) => fw::vegetation_angles_to_bevy_quat(p.angles),
+            (PlantKind::Mesh, _) => fw::angles_to_bevy_quat(p.angles),
             _ => fw::angles_to_bevy_quat([0.0, 0.0, p.yaw.to_degrees()]),
         };
         v.instances.push(VegInstance {

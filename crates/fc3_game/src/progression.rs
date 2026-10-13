@@ -909,6 +909,8 @@ pub struct ItemLooted(pub LootKind);
 pub enum LootKind {
     Skin(Animal),
     Plant(crate::syringes::Plant),
+    /// A shop item taken from a body or chest (a mission's key or codes).
+    Item(u32),
 }
 
 /// An animal's prototype in the entity library (under `FC3_Animals:`):
@@ -973,6 +975,9 @@ impl LootCatalog {
             let item = source.and_then(dropped_item);
             if let Some(item) = item { out.insert(LootKind::Plant(plant), item.clone()); }
         }
+        for item in &metadata.items {
+            out.insert(LootKind::Item(item.id), item.clone());
+        }
         Self(out)
     }
 
@@ -993,6 +998,7 @@ impl LootCatalog {
             let count = match kind {
                 LootKind::Skin(animal) => progress.skins.get(animal).copied().unwrap_or(0),
                 LootKind::Plant(plant) => progress.plants[plant.index()],
+                LootKind::Item(id) => progress.loot.get(id).copied().unwrap_or(0),
             };
             if count > 0 {
                 let total = quantities.entry(item.name_id).or_default();
@@ -2089,6 +2095,7 @@ fn handbook_encounters(
         match l.0 {
             LootKind::Skin(a) => met.extend(met_pages(b, "Wild life/", a.name())),
             LootKind::Plant(p) => met.extend(met_pages(b, "Plant life/", p.name())),
+            LootKind::Item(_) => {}
         }
     }
     for d in died.read().filter(|d| d.killer.is_some() && d.killer == player) {
@@ -3331,19 +3338,60 @@ mod journal_tests {
             Recipe { id: RUCKSACK.into(), kind: 2, label: "Loot pouch small".into(), ingredients: vec![(10, 2)], ..default() },
         ];
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins).insert_resource(State::new(GameState::Journal)).init_resource::<NextState<GameState>>()
-            .init_resource::<Progress>().init_resource::<HudState>().init_resource::<crate::syringes::Boosts>()
-            .insert_resource(CraftCatalog::from_metadata(&metadata)).insert_resource(LootCatalog::from_metadata(&metadata))
-            .init_resource::<Perks>().init_resource::<Skills>().init_resource::<SkillHover>().init_resource::<HandbookData>().init_resource::<HandbookView>().insert_resource(PauseMenu { tutorial: Some(CraftTutorial::Medicine(0)), ..default() })
-            .add_message::<crate::sound::PlaySfx>().add_message::<ItemCrafted>().add_systems(Update, journal_buttons);
-        let player = app.world_mut().spawn((Player {
-            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: true, crouching: false, swimming: false, noclip: false,
-            spawning: false, keep_height: false, last_landing_speed: 0.0, sprinting: false, spawned_at: 0.0,
-            driving: false, eye: 0.0, air: crate::player::AirMode::None, mantle: None, mounted: None, sliding: None, dragging: false,
-        }, PlayerStats {
-            medkits: 0, kills: 0, deaths: 0, respawn_timer: 0.0, spawn_point: Vec3::ZERO,
-            hurt_dir: None, burning: 0.0, last_hurt: DamageKind::Bullet,
-        })).id();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(State::new(GameState::Journal))
+            .init_resource::<NextState<GameState>>()
+            .init_resource::<Progress>()
+            .init_resource::<HudState>()
+            .init_resource::<crate::syringes::Boosts>()
+            .insert_resource(CraftCatalog::from_metadata(&metadata))
+            .insert_resource(LootCatalog::from_metadata(&metadata))
+            .init_resource::<Perks>()
+            .init_resource::<Skills>()
+            .init_resource::<SkillHover>()
+            .init_resource::<HandbookData>()
+            .init_resource::<HandbookView>()
+            .insert_resource(PauseMenu { tutorial: Some(CraftTutorial::Medicine(0)), ..default() })
+            .add_message::<crate::sound::PlaySfx>()
+            .add_message::<ItemCrafted>()
+            .add_systems(Update, journal_buttons);
+        let player = app
+            .world_mut()
+            .spawn((
+                Player {
+                    velocity: Vec3::ZERO,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    grounded: true,
+                    crouching: false,
+                    swimming: false,
+                    noclip: false,
+                    spawning: false,
+                    keep_height: false,
+                    last_landing_speed: 0.0,
+                    sprinting: false,
+                    spawned_at: 0.0,
+                    driving: false,
+                    armed_passenger: false,
+                    eye: 0.0,
+                    air: crate::player::AirMode::None,
+                    mantle: None,
+                    mounted: None,
+                    sliding: None,
+                    dragging: false,
+                },
+                PlayerStats {
+                    medkits: 0,
+                    kills: 0,
+                    deaths: 0,
+                    respawn_timer: 0.0,
+                    spawn_point: Vec3::ZERO,
+                    hurt_dir: None,
+                    burning: 0.0,
+                    last_hurt: DamageKind::Bullet,
+                },
+            ))
+            .id();
         let buttons = [JournalButton::Authored(0), JournalButton::Authored(1), JournalButton::Close]
             .map(|b| app.world_mut().spawn((b, Interaction::None, BackgroundColor(IDLE))).id());
         (app, player, buttons)
@@ -3453,7 +3501,7 @@ pub(crate) mod loot_tests {
 
     pub(crate) fn metadata() -> fc3_formats::progression::Crafting {
         fc3_formats::progression::Crafting::from_text(concat!(
-            "fc3-recipes 6\n",
+            "fc3-recipes 7\n",
             "item\t10\t1\t0\t0\tBoar hide\tHide\t900\t0\t0\t4294967295\t0\t0\t\t\t0\n",
             "item\t11\t1\t0\t0\tGreen leaf\tLeaf\t901\t0\t0\t4294967295\t0\t0\t\t\t0\n",
             "item\t12\t1\t0\t0\tCrimson leaf\tLeaf\t902\t0\t0\t4294967295\t0\t0\t\t\t0\n",
@@ -3746,14 +3794,35 @@ mod shop_tests {
             .add_message::<ItemBought>()
             .add_message::<crate::sound::PlaySfx>()
             .add_systems(Update, shop_buttons);
-        let player = app.world_mut().spawn((inv, stats, Player {
-            velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: true,
-            crouching: false, swimming: false, noclip: false, spawning: false,
-            keep_height: false, last_landing_speed: 0.0, sprinting: false,
-            spawned_at: 0.0, driving: false, eye: crate::player::EYE_HEIGHT,
-            air: crate::player::AirMode::None, mantle: None, mounted: None,
-            sliding: None, dragging: false,
-        })).id();
+        let player = app
+            .world_mut()
+            .spawn((
+                inv,
+                stats,
+                Player {
+                    velocity: Vec3::ZERO,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    grounded: true,
+                    crouching: false,
+                    swimming: false,
+                    noclip: false,
+                    spawning: false,
+                    keep_height: false,
+                    last_landing_speed: 0.0,
+                    sprinting: false,
+                    spawned_at: 0.0,
+                    driving: false,
+                    armed_passenger: false,
+                    eye: crate::player::EYE_HEIGHT,
+                    air: crate::player::AirMode::None,
+                    mantle: None,
+                    mounted: None,
+                    sliding: None,
+                    dragging: false,
+                },
+            ))
+            .id();
         app.update();
         let button = app.world_mut().spawn((Interaction::Pressed, ShopButton::Buy(0), BackgroundColor(IDLE))).id();
         assert_eq!(*app.world().resource::<State<GameState>>().get(), GameState::Shop);

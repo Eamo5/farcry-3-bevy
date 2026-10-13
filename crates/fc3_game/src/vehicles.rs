@@ -27,8 +27,14 @@ impl Plugin for VehiclesPlugin {
             .init_resource::<Repairing>()
             .init_resource::<StorySeatRequests>()
             .init_resource::<crate::vehicle_paths::StoryVehiclePaths>()
-            .add_systems(PreUpdate, (story_board_test, story_exit_test).chain().after(crate::controls::update_actions).after(crate::story::story_interactions)
-                .run_if(in_state(crate::menu::GameState::Playing)))
+            .add_systems(
+                PreUpdate,
+                (story_board_test, story_exit_test, autopilot_exit)
+                    .chain()
+                    .after(crate::controls::update_actions)
+                    .after(crate::story::story_interactions)
+                    .run_if(in_state(crate::menu::GameState::Playing)),
+            )
             .add_systems(OnExit(crate::menu::GameState::Loading), (load_vehicles, load_handling))
             .init_resource::<SpeedFov>()
             .add_systems(Update, speed_fov)
@@ -51,6 +57,7 @@ impl Plugin for VehiclesPlugin {
             .add_message::<StrayHit>()
             .add_message::<PlaceVehicle>()
             .add_systems(Update, place_vehicles.run_if(in_state(crate::menu::GameState::Playing)))
+            .add_systems(Update, scene_unseats_player.after(crate::cinema::CinemaSet).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(Update, (turn_wheels, wreck_rocket, stray_hits, vehicle_damage, wreck_test).chain().after(crate::cinema::CinemaSet).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(PostUpdate, (sync_vehicle_motion, seat_player, seat_story_actors).chain().before(TransformSystems::Propagate));
     }
@@ -673,6 +680,15 @@ fn def_for(name: &str) -> Option<usize> {
     DEFS.iter().position(|d| n.starts_with(d.prefix))
 }
 
+/// The vehicle definition drawn with this model (a graphic's `.xbg` path).
+pub(crate) fn definition_for_model(path: &str) -> Option<usize> {
+    DEFS.iter().position(|d| format!("{VEHICLES}{}", d.model).eq_ignore_ascii_case(path))
+}
+
+pub(crate) fn is_boat(def: usize) -> bool {
+    DEFS.get(def).is_some_and(|d| d.kind == Kind::Boat)
+}
+
 /// The vehicle definition with this display name (e.g. "Technical").
 pub fn def_named(name: &str) -> Option<usize> {
     DEFS.iter().position(|d| d.name == name)
@@ -861,6 +877,11 @@ impl Vehicle {
         self.seats.iter().find(|s| s.kind == 1).and_then(|s| s.pawn)
     }
 
+    /// This pawn has a seat in it.
+    pub(crate) fn carries(&self, pawn: u64) -> bool {
+        self.seats.iter().any(|s| s.pawn == Some(pawn))
+    }
+
     /// Never play a driver pose for a passenger, gunner or unsupported seat.
     pub(crate) fn first_person_clip(&self, seat: usize) -> Option<&'static str> {
         let s = self.seats.get(seat)?;
@@ -956,6 +977,20 @@ impl StorySeatRequests {
         self.0.retain(|r| r.pawn != pawn);
         self.0.push(SeatRequest { vehicle, pawn, index: args.get(2).and_then(|a| a.parse().ok()).unwrap_or(-1), kinds,
             alternate: flag(6), exit, forced: false });
+    }
+
+    /// A called-in crew member takes a seat: the wheel, or a passenger's
+    /// (any free one if those are taken).
+    pub(crate) fn board(&mut self, vehicle: u64, pawn: u64, driver: bool) {
+        self.0.retain(|r| r.pawn != pawn);
+        let kinds = if driver { vec![1] } else { vec![3] };
+        self.0.push(SeatRequest { vehicle, pawn, index: -1, kinds, alternate: !driver, exit: false, forced: false });
+    }
+
+    /// ... and gets out.
+    pub(crate) fn leave(&mut self, vehicle: u64, pawn: u64) {
+        self.0.retain(|r| r.pawn != pawn);
+        self.0.push(SeatRequest { vehicle, pawn, index: -1, kinds: Vec::new(), alternate: false, exit: true, forced: false });
     }
 
     pub(crate) fn force_player(&mut self, args: &[String]) {
@@ -1106,6 +1141,76 @@ fn story_exit_test(
     let Some(v) = driving.vehicle.and_then(|e| vehicles.get(e).ok()).filter(|v| v.spawn_id == id) else { return };
     if v.seats.get(driving.seat).is_none_or(|s| s.pawn != Some(fc3_story::PLAYER)) { return; }
     *requested = true;
+    actions.press(Action::Interact);
+}
+
+/// A scene that plays the player's own body, and not the vehicle he's in,
+/// takes him out of it: when it ends he's where it left him, on foot
+/// (JAS_130's closing scene, the truck's exit disabled since he got in).
+fn scene_unseats_player(
+    cinema: Res<crate::cinema::Cinema>,
+    mut driving: ResMut<Driving>,
+    mut vehicles: Query<&mut Vehicle>,
+    mut players: Query<(Entity, &mut Player)>,
+    mut commands: Commands,
+) {
+    let Some(ve) = driving.vehicle else { return };
+    let Ok(mut v) = vehicles.get_mut(ve) else { return };
+    if !cinema.plays_player_without(v.spawn_id) {
+        return;
+    }
+    let was_driver = v.seats.iter().any(|s| s.kind == 1 && s.pawn == Some(fc3_story::PLAYER));
+    for s in &mut v.seats {
+        if s.pawn == Some(fc3_story::PLAYER) {
+            s.pawn = None;
+        }
+    }
+    v.occupied = v.seats.iter().any(|s| s.pawn.is_some());
+    if was_driver {
+        v.parked = true;
+        v.throttle = 0.0;
+        v.steer = 0.0;
+    }
+    driving.vehicle = None;
+    if let Ok((e, mut p)) = players.single_mut() {
+        p.driving = false;
+        p.armed_passenger = false;
+        commands.entity(e).remove::<ColliderDisabled>();
+    }
+    info!("vehicle: a scene takes the player out of {}", v.spawn_id);
+}
+
+/// Tests: the story autopilot gets out of a vehicle the story is done with
+/// (a mission over in it, the next elsewhere) once the story has been quiet
+/// a while: no script listens to it, it isn't on its way along a path, and
+/// getting out is allowed.
+fn autopilot_exit(
+    host: Option<NonSend<crate::story::StoryHost>>,
+    cinema: Res<crate::cinema::Cinema>,
+    driving: Res<Driving>,
+    paths: Res<crate::vehicle_paths::StoryVehiclePaths>,
+    vehicles: Query<&Vehicle>,
+    mut actions: ResMut<ActionState>,
+    mut last: Local<f32>,
+    time: Res<Time>,
+) {
+    if std::env::var("FC3_STORY_AUTOPILOT").is_err() || cinema.view.is_some() {
+        return;
+    }
+    let Some(host) = host else { return };
+    let Some(v) = driving.vehicle.and_then(|e| vehicles.get(e).ok()) else { return };
+    let id = v.spawn_id;
+    if host.quiet() < 20.0 || time.elapsed_secs() - *last < 5.0 {
+        return;
+    }
+    *last = time.elapsed_secs();
+    let (watched, following, locked, entry) =
+        (host.story.watches_entity(id), paths.following(id), host.story.vehicle_rules(id).exit_disabled, host.story.awaits_vehicle_entry(fc3_story::PLAYER));
+    if watched || following || locked || entry {
+        debug!("story autopilot: staying in vehicle {id} (listened to {watched}, on a path {following}, exit disabled {locked}, entry awaited {entry})");
+        return;
+    }
+    info!("story autopilot: out of vehicle {id}, which the story is done with");
     actions.press(Action::Interact);
 }
 
@@ -1388,16 +1493,44 @@ pub(crate) fn build_placed_vehicle(commands: &mut Commands, sector: &Fc3Sector, 
     let (scale, rotation, at) = (Vec3::splat(placement.scale), Quat::from_array(placement.rotation), Vec3::from_array(placement.translation));
     let root = build_vehicle_inner(commands, def, model, at, rotation, id, Some((sector, placement)));
     commands.entity(root).insert(Transform::from_translation(at).with_rotation(rotation).with_scale(scale));
-    // Set seats once the vehicle exists; no guessed bounds for authored seats.
-    let seats: Vec<SeatSlot> = layout.seats.iter().filter_map(|s| {
-        let pose = seat_bone_pose(&model.bones, s.bone)?;
-        Some(SeatSlot { kind: s.kind, index: s.index, pose, pawn: None })
-    }).collect();
+    author_seats(commands, root, model, layout);
+    Some(root)
+}
+
+/// A vehicle the story makes from an archetype (a reinforcement point's),
+/// with the archetype's seats.
+pub(crate) fn build_story_vehicle(
+    commands: &mut Commands,
+    def: usize,
+    model: &Fc3Model,
+    at: Vec3,
+    rotation: Quat,
+    id: u64,
+    layout: &fc3_story::vehicles::Layout,
+) -> Entity {
+    let root = build_vehicle_inner(commands, def, model, at, rotation, id, None);
+    author_seats(commands, root, model, layout);
+    root
+}
+
+/// Set seats once the vehicle exists; no guessed bounds for authored seats.
+/// (A layout with none keeps the vehicle's own driver seat.)
+fn author_seats(commands: &mut Commands, root: Entity, model: &Fc3Model, layout: &fc3_story::vehicles::Layout) {
+    let seats: Vec<SeatSlot> = layout
+        .seats
+        .iter()
+        .filter_map(|s| {
+            let pose = seat_bone_pose(&model.bones, s.bone)?;
+            Some(SeatSlot { kind: s.kind, index: s.index, pose, pawn: None })
+        })
+        .collect();
+    if seats.is_empty() && layout.seats.is_empty() {
+        return;
+    }
     let vehicle_type = layout.vehicle_type;
     commands.queue(move |world: &mut World| {
         if let Some(mut v) = world.get_mut::<Vehicle>(root) { v.seats = seats; v.vehicle_type = vehicle_type; v.authored_seats = true; }
     });
-    Some(root)
 }
 
 fn seat_bone_pose(bones: &[cache::CachedBone], hash: u32) -> Option<Transform> {
@@ -1607,9 +1740,28 @@ mod story_vehicle_tests {
     }
 
     fn player() -> Player {
-        Player { velocity: Vec3::ZERO, yaw: 0.0, pitch: 0.0, grounded: true, crouching: false,
-            swimming: false, noclip: false, spawning: false, keep_height: false, last_landing_speed: 0.0, sprinting: false, spawned_at: 0.0,
-            driving: false, eye: crate::player::EYE_HEIGHT, air: crate::player::AirMode::None, mantle: None, mounted: None, sliding: None, dragging: false }
+        Player {
+            velocity: Vec3::ZERO,
+            yaw: 0.0,
+            pitch: 0.0,
+            grounded: true,
+            crouching: false,
+            swimming: false,
+            noclip: false,
+            spawning: false,
+            keep_height: false,
+            last_landing_speed: 0.0,
+            sprinting: false,
+            spawned_at: 0.0,
+            driving: false,
+            armed_passenger: false,
+            eye: crate::player::EYE_HEIGHT,
+            air: crate::player::AirMode::None,
+            mantle: None,
+            mounted: None,
+            sliding: None,
+            dragging: false,
+        }
     }
 
     #[test]
@@ -2224,12 +2376,22 @@ fn seat_player(
     cameras: Option<Res<SeatCameras>>,
     paths: Option<Res<crate::vehicle_paths::StoryVehiclePaths>>,
 ) {
-    if cinema.view.is_some() { return; }
-    let Some(ve) = driving.vehicle else { return };
+    let Some(ve) = driving.vehicle else {
+        if let Ok((_, mut p)) = players.single_mut() {
+            p.armed_passenger = false;
+        }
+        return;
+    };
+    if cinema.view.is_some() {
+        return;
+    }
     if keys.just_pressed(KeyCode::KeyV) {
         driving.first_person = !driving.first_person;
     }
     let (Ok((mut pt, mut p)), Ok((vt, mut v))) = (players.single_mut(), vehicles.get_mut(ve)) else { return };
+    // Seated, he isn't flying about (a test's hold up high, kept through a
+    // scene, would hide his weapon and keep it from firing).
+    p.noclip = false;
     let yaw = vt.rotation.to_euler(EulerRot::YXZ).0;
     let turn = (yaw - driving.last_yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
     driving.last_yaw = yaw;
@@ -2237,6 +2399,9 @@ fn seat_player(
     // At the wheel the head turns only as far as the game lets it (its
     // angles count down and right positive, ours up and left).
     let driver = v.seats.get(driving.seat).is_some_and(|s| s.kind == 1);
+    // A passenger (not at the wheel or a mounted gun) keeps his weapon, and
+    // aims and fires from the seat in the seat's own view.
+    p.armed_passenger = driving.first_person && v.seats.get(driving.seat).is_some_and(|s| s.kind == 3);
     if let Some([pitch_lo, pitch_hi, yaw_lo, yaw_hi]) = handling_of(v.def).map(|h| h.look).filter(|_| driving.first_person && driver) {
         if pitch_hi > pitch_lo {
             p.pitch = p.pitch.clamp(-pitch_hi.to_radians(), -pitch_lo.to_radians());
@@ -2956,9 +3121,19 @@ fn drive_test(
                 return;
             }
             v.occupied = true;
-            v.seats[0].pawn = Some(fc3_story::PLAYER);
+            // FC3_DRIVE_SEAT=passenger: beside the driver's seat instead, as a
+            // passenger (armed, in the seat's own view).
+            let seat = if std::env::var("FC3_DRIVE_SEAT").as_deref() == Ok("passenger") {
+                let pose = Transform::from_translation(v.seat() + Vec3::X * 0.8);
+                v.seats.push(SeatSlot { kind: 3, index: 0, pose, pawn: None });
+                v.seats.len() - 1
+            } else {
+                0
+            };
+            v.seats[seat].pawn = Some(fc3_story::PLAYER);
             driving.vehicle = Some(ve);
-            driving.seat = 0;
+            driving.seat = seat;
+            driving.first_person |= seat != 0;
             // FC3_DRIVE_VIEW=chase: from behind, to watch the wheels.
             if std::env::var("FC3_DRIVE_VIEW").as_deref() == Ok("chase") {
                 driving.first_person = false;
