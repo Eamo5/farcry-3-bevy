@@ -120,7 +120,9 @@ nothing else depends on it.
 
 The movies are written against Ubisoft's own ActionScript 2 framework
 (`fire.*`) and talk to the engine three ways (`fc3tool swf-script <movie>
-names|strings|dis <block>|fsc2` reads a converted movie's script):
+names|strings|dis <block>|expr <block>|fsc2` reads a converted movie's
+script; `expr` reads it as statements, the stack folded into expressions,
+jump targets labelled and a function's registers by name):
 
 * **Calls on the engine** are Flash Lite's `FSCommand2` (opcode 0x2D: it pops
   an argument count, the command and its arguments, and pushes a result),
