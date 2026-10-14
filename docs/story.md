@@ -3639,4 +3639,10 @@ about as non-fighters and the first wave never emptied.
   He goes to the battlefield's strategic point (`CStrategicPoint`, the
   nearest within `STRATEGIC_REACH`, 15 m, of its middle), where its
   characters take up their places: the point the script waits for him at
-  is that, 5.5 m from the region's middle.
+  is that, 5.5 m from the region's middle. The last points are on a
+  boardwalk over the water that neither the navigation mesh nor the
+  terrain knows, so Oliver walked the seabed under it, 6 m below the
+  point, never near enough. A story character's walk now stands on what a
+  ray finds under its feet (a step up at most, not on other characters)
+  when that is above the mesh or the terrain, and a path that stops short
+  of its spot is finished straight to it.
