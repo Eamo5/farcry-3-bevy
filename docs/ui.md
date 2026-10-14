@@ -51,9 +51,23 @@ the first image's id (later images of it are a transparent pixel), and every
 its matrix scaled by the image's size over the atlas's (x through scale x
 and skew 0, y through skew 1 and scale y). The shapes are re-encoded field by
 field (styles, and the new styles inside their records); a shape with no such
-fill is left as it was. The cache's movies are stamped
-(`ui/stamp-movies-atlases.txt`) so a converter that predates this makes them
-again.
+fill is left as it was.
+
+A clip made from a library's symbol (the rucksack's grid tiles are
+`lib.feu`'s `mcGridTile`) attaches by name from the library's symbols, not
+the movie that placed it, and its icons are the movie's (`TX_...`). Ruffle
+loads a library afresh for each movie that imports it and gives it that
+movie's exports, but only those registered before the import (the movie
+waits at its `ImportAssets` until the library is in) and only at ids the
+library doesn't use; the icons came later, at ids lib has too, so
+`attachMovie` found nothing and every tile was blank. So in a movie that
+imports, each sprite it exports is written again under an id from 0x8000
+(no movie has a thousand and more), its frames only (the definitions in it
+are the original's), and exported, ahead of its first import; the original
+and its export follow as before, so in the movie itself the name stays the
+original's (and its class). The cache's movies are stamped
+(`ui/stamp-movies-export-copies-first.txt`) so a converter that predates
+this makes them again.
 
 A few movies name textures the game doesn't ship (demo, multiplayer and
 leftover menus); those images are left transparent, as the game would show
@@ -374,7 +388,23 @@ pages are the original's). The keyboard and mouse go to Ruffle while it is
 up (`Host::input`: keys as Flash key codes, the mouse in the window's
 pixels), and it draws its own cursor. The interface runs on the real clock,
 so its menus animate with the game paused. `--pause` (tests) pauses three
-seconds into play.
+seconds into play, and `FC3_PAUSE_PAGE=13` goes on to a page from there.
+
+**Loot rucksack** (`M_PlayerInventory.feu`, quick launch 13): on
+`PlayerInventoryLoaded` the game sends `DataLootInventory`, a tile for each
+thing carried (skins, plants, loot), each from its shop item
+(`progression::LootCatalog`): `sName`, `sInfo` (its description),
+`sSubCategory` (animal, plant, loot), `iPrice` (what it sells for, with the
+perks), `iStateID` 1, `bRare`, `iObjectID` (the item id), and `sImage`, the
+item's own icon when the movie exports it (`TX_HumanAccessories`), else
+the hide of its animal (`TX_AnimalHideBoar`, `TX_AnimalHideRare...`), a
+part, a leaf or a stranger's things; then `SetMoney` and `SortText` 0.
+`RemoveLoot <id>` drops one of it, and the list goes again. Back from the
+page is `RequestPageChange -1`, the pause page. Each page says
+`SinglePlayerMenuLoaded` too, so `FC3_PAUSE_PAGE` is sent once (sent again
+it reloads the page for ever). The main pause page makes a widget
+(`A_Widget`, `attachMovie("mcWidget")`) it doesn't import, so that one
+attaches nothing.
 
 Ruffle gives a SWF 8 movie a blank string from the host as the text
 "null" (as Flash did), so the host sends blanks as null and the shim takes

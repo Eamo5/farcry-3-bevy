@@ -38,6 +38,12 @@ const DEFINE_BITS_LOSSLESS2: u16 = 36;
 const DEFINE_FONT3: u16 = 75;
 const DO_ACTION: u16 = 12;
 const DO_INIT_ACTION: u16 = 59;
+const EXPORT_ASSETS: u16 = 56;
+const IMPORT_ASSETS: u16 = 57;
+const IMPORT_ASSETS2: u16 = 71;
+/// The first id of the copies of a movie's exported sprites (see
+/// `export_copies`): above every movie's own (the most any has is ~1000).
+const EXPORT_COPY_BASE: u16 = 0x8000;
 
 /// The global function a converted movie calls the engine through, with the
 /// command and its arguments (what `FSCommand2` took): the host defines it.
@@ -81,7 +87,7 @@ pub fn is_feu(data: &[u8]) -> bool {
 }
 
 /// Marks the cache's movies as made by this version of [`to_swf`].
-pub const MOVIES_STAMP_REL: &str = "ui/stamp-movies-atlases.txt";
+pub const MOVIES_STAMP_REL: &str = "ui/stamp-movies-export-copies-first.txt";
 
 /// Where a movie lives in the cache as standard SWF (`ui/.../name.swf`), by
 /// its archive path or by the path another movie imports it by (which may be
@@ -113,6 +119,74 @@ struct Tag<'a> {
     code: u16,
     body: &'a [u8],
 }
+
+/// An ExportAssets tag's (id, name) pairs.
+fn parse_exports(body: &[u8]) -> Option<Vec<(u16, &[u8])>> {
+    let n = u16::from_le_bytes(body.get(..2)?.try_into().ok()?);
+    let mut off = 2;
+    let mut out = Vec::new();
+    for _ in 0..n {
+        let id = u16::from_le_bytes(body.get(off..off + 2)?.try_into().ok()?);
+        let len = body.get(off + 2..)?.iter().position(|&b| b == 0)?;
+        out.push((id, &body[off + 2..off + 2 + len]));
+        off += 2 + len + 1;
+    }
+    Some(out)
+}
+
+/// For a movie that imports, the sprites it exports again under new ids,
+/// and their names exported for those, to go before its first import.
+///
+/// A clip imported from a library (`lib.feu`'s grid tile) attaches by name
+/// in the library's own symbols. Ruffle gives those the importer's exports
+/// as the library loads (`import_exports_of_importer`), so only exports met
+/// before the import, and only at ids the library doesn't use: the
+/// rucksack's item icons (`TX_...`, exported after its imports, ids from
+/// 173) never reached lib, and a tile's `attachMovie` of one found nothing.
+/// A copy holds the sprite's frames (not the definitions in it, made once
+/// by the original), so the name attaches the same thing in the library;
+/// in the movie itself the original's export, met later, keeps the name.
+fn export_copies(tags: &[Tag<'_>]) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    if !tags.iter().any(|t| matches!(t.code, IMPORT_ASSETS | IMPORT_ASSETS2)) {
+        return Ok(out);
+    }
+    let exports: Vec<(u16, &[u8])> = tags.iter().filter(|t| t.code == EXPORT_ASSETS).filter_map(|t| parse_exports(t.body)).flatten().collect();
+    let mut copies: Vec<(u16, &[u8])> = Vec::new();
+    for t in tags.iter().filter(|t| t.code == DEFINE_SPRITE && t.body.len() >= 4) {
+        let id = u16::from_le_bytes([t.body[0], t.body[1]]);
+        let names: Vec<&[u8]> = exports.iter().filter(|e| e.0 == id).map(|e| e.1).collect();
+        if names.is_empty() {
+            continue;
+        }
+        let copy = EXPORT_COPY_BASE + copies.len() as u16;
+        let mut body = copy.to_le_bytes().to_vec();
+        body.extend_from_slice(&t.body[2..4]);
+        for inner in read_tags(t.body, 4, t.body.len())?.into_iter().filter(|t| FRAME_TAGS.contains(&t.code)) {
+            match inner.code {
+                DO_ACTION => write_tag(&mut body, DO_ACTION, &crate::avm1::replace_fscommand2(inner.body, ENGINE_CALL)?),
+                code => write_tag(&mut body, code, inner.body),
+            }
+        }
+        write_tag(&mut out, DEFINE_SPRITE, &body);
+        copies.extend(names.into_iter().map(|n| (copy, n)));
+    }
+    if !copies.is_empty() {
+        let mut body = (copies.len() as u16).to_le_bytes().to_vec();
+        for (id, name) in copies {
+            body.extend_from_slice(&id.to_le_bytes());
+            body.extend_from_slice(name);
+            body.push(0);
+        }
+        write_tag(&mut out, EXPORT_ASSETS, &body);
+    }
+    Ok(out)
+}
+
+/// A sprite's tags that make its frames (no definitions): End, ShowFrame,
+/// PlaceObject 1-3, RemoveObject 1-2, DoAction, StartSound 1-2, the sound
+/// stream's, FrameLabel.
+const FRAME_TAGS: [u16; 14] = [END, 1, 4, 5, 12, 15, 18, 19, 26, 28, 43, 45, 70, 89];
 
 /// The tags from `off` up to and including the next End (or `end`).
 fn read_tags(data: &[u8], mut off: usize, end: usize) -> Result<Vec<Tag<'_>>> {
@@ -586,7 +660,14 @@ pub fn to_swf(
     if !is_feu(feu) {
         bail!("not an interface movie (no UEF signature)");
     }
-    fn rewrite(tags: Vec<Tag<'_>>, out: &mut Vec<u8>, image: &mut ImageSource, font: &mut FontSource, atlases: &mut Atlases) -> Result<()> {
+    fn rewrite(
+        tags: Vec<Tag<'_>>,
+        out: &mut Vec<u8>,
+        image: &mut ImageSource,
+        font: &mut FontSource,
+        atlases: &mut Atlases,
+        copies: &mut Vec<u8>,
+    ) -> Result<()> {
         for t in tags {
             match t.code {
                 EXTERNAL_IMAGE => {
@@ -635,8 +716,13 @@ pub fn to_swf(
                 }
                 DEFINE_SPRITE if t.body.len() >= 4 => {
                     let mut body = t.body[..4].to_vec();
-                    rewrite(read_tags(t.body, 4, t.body.len())?, &mut body, image, font, atlases)?;
+                    rewrite(read_tags(t.body, 4, t.body.len())?, &mut body, image, font, atlases, &mut Vec::new())?;
                     write_tag(out, DEFINE_SPRITE, &body);
+                }
+                // The exported sprites' copies first (`export_copies`).
+                IMPORT_ASSETS | IMPORT_ASSETS2 => {
+                    out.append(copies);
+                    write_tag(out, t.code, t.body);
                 }
                 code => write_tag(out, code, t.body),
             }
@@ -647,7 +733,9 @@ pub fn to_swf(
     let mut out = Vec::with_capacity(feu.len() * 2);
     out.extend_from_slice(b"FWS");
     out.extend_from_slice(&feu[3..start]);
-    rewrite(read_tags(feu, start, feu.len())?, &mut out, &mut image, &mut font, &mut Atlases::default())?;
+    let tags = read_tags(feu, start, feu.len())?;
+    let mut copies = export_copies(&tags)?;
+    rewrite(tags, &mut out, &mut image, &mut font, &mut Atlases::default(), &mut copies)?;
     let len = out.len() as u32;
     out[4..8].copy_from_slice(&len.to_le_bytes());
     Ok(out)
@@ -669,6 +757,47 @@ mod tests {
         assert_eq!(movie_rel(r"UI\Menus\Shared.feu"), "ui/menus/shared.swf");
         assert_eq!(movie_rel(r"UI\\Menus\\Shared.feu"), "ui/menus/shared.swf");
         assert_eq!(movie_rel("UI/Menus/Shared.feu"), "ui/menus/shared.swf");
+    }
+
+    /// A movie that imports has each sprite it exports written again under
+    /// a high id, without its definitions, and exported, before the import;
+    /// one that doesn't import is left as it is.
+    #[test]
+    fn an_importing_movie_exports_copies_of_its_sprites() {
+        let movie = |import: bool| {
+            let mut feu = b"UEF\x08\0\0\0\0".to_vec();
+            feu.extend_from_slice(&[0x00, 0x00, 0x18, 0x01, 0x00]);
+            if import {
+                feu.extend(tag(IMPORT_ASSETS, b"UI\\Common\\lib.feu\0\x01\0\x05\0Tile\0"));
+            }
+            let mut image = vec![9, 0, 1, 0, 1, 0];
+            image.extend_from_slice(b"UI\\Common\\Textures\\TX_Icon.png\0");
+            let mut sprite = vec![7, 0, 1, 0];
+            sprite.extend(tag(EXTERNAL_IMAGE, &image));
+            sprite.extend(tag(1, &[]));
+            sprite.extend(tag(END, &[]));
+            feu.extend(tag(DEFINE_SPRITE, &sprite));
+            feu.extend(tag(EXPORT_ASSETS, b"\x01\0\x07\0TX_Icon\0"));
+            feu.extend(tag(END, &[]));
+            let len = feu.len() as u32;
+            feu[4..8].copy_from_slice(&len.to_le_bytes());
+            to_swf(&feu, |_| None, |_| None).unwrap()
+        };
+        let swf = movie(true);
+        let tags = read_tags(&swf, tags_start(&swf).unwrap(), swf.len()).unwrap();
+        assert_eq!(tags.iter().map(|t| t.code).collect::<Vec<_>>(), vec![DEFINE_SPRITE, EXPORT_ASSETS, IMPORT_ASSETS, DEFINE_SPRITE, EXPORT_ASSETS, END]);
+        assert_eq!(&tags[0].body[..2], &EXPORT_COPY_BASE.to_le_bytes());
+        assert_eq!(&tags[3].body[..2], &[7, 0]);
+        // (The copy without the definition in the sprite.)
+        let frames = |body: &[u8]| read_tags(body, 4, body.len()).unwrap().iter().map(|t| t.code).collect::<Vec<_>>();
+        assert_eq!(frames(tags[0].body), vec![1, END]);
+        assert_eq!(frames(tags[3].body), vec![DEFINE_BITS_LOSSLESS2, 1, END]);
+        assert_eq!(parse_exports(tags[1].body).unwrap(), vec![(EXPORT_COPY_BASE, &b"TX_Icon"[..])]);
+        assert_eq!(parse_exports(tags[4].body).unwrap(), vec![(7, &b"TX_Icon"[..])]);
+        let swf = movie(false);
+        let tags = read_tags(&swf, tags_start(&swf).unwrap(), swf.len()).unwrap();
+        assert_eq!(tags.iter().map(|t| t.code).collect::<Vec<_>>(), vec![DEFINE_SPRITE, EXPORT_ASSETS, END]);
+        assert_eq!(parse_exports(tags[1].body).unwrap(), vec![(7, &b"TX_Icon"[..])]);
     }
 
     /// A movie of a sprite holding an external image comes out a standard

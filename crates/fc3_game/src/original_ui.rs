@@ -217,7 +217,13 @@ fn drive_pause(
     mut next: ResMut<NextState<crate::menu::GameState>>,
     mut original: ResMut<crate::menu::OriginalPause>,
     mut calls: ResMut<UiCalls>,
-    (ui, progress, crafting, time): (Res<crate::story::StoryUi>, Res<crate::progression::Progress>, Option<Res<crate::crafting::CraftCatalog>>, Res<Time>),
+    (ui, mut progress, crafting, time): (
+        Res<crate::story::StoryUi>,
+        ResMut<crate::progression::Progress>,
+        Option<Res<crate::crafting::CraftCatalog>>,
+        Res<Time>,
+    ),
+    (loot, perks): (Option<Res<crate::progression::LootCatalog>>, Res<crate::progression::Perks>),
     story: Option<NonSendMut<crate::story::StoryHost>>,
     (mut keys, mut moves, mut buttons): (
         MessageReader<bevy::input::keyboard::KeyboardInput>,
@@ -226,7 +232,7 @@ fn drive_pause(
     ),
     mut windows: Query<(&Window, &mut bevy::window::CursorOptions), With<PrimaryWindow>>,
     mut exit: MessageWriter<AppExit>,
-    (mut open, mut mouse): (Local<bool>, Local<Vec2>),
+    (mut open, mut mouse, mut paged): (Local<bool>, Local<Vec2>, Local<bool>),
 ) {
     use crate::menu::GameState;
     use fc3_ui::input::{MouseButton, PlayerEvent};
@@ -277,13 +283,29 @@ fn drive_pause(
                 let objective = ui.objective.clone().unwrap_or_default();
                 host.event("SetObjective", &[&title, &objective, &money, &rucksack]);
                 host.event("NewItems", &["0", "0", "0"]);
+                // FC3_PAUSE_PAGE=13 (tests): on to a page, as if chosen
+                // (once: each page says the menu's loaded too).
+                if let Some(page) = std::env::var("FC3_PAUSE_PAGE").ok().filter(|_| !*paged) {
+                    *paged = true;
+                    host.event("SetPageToLoad", &[&page]);
+                }
             }
             "Resume" | "QuitMenu" => next.set(GameState::Playing),
             "Quit" | "QuitToDesktop" => {
                 exit.write(AppExit::Success);
             }
-            // Skills (3) and crafting (8) are our journal's for now.
+            // Skills (3) and crafting (8) are our journal's for now; the
+            // rucksack (13) is the original's, and back (-1) is the pause page.
             "RequestPageChange" if matches!(arg(1), "3" | "8") => next.set(GameState::Journal),
+            "RequestPageChange" if matches!(arg(1), "13" | "-1") => host.event("SetPageToLoad", &[arg(1)]),
+            "PlayerInventoryLoaded" => send_rucksack(host, &progress, crafting.as_deref(), loot.as_deref(), &perks),
+            // Dropped from the rucksack: one of it goes.
+            "RemoveLoot" => {
+                if let (Ok(id), Some(loot)) = (arg(1).parse::<u32>(), loot.as_deref()) {
+                    drop_loot(&mut progress, loot, id);
+                    send_rucksack(host, &progress, crafting.as_deref(), Some(loot), &perks);
+                }
+            }
             // 0 last checkpoint, 4 save (done on pausing), 6 crafting, 7 skills.
             "MissionOptionSelected" => match arg(1) {
                 "0" => {
@@ -317,6 +339,117 @@ fn drive_pause(
     for k in keys.read() {
         let Some(key) = movie_key(k.key_code) else { continue };
         host.input(if k.state.is_pressed() { PlayerEvent::KeyDown { key } } else { PlayerEvent::KeyUp { key } });
+    }
+}
+
+/// The loot rucksack page's list (`DataLootInventory`): a tile for each
+/// thing carried, skins, plants and loot, with what its item says (name,
+/// description, sale price, rare, icon), and the money (`SetMoney`) and sort
+/// line (`SortText`).
+fn send_rucksack(
+    host: &fc3_ui::Host,
+    progress: &crate::progression::Progress,
+    crafting: Option<&crate::crafting::CraftCatalog>,
+    loot: Option<&crate::progression::LootCatalog>,
+    perks: &crate::progression::Perks,
+) {
+    use crate::progression::{Animal, LootKind};
+    use fc3_ui::ExternalValue as V;
+    let mut held: Vec<(LootKind, u32, &'static str)> = Vec::new();
+    for a in Animal::ALL {
+        held.push((LootKind::Skin(a), progress.skins.get(&a).copied().unwrap_or(0), "animal"));
+    }
+    for plant in crate::syringes::Plant::ALL {
+        held.push((LootKind::Plant(plant), progress.plants[plant.index()], "plant"));
+    }
+    for (&id, &n) in &progress.loot {
+        held.push((LootKind::Item(id), n, "loot"));
+    }
+    let mut items = Vec::new();
+    for (kind, n, sub) in held.into_iter().filter(|h| h.1 > 0) {
+        let Some(item) = loot.and_then(|l| l.item(kind)) else { continue };
+        let price = crafting.map_or(item.cost, |c| c.sale_price(item.id, perks));
+        let fields: std::collections::BTreeMap<String, V> = [
+            ("sName", V::String(item.name.clone())),
+            ("sInfo", V::String(item.description.clone())),
+            ("sSubCategory", V::String(sub.to_string())),
+            ("iPrice", V::Number(price as f64)),
+            ("iStateID", V::Number(RUCKSACK_AVAILABLE)),
+            ("bRare", V::Bool(item.rare)),
+            ("iObjectID", V::Number(item.id as f64)),
+            ("sImage", V::String(rucksack_icon(kind, item))),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        items.extend(std::iter::repeat_n(fields, n as usize));
+    }
+    host.set_data("DataLootInventory", items);
+    host.event("SetMoney", &[&progress.money.to_string()]);
+    host.event("SortText", &["0"]);
+}
+
+/// A tile's state the rucksack shows as one to sell or drop
+/// (`C_Button.C_STATE_AVAILABLE`).
+const RUCKSACK_AVAILABLE: f64 = 1.0;
+
+/// The rucksack movie's icon for a thing: the item's own when the movie has
+/// it (`TX_...`), else, for its shared ones (`AnimalLoot`), the hide of its
+/// animal (`TX_AnimalHideBoar`, the rare one's) or a part, a leaf, or a
+/// stranger's personal things.
+fn rucksack_icon(kind: crate::progression::LootKind, item: &fc3_formats::progression::Item) -> String {
+    use crate::progression::{Animal, LootKind};
+    if item.icon.starts_with("TX_") {
+        return item.icon.clone();
+    }
+    match kind {
+        LootKind::Skin(a) => {
+            let hide = match a {
+                Animal::Boar => "Boar",
+                Animal::Deer => "Deer",
+                Animal::Goat => "Goat",
+                Animal::Dog => "Dog",
+                Animal::Tapir => "AsianTapir",
+                Animal::Leopard => "Leopard",
+                Animal::Bear => "Bear",
+                Animal::Tiger => "Tiger",
+                Animal::Komodo => "Komodo",
+                Animal::Cassowary => "Cassowary",
+                Animal::Buffalo => "Buffalo",
+                Animal::Shark => "Shark",
+                Animal::Thylacine => "Thylacine",
+                Animal::WildPig | Animal::Pig => "Pig",
+                Animal::SeaTurtle => return "TX_AnimalTurtleShell".into(),
+                Animal::Tortoise | Animal::Crab => return "TX_AnimalShell".into(),
+                Animal::Crow => return "TX_AnimalFeather".into(),
+                Animal::Crocodile => return "TX_AnimalLeather".into(),
+                _ => return "TX_AnimalSkin".into(),
+            };
+            format!("TX_AnimalHide{}{hide}", if item.rare { "Rare" } else { "" })
+        }
+        LootKind::Plant(_) => "TX_PlantsLeaf".into(),
+        LootKind::Item(_) => "TX_HumanPersonalItems".into(),
+    }
+}
+
+/// One of a thing (by its item) out of the rucksack.
+fn drop_loot(progress: &mut crate::progression::Progress, loot: &crate::progression::LootCatalog, id: u32) {
+    use crate::progression::{Animal, LootKind};
+    let one_less = |n: &mut u32| *n = n.saturating_sub(1);
+    if let Some(n) = progress.loot.get_mut(&id).filter(|n| **n > 0) {
+        one_less(n);
+        return;
+    }
+    if let Some(a) =
+        Animal::ALL.into_iter().find(|a| loot.item(LootKind::Skin(*a)).is_some_and(|i| i.id == id) && progress.skins.get(a).is_some_and(|n| *n > 0))
+    {
+        progress.skins.entry(a).and_modify(one_less);
+        return;
+    }
+    if let Some(plant) =
+        crate::syringes::Plant::ALL.into_iter().find(|p| loot.item(LootKind::Plant(*p)).is_some_and(|i| i.id == id) && progress.plants[p.index()] > 0)
+    {
+        one_less(&mut progress.plants[plant.index()]);
     }
 }
 
