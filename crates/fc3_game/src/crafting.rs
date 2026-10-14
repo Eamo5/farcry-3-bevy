@@ -14,6 +14,11 @@ pub const TUTORIAL_RECIPES: [&str; 2] = [MEDICINE, RUCKSACK];
 #[derive(Resource, Default)]
 pub struct CraftCatalog {
     pub recipes: Vec<Recipe>,
+    /// The crafting menu's tabs and their groups (the original page's).
+    #[cfg_attr(not(feature = "original-ui"), allow(dead_code))]
+    pub types: Vec<fc3_formats::progression::Category>,
+    #[cfg_attr(not(feature = "original-ui"), allow(dead_code))]
+    pub subtypes: Vec<fc3_formats::progression::Category>,
     pub items: Vec<fc3_formats::progression::Item>,
     /// Where loot drops, and the loot groups they roll.
     pub sources: Vec<fc3_formats::progression::Source>,
@@ -32,6 +37,8 @@ impl CraftCatalog {
     pub fn from_metadata(metadata: &Crafting) -> Self {
         Self {
             recipes: metadata.recipes.clone(),
+            types: metadata.types.clone(),
+            subtypes: metadata.subtypes.clone(),
             items: metadata.items.clone(),
             sources: metadata.sources.clone(),
             groups: metadata.groups.clone(),
@@ -299,6 +306,12 @@ impl LootCatalog {
             *total = total.checked_add(count)?;
         }
         Some(totals)
+    }
+
+    /// How many of an ingredient (by its item) the player carries.
+    #[cfg_attr(not(feature = "original-ui"), allow(dead_code))]
+    pub fn held(&self, progress: &Progress, item: u32) -> u32 {
+        self.quantities_by_item(progress).get(&item).copied().unwrap_or(0)
     }
 
     pub fn can_consume(&self, progress: &Progress, ingredients: &[(u32, u32)]) -> bool {

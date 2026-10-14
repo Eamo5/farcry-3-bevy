@@ -346,6 +346,15 @@ _global.fire.utils.DataProvider.prototype.onDataReceived = function(result) {
     return true;
 };
 api.addCallback("setData", null, function(name, items) {
+    // (A blank string comes from the host as null; bound to a text field it
+    // would read "null".)
+    for (var n = 0; n < items.length; n++) {
+        for (var f in items[n]) {
+            if (items[n][f] === null) {
+                items[n][f] = "";
+            }
+        }
+    }
     _global.__fireData[name] = items;
     var list = _global.__fireProviders[name];
     var i = 0;

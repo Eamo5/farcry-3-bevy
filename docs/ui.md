@@ -397,7 +397,12 @@ pages are the original's). The keyboard and mouse go to Ruffle while it is
 up (`Host::input`: keys as Flash key codes, the mouse in the window's
 pixels), and it draws its own cursor. The interface runs on the real clock,
 so its menus animate with the game paused. `--pause` (tests) pauses three
-seconds into play, and `FC3_PAUSE_PAGE=13` goes on to a page from there.
+seconds into play, `FC3_PAUSE_PAGE=13` goes on to a page from there, and
+`FC3_PAUSE_KEYS=Enter,Down,Enter` then presses keys on it, 0.6 s apart
+(Enter, Escape, Space and the arrows). The game opens a page with
+`SetPageToLoad <page> -1 -1 -1`: a page takes the further arguments as
+where to open it (the crafting page's tab, a group, an entry), and without
+them the crafting page read a blank as its tab.
 
 **Loot rucksack** (`M_PlayerInventory.feu`, quick launch 13): on
 `PlayerInventoryLoaded` the game sends `DataLootInventory`, a tile for each
@@ -414,6 +419,47 @@ page is `RequestPageChange -1`, the pause page. Each page says
 it reloads the page for ever). The main pause page makes a widget
 (`A_Widget`, `attachMovie("mcWidget")`) it doesn't import, so that one
 attaches nothing.
+
+**Skills** (`M_Skills.feu`, quick launch 3): on `PlayerSkillsLoaded` the
+game sends `InitChapter` (each of the three trees' name, description and a
+blank), `InitCollectibles` (the tattoo's collectibles: relics, then 1, 0,
+0), `SetSkillPoint`, the `SkillsDP` list and `SetLevel` (level, XP, the
+next level's XP; it builds the tree tabs, and the first tree's icon map,
+`M_SkillIcons1..3.feu`, loads and draws). A skill's item: `iSkillTreeId`
+(0-2), `iSkillIndex` (its place in its tree: the first is the root, and
+the map draws the icon by it), `iAbilityState` (3 learned, 0 shut by the
+story, else 2: the map greys one whose parent, `sDependancy`, its index,
+isn't learned, or whose statistic isn't met, `sfulfilledPreReq` 0),
+`iMatrixRowIndex`/`iMatrixColumnIndex`, `iMaxSkillPoint` (its cost),
+`sSkillnName` (so spelled), `sSkillDescription`, `sPreReqString`, the
+tutorial fields (none yet), and `itattooPartName`, the CRC-32 of its
+tattoo part's name as a decimal string (the page maps 12 of them to the
+tattoo's segments). `BuyAbility <tree> <index>` learns it if it can be
+learned (`progression::skill_state`) and is answered
+`DisplaySkillTutorial` 1 or 0, then the points and the list again.
+
+**Crafting** (`M_Crafting.feu`, quick launch 8) drills down, the page
+asking each level as the player moves: on `CraftingPageLoaded` the game
+sends `BagSizes` (syringes, crafted arrows, arrows held) and
+`DataRecipesTypes` (the tabs by the table's order: syringes, equipment,
+ammo, arrows, which the page's `C_CAT_*` take as places);
+`CraftingRecipeTypeChanged <tab>` gets `DataRecipeSubTypes` (the groups
+that tab's recipes fall in: `iID`, `sName`, `bCraftable`, `iQuantity`
+carried, `iFinishedCrafting` when all its gear is made, `iSortID`);
+`CraftingRecipeSubTypeChanged <tab> <group>` gets `DataRecipes` (by
+`iObjectID`, here the recipe's place in the catalog: `sName`,
+`sDescription`, `iUnlocked`, `bCraftable`, `iFinishedCrafting`,
+`iQuantity`, `sDurationValue`...; the page locks a tier after one not
+made); `CraftingRecipeSelected <id>` gets `DataRequirements` (each
+ingredient's `sName`, `iNeeded`, `iPossessed`, `sImage`). The page sends
+`CraftingRecipeCrafted` with no id, so the game makes the recipe last
+selected (`CraftCatalog::craft`) and sends the groups, recipes and
+ingredients again. Using and assigning syringes (`CraftingRecipeUsed`,
+`CraftingRecipeAssigned`, `AssignedSlots`) aren't there yet, and the 3D
+item views (`3D_Crafting_MC` and the like, which the engine draws) are
+hidden: their stand-ins are plain white and blue sheets. Blank data fields
+go to the movie as null, which the shim makes blank again (a blank string
+from the host reads "null" in SWF 8).
 
 Ruffle gives a SWF 8 movie a blank string from the host as the text
 "null" (as Flash did), so the host sends blanks as null and the shim takes

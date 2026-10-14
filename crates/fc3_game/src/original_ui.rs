@@ -223,7 +223,7 @@ fn drive_pause(
         Option<Res<crate::crafting::CraftCatalog>>,
         Res<Time>,
     ),
-    (loot, perks): (Option<Res<crate::progression::LootCatalog>>, Res<crate::progression::Perks>),
+    (loot, perks, skills): (Option<Res<crate::progression::LootCatalog>>, Res<crate::progression::Perks>, Option<Res<crate::progression::Skills>>),
     story: Option<NonSendMut<crate::story::StoryHost>>,
     (mut keys, mut moves, mut buttons): (
         MessageReader<bevy::input::keyboard::KeyboardInput>,
@@ -232,7 +232,12 @@ fn drive_pause(
     ),
     mut windows: Query<(&Window, &mut bevy::window::CursorOptions), With<PrimaryWindow>>,
     mut exit: MessageWriter<AppExit>,
-    (mut open, mut mouse, mut paged): (Local<bool>, Local<Vec2>, Local<bool>),
+    (mut open, mut mouse, mut paged, mut pressed): (Local<bool>, Local<Vec2>, Local<bool>, Local<(Option<std::time::Instant>, usize)>),
+    (mut players, mut crafted, mut page): (
+        Query<&mut crate::combat::PlayerStats, With<crate::player::Player>>,
+        MessageWriter<crate::crafting::ItemCrafted>,
+        Local<CraftPage>,
+    ),
 ) {
     use crate::menu::GameState;
     use fc3_ui::input::{MouseButton, PlayerEvent};
@@ -271,7 +276,7 @@ fn drive_pause(
         }
         let arg = |i: usize| call.args.get(i).map(String::as_str).unwrap_or("");
         match arg(0) {
-            "RequestPageToLoad" => host.event("SetPageToLoad", &["-1"]),
+            "RequestPageToLoad" => open_page(host, "-1"),
             "SinglePlayerMenuLoaded" => {
                 let mission = story.as_ref().is_some_and(|s| s.story.missions().iter().any(|m| m.1 == "Running"));
                 // crafting, skills, save, checkpoint, restart, abandon, debug
@@ -287,17 +292,71 @@ fn drive_pause(
                 // (once: each page says the menu's loaded too).
                 if let Some(page) = std::env::var("FC3_PAUSE_PAGE").ok().filter(|_| !*paged) {
                     *paged = true;
-                    host.event("SetPageToLoad", &[&page]);
+                    open_page(host, &page);
                 }
             }
             "Resume" | "QuitMenu" => next.set(GameState::Playing),
             "Quit" | "QuitToDesktop" => {
                 exit.write(AppExit::Success);
             }
-            // Skills (3) and crafting (8) are our journal's for now; the
-            // rucksack (13) is the original's, and back (-1) is the pause page.
-            "RequestPageChange" if matches!(arg(1), "3" | "8") => next.set(GameState::Journal),
-            "RequestPageChange" if matches!(arg(1), "13" | "-1") => host.event("SetPageToLoad", &[arg(1)]),
+            // Skills (3), crafting (8) and the rucksack (13) are the
+            // original's, and back (-1) is the pause page.
+            "RequestPageChange" if matches!(arg(1), "3" | "8" | "13" | "-1") => open_page(host, arg(1)),
+            // Crafting: its tabs, a tab's groups, a group's recipes, a
+            // recipe's ingredients, and making the one last selected.
+            "CraftingPageLoaded" | "CraftingRecipeTypeChanged" | "CraftingRecipeSubTypeChanged" | "CraftingRecipeSelected" | "CraftingRecipeCrafted" => {
+                let (Some(catalog), Some(loot)) = (crafting.as_deref(), loot.as_deref()) else { continue };
+                let mut stats = players.single_mut().ok();
+                match call.args[0].as_str() {
+                    "CraftingPageLoaded" => {
+                        *page = CraftPage::default();
+                        // The item's 3D views are the engine's drawing; their
+                        // stand-ins are plain white and blue sheets.
+                        for id in ["3D_Crafting_MC", "3D_CraftMirror_MC", "3D_Crafting_MC_B", "3D_Crafting_MC_C", "3D_Crafting_MC_D"] {
+                            host.dps_visible(id, false);
+                        }
+                        let n = perks.arrow_cap.to_string();
+                        host.event("BagSizes", &[&perks.medkit_cap.to_string(), &n, &n]);
+                        send_craft_types(host, catalog);
+                    }
+                    "CraftingRecipeTypeChanged" => {
+                        page.category = arg(1).parse().unwrap_or(0);
+                        send_craft_groups(host, catalog, loot, &progress, stats.as_deref(), perks.medkit_cap, page.category);
+                    }
+                    "CraftingRecipeSubTypeChanged" => {
+                        page.subtype = arg(2).parse().unwrap_or(0);
+                        send_craft_recipes(host, catalog, loot, &progress, stats.as_deref(), perks.medkit_cap, &page);
+                    }
+                    "CraftingRecipeSelected" => {
+                        page.recipe = arg(1).parse().ok().filter(|&i: &usize| i < catalog.recipes.len());
+                        send_craft_ingredients(host, catalog, loot, &progress, &page);
+                    }
+                    _ => {
+                        let Some(recipe) = page.recipe.and_then(|i| catalog.recipes.get(i)) else { continue };
+                        let Some(stats) = stats.as_deref_mut() else { continue };
+                        if let Some(event) = catalog.craft(&mut progress, stats, perks.medkit_cap, loot, &recipe.id) {
+                            crafted.write(event);
+                        }
+                        send_craft_groups(host, catalog, loot, &progress, Some(stats), perks.medkit_cap, page.category);
+                        send_craft_recipes(host, catalog, loot, &progress, Some(stats), perks.medkit_cap, &page);
+                        send_craft_ingredients(host, catalog, loot, &progress, &page);
+                    }
+                }
+            }
+            "PlayerSkillsLoaded" => {
+                if let Some(skills) = skills.as_deref() {
+                    send_skills(host, &progress, skills, true);
+                }
+            }
+            // A skill bought (tree, index in it): learned if it can be, and
+            // the page told (`DisplaySkillTutorial`, 1 or 0) and refreshed.
+            "BuyAbility" => {
+                if let Some(skills) = skills.as_deref() {
+                    let learned = buy_skill(&mut progress, skills, arg(1).parse().unwrap_or(usize::MAX), arg(2).parse().unwrap_or(usize::MAX));
+                    host.event("DisplaySkillTutorial", &[if learned { "1" } else { "0" }, "", "", ""]);
+                    send_skills(host, &progress, skills, false);
+                }
+            }
             "PlayerInventoryLoaded" => send_rucksack(host, &progress, crafting.as_deref(), loot.as_deref(), &perks),
             // Dropped from the rucksack: one of it goes.
             "RemoveLoot" => {
@@ -315,7 +374,8 @@ fn drive_pause(
                     next.set(GameState::Playing);
                     return;
                 }
-                "6" | "7" => next.set(GameState::Journal),
+                "6" => open_page(host, "8"),
+                "7" => open_page(host, "3"),
                 _ => {}
             },
             other => debug!("original UI: pause menu {other} {:?} not handled yet", call.args.get(1..)),
@@ -340,6 +400,34 @@ fn drive_pause(
         let Some(key) = movie_key(k.key_code) else { continue };
         host.input(if k.state.is_pressed() { PlayerEvent::KeyDown { key } } else { PlayerEvent::KeyUp { key } });
     }
+    // FC3_PAUSE_KEYS=Enter,Down,Enter (tests): keys pressed one by one,
+    // 0.6 s apart, once FC3_PAUSE_PAGE's page has had two seconds (on the
+    // wall clock: the game's is stopped under the menu).
+    if let Some(list) = std::env::var("FC3_PAUSE_KEYS").ok().filter(|_| *paged) {
+        let since = pressed.0.get_or_insert_with(std::time::Instant::now).elapsed().as_secs_f32();
+        let names: Vec<&str> = list.split(',').collect();
+        if since > 2.0 + 0.6 * pressed.1 as f32 {
+            if let Some(key) = names.get(pressed.1).and_then(|n| test_key(n)).and_then(movie_key) {
+                host.input(PlayerEvent::KeyDown { key: key.clone() });
+                host.input(PlayerEvent::KeyUp { key });
+            }
+            pressed.1 += 1;
+        }
+    }
+}
+
+/// A key by its name, for tests (`FC3_PAUSE_KEYS`).
+fn test_key(name: &str) -> Option<KeyCode> {
+    Some(match name {
+        "Enter" => KeyCode::Enter,
+        "Escape" => KeyCode::Escape,
+        "Up" => KeyCode::ArrowUp,
+        "Down" => KeyCode::ArrowDown,
+        "Left" => KeyCode::ArrowLeft,
+        "Right" => KeyCode::ArrowRight,
+        "Space" => KeyCode::Space,
+        _ => return None,
+    })
 }
 
 /// The loot rucksack page's list (`DataLootInventory`): a tile for each
@@ -430,6 +518,262 @@ fn rucksack_icon(kind: crate::progression::LootKind, item: &fc3_formats::progres
         LootKind::Plant(_) => "TX_PlantsLeaf".into(),
         LootKind::Item(_) => "TX_HumanPersonalItems".into(),
     }
+}
+
+/// The skills page (`M_Skills.feu`, quick launch 3): the three trees
+/// (`InitChapter`: name, description and a blank each), the tattoo's
+/// collectibles (`InitCollectibles`), the points to spend, `SkillsDP` (a
+/// skill each, in its tree's order: the first is its root, and the icon map
+/// draws a skill's icon by that index), then `SetLevel`, which builds the
+/// tree tabs and draws the first. A skill's state is learned
+/// (`C_STATE_BOUGHT` 3), shut by the story (`C_STATE_LOCK` 0) or open
+/// (`C_STATE_BUY` 2); the page itself greys one whose parent isn't learned
+/// or whose statistic isn't met (`sfulfilledPreReq`). `first` false sends
+/// the points and the list again only (after a purchase).
+fn send_skills(host: &fc3_ui::Host, progress: &crate::progression::Progress, skills: &crate::progression::Skills, first: bool) {
+    use crate::progression::{skill_state, SkillLock, SkillState};
+    use fc3_ui::ExternalValue as V;
+    let tree = &skills.0;
+    let branches: Vec<_> = tree.branches.iter().take(3).collect();
+    if first {
+        let chapters: Vec<&str> = branches.iter().flat_map(|b| [b.name.as_str(), b.description.as_str(), ""]).collect();
+        host.event("InitChapter", &chapters);
+        let relics = progress.stat(crate::progression::stat::RELICS).to_string();
+        host.event("InitCollectibles", &[&relics, "1", "0", "0"]);
+    }
+    host.event("SetSkillPoint", &[&progress.skill_points.to_string()]);
+    let mut items = Vec::new();
+    for (t, b) in branches.iter().enumerate() {
+        let list: Vec<_> = tree.abilities.iter().filter(|a| a.branch == b.number).collect();
+        for (i, a) in list.iter().enumerate() {
+            let state = match skill_state(progress, a) {
+                SkillState::Learned => 3.0,
+                SkillState::Locked(SkillLock::Story | SkillLock::Unavailable) => 0.0,
+                _ => 2.0,
+            };
+            let stat_met = a.stat == 0 || progress.stat(a.stat) >= a.stat_target;
+            let parent = a.requires.iter().find_map(|r| list.iter().position(|x| &x.id == r)).map_or(-1, |p| p as i32);
+            let fields: std::collections::BTreeMap<String, V> = [
+                ("iSkillTreeId", V::Number(t as f64)),
+                ("iSkillIndex", V::Number(i as f64)),
+                ("iAbilityState", V::Number(state)),
+                ("iCurrentSkillPoint", V::Number(if state == 3.0 { a.cost as f64 } else { 0.0 })),
+                ("iMaxSkillPoint", V::Number(a.cost as f64)),
+                ("iMatrixRowIndex", V::Number(a.row as f64)),
+                ("iMatrixColumnIndex", V::Number(a.column as f64)),
+                ("sSkillnName", V::String(a.name.clone())),
+                ("sSkillDescription", V::String(crate::progression::describe(a))),
+                ("sSkillTreeIconName", V::String(String::new())),
+                // (The movie knows tattoo parts by their names' CRC-32.)
+                (
+                    "itattooPartName",
+                    V::String(if a.tattoo_part.is_empty() { String::new() } else { fc3_formats::hash::crc32(a.tattoo_part.as_bytes()).to_string() }),
+                ),
+                ("sDependancy", V::String(parent.to_string())),
+                ("sfulfilledPreReq", V::String(if stat_met { "1" } else { "0" }.into())),
+                ("sPreReqString", V::String(a.stat_text.clone())),
+                ("sHasTutorial", V::String("0".into())),
+                ("sTutorialHeader", V::String(String::new())),
+                ("sTutorialBodyString", V::String(String::new())),
+                ("sTutorialVideoString", V::String(String::new())),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+            items.push(fields);
+        }
+    }
+    host.set_data("SkillsDP", items);
+    if first {
+        // XP so far against the next level's total (level -1 blanks it, at
+        // the top).
+        let next = crate::progression::xp_needed(progress.level + 1, skills);
+        let level = if next == u32::MAX { "-1".to_string() } else { progress.level.to_string() };
+        let total = if next == u32::MAX { progress.xp.max(1) } else { next };
+        host.event("SetLevel", &[&level, &progress.xp.to_string(), &total.to_string()]);
+    }
+}
+
+/// Opens a pause menu page (quick launch: -1 the pause page, 3 skills, 8
+/// crafting, 13 the rucksack). The page takes the event's further arguments
+/// as where to open it (the crafting page's tab, a group, an entry), -1 for
+/// none; left out, a page read a blank as its tab (NaN).
+fn open_page(host: &fc3_ui::Host, page: &str) {
+    host.event("SetPageToLoad", &[page, "-1", "-1", "-1"]);
+}
+
+/// What the crafting page is on: its tab, group and the recipe last
+/// selected (by its place in the catalog; `CraftingRecipeCrafted` names
+/// none).
+#[derive(Default)]
+struct CraftPage {
+    category: u32,
+    subtype: u32,
+    recipe: Option<usize>,
+}
+
+/// How many of what a recipe makes the player carries (medicine, syringes).
+fn craft_carried(progress: &crate::progression::Progress, stats: Option<&crate::combat::PlayerStats>, recipe: &fc3_formats::progression::Recipe) -> u32 {
+    if recipe.id == crate::crafting::MEDICINE {
+        stats.map_or(0, |s| s.medkits)
+    } else {
+        progress.potions.get(&recipe.id).copied().unwrap_or(0)
+    }
+}
+
+/// Gear made already (it is made once).
+fn craft_done(progress: &crate::progression::Progress, recipe: &fc3_formats::progression::Recipe) -> bool {
+    recipe.kind == fc3_formats::progression::KIND_GEAR && progress.recipes.contains(&recipe.id)
+}
+
+/// The crafting page's tabs (`DataRecipesTypes`), in menu order: syringes,
+/// equipment, ammo, arrows (the page's own `C_CAT_*` are their places).
+fn send_craft_types(host: &fc3_ui::Host, catalog: &crate::crafting::CraftCatalog) {
+    use fc3_ui::ExternalValue as V;
+    let mut types = catalog.types.clone();
+    types.sort_by_key(|t| t.sort);
+    let items = types
+        .iter()
+        .map(|t| {
+            [("iID", V::Number(t.id as f64)), ("sName", V::String(t.name.clone())), ("sDesc", V::String(String::new())), ("bNew", V::Bool(false))]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect()
+        })
+        .collect();
+    host.set_data("DataRecipesTypes", items);
+}
+
+/// A tab's groups (`DataRecipeSubTypes`): those its recipes fall in, each
+/// craftable if one of its recipes is, with what the player carries of
+/// them, and done when all its gear is made.
+fn send_craft_groups(
+    host: &fc3_ui::Host,
+    catalog: &crate::crafting::CraftCatalog,
+    loot: &crate::progression::LootCatalog,
+    progress: &crate::progression::Progress,
+    stats: Option<&crate::combat::PlayerStats>,
+    medkit_cap: u32,
+    tab: u32,
+) {
+    use fc3_ui::ExternalValue as V;
+    let mut groups: Vec<&fc3_formats::progression::Category> =
+        catalog.subtypes.iter().filter(|s| catalog.recipes.iter().any(|r| r.category == tab && r.subcategory == s.id)).collect();
+    groups.sort_by_key(|s| s.sort);
+    let items = groups
+        .iter()
+        .map(|s| {
+            let recipes: Vec<_> = catalog.recipes.iter().filter(|r| r.category == tab && r.subcategory == s.id).collect();
+            let craftable = stats.is_some_and(|st| recipes.iter().any(|r| catalog.can_craft(progress, st, medkit_cap, loot, &r.id)));
+            let carried: u32 = recipes.iter().map(|r| craft_carried(progress, stats, r)).sum();
+            let done = recipes.iter().all(|r| craft_done(progress, r));
+            [
+                ("iID", V::Number(s.id as f64)),
+                ("sName", V::String(s.name.clone())),
+                ("sDesc", V::String(String::new())),
+                ("bCraftable", V::Bool(craftable)),
+                ("iQuantity", V::Number(carried as f64)),
+                ("iFinishedCrafting", V::Number(if done { 1.0 } else { 0.0 })),
+                ("bNew", V::Bool(false)),
+                ("iSortID", V::Number(s.sort as f64)),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+        })
+        .collect();
+    host.set_data("DataRecipeSubTypes", items);
+}
+
+/// A group's recipes (`DataRecipes`), by their place in the catalog: open
+/// (the story and the tier before allow it), craftable now, made (gear) and
+/// carried (syringes).
+fn send_craft_recipes(
+    host: &fc3_ui::Host,
+    catalog: &crate::crafting::CraftCatalog,
+    loot: &crate::progression::LootCatalog,
+    progress: &crate::progression::Progress,
+    stats: Option<&crate::combat::PlayerStats>,
+    medkit_cap: u32,
+    page: &CraftPage,
+) {
+    use fc3_ui::ExternalValue as V;
+    let mut recipes: Vec<(usize, &fc3_formats::progression::Recipe)> =
+        catalog.recipes.iter().enumerate().filter(|(_, r)| r.category == page.category && r.subcategory == page.subtype).collect();
+    recipes.sort_by_key(|(_, r)| r.sort);
+    let items = recipes
+        .iter()
+        .map(|&(i, r)| {
+            let craftable = stats.is_some_and(|st| catalog.can_craft(progress, st, medkit_cap, loot, &r.id));
+            let duration = if r.duration > 0.0 { format!("{:.0}s", r.duration) } else { String::new() };
+            [
+                ("iObjectID", V::Number(i as f64)),
+                ("sName", V::String(r.name.clone())),
+                ("sDescription", V::String(r.description.clone())),
+                ("iUnlocked", V::Number(if catalog.available(progress, r) || craft_done(progress, r) { 1.0 } else { 0.0 })),
+                ("bCraftable", V::Bool(craftable)),
+                ("iFinishedCrafting", V::Number(if craft_done(progress, r) { 1.0 } else { 0.0 })),
+                ("iQuantity", V::Number(craft_carried(progress, stats, r) as f64)),
+                ("bNew", V::Bool(false)),
+                ("iSortID", V::Number(r.sort as f64)),
+                ("iLevelProgressCurrent", V::Number(0.0)),
+                ("iLevelProgressMax", V::Number(0.0)),
+                ("sDurationDesc", V::String(String::new())),
+                ("sDurationValue", V::String(duration)),
+                ("sStrengthDesc", V::String(String::new())),
+                ("sStrengthValue", V::String(String::new())),
+                ("sItemSize", V::String(String::new())),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+        })
+        .collect();
+    host.set_data("DataRecipes", items);
+}
+
+/// The selected recipe's ingredients (`DataRequirements`): each item's
+/// name, how many it takes, how many are carried, and its icon.
+fn send_craft_ingredients(
+    host: &fc3_ui::Host,
+    catalog: &crate::crafting::CraftCatalog,
+    loot: &crate::progression::LootCatalog,
+    progress: &crate::progression::Progress,
+    page: &CraftPage,
+) {
+    use fc3_ui::ExternalValue as V;
+    let Some(recipe) = page.recipe.and_then(|i| catalog.recipes.get(i)) else { return };
+    let items = recipe
+        .ingredients
+        .iter()
+        .map(|&(id, n)| {
+            let item = catalog.item(id);
+            [
+                ("sName", V::String(item.map_or_else(String::new, |i| i.name.clone()))),
+                ("iNeeded", V::Number(n as f64)),
+                ("iPossessed", V::Number(loot.held(progress, id) as f64)),
+                ("sImage", V::String(item.map_or_else(String::new, |i| i.icon.clone()))),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+        })
+        .collect();
+    host.set_data("DataRequirements", items);
+}
+
+/// Learns the skill at `index` of tree `tree` (as `send_skills` lists them)
+/// if it can be learned now.
+fn buy_skill(progress: &mut crate::progression::Progress, skills: &crate::progression::Skills, tree: usize, index: usize) -> bool {
+    use crate::progression::{skill_state, SkillState};
+    let Some(branch) = skills.0.branches.iter().take(3).nth(tree) else { return false };
+    let Some(a) = skills.0.abilities.iter().filter(|a| a.branch == branch.number).nth(index) else { return false };
+    if skill_state(progress, a) != SkillState::Ready {
+        return false;
+    }
+    progress.skill_points -= a.cost;
+    progress.skills.insert(a.id.clone());
+    true
 }
 
 /// One of a thing (by its item) out of the rucksack.
@@ -1511,5 +1855,49 @@ fn drive_grenades(
     }
     if ok {
         *last = Some(now);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fc3_formats::progression::{Ability, Branch, SkillTree};
+
+    /// The skills page buys by tree and index in it, in the tree's order,
+    /// and only what can be learned now.
+    #[test]
+    fn a_skill_is_bought_by_its_tree_and_index() {
+        let ability = |id: &str, branch: u32, requires: &[&str]| Ability {
+            id: id.into(),
+            branch,
+            cost: 1,
+            requires: requires.iter().map(|r| r.to_string()).collect(),
+            purchasable: true,
+            available: true,
+            ..Default::default()
+        };
+        let branch = |number: u32| Branch { number, ..Default::default() };
+        let skills = crate::progression::Skills(SkillTree {
+            branches: vec![branch(1), branch(2)],
+            abilities: vec![ability("a_root", 1, &[]), ability("b_root", 2, &[]), ability("a_next", 1, &["a_root"])],
+            ..Default::default()
+        });
+        let mut progress = crate::progression::Progress { skill_points: 1, ..Default::default() };
+        // The first tree's second is `a_next`, which waits for its root.
+        assert!(!buy_skill(&mut progress, &skills, 0, 1));
+        assert!(buy_skill(&mut progress, &skills, 0, 0));
+        assert!(progress.skills.contains("a_root") && progress.skill_points == 0);
+        // No points left; no such tree.
+        assert!(!buy_skill(&mut progress, &skills, 1, 0));
+        progress.skill_points = 1;
+        assert!(!buy_skill(&mut progress, &skills, 5, 0));
+        assert!(buy_skill(&mut progress, &skills, 0, 1));
+    }
+
+    /// The movie knows tattoo parts by the CRC-32 of their names.
+    #[test]
+    fn tattoo_parts_are_named_as_the_skills_movie_knows_them() {
+        assert_eq!(fc3_formats::hash::crc32(b"FirstSkillHeron"), 3509486617);
+        assert_eq!(fc3_formats::hash::crc32(b"Spider3"), 1221601108);
     }
 }

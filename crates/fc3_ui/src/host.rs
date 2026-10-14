@@ -302,7 +302,10 @@ impl Host {
     /// the rucksack's loot, recipes...): each item's fields bind to the
     /// clips of the same names on its tile. The pages showing it hear of it.
     pub fn set_data(&self, name: &str, items: Vec<std::collections::BTreeMap<String, ExternalValue>>) {
-        let list = items.into_iter().map(ExternalValue::Object).collect();
+        // (Blanks go as null, which the shim makes blank again: Ruffle reads
+        // a blank string from the host as "null" for SWF 8.)
+        let blank = |v: ExternalValue| if matches!(&v, ExternalValue::String(s) if s.is_empty()) { ExternalValue::Null } else { v };
+        let list = items.into_iter().map(|item| ExternalValue::Object(item.into_iter().map(|(k, v)| (k, blank(v))).collect())).collect();
         self.call("setData", vec![ExternalValue::String(name.to_string()), ExternalValue::List(list)]);
     }
 

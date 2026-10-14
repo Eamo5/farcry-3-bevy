@@ -1880,7 +1880,7 @@ fn load_skills(info: Res<crate::data::CacheInfo>, mut skills: ResMut<Skills>) {
 }
 
 /// An ability's description with its number put in (`%d`).
-fn describe(a: &fc3_formats::progression::Ability) -> String {
+pub(crate) fn describe(a: &fc3_formats::progression::Ability) -> String {
     a.description.replace("%d", &a.value.to_string()).replace("%%", "%")
 }
 
