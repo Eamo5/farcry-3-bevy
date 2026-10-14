@@ -3682,3 +3682,27 @@ about as non-fighters and the first wave never emptied.
   and B30 completes. (A stalled path driver logs what its hull overlaps and
   touches, `held up against` / `in contact with`; `fc3tool terrain-height`
   gives the converted ground under Dunia points.)
+
+## BAM_020 and BNG_010: the story going quiet
+
+The autopilot acts only once the story has been quiet for a while (no
+command but layers, prints and lines for `autopilot_delay`). Two scripts
+never let it go quiet:
+
+* **A held time of day.** BAM_020's ship sets the time of day again every
+  few seconds; `SetTimeOfDay` no longer counts as the story stirring.
+* **A scene on its own loop.** BNG_010's club plays two light sequences
+  (`bng_010_030_lights`) and, as each ends, stops and plays it again. Their
+  spotlights' movement tracks name their channels `X`..`Yaw` (as vehicle
+  tracks do) where other props' are numbered `0`..`5`, so they converted
+  to nothing: two scenes of no length, replayed every frame. Movement
+  channels are read by either name now (the converter's cinema stamp is
+  `cinema/stamp-named-movement.txt`), so the loops run 1.8 s and 8.8 s;
+  and a scene the scripts start again within 30 s of starting it before
+  (and its stop) isn't the story stirring either
+  (`StoryHost::replayed`). (The lights themselves don't move yet: lamps
+  carry no placed id for a scene to bind.)
+
+The stall dump (every minute with `FC3_STORY_WAIT_DEBUG`) says how long the
+story has been quiet, what last stirred it, and whether a scene holds the
+view or plays the player.

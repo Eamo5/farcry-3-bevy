@@ -129,7 +129,8 @@ pub enum ClipKind {
     VehicleMovement {
         keys: Vec<VehicleKey>,
     },
-    /// An authored prop/entity path: numeric channels 0..5, Dunia XYZ/angles.
+    /// An authored prop/entity path: channels 0..5 (or X, Y, Z, Pitch,
+    /// Roll, Yaw), Dunia XYZ/angles.
     Movement {
         keys: Vec<MovementKey>,
     },
@@ -298,8 +299,21 @@ fn vehicle_keys(e: &Element) -> Vec<VehicleKey> {
 }
 
 fn movement_keys(e: &Element) -> Vec<MovementKey> {
-    let tracks: Vec<_> = (0..6).map(|i| bezier_keys(e, &i.to_string())).collect();
-    if tracks[..3].iter().any(Vec::is_empty) { return Vec::new(); }
+    // Channels are numbered, or (Bangkok's club lights) named as a vehicle's.
+    let names = ["X", "Y", "Z", "Pitch", "Roll", "Yaw"];
+    let tracks: Vec<_> = (0..6)
+        .map(|i| {
+            let keys = bezier_keys(e, &i.to_string());
+            if keys.is_empty() {
+                bezier_keys(e, names[i])
+            } else {
+                keys
+            }
+        })
+        .collect();
+    if tracks[..3].iter().any(Vec::is_empty) {
+        return Vec::new();
+    }
     let end = tracks.iter().filter_map(|k| k.last().map(|k| k.time)).fold(0.0f32, f32::max);
     let steps = ((end / FOV_STEP).ceil() as usize).min(200_000);
     (0..=steps).map(|i| {
@@ -906,6 +920,19 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(&seq.groups[0].clips[0].kind, ClipKind::Animation { source, to: 90, .. } if source == "y.mab"));
+        // A prop's movement with its channels named (club lights) has its
+        // length, not none.
+        let curves =
+            [track("X", 1.0, 1.0), track("Y", 2.0, 2.0), track("Z", 3.0, 3.0), track("Pitch", 0.0, 0.0), track("Roll", 0.0, 0.0), track("Yaw", 0.0, 40.0)]
+                .join("");
+        let seq = parse(&format!(
+            r#"<CCinematicSequence><CSequenceTrackGroup><CGenericTrackGroup hidUniqueId="9">
+            <CMovementTrack><Curves>{curves}</Curves></CMovementTrack></CGenericTrackGroup></CSequenceTrackGroup></CCinematicSequence>"#
+        ))
+        .unwrap();
+        assert_eq!(seq.duration, 1.0);
+        let ClipKind::Movement { keys } = &seq.groups[0].clips[0].kind else { panic!("dropped named movement") };
+        assert_eq!(keys.last().unwrap().angles, [0.0, 0.0, 40.0]);
     }
 
     #[test]

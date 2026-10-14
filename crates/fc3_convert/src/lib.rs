@@ -2520,11 +2520,16 @@ fn convert_cinema(job: &Job) -> Result<()> {
         }
         Some(())
     })?;
-    write_atomic(job.root(), CINEMA_STAMP, b"vehicle/prop movement, clip anchors, Bezier FOV, head look and clips named sAnimation\n", job.ctx)
+    write_atomic(
+        job.root(),
+        CINEMA_STAMP,
+        b"vehicle/prop movement, clip anchors, Bezier FOV, head look, clips named sAnimation and named movement channels\n",
+        job.ctx,
+    )
 }
 
 /// Marks the current sequence conversion schema.
-const CINEMA_STAMP: &str = "cinema/stamp-anim-name.txt";
+const CINEMA_STAMP: &str = "cinema/stamp-named-movement.txt";
 
 /// Every interface movie (`fc3_formats::feu`) as a standard SWF, each
 /// bitmap it takes from the game's textures embedded and each font it takes
