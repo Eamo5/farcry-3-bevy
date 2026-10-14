@@ -3663,3 +3663,10 @@ about as non-fighters and the first wave never emptied.
   it turned back to circle it and swung out of the corridor. A node within
   `PASSED_WITHIN` (10 m) that is already behind the vehicle now counts as
   passed.
+  Then the boat still weaved: steering for the node itself with a rudder
+  that turns by torque swung it past the line and back, onto the bank of a
+  stretch only 17 m wide. A boat now steers for a point on along its route
+  (pure pursuit, 6 m and 1 m more per m/s ahead of its place on the leg)
+  and counter-steers by how fast it is already turning
+  (`YAW_DAMPING`); cars keep steering for the node. It runs the river to
+  its fiftieth node of 63, where it grounds in shallows short of the end.

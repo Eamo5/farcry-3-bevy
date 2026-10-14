@@ -29,6 +29,8 @@ struct FollowPath {
     /// has left backing off after that (s).
     stuck: f32,
     backing: f32,
+    /// Seconds to the next progress report (debug).
+    report: f32,
 }
 
 impl StoryVehiclePaths {
@@ -76,6 +78,7 @@ impl StoryVehiclePaths {
                         reported: false,
                         stuck: 0.0,
                         backing: 0.0,
+                        report: 0.0,
                     },
                 );
             }
@@ -106,6 +109,7 @@ impl StoryVehiclePaths {
                 reported: false,
                 stuck: 0.0,
                 backing: 0.0,
+                report: 0.0,
             },
         );
     }
@@ -163,6 +167,14 @@ const PASSED_WITHIN: f32 = 10.0;
 /// (steering the other way) and tries the turn again.
 const STUCK_AFTER: f32 = 2.0;
 const BACK_OFF: f32 = 1.6;
+/// How far on along the route a boat's driver steers for (pure pursuit):
+/// this much, and this much more per m/s.
+const LOOKAHEAD: f32 = 6.0;
+const LOOKAHEAD_PER_MS: f32 = 1.0;
+/// A boat's rudder turns it by torque, so steering on the heading alone
+/// swings it past and back across a narrow channel onto the bank: it
+/// counter-steers this much per rad/s it is already turning.
+const YAW_DAMPING: f32 = 1.5;
 
 fn flat(v: Vec3) -> Vec2 { Vec2::new(v.x, v.z) }
 
@@ -219,20 +231,63 @@ impl FollowPath {
         }
     }
 
-    fn controls(&self, pose: &Transform, velocity: Vec3) -> (f32, f32, bool) {
+    /// The point `ahead` metres on along the route from the vehicle's place
+    /// on the leg it is on (pure pursuit): steering for it keeps the vehicle
+    /// to the line between nodes, where steering for the node itself let a
+    /// boat that slides weave across a narrow channel onto its bank.
+    fn aim(&self, at: Vec3, ahead: f32) -> Vec3 {
+        let n = self.points.len();
+        let target = self.points[self.next];
+        if self.arrived || (self.next == 0 && !self.looped) {
+            return target;
+        }
+        let from = self.points[(self.next + n - 1) % n];
+        let leg = flat(target - from);
+        let len = leg.length();
+        if len < 0.01 {
+            return target;
+        }
+        let along = flat(at - from).dot(leg / len).clamp(0.0, len);
+        let mut left = ahead;
+        if along + left <= len {
+            return from.lerp(target, (along + left) / len);
+        }
+        left -= len - along;
+        let mut i = self.next;
+        for _ in 0..n {
+            if i + 1 >= n && !self.looped {
+                break;
+            }
+            let (a, b) = (self.points[i], self.points[(i + 1) % n]);
+            let l = flat(b - a).length();
+            if left <= l {
+                return a.lerp(b, left / l.max(0.01));
+            }
+            left -= l;
+            i = (i + 1) % n;
+        }
+        self.points[i]
+    }
+
+    /// `boat`: steer a boat for a point on along the line, damped by how
+    /// fast it is already turning (`yaw_rate`, rad/s, left positive); other
+    /// vehicles steer for the node.
+    fn controls(&self, pose: &Transform, velocity: Vec3, yaw_rate: f32, boat: bool) -> (f32, f32, bool) {
         if self.speed == 0.0 || (self.arrived && self.stop_on_arrival) { return (0.0, 0.0, true); }
         let forward = pose.rotation * Vec3::NEG_Z;
         let forward = Vec3::new(forward.x, 0.0, forward.z).normalize_or(Vec3::NEG_Z);
         let to = self.points[self.next] - pose.translation;
-        let want = if self.arrived { forward } else { Vec3::new(to.x, 0.0, to.z).normalize_or(forward) };
-        let angle = forward.cross(want).y.atan2(forward.dot(want));
         let speed = velocity.dot(forward);
+        let aim = if boat { self.aim(pose.translation, LOOKAHEAD + LOOKAHEAD_PER_MS * speed.max(0.0)) - pose.translation } else { to };
+        let want = if self.arrived { forward } else { Vec3::new(aim.x, 0.0, aim.z).normalize_or(forward) };
+        let angle = forward.cross(want).y.atan2(forward.dot(want));
         let mut target_speed = self.speed * (1.0 - angle.abs() / std::f32::consts::PI * 1.6).max(0.25);
         if self.stop_on_arrival && !self.looped && self.next + 1 == self.points.len() {
             // Begin braking before the final node, not after shooting past it.
             target_speed = target_speed.min((2.0 * 3.0 * (flat(to).length() - REACHED * 0.5).max(0.0)).sqrt());
         }
-        (((target_speed - speed) * 0.4).clamp(-1.0, 1.0), (angle * 2.0).clamp(-1.0, 1.0), speed > target_speed + 2.0)
+        let damping = if boat { YAW_DAMPING * yaw_rate } else { 0.0 };
+        (((target_speed - speed) * 0.4).clamp(-1.0, 1.0), (angle * 2.0 - damping).clamp(-1.0, 1.0), speed > target_speed + 2.0)
     }
 }
 
@@ -243,11 +298,11 @@ pub(crate) fn drive_paths(
     mut paths: ResMut<StoryVehiclePaths>,
     cinema: Res<crate::cinema::Cinema>,
     spatial: SpatialQuery,
-    mut vehicles: Query<(Entity, &Transform, &LinearVelocity, &RigidBody, &mut Vehicle, Option<&crate::combat::Health>)>,
+    mut vehicles: Query<(Entity, &Transform, &LinearVelocity, &AngularVelocity, &RigidBody, &mut Vehicle, Option<&crate::combat::Health>)>,
     (colliders, bodies, cars): (Query<&ColliderOf>, Query<&RigidBody, Without<Vehicle>>, Query<(), With<Vehicle>>),
 ) {
     let mut interrupted = Vec::new();
-    for (entity, pose, velocity, body, mut vehicle, health) in &mut vehicles {
+    for (entity, pose, velocity, spin, body, mut vehicle, health) in &mut vehicles {
         let id = vehicle.story_id();
         let Some(path) = paths.paths.get_mut(&id) else { continue };
         if health.is_some_and(|h| h.dead) { vehicle.control(0.0, 0.0, true); interrupted.push(id); continue; }
@@ -257,7 +312,19 @@ pub(crate) fn drive_paths(
         let previous = path.next;
         path.advance(pose.translation, pose.rotation * Vec3::NEG_Z);
         if previous != path.next { info!("vehicle path {id}: reached node {previous}, next {} at {:?}", path.next, pose.translation); }
-        let (mut throttle, mut steer, mut brake) = path.controls(pose, velocity.0);
+        let boat = vehicle.kind() == crate::vehicles::Kind::Boat;
+        let (mut throttle, mut steer, mut brake) = path.controls(pose, velocity.0, spin.0.y, boat);
+        path.report -= time.delta_secs();
+        if path.report <= 0.0 && !path.arrived {
+            path.report = 2.0;
+            debug!(
+                "vehicle path {id}: at {:.1?}, {:.1} m/s, node {} {:.1} m off, controls {throttle:.2} {steer:.2} {brake}",
+                pose.translation,
+                velocity.0.length(),
+                path.next,
+                flat(path.points[path.next] - pose.translation).length()
+            );
+        }
         // Round a fixed obstacle between it and the next node (a corner of
         // rock the straight line cuts across, as the road bends round it):
         // the nearest heading either side that's clear for a while.
@@ -325,6 +392,7 @@ mod tests {
             reported: false,
             stuck: 0.0,
             backing: 0.0,
+            report: 0.0,
         }
     }
 
@@ -383,7 +451,7 @@ mod tests {
         assert_eq!(p.next, 2);
         p.advance(Vec3::new(-8.0, 0.0, -10.0), Vec3::ZERO);
         assert!(p.arrived);
-        assert_eq!(p.controls(&Transform::IDENTITY, Vec3::NEG_Z * 11.0), (0.0, 0.0, true));
+        assert_eq!(p.controls(&Transform::IDENTITY, Vec3::NEG_Z * 11.0, 0.0, false), (0.0, 0.0, true));
         p.advance(Vec3::ZERO, Vec3::ZERO);
         assert!(p.arrived);
         let mut looped = route();
@@ -395,19 +463,58 @@ mod tests {
         assert!(!looped.arrived);
     }
 
+    /// Off to one side of a leg, the driver steers for a point on along the
+    /// line, back onto it, not straight at the node; near a node's turn, for
+    /// a point round it on the next leg.
+    #[test]
+    fn a_driver_steers_back_onto_the_line_between_nodes() {
+        let mut p = route();
+        p.next = 1;
+        // 3 m to the right of the leg (0,0) -> (0,-10), 2 m along it.
+        let aim = p.aim(Vec3::new(3.0, 0.0, -2.0), 4.0);
+        assert!(aim.abs_diff_eq(Vec3::new(0.0, 0.0, -6.0), 1e-4), "{aim:?}");
+        // 8 m along, 4 m ahead: 2 m round the turn onto the next leg.
+        let aim = p.aim(Vec3::new(0.0, 0.0, -8.0), 4.0);
+        assert!(aim.abs_diff_eq(Vec3::new(-2.0, 0.0, -10.0), 1e-4), "{aim:?}");
+        // Past the route's end: its last node.
+        let aim = p.aim(Vec3::new(0.0, 0.0, -8.0), 40.0);
+        assert!(aim.abs_diff_eq(Vec3::new(-10.0, 0.0, -10.0), 1e-4), "{aim:?}");
+    }
+
+    /// A boat already swinging toward its line eases off the rudder before
+    /// it gets there, and counter-steers if swinging fast.
+    #[test]
+    fn a_boat_turning_already_eases_off_the_rudder() {
+        let mut p = route();
+        p.next = 1;
+        // 2 m right of the leg, facing along it: steer left.
+        let pose = Transform::from_xyz(2.0, 0.0, -2.0);
+        let (_, still, _) = p.controls(&pose, Vec3::NEG_Z * 5.0, 0.0, true);
+        assert!(still > 0.0);
+        let (_, easing, _) = p.controls(&pose, Vec3::NEG_Z * 5.0, 0.1, true);
+        assert!(easing < still && easing > 0.0);
+        let (_, back, _) = p.controls(&pose, Vec3::NEG_Z * 5.0, 1.0, true);
+        assert!(back < 0.0);
+    }
+
     #[test]
     fn controller_steers_slows_for_turns_obeys_zero_speed_and_continues_when_requested() {
         let mut p = route();
         p.advance(Vec3::ZERO, Vec3::ZERO);
-        let (throttle, steer, brake) = p.controls(&Transform::IDENTITY, Vec3::ZERO);
+        let (throttle, steer, brake) = p.controls(&Transform::IDENTITY, Vec3::ZERO, 0.0, false);
         assert_eq!((throttle, steer, brake), (1.0, 0.0, false));
         p.next = 2;
         let pose = Transform::from_xyz(0.0, 0.0, -10.0);
-        let (throttle, steer, brake) = p.controls(&pose, Vec3::NEG_Z * 11.0);
-        assert!(throttle < 0.0); assert!(steer > 0.0); assert!(brake);
-        p.speed = 0.0; assert_eq!(p.controls(&pose, Vec3::ZERO), (0.0, 0.0, true));
-        p.speed = 11.0; p.arrived = true; p.stop_on_arrival = false;
-        assert_eq!(p.controls(&pose, Vec3::ZERO), (1.0, 0.0, false));
+        let (throttle, steer, brake) = p.controls(&pose, Vec3::NEG_Z * 11.0, 0.0, false);
+        assert!(throttle < 0.0);
+        assert!(steer > 0.0);
+        assert!(brake);
+        p.speed = 0.0;
+        assert_eq!(p.controls(&pose, Vec3::ZERO, 0.0, false), (0.0, 0.0, true));
+        p.speed = 11.0;
+        p.arrived = true;
+        p.stop_on_arrival = false;
+        assert_eq!(p.controls(&pose, Vec3::ZERO, 0.0, false), (1.0, 0.0, false));
     }
 
     #[test]
