@@ -40,6 +40,7 @@ mod tutorial_tests {
         app.add_plugins(MinimalPlugins).insert_resource(State::new(GameState::Journal)).init_resource::<NextState<GameState>>()
             .init_resource::<ButtonInput<KeyCode>>().init_resource::<crate::options::Rebinding>()
             .init_resource::<crate::options::OptionsOpen>()
+            .init_resource::<OriginalPause>()
             .insert_resource(PauseMenu { tutorial: Some(CraftTutorial::Medicine(0)), ..default() })
             .add_systems(Update, pause_toggle);
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
