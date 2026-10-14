@@ -391,6 +391,8 @@ pub struct StoryHost {
     /// loop isn't the story moving on), and the files of their meta ids.
     replays: std::collections::HashMap<String, (f32, u32)>,
     replay_metas: std::collections::HashMap<String, String>,
+    /// When each native command (name and arguments) last came.
+    recent: std::collections::HashMap<String, f32>,
     used: std::collections::HashSet<(u64, String)>,
     /// The last checkpoint's progress, and when a reload to it is due.
     checkpoint: Option<fc3_story::save::StorySave>,
@@ -474,14 +476,20 @@ impl StoryHost {
         }
     }
 
-    /// Whether a command starts or stops a scene the scripts have already
-    /// started within the last half minute (their own loop of it).
+    /// Whether a command repeats what the scripts did within the last half
+    /// minute, as their own loops do: the very same command again (an
+    /// action switched on again), or a scene started again (under a new
+    /// meta id) or stopped.
     fn replayed(&mut self, c: &Command, now: f32) -> bool {
         const WITHIN: f32 = 30.0;
         let Command::Native { name, args } = c else { return false };
+        let same = self.recent.insert(format!("{name}{args:?}"), now).is_some_and(|at| now - at < WITHIN);
+        if self.recent.len() > 1024 {
+            self.recent.retain(|_, at| now - *at < WITHIN);
+        }
         let a = |i: usize| args.get(i).map(String::as_str).unwrap_or("");
         let again = |r: Option<&(f32, u32)>| r.is_some_and(|&(at, n)| n > 1 && now - at < WITHIN);
-        match name.as_str() {
+        same || match name.as_str() {
             "Sequence" if a(0).starts_with("play") => {
                 let r = self.replays.entry(a(2).to_string()).or_insert((now, 0));
                 r.1 = if now - r.0 < WITHIN { r.1 + 1 } else { 1 };
@@ -509,6 +517,7 @@ impl StoryHost {
             stirred_by: String::new(),
             replays: Default::default(),
             replay_metas: Default::default(),
+            recent: Default::default(),
             used: Default::default(),
             checkpoint,
             reload_at: None,
@@ -1332,13 +1341,14 @@ fn run_story(
     // script waits on.
     host.quiet += dt;
     // (Nor does a script holding the time of day, set again every few
-    // seconds: BAM_020's ship; nor one replaying a scene on a loop of its
-    // own: BNG_010's club lights.)
+    // seconds: BAM_020's ship; nor one repeating itself: BNG_010's club
+    // replays its light scenes, each start clearing arrows first, and
+    // switches the same action on again and again.)
     let now = time.elapsed_secs();
     let mut stirred = None;
     for c in &commands {
         let quiet = matches!(c, Command::Layer { .. } | Command::Print(_) | Command::Dialog { .. })
-            || matches!(c, Command::Native { name, .. } if name == "SetTimeOfDay");
+            || matches!(c, Command::Native { name, .. } if name == "SetTimeOfDay" || name == "DeleteAllArrowPickups");
         if !quiet && !host.replayed(c, now) {
             stirred.get_or_insert(c);
         }

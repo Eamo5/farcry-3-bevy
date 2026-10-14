@@ -3700,7 +3700,12 @@ never let it go quiet:
   `cinema/stamp-named-movement.txt`), so the loops run 1.8 s and 8.8 s;
   and a scene the scripts start again within 30 s of starting it before
   (and its stop) isn't the story stirring either
-  (`StoryHost::replayed`). (The lights themselves don't move yet: lamps
+  (`StoryHost::replayed`), nor the arrow pickups each start clears first
+  (`PlaySequence:Play` calls `DeleteAllArrowPickups`).
+* **The same command again.** The club also switches the same contextual
+  action on again and again (`UseContextualActionModifier:Enable`). Any
+  native command the very same as one within the last 30 s (name and
+  arguments) isn't the story stirring. (The lights themselves don't move yet: lamps
   carry no placed id for a scene to bind.)
 
 The stall dump (every minute with `FC3_STORY_WAIT_DEBUG`) says how long the
