@@ -391,7 +391,7 @@ pub struct StoryHost {
     /// loop isn't the story moving on), and the files of their meta ids.
     replays: std::collections::HashMap<String, (f32, u32)>,
     replay_metas: std::collections::HashMap<String, String>,
-    /// When each native command (name and arguments) last came.
+    /// When each command (as it reads) last came.
     recent: std::collections::HashMap<String, f32>,
     used: std::collections::HashSet<(u64, String)>,
     /// The last checkpoint's progress, and when a reload to it is due.
@@ -478,15 +478,15 @@ impl StoryHost {
 
     /// Whether a command repeats what the scripts did within the last half
     /// minute, as their own loops do: the very same command again (an
-    /// action switched on again), or a scene started again (under a new
-    /// meta id) or stopped.
+    /// action switched on again, a fire's particles played again), or a
+    /// scene started again (under a new meta id) or stopped.
     fn replayed(&mut self, c: &Command, now: f32) -> bool {
         const WITHIN: f32 = 30.0;
-        let Command::Native { name, args } = c else { return false };
-        let same = self.recent.insert(format!("{name}{args:?}"), now).is_some_and(|at| now - at < WITHIN);
+        let same = self.recent.insert(format!("{c:?}"), now).is_some_and(|at| now - at < WITHIN);
         if self.recent.len() > 1024 {
             self.recent.retain(|_, at| now - *at < WITHIN);
         }
+        let Command::Native { name, args } = c else { return same };
         let a = |i: usize| args.get(i).map(String::as_str).unwrap_or("");
         let again = |r: Option<&(f32, u32)>| r.is_some_and(|&(at, n)| n > 1 && now - at < WITHIN);
         same || match name.as_str() {
@@ -1343,7 +1343,8 @@ fn run_story(
     // (Nor does a script holding the time of day, set again every few
     // seconds: BAM_020's ship; nor one repeating itself: BNG_010's club
     // replays its light scenes, each start clearing arrows first, and
-    // switches the same action on again and again.)
+    // switches the same action on again and again; BAM_030's ruins play
+    // and stop their particles.)
     let now = time.elapsed_secs();
     let mut stirred = None;
     for c in &commands {

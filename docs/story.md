@@ -3703,9 +3703,11 @@ never let it go quiet:
   (`StoryHost::replayed`), nor the arrow pickups each start clears first
   (`PlaySequence:Play` calls `DeleteAllArrowPickups`).
 * **The same command again.** The club also switches the same contextual
-  action on again and again (`UseContextualActionModifier:Enable`). Any
-  native command the very same as one within the last 30 s (name and
-  arguments) isn't the story stirring. (The lights themselves don't move yet: lamps
+  action on again and again (`UseContextualActionModifier:Enable`), and
+  BAM_030's ruins play and stop their particles on their own entities. Any
+  command the very same as one within the last 30 s (as it reads: a
+  native's name and arguments, an entity and its event) isn't the story
+  stirring. (The lights themselves don't move yet: lamps
   carry no placed id for a scene to bind.)
 
 The stall dump (every minute with `FC3_STORY_WAIT_DEBUG`) says how long the
