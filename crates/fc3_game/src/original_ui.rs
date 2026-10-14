@@ -41,6 +41,7 @@ impl Plugin for OriginalUiPlugin {
         bevy::asset::embedded_asset!(app, "original_ui.wgsl");
         app.add_plugins((ExtractResourcePlugin::<Canvas>::default(), UiMaterialPlugin::<CanvasMaterial>::default()))
             .insert_non_send(Interface::Waiting)
+            .init_resource::<UiCalls>()
             .add_systems(Startup, make_canvas)
             .add_systems(
                 Update,
@@ -57,6 +58,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_radar,
                     drive_potions,
                     drive_camera,
+                    drive_pause,
                     run_interface,
                 )
                     .chain()
@@ -149,10 +151,17 @@ fn hand_back_texture(canvas: Option<Res<Canvas>>, images: Res<RenderAssets<GpuIm
 /// Starts the player once the texture is there, then runs and draws it each
 /// frame.
 #[allow(clippy::too_many_arguments)]
+/// What the movies asked of the engine last frame, for the systems that
+/// answer (`drive_pause`).
+#[derive(Resource, Default)]
+struct UiCalls(Vec<fc3_ui::EngineCall>);
+
+/// (The interface keeps the real clock: its menus run with the game paused.)
 fn run_interface(
     mut state: NonSendMut<Interface>,
+    mut calls: ResMut<UiCalls>,
     canvas: Res<Canvas>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     info: Res<crate::data::CacheInfo>,
     instance: Option<Res<GpuInstance>>,
     device: Res<RenderDevice>,
@@ -186,8 +195,205 @@ fn run_interface(
     host.run(time.delta_secs_f64());
     for call in host.take_calls() {
         debug!("original UI: engine call {} {:?}", call.command, call.args);
+        calls.0.push(call);
     }
     host.render();
+}
+
+/// The pause menu's movie (a page manager) and its level, over the HUD's.
+const PAUSE_MOVIE: &str = r"UI\Singleplayer\Menu\Pause\M_PauseMenu.feu";
+const PAUSE_LEVEL: u32 = 10;
+
+/// The original pause menu, run as the engine ran it (docs/ui.md): loaded
+/// over the HUD (hidden under it) as the game pauses, told to show its pause
+/// page, given what that page asks for (the unlocked entries, the
+/// objective, money and rucksack), the keyboard and the mouse; what is
+/// chosen there resumes, goes to the journal, reloads the checkpoint or
+/// quits. Pages it has no data for yet stay ours.
+#[allow(clippy::too_many_arguments)]
+fn drive_pause(
+    mut state: NonSendMut<Interface>,
+    game: Res<State<crate::menu::GameState>>,
+    mut next: ResMut<NextState<crate::menu::GameState>>,
+    mut original: ResMut<crate::menu::OriginalPause>,
+    mut calls: ResMut<UiCalls>,
+    (ui, progress, crafting, time): (Res<crate::story::StoryUi>, Res<crate::progression::Progress>, Option<Res<crate::crafting::CraftCatalog>>, Res<Time>),
+    story: Option<NonSendMut<crate::story::StoryHost>>,
+    (mut keys, mut moves, mut buttons): (
+        MessageReader<bevy::input::keyboard::KeyboardInput>,
+        MessageReader<CursorMoved>,
+        MessageReader<bevy::input::mouse::MouseButtonInput>,
+    ),
+    mut windows: Query<(&Window, &mut bevy::window::CursorOptions), With<PrimaryWindow>>,
+    mut exit: MessageWriter<AppExit>,
+    (mut open, mut mouse): (Local<bool>, Local<Vec2>),
+) {
+    use crate::menu::GameState;
+    use fc3_ui::input::{MouseButton, PlayerEvent};
+    let Interface::Running(host) = &mut *state else { return };
+    let paused = *game.get() == GameState::Paused;
+    if paused != *open {
+        *open = paused;
+        original.0 = paused;
+        keys.clear();
+        moves.clear();
+        buttons.clear();
+        calls.0.clear();
+        if paused {
+            host.answer("ShowGamePadInterface", "0");
+            host.answer("IsSplitscreen", "0");
+            host.answer("IsInvertActivateCancel", "0");
+            host.event("SetVisible", &["0"]);
+            host.load(PAUSE_MOVIE, PAUSE_LEVEL);
+            // (It draws its own cursor.)
+            if let Ok((_, mut cursor)) = windows.single_mut() {
+                cursor.visible = false;
+            }
+        } else {
+            host.unload(PAUSE_LEVEL);
+            host.event("SetVisible", &["1"]);
+        }
+        return;
+    }
+    if !*open {
+        calls.0.clear();
+        return;
+    }
+    for call in std::mem::take(&mut calls.0) {
+        if call.command != "Send" {
+            continue;
+        }
+        let arg = |i: usize| call.args.get(i).map(String::as_str).unwrap_or("");
+        match arg(0) {
+            "RequestPageToLoad" => host.event("SetPageToLoad", &["-1"]),
+            "SinglePlayerMenuLoaded" => {
+                let mission = story.as_ref().is_some_and(|s| s.story.missions().iter().any(|m| m.1 == "Running"));
+                // crafting, skills, save, checkpoint, restart, abandon, debug
+                host.event("SetUnlockedMenus", &["1", "1", "1", if mission { "1" } else { "0" }, "0", "0", "0", "", ""]);
+                let money = format!("{}/{}", progress.money, progress.money_cap());
+                let capacity = crafting.as_ref().map_or(16, |c| c.loot_capacity(&progress));
+                let rucksack = format!("{}/{}", crate::crafting::loot_count(&progress), capacity);
+                let title = ui.mission.clone().unwrap_or_default();
+                let objective = ui.objective.clone().unwrap_or_default();
+                host.event("SetObjective", &[&title, &objective, &money, &rucksack]);
+                host.event("NewItems", &["0", "0", "0"]);
+            }
+            "Resume" | "QuitMenu" => next.set(GameState::Playing),
+            "Quit" | "QuitToDesktop" => {
+                exit.write(AppExit::Success);
+            }
+            // Skills (3) and crafting (8) are our journal's for now.
+            "RequestPageChange" if matches!(arg(1), "3" | "8") => next.set(GameState::Journal),
+            // 0 last checkpoint, 4 save (done on pausing), 6 crafting, 7 skills.
+            "MissionOptionSelected" => match arg(1) {
+                "0" => {
+                    if let Some(mut story) = story {
+                        story.reload_checkpoint(time.elapsed_secs());
+                    }
+                    next.set(GameState::Playing);
+                    return;
+                }
+                "6" | "7" => next.set(GameState::Journal),
+                _ => {}
+            },
+            other => debug!("original UI: pause menu {other} {:?} not handled yet", call.args.get(1..)),
+        }
+    }
+    let scale = windows.single().map_or(1.0, |(w, _)| w.scale_factor()) as f64;
+    for m in moves.read() {
+        *mouse = m.position;
+        host.input(PlayerEvent::MouseMove { x: m.position.x as f64 * scale, y: m.position.y as f64 * scale });
+    }
+    for b in buttons.read() {
+        let button = match b.button {
+            bevy::input::mouse::MouseButton::Left => MouseButton::Left,
+            bevy::input::mouse::MouseButton::Right => MouseButton::Right,
+            bevy::input::mouse::MouseButton::Middle => MouseButton::Middle,
+            _ => continue,
+        };
+        let (x, y) = (mouse.x as f64 * scale, mouse.y as f64 * scale);
+        host.input(if b.state.is_pressed() { PlayerEvent::MouseDown { x, y, button, index: None } } else { PlayerEvent::MouseUp { x, y, button } });
+    }
+    for k in keys.read() {
+        let Some(key) = movie_key(k.key_code) else { continue };
+        host.input(if k.state.is_pressed() { PlayerEvent::KeyDown { key } } else { PlayerEvent::KeyUp { key } });
+    }
+}
+
+/// A key as the movies see it (Ruffle gives them Flash's key codes).
+fn movie_key(code: KeyCode) -> Option<fc3_ui::input::KeyDescriptor> {
+    use fc3_ui::input::{KeyDescriptor, KeyLocation, LogicalKey, NamedKey, PhysicalKey as P};
+    let named = |p: P, n: NamedKey, location: KeyLocation| Some(KeyDescriptor { physical_key: p, logical_key: LogicalKey::Named(n), key_location: location });
+    let character = |p: P, c: char| Some(KeyDescriptor { physical_key: p, logical_key: LogicalKey::Character(c), key_location: KeyLocation::Standard });
+    let s = KeyLocation::Standard;
+    match code {
+        KeyCode::ArrowUp => named(P::ArrowUp, NamedKey::ArrowUp, s),
+        KeyCode::ArrowDown => named(P::ArrowDown, NamedKey::ArrowDown, s),
+        KeyCode::ArrowLeft => named(P::ArrowLeft, NamedKey::ArrowLeft, s),
+        KeyCode::ArrowRight => named(P::ArrowRight, NamedKey::ArrowRight, s),
+        KeyCode::Enter => named(P::Enter, NamedKey::Enter, s),
+        KeyCode::NumpadEnter => named(P::NumpadEnter, NamedKey::Enter, KeyLocation::Numpad),
+        KeyCode::Escape => named(P::Escape, NamedKey::Escape, s),
+        KeyCode::Backspace => named(P::Backspace, NamedKey::Backspace, s),
+        KeyCode::Tab => named(P::Tab, NamedKey::Tab, s),
+        KeyCode::Delete => named(P::Delete, NamedKey::Delete, s),
+        KeyCode::Home => named(P::Home, NamedKey::Home, s),
+        KeyCode::End => named(P::End, NamedKey::End, s),
+        KeyCode::PageUp => named(P::PageUp, NamedKey::PageUp, s),
+        KeyCode::PageDown => named(P::PageDown, NamedKey::PageDown, s),
+        KeyCode::ShiftLeft => named(P::ShiftLeft, NamedKey::Shift, KeyLocation::Left),
+        KeyCode::ShiftRight => named(P::ShiftRight, NamedKey::Shift, KeyLocation::Right),
+        KeyCode::ControlLeft => named(P::ControlLeft, NamedKey::Control, KeyLocation::Left),
+        KeyCode::ControlRight => named(P::ControlRight, NamedKey::Control, KeyLocation::Right),
+        KeyCode::Space => character(P::Space, ' '),
+        _ => {
+            const LETTERS: [(KeyCode, P); 26] = [
+                (KeyCode::KeyA, P::KeyA),
+                (KeyCode::KeyB, P::KeyB),
+                (KeyCode::KeyC, P::KeyC),
+                (KeyCode::KeyD, P::KeyD),
+                (KeyCode::KeyE, P::KeyE),
+                (KeyCode::KeyF, P::KeyF),
+                (KeyCode::KeyG, P::KeyG),
+                (KeyCode::KeyH, P::KeyH),
+                (KeyCode::KeyI, P::KeyI),
+                (KeyCode::KeyJ, P::KeyJ),
+                (KeyCode::KeyK, P::KeyK),
+                (KeyCode::KeyL, P::KeyL),
+                (KeyCode::KeyM, P::KeyM),
+                (KeyCode::KeyN, P::KeyN),
+                (KeyCode::KeyO, P::KeyO),
+                (KeyCode::KeyP, P::KeyP),
+                (KeyCode::KeyQ, P::KeyQ),
+                (KeyCode::KeyR, P::KeyR),
+                (KeyCode::KeyS, P::KeyS),
+                (KeyCode::KeyT, P::KeyT),
+                (KeyCode::KeyU, P::KeyU),
+                (KeyCode::KeyV, P::KeyV),
+                (KeyCode::KeyW, P::KeyW),
+                (KeyCode::KeyX, P::KeyX),
+                (KeyCode::KeyY, P::KeyY),
+                (KeyCode::KeyZ, P::KeyZ),
+            ];
+            const DIGITS: [(KeyCode, P); 10] = [
+                (KeyCode::Digit0, P::Digit0),
+                (KeyCode::Digit1, P::Digit1),
+                (KeyCode::Digit2, P::Digit2),
+                (KeyCode::Digit3, P::Digit3),
+                (KeyCode::Digit4, P::Digit4),
+                (KeyCode::Digit5, P::Digit5),
+                (KeyCode::Digit6, P::Digit6),
+                (KeyCode::Digit7, P::Digit7),
+                (KeyCode::Digit8, P::Digit8),
+                (KeyCode::Digit9, P::Digit9),
+            ];
+            if let Some(i) = LETTERS.iter().position(|(k, _)| *k == code) {
+                return character(LETTERS[i].1, (b'a' + i as u8) as char);
+            }
+            let i = DIGITS.iter().position(|(k, _)| *k == code)?;
+            character(DIGITS[i].1, (b'0' + i as u8) as char)
+        }
+    }
 }
 
 /// The main HUD, as the engine starts it.

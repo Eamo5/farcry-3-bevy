@@ -419,6 +419,14 @@ pub struct StoryHost {
 }
 
 impl StoryHost {
+    /// Back to the last checkpoint as play resumes (the pause menu's "last
+    /// checkpoint").
+    pub(crate) fn reload_checkpoint(&mut self, now: f32) {
+        if self.checkpoint.is_some() {
+            self.reload_at = Some(now);
+        }
+    }
+
     /// How long the story has gone without anything happening (tests).
     pub fn quiet(&self) -> f32 {
         self.quiet

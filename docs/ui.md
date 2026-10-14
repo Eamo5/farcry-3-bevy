@@ -340,6 +340,23 @@ While it runs, the game's own health, ammo, compass, crosshair, hit marker,
 prompt, objective, subtitles, banners and XP popups are hidden or left empty
 (`hud::ReplacedByOriginal`, `hud::OriginalHud`).
 
+**Pause menu** (`original_ui::drive_pause`): pausing loads
+`M_PauseMenu.feu` at level 10 over the HUD (which `SetVisible 0` hides,
+and our own pause menu stands down: `menu::OriginalPause`), and the game
+answers it as the engine did (above): `SetPageToLoad -1` for the pause
+page; on `SinglePlayerMenuLoaded`, `SetUnlockedMenus` (crafting, skills
+and save on; the last checkpoint while a mission runs; no restart, abandon
+or debug), `SetObjective` (the mission's title and objective, the money and
+its most, the rucksack's loot and its size) and `NewItems`. What is chosen
+comes back as `Resume`/`QuitMenu` (play on), `Quit`/`QuitToDesktop` (exit),
+`MissionOptionSelected` 0 (back to the last checkpoint), 6 and 7 and
+`RequestPageChange` 3 and 8 (our journal, until the skills and crafting
+pages are the original's). The keyboard and mouse go to Ruffle while it is
+up (`Host::input`: keys as Flash key codes, the mouse in the window's
+pixels), and it draws its own cursor. The interface runs on the real clock,
+so its menus animate with the game paused. `--pause` (tests) pauses three
+seconds into play.
+
 Ruffle gives a SWF 8 movie a blank string from the host as the text
 "null" (as Flash did), so the host sends blanks as null and the shim takes
 null as empty.

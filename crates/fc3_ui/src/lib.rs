@@ -6,6 +6,8 @@ mod host;
 
 pub use host::{string as text_value, EngineCall, Host, STAGE};
 pub use ruffle_core::external::Value as ExternalValue;
+/// Keyboard and mouse for the movies (`Host::input`).
+pub use ruffle_core::events as input;
 pub use ruffle_render_wgpu::wgpu;
 
 use std::path::Path;

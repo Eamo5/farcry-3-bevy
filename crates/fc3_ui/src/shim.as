@@ -270,6 +270,12 @@ api.addCallback("unload", null, function(level) {
 });
 api.addCallback("event", null, function(name, args) {
     var channel = _global.ExtendedEvents[name];
+    // (A blank string comes from the host as null.)
+    for (var k = 0; k < args.length; k++) {
+        if (args[k] === null) {
+            args[k] = "";
+        }
+    }
     channel.broadcastMessage.apply(channel, ["onEvent"].concat(args));
 });
 // A function a movie defines (on its timeline or globally), by path.

@@ -69,12 +69,18 @@ impl Plugin for MenuPlugin {
             .add_systems(OnEnter(GameState::Shop), enter_paused)
             .add_systems(OnEnter(GameState::MainMenu), enter_menu)
             .init_resource::<StartPlaying>()
-            .add_systems(Update, (leave_loading, menu_buttons, pause_toggle, recapture_cursor, update_menu));
+            .init_resource::<OriginalPause>()
+            .add_systems(Update, (leave_loading, menu_buttons, pause_toggle, recapture_cursor, update_menu, test_pause));
     }
 }
 
 #[derive(Component)]
 struct MenuRoot;
+
+/// The original game's pause menu is up in place of ours (`original_ui`):
+/// ours stays hidden and leaves the keyboard's Escape to it.
+#[derive(Resource, Default)]
+pub struct OriginalPause(pub bool);
 
 #[derive(Component)]
 struct MenuTitle;
@@ -217,10 +223,11 @@ fn pause_toggle(
     mut options: ResMut<crate::options::OptionsOpen>,
     mut next: ResMut<NextState<GameState>>,
     mut journal: ResMut<crate::progression::PauseMenu>,
+    original: Res<OriginalPause>,
 ) {
     use bevy::input::gamepad::GamepadButton as B;
     let pad = |b: B| gamepads.iter().any(|g| g.just_pressed(b));
-    let esc = keys.just_pressed(KeyCode::Escape);
+    let esc = keys.just_pressed(KeyCode::Escape) && !(original.0 && *state.get() == GameState::Paused);
     if options.0 {
         if (esc && !crate::options::binding_key(&rebinding)) || pad(B::East) || pad(B::Start) {
             options.0 = false;
@@ -250,6 +257,25 @@ fn pause_toggle(
 }
 
 /// Clicking back into the window while playing re-locks the cursor (e.g. after alt-tab).
+/// --pause (tests): pause once, three seconds into play.
+fn test_pause(
+    args: Res<crate::Args>,
+    state: Res<State<GameState>>,
+    mut next: ResMut<NextState<GameState>>,
+    time: Res<Time<Real>>,
+    mut since: Local<Option<f32>>,
+    mut done: Local<bool>,
+) {
+    if !args.open_pause || *done || *state.get() != GameState::Playing {
+        return;
+    }
+    let now = time.elapsed_secs();
+    if now - *since.get_or_insert(now) > 3.0 {
+        *done = true;
+        next.set(GameState::Paused);
+    }
+}
+
 fn recapture_cursor(
     args: Res<Args>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -313,19 +339,20 @@ fn update_menu(
     state: Res<State<GameState>>,
     slot: Res<crate::save::SaveSlot>,
     options: Res<crate::options::OptionsOpen>,
+    original: Res<OriginalPause>,
     mut root: Query<&mut Visibility, (With<MenuRoot>, Without<MenuButton>)>,
     mut buttons: Query<(&MenuButton, &mut Visibility, &mut Node), Without<MenuRoot>>,
     mut play: Query<&mut Text, (With<PlayLabel>, Without<MenuTitle>)>,
     mut title: Query<&mut Text, (With<MenuTitle>, Without<PlayLabel>)>,
 ) {
-    if !state.is_changed() && !slot.is_changed() && !options.is_changed() {
+    if !state.is_changed() && !slot.is_changed() && !options.is_changed() && !original.is_changed() {
         return;
     }
     let s = *state.get();
     let can_continue = s == GameState::MainMenu && slot.existing.is_some();
     if let Ok(mut v) = root.single_mut() {
         // Hidden in play and under the options screen (so it can't take clicks).
-        *v = if matches!(s, GameState::Playing | GameState::Map | GameState::Journal | GameState::Shop) || options.0 {
+        *v = if matches!(s, GameState::Playing | GameState::Map | GameState::Journal | GameState::Shop) || options.0 || (original.0 && s == GameState::Paused) {
             Visibility::Hidden
         } else {
             Visibility::Inherited

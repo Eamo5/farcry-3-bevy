@@ -357,6 +357,12 @@ impl Host {
         self.player.lock().unwrap().set_viewport_dimensions(ruffle_core::ViewportDimensions { width, height, scale_factor: 1.0 });
     }
 
+    /// A key, the mouse, for the movies (a menu's input manager listens to
+    /// `Key` and `Mouse`). The mouse is in the window's pixels.
+    pub fn input(&self, event: ruffle_core::events::PlayerEvent) {
+        self.player.lock().unwrap().handle_event(event);
+    }
+
     /// The player, for what this doesn't cover (input, the renderer).
     pub fn player(&self) -> &Arc<Mutex<Player>> {
         &self.player

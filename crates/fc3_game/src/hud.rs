@@ -836,7 +836,9 @@ fn update_overlays(
         state.message = None;
     }
     if let Ok(mut t) = message.single_mut() {
-        t.0 = state.message.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+        // (In play only: a menu's clock is stopped, and it would stay over it.)
+        let playing = *game_state.get() == crate::menu::GameState::Playing;
+        t.0 = state.message.as_ref().filter(|_| playing).map(|(m, _)| m.clone()).unwrap_or_default();
     }
     if let Ok(mut t) = fps.single_mut() {
         if let Some(v) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS).and_then(|d| d.smoothed()) {

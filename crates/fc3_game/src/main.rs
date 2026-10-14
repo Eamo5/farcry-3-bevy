@@ -149,6 +149,8 @@ pub struct Args {
     pub takedown_test: bool,
     /// Test: open the journal once playing (for screenshots).
     pub open_journal: bool,
+    /// Test: pause once playing a few seconds (the pause menu's screenshot).
+    pub open_pause: bool,
     /// Open the shop once playing (tests), with this tab.
     pub open_shop: Option<usize>,
     /// Test: a row of frozen animals in front of the player playing this clip (idle|walk|run|eat).
@@ -204,6 +206,7 @@ impl Args {
             outpost_test: false,
             takedown_test: false,
             open_journal: false,
+            open_pause: false,
             open_shop: None,
             animal_test: None,
             drive_test: false,
@@ -254,6 +257,7 @@ impl Args {
                 "--open-map" => a.open_map = true,
                 "--outpost-test" => a.outpost_test = true,
                 "--journal" => a.open_journal = true,
+                "--pause" => a.open_pause = true,
                 "--shop" => {
                     a.open_shop = next.parse().ok();
                     i += 1;
