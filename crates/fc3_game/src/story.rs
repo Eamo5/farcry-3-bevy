@@ -1313,7 +1313,12 @@ fn run_story(
     let autopilot_delay = std::env::var("FC3_STORY_AUTOPILOT_DELAY").ok()
         .and_then(|s| s.parse::<f32>().ok()).filter(|s| s.is_finite())
         .unwrap_or(6.0).max(0.5);
-    if gameplay && health.as_ref().is_none_or(|h| !h.dead) && !p.driving && cinema.view.is_none() && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
+    if gameplay
+        && health.as_ref().is_none_or(|h| !h.dead)
+        && !p.driving
+        && cinema.view.is_none()
+        && !cinema.plays_player()
+        && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
         && host.quiet > autopilot_delay && host.story.watched_loot_filters().is_empty() {
         let graph = std::env::var("FC3_STORY_AUTOPILOT_GRAPH").ok();
         let watched = host.story.watched_triggers_in_graph(graph.as_deref());
@@ -2590,7 +2595,11 @@ fn autopilot_loot(
 ) {
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() { return }
     let Some(mut host) = host else { return };
-    if time.is_paused() || !ui.boxes.is_empty() || cinema.view.is_some() || qtes.active() || busy.busy() { return }
+    // (Nor while a scene plays the player through without its own view: a
+    // quest giver's brief walked out of left its pickup untaken.)
+    if time.is_paused() || !ui.boxes.is_empty() || cinema.view.is_some() || cinema.plays_player() || qtes.active() || busy.busy() {
+        return;
+    }
     let Ok((mut at, mut player, health, inventory)) = players.single_mut() else { return };
     // (Held up where a high trigger was stepped into, the player may still
     // go after a character: getting there sets him down.)

@@ -3646,3 +3646,13 @@ about as non-fighters and the first wave never emptied.
   ray finds under its feet (a step up at most, not on other characters)
   when that is above the mesh or the terrain, and a path that stops short
   of its spot is finished straight to it.
+* **A brief walked out of.** After WIL_020 two of Willis's briefs open at
+  once, WIL_040's and WIL_010's. The autopilot talked to WIL_010's giver,
+  whose brief is a first-person scene (the player's own body, no camera of
+  its own) ending in a pickup, and six seconds in teleported on to WIL_040's
+  trigger. The brief never got its pickup, stayed acknowledged, and so
+  replays its scene on every load (as its listener does for an
+  acknowledged mission), taking the player out of the boat's turret in
+  B30. The autopilot now waits out a scene playing the player through
+  (`Cinema::plays_player`: a player part with tracks, not held at a pause
+  or its end, not a loop), view or no view.

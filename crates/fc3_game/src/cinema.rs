@@ -160,6 +160,16 @@ impl Cinema {
         self.playing.iter().any(|p| p.bindings.values().any(|&entity| entity == id))
     }
 
+    /// A scene is playing the player's own body through (a player group with
+    /// tracks, neither held at a pause or its end nor looping): a
+    /// first-person scene (a quest giver's brief) keeps him until it ends,
+    /// view or no view.
+    pub fn plays_player(&self) -> bool {
+        self.playing
+            .iter()
+            .any(|p| !p.paused && !p.seq.looping && p.t < p.seq.duration && p.seq.groups.iter().any(|g| g.kind == GroupKind::Player && !g.clips.is_empty()))
+    }
+
     /// A scene plays the player's own body (a player group with tracks)
     /// and doesn't have this vehicle in it: he's out of it for the scene.
     pub fn plays_player_without(&self, vehicle: u64) -> bool {
@@ -1234,5 +1244,43 @@ mod tests {
         assert_eq!(cinema.released.len(), 2);
         assert_eq!(cinema.playing.iter().map(|p| p.file.as_str()).collect::<Vec<_>>(), vec!["other", "qte"]);
         assert!(cinema.stop_meta(10).is_empty());
+    }
+
+    /// The autopilot waits out a scene playing the player through, but not
+    /// one held at a pause or at its end, a loop, or one without his part.
+    #[test]
+    fn a_scene_plays_the_player_only_while_it_runs_his_part() {
+        let part = |kind| cinema::Group {
+            uid: 1,
+            kind,
+            name: "part".into(),
+            archetype: 0,
+            clips: vec![cinema::Clip { start: 0.0, duration: 10.0, kind: ClipKind::Movement { keys: vec![] } }],
+        };
+        let playing = |kind, looping| Playing {
+            scene: 1,
+            meta: None,
+            file: "brief".into(),
+            seq: Sequence { looping, duration: 10.0, groups: vec![part(kind)], ..Default::default() },
+            t: 2.0,
+            paused: false,
+            paused_cue: false,
+            origin: Transform::default(),
+            movement_frames: HashMap::new(),
+            bindings: HashMap::new(),
+            anchor: None,
+            clips: HashMap::new(),
+            waited: 0.0,
+        };
+        let mut cinema = Cinema::default();
+        cinema.playing = vec![playing(GroupKind::Player, false)];
+        assert!(cinema.plays_player());
+        cinema.playing[0].paused = true;
+        assert!(!cinema.plays_player());
+        cinema.playing[0].paused = false;
+        cinema.playing[0].t = 10.0;
+        assert!(!cinema.plays_player(), "held at its end");
+        cinema.playing = vec![playing(GroupKind::Player, true), playing(GroupKind::Character, false)];
+        assert!(!cinema.plays_player());
     }
 }
