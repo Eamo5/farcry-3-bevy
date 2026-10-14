@@ -397,7 +397,8 @@ pages are the original's). The keyboard and mouse go to Ruffle while it is
 up (`Host::input`: keys as Flash key codes, the mouse in the window's
 pixels), and it draws its own cursor. The interface runs on the real clock,
 so its menus animate with the game paused. `--pause` (tests) pauses three
-seconds into play, `FC3_PAUSE_PAGE=13` goes on to a page from there, and
+seconds into play, `FC3_PAUSE_PAGE=13` goes on to a page from there
+(`10,5` with launch arguments: the handbook's guide tab), and
 `FC3_PAUSE_KEYS=Enter,Down,Enter` then presses keys on it, 0.6 s apart
 (Enter, Escape, Space and the arrows). The game opens a page with
 `SetPageToLoad <page> -1 -1 -1`: a page takes the further arguments as
@@ -460,6 +461,19 @@ item views (`3D_Crafting_MC` and the like, which the engine draws) are
 hidden: their stand-ins are plain white and blue sheets. Blank data fields
 go to the movie as null, which the shim makes blank again (a blank string
 from the host reads "null" in SWF 8).
+
+**Handbook** (`M_Handbook.feu`, quick launch 10) asks for one list at a
+time, `OnEncyclopediaRequest <id> <list>`, and the game fills that
+provider from the handbook (`progression::HandbookData`): `TabCategory`
+(its categories by their order: statistics 2, the survival guide 5,
+collectibles 1, tutorials 4, the manual 6, by `iObjectID`), `SubCategory
+<tab>` (a category's groups), `WikiCategory <group>` (a group's pages:
+`sName`, `sDescription`, `bUnlocked` as `handbook_open` has it). The
+statistics (`StatsCategory`) go empty for now, and the manual (`Emanual`,
+its own movie) isn't answered.
+
+While the pause menu is up the HUD's level is hidden (`Host::level_visible`;
+the shim's `levelVisible`), as the game's was: subtitles showed through.
 
 Ruffle gives a SWF 8 movie a blank string from the host as the text
 "null" (as Flash did), so the host sends blanks as null and the shim takes

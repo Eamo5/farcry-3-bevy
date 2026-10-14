@@ -268,6 +268,12 @@ api.addCallback("load", null, function(url, level) {
 api.addCallback("unload", null, function(level) {
     unloadMovieNum(level);
 });
+api.addCallback("levelVisible", null, function(level, on) {
+    var root = eval("_level" + level);
+    if (root != undefined) {
+        root._visible = on;
+    }
+});
 api.addCallback("event", null, function(name, args) {
     var channel = _global.ExtendedEvents[name];
     // (A blank string comes from the host as null.)

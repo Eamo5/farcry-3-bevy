@@ -203,6 +203,8 @@ fn run_interface(
 /// The pause menu's movie (a page manager) and its level, over the HUD's.
 const PAUSE_MOVIE: &str = r"UI\Singleplayer\Menu\Pause\M_PauseMenu.feu";
 const PAUSE_LEVEL: u32 = 10;
+/// The HUD's level (`MainHud.feu`, and the pieces it loads).
+const HUD_LEVEL: u32 = 1;
 
 /// The original pause menu, run as the engine ran it (docs/ui.md): loaded
 /// over the HUD (hidden under it) as the game pauses, told to show its pause
@@ -223,7 +225,12 @@ fn drive_pause(
         Option<Res<crate::crafting::CraftCatalog>>,
         Res<Time>,
     ),
-    (loot, perks, skills): (Option<Res<crate::progression::LootCatalog>>, Res<crate::progression::Perks>, Option<Res<crate::progression::Skills>>),
+    (loot, perks, skills, handbook): (
+        Option<Res<crate::progression::LootCatalog>>,
+        Res<crate::progression::Perks>,
+        Option<Res<crate::progression::Skills>>,
+        Option<Res<crate::progression::HandbookData>>,
+    ),
     story: Option<NonSendMut<crate::story::StoryHost>>,
     (mut keys, mut moves, mut buttons): (
         MessageReader<bevy::input::keyboard::KeyboardInput>,
@@ -246,6 +253,8 @@ fn drive_pause(
     if paused != *open {
         *open = paused;
         original.0 = paused;
+        // The HUD goes under the menu (its subtitles showed through).
+        host.level_visible(HUD_LEVEL, !paused);
         keys.clear();
         moves.clear();
         buttons.clear();
@@ -289,19 +298,28 @@ fn drive_pause(
                 host.event("SetObjective", &[&title, &objective, &money, &rucksack]);
                 host.event("NewItems", &["0", "0", "0"]);
                 // FC3_PAUSE_PAGE=13 (tests): on to a page, as if chosen
-                // (once: each page says the menu's loaded too).
+                // (once: each page says the menu's loaded too); `10,5`
+                // opens it where its launch arguments say (the handbook's
+                // guide tab).
                 if let Some(page) = std::env::var("FC3_PAUSE_PAGE").ok().filter(|_| !*paged) {
                     *paged = true;
-                    open_page(host, &page);
+                    let mut args: Vec<&str> = page.split(',').collect();
+                    args.resize(4, "-1");
+                    host.event("SetPageToLoad", &args);
                 }
             }
             "Resume" | "QuitMenu" => next.set(GameState::Playing),
             "Quit" | "QuitToDesktop" => {
                 exit.write(AppExit::Success);
             }
-            // Skills (3), crafting (8) and the rucksack (13) are the
-            // original's, and back (-1) is the pause page.
-            "RequestPageChange" if matches!(arg(1), "3" | "8" | "13" | "-1") => open_page(host, arg(1)),
+            // Skills (3), crafting (8), the handbook (10) and the rucksack
+            // (13) are the original's, and back (-1) is the pause page.
+            "RequestPageChange" if matches!(arg(1), "3" | "8" | "10" | "13" | "-1") => open_page(host, arg(1)),
+            "OnEncyclopediaRequest" => {
+                if let Some(book) = handbook.as_deref().and_then(|b| b.0.as_ref()) {
+                    send_handbook(host, book, &progress, arg(1).parse().unwrap_or(0), arg(2));
+                }
+            }
             // Crafting: its tabs, a tab's groups, a group's recipes, a
             // recipe's ingredients, and making the one last selected.
             "CraftingPageLoaded" | "CraftingRecipeTypeChanged" | "CraftingRecipeSubTypeChanged" | "CraftingRecipeSelected" | "CraftingRecipeCrafted" => {
@@ -602,6 +620,61 @@ fn open_page(host: &fc3_ui::Host, page: &str) {
     host.event("SetPageToLoad", &[page, "-1", "-1", "-1"]);
 }
 
+/// The handbook page (`M_Handbook.feu`, quick launch 10) asks for one list
+/// at a time (`OnEncyclopediaRequest <id> <list>`): `TabCategory` its tabs
+/// (the handbook's categories: collectibles 1, statistics 2, tutorials 4,
+/// the survival guide 5, the manual 6), `SubCategory <tab>` a tab's groups,
+/// `WikiCategory <group>` a group's pages (`bUnlocked` as the game opens
+/// them: `progression::handbook_open`), `StatsCategory` the statistics
+/// (none yet) and `Emanual` the manual's (not answered: its own movie).
+fn send_handbook(host: &fc3_ui::Host, book: &fc3_formats::progression::Handbook, progress: &crate::progression::Progress, id: u32, list: &str) {
+    use fc3_ui::ExternalValue as V;
+    let item = |fields: Vec<(&str, V)>| fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect::<std::collections::BTreeMap<String, V>>();
+    let items = match list {
+        "TabCategory" => {
+            let mut tabs: Vec<_> = book.categories.iter().collect();
+            tabs.sort_by_key(|c| c.sort);
+            tabs.iter().map(|c| item(vec![("iObjectID", V::Number(c.id as f64)), ("sName", V::String(c.name.clone())), ("bNew", V::Bool(false))])).collect()
+        }
+        "SubCategory" => {
+            let ids = book.categories.iter().find(|c| c.id == id).map(|c| c.subcategories.clone()).unwrap_or_default();
+            let mut groups: Vec<_> = book.subcategories.iter().filter(|s| ids.contains(&s.id)).collect();
+            groups.sort_by_key(|s| s.sort);
+            groups
+                .iter()
+                .map(|s| {
+                    item(vec![
+                        ("iObjectID", V::Number(s.id as f64)),
+                        ("sName", V::String(s.name.clone())),
+                        ("bEnabled", V::Bool(true)),
+                        ("bNew", V::Bool(false)),
+                    ])
+                })
+                .collect()
+        }
+        "WikiCategory" => {
+            let mut pages: Vec<_> = book.entries.iter().filter(|e| e.subcategory == id).collect();
+            pages.sort_by_key(|e| e.sort);
+            pages
+                .iter()
+                .map(|e| {
+                    item(vec![
+                        ("iObjectID", V::Number(e.id as f64)),
+                        ("sName", V::String(e.name.clone())),
+                        ("sDescription", V::String(e.description.clone())),
+                        ("bUnlocked", V::Bool(crate::progression::handbook_open(e, progress))),
+                        ("bNew", V::Bool(false)),
+                        ("sImage", V::String(String::new())),
+                    ])
+                })
+                .collect()
+        }
+        "StatsCategory" => Vec::new(),
+        _ => return,
+    };
+    host.set_data(list, items);
+}
+
 /// What the crafting page is on: its tab, group and the recipe last
 /// selected (by its place in the catalog; `CraftingRecipeCrafted` names
 /// none).
@@ -879,7 +952,7 @@ fn start_hud(host: &mut fc3_ui::Host, (_w, h): (u32, u32)) {
     host.answer("GetLanguage", "english");
     host.answer("Platform", "PC");
     host.run_frame();
-    host.load(r"UI\Singleplayer\Hud\MainHud\MainHud.feu", 1);
+    host.load(r"UI\Singleplayer\Hud\MainHud\MainHud.feu", HUD_LEVEL);
     for _ in 0..3 {
         host.run_frame();
     }

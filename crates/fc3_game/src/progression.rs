@@ -1972,7 +1972,7 @@ fn load_handbook(info: Res<crate::data::CacheInfo>, mut book: ResMut<HandbookDat
 /// describe: animals killed or skinned, plants gathered, weapons held and
 /// vehicles boarded (`Progress::met`), and as many of a kind of collectible
 /// as have been found.
-fn handbook_open(e: &fc3_formats::progression::HandbookEntry, progress: &Progress) -> bool {
+pub(crate) fn handbook_open(e: &fc3_formats::progression::HandbookEntry, progress: &Progress) -> bool {
     if !progress.story || e.at_start {
         return true;
     }

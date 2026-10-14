@@ -235,6 +235,11 @@ impl Host {
         self.call("unload", vec![ExternalValue::Number(level as f64)]);
     }
 
+    /// Shows or hides the movie at a level.
+    pub fn level_visible(&self, level: u32, on: bool) {
+        self.call("levelVisible", vec![ExternalValue::Number(level as f64), ExternalValue::Bool(on)]);
+    }
+
     /// Broadcasts an event to the movies listening on a channel
     /// (`_global.ExtendedEvents.<channel>`): `onEvent(args...)`.
     pub fn event(&self, channel: &str, args: &[&str]) {
