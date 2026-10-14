@@ -385,6 +385,8 @@ pub struct StoryHost {
     /// Tests (`FC3_STORY_AUTOPILOT`): seconds since anything happened, and
     /// the triggers already walked into.
     quiet: f32,
+    /// What last kept the story from going quiet (tests: the stall dump).
+    stirred_by: String,
     used: std::collections::HashSet<(u64, String)>,
     /// The last checkpoint's progress, and when a reload to it is due.
     checkpoint: Option<fc3_story::save::StorySave>,
@@ -476,6 +478,7 @@ impl StoryHost {
             scene_in_block: false,
             scene_in_last: false,
             quiet: 0.0,
+            stirred_by: String::new(),
             used: Default::default(),
             checkpoint,
             reload_at: None,
@@ -1298,8 +1301,13 @@ fn run_story(
     // Tests: when nothing has happened for a while, step into a trigger a
     // script waits on.
     host.quiet += dt;
-    if commands.iter().any(|c| !matches!(c, Command::Layer { .. } | Command::Print(_) | Command::Dialog { .. })) {
+    // (Nor does a script holding the time of day, set again every few
+    // seconds: BAM_020's ship.)
+    if let Some(c) = commands.iter().find(|c| {
+        !matches!(c, Command::Layer { .. } | Command::Print(_) | Command::Dialog { .. }) && !matches!(c, Command::Native { name, .. } if name == "SetTimeOfDay")
+    }) {
         host.quiet = 0.0;
+        host.stirred_by = format!("{c:?}").chars().take(120).collect();
     }
     // (With FC3_STORY_WAIT_DEBUG, a minute on too: a script's looping bark
     // can keep the story from ever going quiet.)
@@ -1308,7 +1316,15 @@ fn run_story(
         && (std::env::var("FC3_STORY_AUTOPILOT").is_ok() || std::env::var("FC3_STORY_WAIT_DEBUG").is_ok())
         && ((host.quiet > 20.0 && host.quiet - dt <= 20.0) || minute)
     {
-        info!("story autopilot: stalled; triggers {:?}, signals {:?}", host.story.watched_triggers(), host.story.watched_signals());
+        info!(
+            "story autopilot: stalled ({:.1} s quiet, last stirred by {}; scene view {}, scene plays the player {}); triggers {:?}, signals {:?}",
+            host.quiet,
+            host.stirred_by,
+            cinema.view.is_some(),
+            cinema.plays_player(),
+            host.story.watched_triggers(),
+            host.story.watched_signals()
+        );
         for w in host.story.waiting_on() {
             info!("story autopilot: waiting on {w}");
         }
