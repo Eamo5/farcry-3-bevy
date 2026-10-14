@@ -74,6 +74,29 @@ fn main() -> Result<()> {
                 }
                 println!("dps ids: {:?}", host.dps_ids());
             }
+            // FC3UI_DATA="DataLootInventory=sName:Feather,iStateID:2;sName:Hide|Other=...":
+            // lists for the data providers (items by ";", fields by ",",
+            // numbers as numbers), set after the events, as the engine sets
+            // them once a page says it is loaded (it builds its grid then).
+            for list in std::env::var("FC3UI_DATA").unwrap_or_default().split('|').filter(|l| !l.is_empty()) {
+                let Some((name, items)) = list.split_once('=') else { continue };
+                let items = items
+                    .split(';')
+                    .map(|item| {
+                        item.split(',')
+                            .filter_map(|kv| kv.split_once(':'))
+                            .map(|(k, v)| {
+                                let value = v.parse::<f64>().map_or_else(|_| fc3_ui::ExternalValue::String(v.to_string()), fc3_ui::ExternalValue::Number);
+                                (k.to_string(), value)
+                            })
+                            .collect()
+                    })
+                    .collect();
+                host.set_data(name, items);
+                for _ in 0..frames.max(1) {
+                    step(&mut host);
+                }
+            }
             // FC3UI_SET="id:visible=1,frame=12,text=99;id2:_alpha=50": clip
             // states to try (a frame or text, else any property).
             if let Ok(set) = std::env::var("FC3UI_SET") {

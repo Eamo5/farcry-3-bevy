@@ -302,6 +302,58 @@ api.addCallback("call", null, function(path, args) {
     }
     return f.apply(o, args);
 });
+// The engine's data providers, fire.utils.DataProvider(name) (no movie
+// defines it; lib's DataProviderAS is the script-side kind): the lists a
+// page shows (the rucksack's loot, recipes, skills...), kept here by name as
+// the host sets them. A page reads them (getLength, request) and hears of
+// each new list (onDataReceived), which the host sends once the page says
+// it is loaded (a page builds its grid on it); an item's fields bind to the
+// clips of the same names on its tile (fire.utils.DataBinderUtils).
+_global.__fireData = new Object();
+_global.__fireProviders = new Object();
+_global.__fireResult = function(status, data) {
+    var r = _global.fire.utils.DataResult == undefined ? new Object() : new _global.fire.utils.DataResult();
+    r.status = status;
+    r.data = data;
+    return r;
+};
+_global.fire.utils.DataProvider = function(name) {
+    this.m_name = String(name);
+    if (_global.__fireProviders[this.m_name] == undefined) {
+        _global.__fireProviders[this.m_name] = new Array();
+    }
+    _global.__fireProviders[this.m_name].push(this);
+};
+_global.fire.utils.DataProvider.prototype.getLength = function() {
+    var d = _global.__fireData[this.m_name];
+    return d == undefined ? 0 : d.length;
+};
+_global.fire.utils.DataProvider.prototype.request = function(index, count) {
+    var d = _global.__fireData[this.m_name];
+    var out = new Array();
+    if (d == undefined || index < 0 || index >= d.length) {
+        return _global.__fireResult(0, out);
+    }
+    var n = (count == undefined || count < 1) ? 1 : count;
+    var i = 0;
+    while (i < n && index + i < d.length) {
+        out.push(d[index + i]);
+        i++;
+    }
+    return _global.__fireResult(2, out);
+};
+_global.fire.utils.DataProvider.prototype.onDataReceived = function(result) {
+    return true;
+};
+api.addCallback("setData", null, function(name, items) {
+    _global.__fireData[name] = items;
+    var list = _global.__fireProviders[name];
+    var i = 0;
+    while (list != undefined && i < list.length) {
+        list[i].onDataReceived(_global.__fireResult(2, items));
+        i++;
+    }
+});
 api.addCallback("dpsList", null, function() {
     _global.__fireRescan();
     var ids = new Array();
@@ -327,15 +379,19 @@ api.addCallback("dpsInfo", null, function(id) {
 });
 // (Tools) what is at a path ("_level1.mcBack", "_global.isInverted"): a
 // clip's state at a glance, else the value.
+// (A bare _global read as a value comes out undefined here: start from its
+// first member.)
 _global.__fireAt = function(path) {
     var parts = String(path).split(".");
-    var o = _global;
-    var i = 0;
+    var o;
+    var i = 1;
     if (parts[0] == "_global") {
-        i = 1;
+        o = _global[parts[1]];
+        i = 2;
     } else if (parts[0].substr(0, 6) == "_level" || parts[0] == "_root") {
         o = eval(parts[0]);
-        i = 1;
+    } else {
+        o = _global[parts[0]];
     }
     while (i < parts.length && o != undefined) {
         o = o[parts[i]];

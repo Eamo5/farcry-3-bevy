@@ -298,6 +298,14 @@ impl Host {
         (v.len() == 4).then(|| [v[0], v[1], v[2], v[3]])
     }
 
+    /// A list for the movies' data providers (`fire.utils.DataProvider(name)`:
+    /// the rucksack's loot, recipes...): each item's fields bind to the
+    /// clips of the same names on its tile. The pages showing it hear of it.
+    pub fn set_data(&self, name: &str, items: Vec<std::collections::BTreeMap<String, ExternalValue>>) {
+        let list = items.into_iter().map(ExternalValue::Object).collect();
+        self.call("setData", vec![ExternalValue::String(name.to_string()), ExternalValue::List(list)]);
+    }
+
     /// What is at a path (`_level1.mcBack`, `_global.isInverted`), as text:
     /// a clip's state at a glance, else the value (tools).
     pub fn path_info(&self, path: &str) -> String {

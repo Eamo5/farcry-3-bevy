@@ -163,6 +163,23 @@ names|strings|dis <block>|fsc2` reads a converted movie's script):
   whole menu stayed invisible. The shim defines it, stepping its tweens
   every frame by `getTimer` (Penner's quadratic, quintic, back and bounce
   curves; `repeat` -1 is for ever, `yoyo` runs back on each repeat).
+* **Data providers**: `new fire.utils.DataProvider(name)` is the engine's
+  as well (lib defines only `DataProviderAS`, the script-side kind): a
+  named list the engine fills (`DataLootInventory`, `DataRecipes`,
+  `SkillsDP`, `DataMap`, `KeyBindings`, ...). A page reads it with
+  `getLength()` and `request(index, count)` (a `fire.utils.DataResult`:
+  `status` 0 failed, 1 pending, 2 success, and `data`), and builds its grid
+  or list when it hears of a list (`onDataReceived`), which the engine sends
+  once the page says it is loaded (`PlayerInventoryLoaded`); a list sent
+  earlier would refresh a grid not yet made. An item's fields bind by name
+  (lib's `fire.utils.DataBinderUtils`): `iStateID` the state, `iObjectID`,
+  `sImage` (an exported symbol attached as the icon, `TX_AnimalHideBoar`),
+  `iNameID`, `iTypeID`, `bEquip`; any other field goes to the tile's clip
+  of that name (a text field's text). The rucksack's items also carry
+  `sName`, `sInfo`, `sSubCategory` (loot, animal, plant), `iPrice` and
+  `bRare`. The shim keeps the lists by name (`Host::set_data`);
+  `FC3UI_DATA="DataLootInventory=sName:...,iStateID:2;..."` sets them in
+  `fc3ui hud` after its events.
 
 `crates/fc3_ui/src/shim.as` is the engine's side, compiled at start with
 `rascal` (the AS2 compiler Ruffle's build uses) and played at level 0:
