@@ -870,6 +870,38 @@ pub struct Clip {
     pub sub_clips: Vec<Clip>,
 }
 
+/// An additive clip laid over a base pose (the first-person swim strokes
+/// over the swimming aim pose, which the game layers them on): each bone's
+/// rotation is the base's (at its start) times the clip's, at the base's
+/// place. Bones only the base keys keep the base's pose.
+pub fn layered_over(add: &Clip, base: &Clip) -> Clip {
+    let mut out = add.clone();
+    for t in &mut out.tracks {
+        let under = base.tracks.iter().find(|b| b.bone == t.bone);
+        if let Some(qb) = under.and_then(|b| b.sample_rotation(0.0)) {
+            for q in &mut t.rotations {
+                *q = quat_mul(qb, *q);
+            }
+        }
+        match under.and_then(|b| b.sample_translation(0.0)) {
+            Some(tb) => {
+                t.translation_times = vec![0.0];
+                t.translations = vec![tb];
+            }
+            None => {
+                t.translation_times.clear();
+                t.translations.clear();
+            }
+        }
+    }
+    for b in &base.tracks {
+        if !out.tracks.iter().any(|t| t.bone == b.bone) {
+            out.tracks.push(b.clone());
+        }
+    }
+    out
+}
+
 impl Clip {
     /// Fills `bone_hash` of every track from the skeleton the clip targets.
     pub fn resolve(&mut self, skel: &Skeleton) {

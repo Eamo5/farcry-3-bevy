@@ -1,0 +1,343 @@
+use crate::Error;
+use crate::buffer_pool::PoolEntry;
+use crate::utils::{BufferDimensions, remove_srgb};
+use ruffle_render::bitmap::PixelRegion;
+use std::fmt::Debug;
+use std::ops::Deref;
+use tracing::instrument;
+
+pub trait RenderTargetFrame: Debug {
+    fn into_view(self) -> wgpu::TextureView;
+
+    fn view(&self) -> &wgpu::TextureView;
+}
+
+pub trait RenderTarget: Debug + 'static {
+    type Frame: RenderTargetFrame;
+
+    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32);
+
+    fn format(&self) -> wgpu::TextureFormat;
+
+    fn width(&self) -> u32;
+
+    fn height(&self) -> u32;
+
+    /// Returns the frame to render into, or `None` if no frame could be
+    /// acquired - in which case the caller should skip this frame, and
+    /// may attempt to recreate the swap chain via [`RenderTarget::resize`].
+    fn get_next_texture(&mut self) -> Option<Self::Frame>;
+
+    fn submit<I: IntoIterator<Item = wgpu::CommandBuffer>>(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        command_buffers: I,
+        frame: Self::Frame,
+    ) -> wgpu::SubmissionIndex;
+}
+
+#[derive(Debug)]
+pub struct SwapChainTarget {
+    window_surface: wgpu::Surface<'static>,
+    surface_config: wgpu::SurfaceConfiguration,
+}
+
+#[derive(Debug)]
+pub struct SwapChainTargetFrame {
+    texture: wgpu::SurfaceTexture,
+    view: wgpu::TextureView,
+}
+
+impl RenderTargetFrame for SwapChainTargetFrame {
+    fn into_view(self) -> wgpu::TextureView {
+        self.view
+    }
+
+    fn view(&self) -> &wgpu::TextureView {
+        &self.view
+    }
+}
+
+impl SwapChainTarget {
+    pub fn new(
+        surface: wgpu::Surface<'static>,
+        adapter: &wgpu::Adapter,
+        (width, height): (u32, u32),
+        device: &wgpu::Device,
+    ) -> Self {
+        // Flash colors and blending are done in sRGB space -- we don't want the GPU to
+        // adjust the colors. We prefer a non-sRGB surface format directly, but on platforms
+        // that only expose sRGB surface formats we view the surface texture as its non-sRGB
+        // counterpart so writes skip the linear->sRGB encode step.
+        let capabilities = surface.get_capabilities(adapter);
+        let format = capabilities
+            .formats
+            .iter()
+            .find(|format| {
+                matches!(
+                    format,
+                    wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
+                )
+            })
+            .or_else(|| capabilities.formats.first())
+            .copied()
+            // No surface (rendering to texture), default to linear RBGA.
+            .unwrap_or(wgpu::TextureFormat::Rgba8Unorm);
+
+        let linear_format = remove_srgb(format);
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width,
+            height,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: capabilities.alpha_modes[0],
+            view_formats: if linear_format == format {
+                vec![format]
+            } else {
+                vec![format, linear_format]
+            },
+        };
+        surface.configure(device, &surface_config);
+        Self {
+            surface_config,
+            window_surface: surface,
+        }
+    }
+}
+
+impl RenderTarget for SwapChainTarget {
+    type Frame = SwapChainTargetFrame;
+
+    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        self.surface_config.width = width;
+        self.surface_config.height = height;
+        self.window_surface.configure(device, &self.surface_config);
+    }
+
+    fn format(&self) -> wgpu::TextureFormat {
+        remove_srgb(self.surface_config.format)
+    }
+
+    fn width(&self) -> u32 {
+        self.surface_config.width
+    }
+
+    fn height(&self) -> u32 {
+        self.surface_config.height
+    }
+
+    fn get_next_texture(&mut self) -> Option<Self::Frame> {
+        let texture = match self.window_surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(surface_texture) => surface_texture,
+            // The texture is still usable - no reason to waste an already
+            // acquired frame. Ideally the surface should also be reconfigured
+            // before the next acquire; we don't currently do that (matching
+            // pre-wgpu-29 behavior, which never checked the suboptimal flag).
+            wgpu::CurrentSurfaceTexture::Suboptimal(surface_texture) => surface_texture,
+            state => {
+                tracing::warn!("Couldn't acquire surface texture: {:?}", state);
+                return None;
+            }
+        };
+        let view_format = remove_srgb(self.surface_config.format);
+
+        let view = texture.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(view_format),
+            ..Default::default()
+        });
+
+        Some(SwapChainTargetFrame { texture, view })
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    fn submit<I: IntoIterator<Item = wgpu::CommandBuffer>>(
+        &self,
+        _device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        command_buffers: I,
+        frame: Self::Frame,
+    ) -> wgpu::SubmissionIndex {
+        let index = queue.submit(command_buffers);
+        frame.texture.present();
+        index
+    }
+}
+
+#[derive(Debug)]
+pub enum MaybeOwnedBuffer {
+    Borrowed(PoolEntry<wgpu::Buffer, BufferDimensions>, BufferDimensions),
+    Owned(wgpu::Buffer, BufferDimensions),
+}
+
+impl MaybeOwnedBuffer {
+    pub fn inner(&self) -> (&wgpu::Buffer, &BufferDimensions) {
+        match &self {
+            MaybeOwnedBuffer::Borrowed(entry, dimensions) => ((*entry).deref(), dimensions),
+            MaybeOwnedBuffer::Owned(buffer, dimensions) => (buffer, dimensions),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct TextureBufferInfo {
+    pub buffer: MaybeOwnedBuffer,
+    pub copy_area: PixelRegion,
+}
+
+#[derive(Debug)]
+pub struct TextureTarget {
+    pub size: wgpu::Extent3d,
+    pub texture: wgpu::Texture,
+    pub format: wgpu::TextureFormat,
+    pub buffer: Option<TextureBufferInfo>,
+}
+
+#[derive(Debug)]
+pub struct TextureTargetFrame(wgpu::TextureView);
+
+impl RenderTargetFrame for TextureTargetFrame {
+    fn view(&self) -> &wgpu::TextureView {
+        &self.0
+    }
+
+    fn into_view(self) -> wgpu::TextureView {
+        self.0
+    }
+}
+
+impl TextureTarget {
+    pub fn new(device: &wgpu::Device, size: (u32, u32)) -> Result<Self, Error> {
+        if size.0 > device.limits().max_texture_dimension_2d
+            || size.1 > device.limits().max_texture_dimension_2d
+            || size.0 < 1
+            || size.1 < 1
+        {
+            return Err(format!(
+                "Texture target cannot be smaller than 1 or larger than {}px on either dimension (requested {} x {})",
+                device.limits().max_texture_dimension_2d,
+                size.0,
+                size.1
+            )
+            .into());
+        }
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let buffer_dimensions = BufferDimensions::new(size.0 as usize, size.1 as usize, format);
+        let size = wgpu::Extent3d {
+            width: size.0,
+            height: size.1,
+            depth_or_array_layers: 1,
+        };
+        let texture_label = create_debug_label!("Render target texture");
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: texture_label.as_deref(),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            view_formats: &[format],
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+        });
+        let buffer_label = create_debug_label!("Render target buffer");
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: buffer_label.as_deref(),
+            size: (buffer_dimensions.padded_bytes_per_row as u64 * buffer_dimensions.height as u64),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        Ok(Self {
+            size,
+            texture,
+            format,
+            buffer: Some(TextureBufferInfo {
+                buffer: MaybeOwnedBuffer::Owned(buffer, buffer_dimensions),
+                copy_area: PixelRegion::for_whole_size(size.width, size.height),
+            }),
+        })
+    }
+
+    pub fn get_texture(&self) -> wgpu::Texture {
+        self.texture.clone()
+    }
+
+    pub fn take_buffer(self) -> Option<TextureBufferInfo> {
+        self.buffer
+    }
+}
+
+impl RenderTarget for TextureTarget {
+    type Frame = TextureTargetFrame;
+
+    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        *self =
+            TextureTarget::new(device, (width, height)).expect("Unable to resize texture target");
+    }
+
+    fn format(&self) -> wgpu::TextureFormat {
+        self.format
+    }
+
+    fn width(&self) -> u32 {
+        self.size.width
+    }
+
+    fn height(&self) -> u32 {
+        self.size.height
+    }
+
+    fn get_next_texture(&mut self) -> Option<Self::Frame> {
+        Some(TextureTargetFrame(
+            self.texture.create_view(&Default::default()),
+        ))
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    fn submit<I: IntoIterator<Item = wgpu::CommandBuffer>>(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        command_buffers: I,
+        _frame: Self::Frame,
+    ) -> wgpu::SubmissionIndex {
+        if let Some(TextureBufferInfo { buffer, copy_area }) = &self.buffer {
+            let label = create_debug_label!("Render target transfer encoder");
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: label.as_deref(),
+            });
+            let (buffer, dimensions) = buffer.inner();
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: copy_area.x_min,
+                        y: copy_area.y_min,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(dimensions.padded_bytes_per_row),
+                        rows_per_image: None,
+                    },
+                },
+                wgpu::Extent3d {
+                    width: copy_area.width(),
+                    height: copy_area.height(),
+                    depth_or_array_layers: 1,
+                },
+            );
+            queue.submit(command_buffers.into_iter().chain(Some(encoder.finish())))
+        } else {
+            queue.submit(command_buffers)
+        }
+    }
+}

@@ -81,7 +81,13 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
             c.group_removed.insert((group.0, e));
         }
     })?;
-    r.f("CAPI_Entity.IsEntityLoaded", |c, id: Text| id.id().is_some_and(|i| c.is_loaded(i)))?;
+    r.f("CAPI_Entity.IsEntityLoaded", |c, id: Text| {
+        let loaded = id.id().filter(|i| c.is_loaded(*i));
+        if let Some(i) = loaded {
+            c.told_loaded.insert(i);
+        }
+        loaded.is_some()
+    })?;
     r.f("IsEntityValid", |c, id: Text| id.id().is_some_and(|i| c.is_valid(i)))?;
     r.f("CAPI_Entity.GetName", |c, id: Text| match id.id() {
         Some(PLAYER) => "Player".to_string(),
@@ -294,14 +300,14 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
                 }
             });
         }
-        let ids: Vec<u64> = archetypes.iter().map(|_| c.next_id() | 0x7FFE_0000_0000_0000).collect();
+        let ids: Vec<u64> = archetypes.iter().map(|_| c.next_id() | crate::SPAWNED_IDS).collect();
         for (id, ark) in ids.iter().zip(&archetypes) {
             c.spawned.insert(*id, format!("{ark:016x}"));
             for g in &groups {
                 c.group_added.insert((g.clone(), *id));
             }
         }
-        let vehicle = vehicle.map(|ark| (c.next_id() | 0x7FFE_0000_0000_0000, ark));
+        let vehicle = vehicle.map(|ark| (c.next_id() | crate::SPAWNED_IDS, ark));
         if let Some((id, ark)) = vehicle {
             c.spawned.insert(id, format!("{ark:016x}"));
             for g in &vehicle_groups {
@@ -321,7 +327,7 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         true
     })?;
     r.f("SpawnEntityFromArchetype", |c, (archetype, x, y, z, ax, ay, az): (Text, Num, Num, Num, Num, Num, Num)| {
-        let id = c.next_id() | 0x7FFE_0000_0000_0000;
+        let id = c.next_id() | crate::SPAWNED_IDS;
         c.spawned.insert(id, archetype.0.clone());
         // (Where it stands, for the scripts and for using it.)
         let v = |n: Num| n.or(0.0) as f32;
@@ -428,6 +434,17 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     Ok(())
 }
 
+impl Core {
+    /// Where a look-at trigger is now: one placed on a character rides with
+    /// it (`triggers::carrier_of`), others stay where they were placed.
+    pub fn look_at_point(&mut self, trigger: u64) -> Option<[f32; 3]> {
+        let e = self.data.entities.get(&trigger)?;
+        let carrier = *self.look_carriers.entry(trigger).or_insert_with(|| crate::triggers::carrier_of(e, &self.data.entities));
+        let live = carrier.and_then(|(pawn, d)| self.view.spawned.get(&pawn).map(|l| [l.pos[0] + d[0], l.pos[1] + d[1], l.pos[2] + d[2]]));
+        Some(live.unwrap_or(e.pos))
+    }
+}
+
 /// Raises trigger enter/leave events for the triggers scripts listen on:
 /// the host reports who is inside each trigger (`View::contacts`); changes
 /// since the last frame become `Enter` / `Leave` events with the entity.
@@ -455,9 +472,12 @@ pub fn update_triggers(c: &mut Core) {
     c.looked_at.retain(|t| looks.contains(t));
     let eye = [c.view.player[0], c.view.player[1], c.view.player[2] + 1.6];
     for t in looks {
+        let at = c.look_at_point(t);
         let seen = c.trigger_on(t)
             && c.is_loaded(t)
-            && c.data.entities.get(&t).is_some_and(|e| crate::triggers::looked_at(e, eye, c.view.look, if c.view.fov > 1.0 { c.view.fov } else { 60.0 }));
+            && at
+                .zip(c.data.entities.get(&t))
+                .is_some_and(|(at, e)| crate::triggers::looked_at(e, at, eye, c.view.look, if c.view.fov > 1.0 { c.view.fov } else { 60.0 }));
         if seen && c.looked_at.insert(t) {
             c.raise(&Listen::Entity(t, "EnterFOV".into()), vec![Arg::id(PLAYER)]);
         } else if !seen && c.looked_at.remove(&t) {

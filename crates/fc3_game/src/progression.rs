@@ -3861,14 +3861,21 @@ fn setup_popups(mut commands: Commands) {
     ));
 }
 
-fn update_popups(time: Res<Time<Real>>, popups: Option<ResMut<Popups>>, mut text: Query<&mut Text, With<PopupText>>) {
+fn update_popups(
+    time: Res<Time<Real>>,
+    popups: Option<ResMut<Popups>>,
+    mut text: Query<&mut Text, With<PopupText>>,
+    original: Option<Res<crate::hud::OriginalHud>>,
+) {
     let Some(mut popups) = popups else { return };
     for p in &mut popups.0 {
         p.1 -= time.delta_secs();
     }
     popups.0.retain(|p| p.1 > 0.0);
     if let Ok(mut t) = text.single_mut() {
-        let s = popups.0.iter().rev().take(4).map(|p| p.0.as_str()).collect::<Vec<_>>().join("\n");
+        // (The original HUD's XP kicker shows them instead.)
+        let own = !original.is_some_and(|o| o.0);
+        let s = popups.0.iter().rev().take(4).filter(|_| own).map(|p| p.0.as_str()).collect::<Vec<_>>().join("\n");
         if t.0 != s {
             t.0 = s;
         }

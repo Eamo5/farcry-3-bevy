@@ -27,6 +27,7 @@ pub struct StealthPlugin;
 impl Plugin for StealthPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Binoculars>()
+            .add_message::<CameraSaw>()
             .init_resource::<RockAimTest>()
             .init_resource::<Takedown>()
             .add_systems(PreUpdate, aim_test_rock.after(crate::controls::update_actions).run_if(in_state(crate::menu::GameState::Playing)))
@@ -34,7 +35,7 @@ impl Plugin for StealthPlugin {
             .add_systems(Startup, load_rock)
             .add_systems(
                 Update,
-                ((tag_test, binoculars).chain(), takedown_prompt.before(crate::hud::HudSet), detection_markers, throw_rock, fly_rocks)
+                ((tag_test, binoculars, camera_shot).chain(), takedown_prompt.before(crate::hud::HudSet), detection_markers, throw_rock, fly_rocks)
                     .run_if(in_state(crate::menu::GameState::Playing)),
             );
     }
@@ -45,16 +46,48 @@ impl Plugin for StealthPlugin {
 pub struct Tagged;
 
 /// Binocular zoom (0..1 blend, read by the camera FOV and view model).
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct Binoculars {
     pub blend: f32,
+    /// The camera's magnification (`CAMERA_ZOOM`), the wheel's to change
+    /// while it is up.
+    pub zoom: f32,
+    /// Something to tag or take in is under the camera's centre.
+    pub on_target: bool,
     /// Seconds the tag key has been held (the camera comes up first).
     pub held: f32,
     dwell: HashMap<Entity, f32>,
 }
 
+/// The camera rested on one of the story's characters (alive or dead) long
+/// enough to take it in: scripts hear it discovered (and a live one, foe or
+/// not, tagged: a mission may want a captive picked out).
+#[derive(Message, Clone, Copy)]
+pub struct CameraSaw {
+    pub id: u64,
+    pub tagged: bool,
+}
+
 /// The camera's raise (its draw clip) before the view goes through it.
 const CAMERA_RAISE: f32 = 0.5;
+
+/// The camera's magnification: least and most (its viewfinder reads 1.0x to
+/// 7.5x), as first raised, and a step of the wheel.
+pub const CAMERA_ZOOM: [f32; 2] = [1.0, 7.5];
+const CAMERA_START_ZOOM: f32 = 4.0;
+const CAMERA_ZOOM_STEP: f32 = 1.25;
+
+impl Default for Binoculars {
+    fn default() -> Self {
+        Binoculars { blend: 0.0, zoom: CAMERA_START_ZOOM, on_target: false, held: 0.0, dwell: HashMap::new() }
+    }
+}
+
+/// The vertical field of view (degrees) through the camera at a
+/// magnification, from the view's own.
+pub fn camera_fov(view: f32, zoom: f32) -> f32 {
+    2.0 * ((view.to_radians() * 0.5).tan() / zoom.max(1.0)).atan().to_degrees()
+}
 
 /// Takedown in progress: restores the previous weapon afterwards.
 #[derive(Resource, Default)]
@@ -264,7 +297,7 @@ fn fly_rocks(
                 t.translation += step.normalize_or_zero() * h.distance + h.normal * 0.05;
                 rock.landed = true;
                 rock.age = 0.0;
-                noise.write(crate::npc::Noise { at: t.translation, radius: ROCK_HEARD, kind: crate::npc::NoiseKind::Interesting });
+                noise.write(crate::npc::Noise { at: t.translation, radius: ROCK_HEARD, kind: crate::npc::NoiseKind::Interesting, aside: false });
                 debug!("rock impact at {:?}", t.translation);
                 let event = crate::sound::switched(crate::sound::ev::ROCK_IMPACT, probe.at(h.entity, t.translation, h.normal), 0);
                 sfx.write(crate::sound::PlaySfx { event, at: Some(t.translation), volume: 0.45 });
@@ -283,8 +316,7 @@ fn fly_rocks(
 const TAG_RANGE: f32 = 180.0;
 
 fn camera_available(actions: &ActionState, player: &Player, health: &Health, scripted: &crate::story::ScriptedPlayer) -> bool {
-    actions.pressed(Action::Tag) && scripted.has_camera()
-        && !health.dead && !player.swimming && !player.noclip && !player.driving
+    (actions.pressed(Action::Tag) || scripted.camera_drawn) && scripted.has_camera() && !health.dead && !player.swimming && !player.noclip && !player.driving
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -299,19 +331,60 @@ fn binoculars(
     mut commands: Commands,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     perks: Res<crate::progression::Perks>,
-    (scripted, hud): (Res<crate::story::ScriptedPlayer>, Res<crate::map::HudParams>),
+    (mut scripted, hud): (ResMut<crate::story::ScriptedPlayer>, Res<crate::map::HudParams>),
+    (actors, mut saw, mut reported, mut story_dwell): (
+        Query<(Entity, &GlobalTransform, &crate::story_actors::StoryActor)>,
+        MessageWriter<CameraSaw>,
+        Local<std::collections::HashSet<u64>>,
+        Local<HashMap<Entity, f32>>,
+    ),
 ) {
     let dt = time.delta_secs();
     let Ok((pe, p, h)) = players.single() else { return };
     // The game's tagging range (else ours).
     let range = if hud.0.tag_range > 0.0 { hud.0.tag_range } else { TAG_RANGE };
+    // A camera a script drew goes down when the player presses for it (the
+    // press then holds it up as usual).
+    if scripted.camera_drawn && actions.just_pressed(Action::Tag) {
+        scripted.camera_drawn = false;
+    }
     let active = camera_available(&actions, p, h, &scripted);
+    if actions.pressed(Action::Tag) && std::env::var("FC3_CAMERA_DEBUG").is_ok() && time.elapsed_secs() as u32 != (time.elapsed_secs() - dt) as u32 {
+        info!(
+            "camera asked for: available {active} (camera {}, dead {}, swimming {}, noclip {}, driving {}), held {:.2}, raised {:.2}",
+            scripted.has_camera(),
+            h.dead,
+            p.swimming,
+            p.noclip,
+            p.driving,
+            bino.held,
+            bino.blend
+        );
+    }
     bino.held = if active { bino.held + dt } else { 0.0 };
     let target = if bino.held >= CAMERA_RAISE { 1.0 } else { 0.0 };
     bino.blend += (target - bino.blend) * (dt * 10.0).min(1.0);
+    let up = bino.blend >= 0.8;
+    if scripted.camera_up != up {
+        scripted.camera_up = up;
+    }
+    // The wheel zooms the camera while it is up (up is in).
+    if up && actions.cycle != 0 {
+        bino.zoom = (bino.zoom * CAMERA_ZOOM_STEP.powi(-actions.cycle.signum())).clamp(CAMERA_ZOOM[0], CAMERA_ZOOM[1]);
+    }
     if bino.blend < 0.8 {
         bino.dwell.clear();
+        bino.on_target = false;
         return;
+    }
+    if std::env::var("FC3_CAMERA_DEBUG").is_ok() && time.elapsed_secs() as u32 != (time.elapsed_secs() - dt) as u32 {
+        let Ok(cam) = camera.single() else { return };
+        let near = actors
+            .iter()
+            .map(|(_, gt, a)| (a.id, a.dead, gt.translation() - cam.translation()))
+            .min_by(|a, b| a.2.length().total_cmp(&b.2.length()))
+            .map(|(id, dead, to)| (id, dead, to.length(), to.normalize_or_zero().dot(cam.forward().as_vec3()).clamp(-1.0, 1.0).acos().to_degrees()));
+        info!("camera up; nearest story character (id, dead, m, degrees off): {near:?}");
     }
     let Ok(cam) = camera.single() else { return };
     let eye = cam.translation();
@@ -332,6 +405,36 @@ fn binoculars(
         let clear = spatial.cast_ray(eye, dir, dist, true, &filter).is_none_or(|hit| hit.entity == e || hit.distance > dist - 0.8);
         if clear {
             seen.push(e);
+        }
+    }
+    // The story's characters, the dead too (a body to photograph).
+    let filter = SpatialQueryFilter::from_excluded_entities([pe]);
+    let mut story_seen = Vec::new();
+    for (e, gt, actor) in &actors {
+        if reported.contains(&actor.id) {
+            continue;
+        }
+        let at = gt.translation() + Vec3::Y * if actor.dead { -0.6 } else { 0.3 };
+        let to = at - eye;
+        let dist = to.length();
+        if dist > range * perks.tag_range || to.normalize_or_zero().dot(fwd) < 4f32.to_radians().cos() {
+            continue;
+        }
+        let Ok(dir) = Dir3::new(to) else { continue };
+        if spatial.cast_ray(eye, dir, dist, true, &filter).is_none_or(|hit| hit.entity == e || hit.distance > dist - 0.8) {
+            story_seen.push((e, actor.id, !actor.dead));
+        }
+    }
+    if !story_seen.is_empty() {
+        trace!("camera: {} of the story's characters in view", story_seen.len());
+    }
+    bino.on_target = !seen.is_empty() || !story_seen.is_empty();
+    story_dwell.retain(|e, _| story_seen.iter().any(|s| s.0 == *e));
+    for (e, id, hostile) in story_seen {
+        let t = story_dwell.entry(e).or_insert(0.0);
+        *t += dt;
+        if *t >= 0.35 && reported.insert(id) {
+            saw.write(CameraSaw { id, tagged: hostile });
         }
     }
     bino.dwell.retain(|e, _| seen.contains(e));
@@ -435,6 +538,20 @@ mod tests {
         assert!(camera_available(&actions, &player, &health, &scripted));
         player.driving = true;
         assert!(!camera_available(&actions, &player, &health, &scripted));
+        // Drawn by a script, the camera comes up with no button held.
+        player.driving = false;
+        let idle = ActionState::default();
+        assert!(!camera_available(&idle, &player, &health, &scripted));
+        scripted.camera_drawn = true;
+        assert!(camera_available(&idle, &player, &health, &scripted));
+    }
+
+    #[test]
+    fn the_camera_narrows_the_view_by_its_magnification() {
+        assert!((camera_fov(70.0, 1.0) - 70.0).abs() < 1e-3);
+        let narrow = camera_fov(70.0, 4.0);
+        assert!(((narrow.to_radians() * 0.5).tan() * 4.0 - 35f32.to_radians().tan()).abs() < 1e-4);
+        assert!(camera_fov(70.0, CAMERA_ZOOM[1]) < narrow);
     }
 }
 
@@ -472,6 +589,26 @@ fn tag_test(
     if t > 2.0 && !*logged {
         *logged = true;
         info!("tag-test: {} tagged", tagged.iter().count());
+    }
+}
+
+/// `FC3_CAMERA_SHOT=<seconds>` (with `--screenshot`): a screenshot the
+/// first time the camera has been up that long (`<stem>_camera.png`).
+fn camera_shot(time: Res<Time>, args: Res<crate::Args>, scripted: Res<crate::story::ScriptedPlayer>, mut up_for: Local<Option<f32>>, mut commands: Commands) {
+    let Some(after) = std::env::var("FC3_CAMERA_SHOT").ok().and_then(|v| v.parse::<f32>().ok()) else { return };
+    let Some(path) = args.screenshot.as_ref() else { return };
+    let Some(t) = up_for.as_mut().filter(|t| **t >= 0.0) else {
+        if up_for.is_none() && scripted.camera_up {
+            *up_for = Some(0.0);
+        }
+        return;
+    };
+    *t = if scripted.camera_up { *t + time.delta_secs() } else { 0.0 };
+    if *t >= after {
+        let stem = path.strip_suffix(".png").unwrap_or(path);
+        crate::camera::capture(&mut commands, format!("{stem}_camera.png"));
+        // (Once.)
+        *up_for = Some(-1.0);
     }
 }
 

@@ -6,7 +6,7 @@
 use mlua::Value;
 
 use super::{vec3, Reg};
-use crate::core::Core;
+use crate::core::{Core, Listen};
 use crate::values::{Flag, Num, Text};
 use crate::{Command, Item, PLAYER};
 
@@ -30,6 +30,22 @@ impl Core {
         let id = fc3_formats::hash::crc64(format!("item:{}", name.to_ascii_lowercase()).as_bytes()) | 1 << 63;
         self.item_ids.insert(id, name.to_string());
         id.to_string()
+    }
+
+    /// Vehicles that boxes watch for damage (`OnStateChange`), and whether
+    /// each is wrecked now.
+    pub fn watched_vehicles(&self) -> Vec<(u64, bool)> {
+        let mut ids: Vec<u64> = self
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Entity(id, event) if event == "OnStateChange" => Some(*id),
+                _ => None,
+            })
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids.into_iter().map(|id| (id, self.is_dead(id))).collect()
     }
 
     pub fn is_dead(&self, id: u64) -> bool {
@@ -136,9 +152,6 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         "CAPI_Player.DrawGadget",
         "CAPI_AI.StartPlayAnim",
         "CAPI_AI.StopPlayAnim",
-        "CAPI_Companion.CompanionSetFollow",
-        "CAPI_Companion.CompanionSetLead",
-        "CAPI_Companion.CompanionSetWait",
     ] {
         let n = name.to_string();
         r.f(name, move |c, args: mlua::Variadic<Text>| {
@@ -146,6 +159,36 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
             true
         })?;
     }
+    // A companion told to follow the player, lead along a path (waiting
+    // while the player is further off than the distance given) or wait.
+    r.f("CAPI_Companion.CompanionSetFollow", |c, companion: Text| {
+        if let Some(id) = companion.id() {
+            c.companions.insert(id, crate::Companion::Follow);
+        }
+        c.emit(Command::Native { name: "CAPI_Companion.CompanionSetFollow".into(), args: vec![companion.0] });
+        true
+    })?;
+    r.f("CAPI_Companion.CompanionSetLead", |c, (companion, path, distance): (Text, Text, Num)| {
+        if let (Some(id), Some(path)) = (companion.id(), path.id()) {
+            c.companions.insert(id, crate::Companion::Lead { path, distance: distance.0.unwrap_or(15.0) as f32 });
+        }
+        c.emit(Command::Native { name: "CAPI_Companion.CompanionSetLead".into(), args: vec![companion.0, path.0] });
+        true
+    })?;
+    r.f("CAPI_Companion.CompanionSetWait", |c, companion: Text| {
+        if let Some(id) = companion.id() {
+            c.companions.insert(id, crate::Companion::Wait);
+        }
+        c.emit(Command::Native { name: "CAPI_Companion.CompanionSetWait".into(), args: vec![companion.0] });
+        true
+    })?;
+    // The player's pawn swapped for another archetype (a later model of
+    // him): `LocalPlayerRespawnedReady` once it is in, as the box that asked
+    // turns to listen for it just after.
+    r.f("CAPI_Player.SwitchPlayerPawn", |c, args: mlua::Variadic<Text>| {
+        c.pawn_ready_at = Some(c.time + 0.1);
+        c.emit(Command::Native { name: "CAPI_Player.SwitchPlayerPawn".into(), args: args.into_iter().map(|t| t.0).collect() });
+    })?;
     r.f("CAPI_Player.StartPhoneCall", |c, (pawn, sound, caller, incoming): (Text, Text, Num, Flag)| {
         let caller_name = caller.0.and_then(|id| c.data.strings.get(id as u32)).unwrap_or_default().to_string();
         c.emit(Command::Native { name: "CAPI_Player.StartPhoneCall".into(), args: vec![pawn.0, sound.0, caller_name, incoming.0.to_string()] });
@@ -188,7 +231,13 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.constant("PlayCoopBark", false)?;
 
     // ---- vehicles
-    r.constant("CAPI_Vehicle.GetVehicleEngineState", 0.0)?;
+    // A vehicle's damage state as `VehicleDamageListener` reads it (0
+    // destroyed ... 5 mint): destroyed once the host has it wrecked, mint
+    // until then (a listener reads it the moment it is enabled).
+    r.f("CAPI_Vehicle.GetVehicleEngineState", |c, v: Text| match v.id() {
+        Some(i) if c.is_dead(i) => crate::VEHICLE_DESTROYED,
+        _ => crate::VEHICLE_MINT,
+    })?;
     r.f("CAPI_Vehicle.IsVehicleDisabled", |c, v: Text| v.id().is_some_and(|i| c.is_dead(i)))?;
     r.constant("CAPI_Vehicle.IsVehicleFlipped", false)?;
     r.constant("CAPI_Vehicle.IsVehicleUnderwater", false)?;

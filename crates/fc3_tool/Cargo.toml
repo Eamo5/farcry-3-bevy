@@ -14,3 +14,5 @@ fc3_story.workspace = true
 anyhow.workspace = true
 naga = { version = "29", features = ["wgsl-in"] }
 rayon = "1"
+# Ruffle's SWF and ABC reader (the revision `fc3_ui` uses), for `playerglobal-abc`.
+swf = { git = "https://github.com/ruffle-rs/ruffle", rev = "2372a4e148a67d68efd796f4477b3cddd4f880cd" }

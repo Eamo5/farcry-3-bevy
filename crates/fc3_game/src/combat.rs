@@ -349,14 +349,20 @@ fn apply_damage(
         if driving.as_ref().is_some_and(|d| d.vehicle == Some(ev.target)) {
             amount *= perks.vehicle_damage;
         }
-        // Syringes: the fighter's halves damage, the fireproof one stops burns.
+        // The hunter's syringe: the player's shots and blows on animals do
+        // more.
+        if ps.is_none()
+            && boosts.active(crate::syringes::Syringe::AnimalDamage)
+            && ev.instigator.is_some_and(|i| players.contains(i))
+            && instigators.get(ev.target).is_ok_and(|(animal, ..)| animal.is_some())
+        {
+            amount *= 1.0 + boosts.animal_damage;
+        }
+        // Syringes: the fireproof one stops burns, the invincible one all.
         if ps.is_some() {
             use crate::syringes::Syringe;
             if boosts.active(Syringe::Fireproof) && ev.kind == DamageKind::Fire {
                 amount = 0.0;
-            }
-            if boosts.active(Syringe::AnimalShield) && ev.instigator.and_then(|e| instigators.get(e).ok()).is_some_and(|(animal, ..)| animal.is_some()) {
-                amount *= 0.5;
             }
             if boosts.active(Syringe::Invincible) {
                 amount = 0.0;

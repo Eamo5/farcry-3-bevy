@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["crates/fc3_formats", "crates/fc3_tool", "crates/fc3_game", "crates/fc3_convert", "crates/fc3_domino", "crates/fc3_story", "crates/fc3_bink"]
+members = ["crates/fc3_formats", "crates/fc3_tool", "crates/fc3_game", "crates/fc3_convert", "crates/fc3_domino", "crates/fc3_story", "crates/fc3_bink", "crates/fc3_ui"]
+# `fc3_ui` builds only once Ruffle's pre-built playerglobal is in
+# vendor/build_playerglobal (see vendor/README.md): `cargo build -p fc3_ui`.
+default-members = ["crates/fc3_formats", "crates/fc3_tool", "crates/fc3_game", "crates/fc3_convert", "crates/fc3_domino", "crates/fc3_story", "crates/fc3_bink"]
 
 [workspace.package]
 edition = "2021"
@@ -19,6 +22,13 @@ flate2 = "1"
 # Bevy's mesh crate with a streaming fix (see vendor/README.md).
 [patch.crates-io]
 bevy_mesh = { path = "vendor/bevy_mesh" }
+
+# Ruffle's AGAL shader compiler at naga 29, to match the vendored renderer,
+# and its playerglobal builder reading a pre-built ABC instead of running
+# Java (see vendor/README.md).
+[patch."https://github.com/ruffle-rs/ruffle"]
+naga-agal = { path = "vendor/naga-agal" }
+build_playerglobal = { path = "vendor/build_playerglobal" }
 
 [profile.dev]
 opt-level = 1

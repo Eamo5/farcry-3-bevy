@@ -1,0 +1,27 @@
+[package]
+name = "fc3_ui"
+edition.workspace = true
+version.workspace = true
+
+# The game's interface movies run in Ruffle (MIT or Apache-2.0), its wgpu
+# renderer vendored at wgpu 29 to share Bevy's device (see vendor/README.md).
+[dependencies]
+ruffle_core = { git = "https://github.com/ruffle-rs/ruffle", rev = "2372a4e148a67d68efd796f4477b3cddd4f880cd", features = ["default_font"] }
+ruffle_render_wgpu = { path = "../../vendor/ruffle_render_wgpu" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+futures = "0.3"
+anyhow.workspace = true
+fc3_formats.workspace = true
+# Ruffle's own versions: its AS2 compiler (for the shim), URLs and channels
+# (its navigator's interface), its renderer interface.
+rascal = "0.3.6"
+url = "2.5"
+async-channel = "2.5"
+# (The tool's log: Ruffle's warnings with RUST_LOG.)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ruffle_render = { git = "https://github.com/ruffle-rs/ruffle", rev = "2372a4e148a67d68efd796f4477b3cddd4f880cd" }
+
+[[bin]]
+name = "fc3ui"
+path = "src/main.rs"

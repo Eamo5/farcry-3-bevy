@@ -1280,9 +1280,12 @@ fn switch_weapon(
     mut q: Query<(&mut Inventory, &Health), With<Player>>,
     mut wheel: ResMut<crate::weapon_wheel::WeaponWheel>,
     perks: Res<crate::progression::Perks>,
+    bino: Res<crate::stealth::Binoculars>,
 ) {
     use crate::controls::Action;
     let Ok((mut inv, health)) = q.single_mut() else { return };
+    // (With the camera up the wheel zooms it.)
+    let cycle = if bino.held > 0.0 || bino.blend > 0.3 { 0 } else { actions.cycle };
     let (tap, pick) = (std::mem::take(&mut wheel.tap), wheel.pick.take());
     let dt = time.delta_secs();
     if inv.switching > 0.0 {
@@ -1301,9 +1304,9 @@ fn switch_weapon(
     }
     let n = inv.slots.len();
     if n == 0 { return; }
-    if actions.cycle < 0 || actions.just_pressed(Action::PrevWeapon) {
+    if cycle < 0 || actions.just_pressed(Action::PrevWeapon) {
         target = Some((inv.current + n - 1) % n);
-    } else if actions.cycle > 0 {
+    } else if cycle > 0 {
         target = Some((inv.current + 1) % n);
     } else if tap {
         target = wheel.quick_swap(&inv.slots, inv.current);
@@ -2325,9 +2328,9 @@ fn update_view_model(
             // Aiming narrows from the player's FOV toward the weapon's.
             let base = settings.fov;
             let fov = base + (d.ads_fov.min(base) - base) * inv.aim_blend;
-            // Binoculars zoom further still; a vehicle's camera widens with
-            // speed.
-            let fov = (fov + (18.0 - fov) * bino.blend) * speed_fov.as_ref().map_or(1.0, |s| s.0);
+            // Binoculars zoom further still (by the camera's own
+            // magnification); a vehicle's camera widens with speed.
+            let fov = (fov + (crate::stealth::camera_fov(base, bino.zoom) - fov) * bino.blend) * speed_fov.as_ref().map_or(1.0, |s| s.0);
             let fov = fov.min(120.0).to_radians();
             p.fov = fov;
         }

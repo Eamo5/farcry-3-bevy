@@ -146,6 +146,60 @@ fn bc4_texel(b: &[u8], t: usize) -> f32 {
     bc4_values(b)[((bits >> (3 * t)) & 7) as usize]
 }
 
+/// The top mip of a DDS as 8-bit RGBA rows (DXT1, DXT3, DXT5, or 32-bit
+/// uncompressed by its channel masks): width, height, pixels.
+pub fn decode_rgba(dds: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    let info = dds_info(dds)?;
+    let (w, h) = (info.width, info.height);
+    let start = dds_header_len(dds);
+    let data = dds.get(start..)?;
+    let mut out = vec![0u8; (w * h * 4) as usize];
+    let unit = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let block_bytes = match &info.fourcc {
+        b"DXT1" => 8,
+        b"DXT3" | b"DXT5" => 16,
+        _ => 0,
+    };
+    if block_bytes > 0 {
+        let blocks_w = w.div_ceil(4) as usize;
+        for by in 0..h.div_ceil(4) as usize {
+            for bx in 0..blocks_w {
+                let b = data.get((by * blocks_w + bx) * block_bytes..(by * blocks_w + bx + 1) * block_bytes)?;
+                let (alpha, colour) = if block_bytes == 16 { (Some(&b[..8]), &b[8..]) } else { (None, b) };
+                let palette = bc1_palette(colour, alpha.is_none());
+                let bits = u32::from_le_bytes([colour[4], colour[5], colour[6], colour[7]]);
+                for t in 0..16 {
+                    let (x, y) = (bx * 4 + t % 4, by * 4 + t / 4);
+                    if x >= w as usize || y >= h as usize {
+                        continue;
+                    }
+                    let c = palette[((bits >> (2 * t)) & 3) as usize];
+                    let a = match (&info.fourcc, alpha) {
+                        (b"DXT5", Some(a)) => bc4_texel(a, t),
+                        (b"DXT3", Some(a)) => ((a[t / 2] >> (4 * (t % 2))) & 15) as f32 / 15.0,
+                        _ => c[3],
+                    };
+                    let o = (y * w as usize + x) * 4;
+                    out[o..o + 4].copy_from_slice(&[unit(c[0]), unit(c[1]), unit(c[2]), unit(a)]);
+                }
+            }
+        }
+        return Some((w, h, out));
+    }
+    // Uncompressed 32-bit, by its masks (no alpha mask: opaque).
+    let rd = |o: usize| u32::from_le_bytes(dds[o..o + 4].try_into().unwrap());
+    if rd(88) != 32 {
+        return None;
+    }
+    let masks = [rd(92), rd(96), rd(100), rd(104)];
+    for (i, px) in data.chunks_exact(4).take((w * h) as usize).enumerate() {
+        let p = u32::from_le_bytes(px.try_into().unwrap());
+        let chan = |mask: u32| if mask == 0 { 255 } else { (((p & mask) >> mask.trailing_zeros()) * 255 / (mask >> mask.trailing_zeros())) as u8 };
+        out[i * 4..i * 4 + 4].copy_from_slice(&[chan(masks[0]), chan(masks[1]), chan(masks[2]), chan(masks[3])]);
+    }
+    Some((w, h, out))
+}
+
 /// Average colour (RGBA, 0..1, as stored) of a DDS, from its smallest mip
 /// level that holds at least one block. Supports BC1-5 and 32-bit RGBA/BGRA.
 pub fn mean_color(dds: &[u8]) -> Option<[f32; 4]> {

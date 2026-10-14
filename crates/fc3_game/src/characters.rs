@@ -112,6 +112,15 @@ const CLIPS: [(AnimKind, &str); 8] = [
     (AnimKind::Reload, r"weapons\npc\lotuseaters\ak47\reloads\3rdge_fulbst_idlealert_normal_reload_v00_+000fw_ak74.mab"),
     (AnimKind::Death, r"injury\death\stand\head\3rdge_fulbst_diehead00_fromfw_+000fw_ak74.mab"),
 ];
+/// A charger's clips (the beheader's machete set): idle, walk, run, at the
+/// ready, and the human death.
+const CHARGER_CLIPS: [(AnimKind, &str); 5] = [
+    (AnimKind::Idle, r"locomotion\stand\idle\cautious\3rdge_fulbst_idlecautious_v00_000fw_beh.mab"),
+    (AnimKind::Walk, r"locomotion\stand\walk\cautious\3rdge_fulbst_walkcautious_v00_000fw_beh.mab"),
+    (AnimKind::Run, r"patrolkits\lotuseater\neutral\3rdge_fulbst_alert_run_v00_+000fw_beh.mab"),
+    (AnimKind::Aim, r"locomotion\stand\idle\cautious\3rdge_fulbst_idlecautious_v00_000fw_beh.mab"),
+    (AnimKind::Death, r"injury\death\stand\head\3rdge_fulbst_diehead00_fromfw_+000fw_ak74.mab"),
+];
 /// Skeleton whose bone indices the human clips use.
 const MASTER_SKELETON: &str = r"graphics\actors_\_skeleton_master\hips_ref.skeleton";
 macro_rules! gun {
@@ -135,7 +144,8 @@ const fn look(faction: Faction, role: Role, kits: &'static [&'static str], weapo
 
 pub const LOOKS: &[LookDef] = &[
     look(Faction::Pirate, Role::Assault, &["Pirate_Assault"], gun!("ak74m", "ak74m")),
-    look(Faction::Pirate, Role::Shotgunner, &["Pirate_Shotgun", "Pirate_Beheader"], gun!("870shotgun", "870shotgun")),
+    look(Faction::Pirate, Role::Shotgunner, &["Pirate_Shotgun"], gun!("870shotgun", "870shotgun")),
+    look(Faction::Pirate, Role::Charger, &["Pirate_Beheader"], gun!("machete", "machete")),
     look(Faction::Pirate, Role::Sniper, &["Pirate_sniper"], gun!("svd", "svd")),
     look(Faction::Pirate, Role::Rocket, &["Pirate_Rocket"], gun!("rpg7", "rpg7")),
     look(Faction::Pirate, Role::Heavy, &["Pirate_HeavyGunner"], gun!("pkm", "pkm")),
@@ -185,6 +195,8 @@ pub struct Look {
 #[derive(Resource)]
 pub struct CharacterAssets {
     pub human: Arc<ClipSet>,
+    /// Chargers' machete clips.
+    pub charger: Arc<ClipSet>,
     pub kits: Vec<LoadedKit>,
     pub looks: Vec<Look>,
     /// Villagers: the men's and women's kits (indices into `kits`) and their
@@ -217,12 +229,22 @@ impl CharacterAssets {
         // Missing pieces are skipped, so settled (loaded or failed) is enough.
         let settled = |id: bevy::asset::UntypedAssetId| crate::cache_assets::settled(server, id);
         self.human.ready(server)
+            && self.charger.ready(server)
             && self.looks.iter().all(|l| settled(l.weapon.id().untyped()))
             && self
                 .kits
                 .iter()
                 .flat_map(|k| k.slots.iter().flatten())
                 .all(|p| settled(p.model.id().untyped()) && p.swaps.iter().flat_map(|(_, c)| c).all(|m| settled(m.id().untyped())))
+    }
+
+    /// The clips a fighter of a role moves with (or anyone else, `None`).
+    pub fn clips_for(&self, role: Option<Role>) -> Arc<ClipSet> {
+        if role == Some(Role::Charger) {
+            self.charger.clone()
+        } else {
+            self.human.clone()
+        }
     }
 
     /// Indices of the looks for a faction and role (the faction's assault
@@ -276,7 +298,9 @@ impl LoadedKit {
 }
 
 /// Spawns a character dressed from one kit under `parent` (feet at
-/// `offset`), on the human clips; `weapon` goes in its right hand.
+/// `offset`), on the human clips (a fighter's for its role); `weapon` goes
+/// in its right hand.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_kit_character(
     commands: &mut Commands,
     parent: Entity,
@@ -284,11 +308,12 @@ pub fn spawn_kit_character(
     kit: &LoadedKit,
     models: &Assets<Fc3Model>,
     weapon: Option<&Fc3Model>,
+    role: Option<Role>,
     rng: &mut Rng,
     offset: Vec3,
 ) -> Option<Entity> {
     let parts = dress(kit, models, rng);
-    spawn_dressed_rig(commands, parent, &parts, weapon, assets.human.clone(), offset, None)
+    spawn_dressed_rig(commands, parent, &parts, weapon, assets.clips_for(role), offset, None)
 }
 
 fn load_character_assets(mut commands: Commands, server: Res<AssetServer>, info: Res<crate::data::CacheInfo>) {
@@ -313,7 +338,9 @@ fn load_character_assets(mut commands: Commands, server: Res<AssetServer>, info:
         Arc::new(ClipSet { skeleton: skeleton.clone(), clips })
     });
     let villager_kits = ["Villager_Men", "Local_Women"].map(|n| kits.iter().position(|k| k.name.eq_ignore_ascii_case(n)));
-    commands.insert_resource(CharacterAssets { human: Arc::new(ClipSet { skeleton, clips }), kits, looks, villager_kits, villager_clips });
+    let charger = CHARGER_CLIPS.iter().map(|(k, p)| (*k, server.load(cache_path(&cache::anim_rel(&format!("{CLIP_ROOT}{p}")))))).collect();
+    let charger = Arc::new(ClipSet { skeleton: skeleton.clone(), clips: charger });
+    commands.insert_resource(CharacterAssets { human: Arc::new(ClipSet { skeleton, clips }), charger, kits, looks, villager_kits, villager_clips });
 }
 
 /// Weighted pick of an index (uniform when every weight is zero).
@@ -567,7 +594,7 @@ pub fn spawn_character(
     // The part with the fullest bone list builds the rig.
     parts.sort_by_key(|p| std::cmp::Reverse(p.model.bones.len()));
     let weapon = models.get(&look.weapon);
-    let rig = spawn_dressed_rig(commands, parent, &parts, weapon, assets.human.clone(), offset, None)?;
+    let rig = spawn_dressed_rig(commands, parent, &parts, weapon, assets.clips_for(Some(look.role)), offset, None)?;
     commands.entity(rig).insert(KitId(kit.id));
     Some(rig)
 }

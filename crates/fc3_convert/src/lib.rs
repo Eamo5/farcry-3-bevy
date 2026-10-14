@@ -1112,8 +1112,10 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
-    // ---- the damage characters and animals take
-    if opts.only_sectors.is_none() && job.should_write(fc3_formats::counters::DAMAGE_REL) {
+    // ---- the damage characters and animals take (written again when an
+    // older table lacks the characters' strikes)
+    let current = std::fs::read_to_string(job.root().join(fc3_formats::counters::DAMAGE_REL)).is_ok_and(|t| fc3_formats::counters::is_current(&t));
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::counters::DAMAGE_REL) || !current) {
         let result = (|| -> Result<()> {
             let bytes = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
             let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
@@ -1429,6 +1431,13 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     if opts.only_sectors.is_none() {
         if let Err(e) = convert_cinema(&job) {
             job.error(format!("cinema: {e:#}"));
+        }
+    }
+
+    // ---- interface movies: standard SWF, their bitmaps embedded
+    if opts.only_sectors.is_none() {
+        if let Err(e) = convert_movies(&job) {
+            job.error(format!("interface movies: {e:#}"));
         }
     }
 
@@ -2516,6 +2525,75 @@ fn convert_cinema(job: &Job) -> Result<()> {
 
 /// Marks the current sequence conversion schema.
 const CINEMA_STAMP: &str = "cinema/stamp-anim-name.txt";
+
+/// Every interface movie (`fc3_formats::feu`) as a standard SWF, each
+/// bitmap it takes from the game's textures embedded and each font it takes
+/// from the game's font files traced (`fc3_formats::ffd`).
+fn convert_movies(job: &Job) -> Result<()> {
+    use fc3_formats::{feu, ffd, texture};
+    let paths: Vec<String> = job.vfs.names.values().filter(|n| n.ends_with(".feu")).cloned().collect();
+    let refresh = !exists(job.root(), feu::MOVIES_STAMP_REL);
+    let pixels = |path: &str| job.vfs.read(path).ok().and_then(|x| texture::parse(&x).ok().and_then(|t| texture::decode_rgba(t.dds)));
+    // The fonts the movies take, each traced once.
+    let mut font_files: BTreeSet<String> = BTreeSet::new();
+    if refresh || paths.iter().any(|p| job.should_write(&feu::movie_rel(p))) {
+        for path in &paths {
+            if let Some(fonts) = job.vfs.read(path).ok().and_then(|b| feu::external_fonts(&b).ok()) {
+                font_files.extend(fonts.into_iter().map(|f| f.file.to_ascii_lowercase()));
+            }
+        }
+    }
+    let font_files: Vec<String> = font_files.into_iter().collect();
+    let fonts: HashMap<String, ffd::TracedFont> = font_files
+        .par_iter()
+        .filter_map(|file| {
+            let traced = job.vfs.read(file).map_err(anyhow::Error::from).and_then(|b| ffd::parse(&b)).and_then(|font| {
+                let pages: Vec<Option<ffd::Page>> =
+                    (0..font.pages.len()).map(|i| font.page_texture(i).and_then(|t| pixels(&t)).map(|(w, h, px)| ffd::Page::from_rgba(w, h, &px))).collect();
+                ffd::TracedFont::trace(&font, &pages)
+            });
+            match traced {
+                Ok(t) => Some((file.clone(), t)),
+                Err(e) => {
+                    job.error(format!("font {file}: {e:#}"));
+                    None
+                }
+            }
+        })
+        .collect();
+    job.run(Stage::Story, &paths, |path| {
+        let rel = feu::movie_rel(path);
+        if !refresh && !job.should_write(&rel) {
+            return Some(());
+        }
+        let bytes = job.vfs.read(path).ok()?;
+        let mut missing = Vec::new();
+        let swf = feu::to_swf(
+            &bytes,
+            |img| {
+                let px = pixels(&img.texture());
+                if px.is_none() {
+                    missing.push(img.texture());
+                }
+                px
+            },
+            |font| fonts.get(&font.file.to_ascii_lowercase()).map(|t| t.define_font3(font.id, &font.face)),
+        );
+        if !missing.is_empty() {
+            job.error(format!("movie {path}: {} images not found, as {}", missing.len(), missing[0]));
+        }
+        if let Err(e) = swf.and_then(|s| write_atomic(job.root(), &rel, &s, job.ctx)) {
+            job.error(format!("movie {path}: {e:#}"));
+        }
+        Some(())
+    })?;
+    write_atomic(
+        job.root(),
+        feu::MOVIES_STAMP_REL,
+        b"standard SWF, external images (atlases whole) and fonts embedded, engine calls as function calls\n",
+        job.ctx,
+    )
+}
 
 /// Packs every Domino script the file lists name, and the ones they refer to
 /// that the lists don't.

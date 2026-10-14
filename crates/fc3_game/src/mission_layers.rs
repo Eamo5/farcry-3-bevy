@@ -125,6 +125,11 @@ fn stream_layers(
                         Transform::from_translation(Vec3::from_array(entity.translation)), Visibility::Visible, ChildOf(lroot))).id();
                     if kind == crate::pickups::PickupKind::Loot {
                         commands.entity(pickup).insert(crate::pickups::LootSource(entity.name.clone()));
+                        // (Its own loot, when its entity names some.)
+                        let own = data.as_deref().and_then(|d| d.entities.get(&entity.id)).and_then(|e| e.component("CFCXPawnLootComponent"));
+                        if let Some(own) = own.and_then(|c| crate::pickups::OwnLoot::from_component(c)) {
+                            commands.entity(pickup).insert(own);
+                        }
                     }
                 }
             }
@@ -139,9 +144,17 @@ fn layer_pickup(entity: &fc3_formats::cache::CachedEntity, removed: &HashSet<u64
     // collectible gets a transaction, not its marker or a similarly named prop.
     if data.is_some_and(|d| !d.entities.get(&entity.id).is_some_and(|e|
         e.component("CPickupCollectible").is_some() || e.component("CPickupAmmo").is_some())) { return None }
-    match crate::pickups::classify(&entity.name)? {
-        crate::pickups::Classified::Pickup(kind) => Some(kind),
-        crate::pickups::Classified::Explosive => None,
+    match crate::pickups::classify(&entity.name) {
+        Some(crate::pickups::Classified::Pickup(kind)) => Some(kind),
+        Some(crate::pickups::Classified::Explosive) => None,
+        // A mission's own pickup, named for the mission (a stash to hide
+        // something in): picked up like loot, its own loot given.
+        None if !entity.name.to_ascii_lowercase().starts_with("pickups/")
+            && data.is_some_and(|d| d.entities.get(&entity.id).is_some_and(|e| e.component("CPickupCollectible").is_some())) =>
+        {
+            Some(crate::pickups::PickupKind::Loot)
+        }
+        None => None,
     }
 }
 

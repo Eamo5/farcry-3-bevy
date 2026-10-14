@@ -138,6 +138,10 @@ pub struct StoryData {
     /// Group name hash -> members (scripts write a group as `#` and the
     /// hash in hex).
     pub groups: HashMap<u32, Vec<u64>>,
+    /// The markups (`CA_Markup1`...) of contextual actions that stage a
+    /// sequence, and when they come (s from the action's start), from the
+    /// sequence's own event clips.
+    pub action_markups: HashMap<u64, Vec<(f64, String)>>,
     pub group_names: HashMap<u32, String>,
 }
 
@@ -180,6 +184,41 @@ impl StoryData {
     pub fn load(root: &Path) -> Result<StoryData> {
         let mut d = StoryData::default();
         let entities = story::from_bytes(&std::fs::read(root.join(story::ENTITIES_REL)).context("story entities")?)?;
+        // Contextual actions that stage a sequence: their markups' times.
+        for e in &entities {
+            let Some(ca) = e.components.children.iter().find(|c| c.name_hash == fc3_formats::hash::name_hash("CAIContextualActionComponent")) else {
+                continue;
+            };
+            let mut paths = Vec::new();
+            ca.walk(&mut |o, _| {
+                for (_, bytes) in &o.fields {
+                    let text = String::from_utf8_lossy(bytes.strip_suffix(&[0]).unwrap_or(bytes)).to_ascii_lowercase();
+                    if text.ends_with(".cseq") && !paths.contains(&text) {
+                        paths.push(text);
+                    }
+                }
+            });
+            let mut markups: Vec<(f64, String)> = Vec::new();
+            for path in paths {
+                let Some(seq) = std::fs::read_to_string(root.join(fc3_formats::cinema::sequence_rel(&path)))
+                    .ok()
+                    .and_then(|t| fc3_formats::cinema::Sequence::from_text(&t))
+                else {
+                    continue;
+                };
+                for clip in seq.groups.iter().flat_map(|g| &g.clips) {
+                    if let fc3_formats::cinema::ClipKind::Event { name } = &clip.kind {
+                        if name.starts_with("CA_Markup") && !markups.iter().any(|m| m.1 == *name) {
+                            markups.push((clip.start as f64, name.clone()));
+                        }
+                    }
+                }
+            }
+            if !markups.is_empty() {
+                markups.sort_by(|a, b| a.0.total_cmp(&b.0));
+                d.action_markups.insert(e.id, markups);
+            }
+        }
         for e in entities {
             let origin = match e.source {
                 story::Source::Sector(id) => Origin::Sector(id),

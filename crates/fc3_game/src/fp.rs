@@ -23,6 +23,8 @@ pub struct FpPlugin;
 impl Plugin for FpPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FpState>()
+            .init_resource::<SwimClips>()
+            .add_systems(Update, compose_swim_clips)
             .init_resource::<Cinematic>()
             .init_resource::<HandsBusy>()
             .add_systems(PreUpdate, expire_cinematic_hold.run_if(in_state(crate::menu::GameState::Playing)))
@@ -103,6 +105,32 @@ enum Context {
     Repair,
     /// Raising the camera to tag (then looking through it).
     Camera,
+}
+
+/// The swimming strokes are additive: the game lays them over the swimming
+/// aim pose (`aimingswimsurface`). Played alone, their torso lies at the
+/// skeleton's rest, on its side, and the arms show up at the screen's
+/// edge. Composed once their clips are in.
+const SWIM_BASE: &str = r"locomotion\stand\swim\1stge_uppb_aimingswimsurface_+000fw_nowep.mab";
+
+#[derive(Resource, Default)]
+struct SwimClips {
+    /// The base and the strokes (idle, moving) as loaded, then composed.
+    loading: Option<[Handle<Fc3Clip>; 3]>,
+    idle: Option<Handle<Fc3Clip>>,
+    moving: Option<Handle<Fc3Clip>>,
+}
+
+fn compose_swim_clips(server: Res<AssetServer>, mut clips: ResMut<Assets<Fc3Clip>>, mut swim: ResMut<SwimClips>) {
+    if swim.idle.is_some() {
+        return;
+    }
+    let load = |rel: &str| -> Handle<Fc3Clip> { server.load(cache_path(&cache::anim_rel(&format!("{ANIM_ROOT}{rel}")))) };
+    let [base, idle, moving] = swim.loading.get_or_insert_with(|| [load(SWIM_BASE), load(Context::Swim.clip()), load(Context::SwimMove.clip())]).clone();
+    let (Some(b), Some(i), Some(m)) = (clips.get(&base), clips.get(&idle), clips.get(&moving)) else { return };
+    let (composed_idle, composed_moving) = (fc3_formats::anim::layered_over(&i.0, &b.0), fc3_formats::anim::layered_over(&m.0, &b.0));
+    swim.idle = Some(clips.add(Fc3Clip(std::sync::Arc::new(composed_idle))));
+    swim.moving = Some(clips.add(Fc3Clip(std::sync::Arc::new(composed_moving))));
 }
 
 /// Falling faster than this (m/s) with nothing open puts the arms out.
@@ -1602,12 +1630,13 @@ fn drive_arms(
     server: Res<AssetServer>,
     chars: Option<Res<CharacterAssets>>,
     mut mounts: Query<&mut Visibility>,
-    (holding, driving, vehicles, plain, ways): (
+    (holding, driving, vehicles, plain, ways, swim): (
         Res<crate::traversal::Mount>,
         Res<crate::vehicles::Driving>,
         Query<&crate::vehicles::Vehicle>,
         Query<Entity, With<crate::weapons::ViewModelPart>>,
         Res<crate::traversal::Ways>,
+        Res<SwimClips>,
     ),
     (mut cinematic, mut busy, repairing, bino): (ResMut<Cinematic>, ResMut<HandsBusy>, Res<crate::vehicles::Repairing>, Res<crate::stealth::Binoculars>),
     mut commands: Commands,
@@ -1669,7 +1698,14 @@ fn drive_arms(
         match (context, chars.as_ref()) {
             (Some(c), Some(chars)) => {
                 let load = |rel: &str| -> Handle<Fc3Clip> { server.load(cache_path(&cache::anim_rel(&format!("{ANIM_ROOT}{rel}")))) };
-                let mut clips = HashMap::from([(AnimKind::Idle, load(c.clip()))]);
+                // (The strokes over their base pose, once composed; the base
+                // alone until then.)
+                let clip = match c {
+                    Context::Swim => swim.idle.clone().unwrap_or_else(|| load(SWIM_BASE)),
+                    Context::SwimMove => swim.moving.clone().unwrap_or_else(|| load(SWIM_BASE)),
+                    _ => load(c.clip()),
+                };
+                let mut clips = HashMap::from([(AnimKind::Idle, clip)]);
                 state.intro = 0.0;
                 if let Some((intro, secs)) = c.intro() {
                     clips.insert(AnimKind::Shot, load(intro));

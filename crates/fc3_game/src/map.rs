@@ -99,6 +99,7 @@ impl Plugin for MapPlugin {
             .init_resource::<MapAutomation>()
             .init_resource::<Gps>()
             .init_resource::<MinimapReach>()
+            .init_resource::<MinimapPlacement>()
             .init_resource::<HudParams>()
             .add_systems(OnExit(GameState::Loading), load_minimap)
             .add_systems(Update, update_reach.before(update_minimap))
@@ -360,6 +361,12 @@ impl Default for FullMapView {
 #[derive(Component)]
 struct Minimap;
 
+/// Where another HUD wants the minimap (the original game's radar disc,
+/// `original_ui`): its centre and diameter in logical pixels from the
+/// window's top left.
+#[derive(Resource, Default)]
+pub struct MinimapPlacement(pub Option<(Vec2, f32)>);
+
 #[derive(Component)]
 struct FullMap;
 
@@ -546,13 +553,27 @@ fn update_minimap(
     waypoint: Res<Waypoint>,
     gps: Res<Gps>,
     players: Query<(&Transform, &Player, &crate::combat::Health)>,
-    mut minimap: Query<(&MaterialNode<MapMaterial>, &mut Visibility), With<Minimap>>,
+    mut minimap: Query<(&MaterialNode<MapMaterial>, &mut Visibility, &mut Node, &mut UiTransform), With<Minimap>>,
     mut materials: ResMut<Assets<MapMaterial>>,
     scripted: Res<crate::story::ScriptedPlayer>,
     cinema: Res<crate::cinema::Cinema>,
-    reach: Res<MinimapReach>,
+    (reach, placement): (Res<MinimapReach>, Res<MinimapPlacement>),
 ) {
-    let Ok((node, mut vis)) = minimap.single_mut() else { return };
+    let Ok((node, mut vis, mut layout, mut transform)) = minimap.single_mut() else { return };
+    // In another HUD's disc (scaled about its centre, icons and all), or its
+    // own corner.
+    let (left, top, bottom, scale) = match placement.0 {
+        Some((centre, diameter)) => (Val::Px(centre.x - MINIMAP_SIZE / 2.0), Val::Px(centre.y - MINIMAP_SIZE / 2.0), Val::Auto, diameter / MINIMAP_SIZE),
+        None => (Val::Px(30.0), Val::Auto, Val::Px(84.0), 1.0),
+    };
+    if layout.left != left || layout.top != top || layout.bottom != bottom {
+        layout.left = left;
+        layout.top = top;
+        layout.bottom = bottom;
+    }
+    if transform.scale != Vec2::splat(scale) {
+        transform.scale = Vec2::splat(scale);
+    }
     let Ok((t, p, h)) = players.single() else { return };
     // Missions hide it with the HUD, and scenes take the screen.
     let show = *state.get() == GameState::Playing && !h.dead && !scripted.hud_hidden && cinema.view.is_none();
@@ -692,12 +713,13 @@ fn update_minimap_icons(
     mut commands: Commands,
     objectives: Res<crate::story::ObjectiveMarkers>,
     reach: Res<MinimapReach>,
-    (hud, pickups): (Res<HudParams>, Query<(&GlobalTransform, &crate::pickups::Pickup)>),
+    (hud, pickups, original): (Res<HudParams>, Query<(&GlobalTransform, &crate::pickups::Pickup)>, Res<crate::hud::OriginalHud>),
 ) {
     for e in &dots {
         commands.entity(e).despawn();
     }
-    if *state.get() != GameState::Playing {
+    // (The original HUD's radar has its own markers.)
+    if *state.get() != GameState::Playing || original.0 {
         return;
     }
     let (Ok((t, p)), Ok(mini)) = (players.single(), minimap.single()) else { return };

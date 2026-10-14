@@ -6,14 +6,15 @@
 //! `CFCXCountersComponentAnimal`: armour on each body part against bullets,
 //! a multiplier for each kind of harm, an animal's own health and head
 //! multiplier), with an animal's attack from its AI personality
-//! (`AttackDamage`). The cache keeps them as text ([`DAMAGE_REL`]).
+//! (`AttackDamage`) and a character's close-quarters strike from its own
+//! (`Melee`). The cache keeps them as text ([`DAMAGE_REL`]).
 
 use anyhow::{bail, Result};
 
 use crate::fcb::Object;
 
 pub const DAMAGE_REL: &str = "characters/damage.txt";
-const MAGIC: &str = "fc3-damage 4";
+const MAGIC: &str = "fc3-damage 5";
 const SERVICE: &str = "countersservice:counters.countersservice";
 
 /// A character's health and how much of it each body part can lose before
@@ -101,6 +102,21 @@ pub struct Vulnerability {
     pub harms: [f32; 10],
     /// An animal's attack.
     pub attack: Option<Attack>,
+    /// A character's strike at arm's length.
+    pub melee: Option<Melee>,
+}
+
+/// A character's close-quarters strike (its personality's `Melee`): how far
+/// it reaches (m) and across what angle in front (degrees), the damage stim
+/// it deals, the seconds before another; with the character's top running
+/// speed (`fPawnSpeeds`, m/s).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Melee {
+    pub reach: f32,
+    pub angle: f32,
+    pub damage: f32,
+    pub cooldown: f32,
+    pub speed: f32,
 }
 
 /// An animal's bite or charge (its personality's `AttackDamage`): between
@@ -125,7 +141,18 @@ impl Attack {
 
 impl Default for Vulnerability {
     fn default() -> Self {
-        Vulnerability { name: String::new(), animal: false, health: None, body: 1.0, head: 1.0, torso: 1.0, legs: 1.0, harms: [1.0; 10], attack: None }
+        Vulnerability {
+            name: String::new(),
+            animal: false,
+            health: None,
+            body: 1.0,
+            head: 1.0,
+            torso: 1.0,
+            legs: 1.0,
+            harms: [1.0; 10],
+            attack: None,
+            melee: None,
+        }
     }
 }
 
@@ -260,11 +287,33 @@ fn attacks(templates: &Object) -> std::collections::HashMap<u32, Attack> {
     out
 }
 
+/// The characters' strikes by their personality template (the CRC of its
+/// full name, lower case).
+fn melees(templates: &Object) -> std::collections::HashMap<u32, Melee> {
+    let mut out = std::collections::HashMap::new();
+    templates.walk(&mut |o, _| {
+        let Some(name) = o.str("FullName").filter(|n| n.starts_with("aipersonality:")) else { return };
+        let Some(m) = o.child("Melee") else { return };
+        let f = |n: &str| float(m, n).unwrap_or(0.0);
+        let melee = Melee {
+            reach: f("fMeleeReachDistance"),
+            angle: f("fMeleeReachAngle"),
+            damage: f("fMeleeDamageStimLevel"),
+            cooldown: f("fMeleeAttackCooldown"),
+            speed: o.child("fPawnSpeeds").and_then(|s| float(s, "fMaxForwardSpeed")).unwrap_or(0.0),
+        };
+        out.insert(crate::hash::crc32(name.to_ascii_lowercase().as_bytes()), melee);
+    });
+    out
+}
+
 /// The enemy archetypes' (`FC3_NPC:Merc/BaseMerc_FC3.*`) and animals'
 /// (`FC3_Animals:*`) counters from the entity library, with the animals'
-/// attacks from their personalities among the templates.
+/// attacks and the characters' strikes from their personalities among the
+/// templates.
 pub fn archetypes(library: &Object, templates: &Object) -> Vec<Vulnerability> {
     let attacks = attacks(templates);
+    let melees = melees(templates);
     let mut out = Vec::new();
     library.walk(&mut |o, _| {
         if !o.is("EntityPrototype") {
@@ -281,14 +330,20 @@ pub fn archetypes(library: &Object, templates: &Object) -> Vec<Vulnerability> {
         };
         let Some(c) = e.child("Components").and_then(|c| c.child("CFCXCountersComponentAI").or_else(|| c.child("CFCXCountersComponentAnimal"))) else { return };
         let mut v = Vulnerability::from_component(&name, c);
+        // (Its personality by the name's CRC, or by name.)
+        let mut personality = None;
+        e.walk(&mut |o, _| {
+            if personality.is_none() {
+                personality = o.field("tmplPersonalityType").map(|b| match b.len() {
+                    4 => u32::from_le_bytes(b.try_into().unwrap()),
+                    _ => crate::hash::crc32(String::from_utf8_lossy(b).trim_end_matches('\0').to_ascii_lowercase().as_bytes()),
+                });
+            }
+        });
         if v.animal {
-            let mut personality = None;
-            e.walk(&mut |o, _| {
-                if personality.is_none() {
-                    personality = o.field("tmplPersonalityType").filter(|b| b.len() == 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
-                }
-            });
             v.attack = personality.and_then(|p| attacks.get(&p)).copied().filter(|a| a.max > 0.0 || a.percent > 0.0);
+        } else {
+            v.melee = personality.and_then(|p| melees.get(&p)).copied().filter(|m| m.reach > 0.0);
         }
         out.push(v);
     });
@@ -305,9 +360,24 @@ pub fn to_text(d: &Damage) -> String {
     for v in &d.archetypes {
         let harms = v.harms.iter().map(|h| h.to_string()).collect::<Vec<_>>().join(",");
         let attack = v.attack.map_or("-".to_string(), |a| format!("{},{},{},{}", a.min, a.max, a.percent, a.per_level));
-        s += &format!("{}\t{}\t{}\t{}\t{}\t{}\t{harms}\t{}\t{attack}\n", v.name, v.health.unwrap_or(-1.0), v.body, v.head, v.torso, v.legs, u8::from(v.animal));
+        let melee = v.melee.map_or("-".to_string(), |m| format!("{},{},{},{},{}", m.reach, m.angle, m.damage, m.cooldown, m.speed));
+        s += &format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{harms}\t{}\t{attack}\t{melee}\n",
+            v.name,
+            v.health.unwrap_or(-1.0),
+            v.body,
+            v.head,
+            v.torso,
+            v.legs,
+            u8::from(v.animal)
+        );
     }
     s
+}
+
+/// Whether a cached table is in this version's layout.
+pub fn is_current(text: &str) -> bool {
+    text.lines().next().map(str::trim) == Some(MAGIC)
 }
 
 pub fn from_text(text: &str) -> Result<Damage> {
@@ -342,6 +412,10 @@ pub fn from_text(text: &str) -> Result<Damage> {
                     let v: Vec<f32> = a.split(',').filter_map(|x| x.parse().ok()).collect();
                     (v.len() == 4).then(|| Attack { min: v[0], max: v[1], percent: v[2], per_level: v[3] })
                 }),
+                melee: f.get(9).and_then(|m| {
+                    let v: Vec<f32> = m.split(',').filter_map(|x| x.parse().ok()).collect();
+                    (v.len() == 5).then(|| Melee { reach: v[0], angle: v[1], damage: v[2], cooldown: v[3], speed: v[4] })
+                }),
                 health: Some(n(1)).filter(|h| *h > 0.0),
                 body: n(2),
                 head: n(3),
@@ -360,7 +434,8 @@ mod tests {
 
     #[test]
     fn round_trips_and_finds_derived_archetypes() {
-        let mut heavy = Vulnerability { name: "Pirate_HeavyGunner".into(), torso: 0.025, legs: 0.04, ..Default::default() };
+        let melee = Melee { reach: 1.5, angle: 70.0, damage: 12.0, cooldown: 4.0, speed: 3.0 };
+        let mut heavy = Vulnerability { name: "Pirate_HeavyGunner".into(), torso: 0.025, legs: 0.04, melee: Some(melee), ..Default::default() };
         heavy.harms[9] = 4.0;
         let attack = Attack { min: 40.0, max: 70.0, percent: 0.5, per_level: 0.06 };
         let tiger = Vulnerability { name: "Tiger".into(), animal: true, health: Some(800.0), head: 2.3, attack: Some(attack), ..Default::default() };
@@ -373,6 +448,8 @@ mod tests {
         assert_eq!(back, d);
         assert_eq!(back.get("pirate_heavygunner_elite").map(|v| v.torso), Some(0.025));
         assert_eq!(back.get("Pirate_HeavyGunner").unwrap().harm(Harm::Arrow), 4.0);
+        assert_eq!(back.get("Pirate_HeavyGunner").unwrap().melee, Some(melee));
+        assert!(is_current(&to_text(&d)) && !is_current("fc3-damage 4\n"));
         assert_eq!(back.get("Tiger").and_then(|v| v.health), Some(800.0));
         assert!(back.get("Pirate").is_none());
     }

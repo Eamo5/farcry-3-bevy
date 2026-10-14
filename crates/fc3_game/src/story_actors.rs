@@ -47,7 +47,19 @@ impl Plugin for StoryActorsPlugin {
             .init_resource::<CalledIn>()
             .add_systems(
                 Update,
-                (land_reinforcements, spawn_actors, despawn_actors, actor_tasks, actor_alerts, ai_events, actor_idle, actor_health, actor_deaths)
+                (
+                    land_reinforcements,
+                    spawn_actors,
+                    despawn_actors,
+                    actor_tasks,
+                    companions,
+                    actor_alerts,
+                    ai_events,
+                    actor_idle,
+                    actor_health,
+                    actor_deaths,
+                    keep_watched_bodies,
+                )
                     .chain()
                     .in_set(ActorSet)
                     .after(crate::story::EntityPosesSet)
@@ -308,6 +320,10 @@ fn load_ca_moves(info: Res<CacheInfo>, mut moves: ResMut<CaMoves>) {
     moves.0 = fc3_formats::moves::from_text(&text);
 }
 
+/// A story character that is an animal (a seagull, a dog), not a person.
+#[derive(Component)]
+pub struct StoryCreature;
+
 /// A story character in the world.
 #[derive(Component)]
 pub struct StoryActor {
@@ -398,13 +414,23 @@ struct Fighter {
 }
 
 /// From the pawn's AI: its army's hostility to the player's (grey) army, its
-/// primary weapon, and whether scripts hold it from the start.
+/// primary weapon (none for a beheader's machete), and whether scripts hold
+/// it from the start.
+/// A placed story character that isn't a fighter (a captive, a guide):
+/// sent to a battlefield it is given, as its AI would take it there.
+pub(crate) fn walks_to_battlefields(data: &fc3_story::data::StoryData, id: u64) -> bool {
+    data.entities.get(&id).is_some_and(|e| e.component("CFCXAIComponent").is_some() && fighter_of(e).is_none())
+}
+
 fn fighter_of(e: &fc3_story::data::Entry) -> Option<Fighter> {
     let agent = e.component("CFCXAIComponent")?.child("AIObject")?.child("CPawnAgent")?;
     if !agent.child("ArmyHostileMask").and_then(|m| m.bool("bGrey")).unwrap_or(false) {
         return None;
     }
-    let role = crate::npc::role_from_weapon(&agent.child("ShootingPrefsSingle").and_then(|w| w.str("tmplPrimaryWeapon")).unwrap_or_default())?;
+    let mut beheader = false;
+    agent.walk(&mut |o, _| beheader |= o.str("tmplPersonalityType").is_some_and(|p| p.to_ascii_lowercase().contains("personality.beheader")));
+    let primary = agent.child("ShootingPrefsSingle").and_then(|w| w.str("tmplPrimaryWeapon")).unwrap_or_default();
+    let role = crate::npc::role_from_weapon(&primary).or(beheader.then_some(crate::npc::Role::Charger))?;
     let name = e.name.to_ascii_lowercase();
     let faction = if name.contains("privateer") || name.contains("mercenar") { crate::npc::Faction::Privateer } else { crate::npc::Faction::Pirate };
     Some(Fighter { faction, role, scripted: agent.bool("bStartOnScriptControl").unwrap_or(false) })
@@ -433,6 +459,7 @@ fn spawn_actors(
     faces: Option<ResMut<crate::faces::FaceLibrary>>,
     placements: Res<crate::story::EntityPlacements>,
     damage: Res<crate::combat::DamageTable>,
+    (seats, vehicles): (Res<crate::vehicles::StorySeatRequests>, Query<(&Transform, &crate::vehicles::Vehicle), Without<Player>>),
 ) {
     let (Some(host), Some(chars)) = (host, chars) else { return };
     let mut faces = faces;
@@ -477,8 +504,12 @@ fn spawn_actors(
             rotation: Quat::from_array(fc3_formats::world::angles_to_bevy_quat(e.angles)),
             scale: Vec3::ONE,
         });
-        let at = pose.translation;
-        if at.distance(pt.translation) > SPAWN {
+        // One a script has waiting to board a vehicle in the world comes
+        // with it, however far (a convoy's crew, out of sight): the seat
+        // takes him.
+        let boarding = seats.boarding(e.id).and_then(|v| vehicles.iter().find(|(_, x)| x.story_id() == v)).map(|(t, _)| t.translation + Vec3::Y);
+        let at = boarding.unwrap_or(pose.translation);
+        if boarding.is_none() && at.distance(pt.translation) > SPAWN {
             continue;
         }
         // The kit's parts load the first time one of its characters shows.
@@ -514,7 +545,7 @@ fn spawn_actors(
         }
         // Fighters carry their faction's gun for the role.
         let weapon = fighter.and_then(|f| chars.looks_for(f.faction, f.role).first().and_then(|&l| models.get(&chars.looks[l].weapon)));
-        let rig = spawn_kit_character(&mut commands, root, &chars, kit, &models, weapon, &mut rng, Vec3::new(0.0, -HALF_HEIGHT, 0.0));
+        let rig = spawn_kit_character(&mut commands, root, &chars, kit, &models, weapon, fighter.map(|f| f.role), &mut rng, Vec3::new(0.0, -HALF_HEIGHT, 0.0));
         // Its face rig, for scenes and spoken lines.
         if let (Some(rig), Some(faces), Some(c)) = (rig, faces.as_mut(), e.component("CFacialPoseComponent")) {
             if let Some(face) = faces.rig_for(c) {
@@ -523,6 +554,9 @@ fn spawn_actors(
             }
         }
         commands.entity(root).insert(StoryActor::new(e.id, rig, fighter.is_some()));
+        if e.component("CAnimalNetworkComponent").is_some() || e.component("CAIDogNetworkComponent").is_some() || e.name.contains("Animal") {
+            commands.entity(root).insert(StoryCreature);
+        }
         // Its own loot (a mission's operator and his codes).
         if let Some(own) = e.component("CFCXPawnLootComponent").and_then(|c| crate::pickups::OwnLoot::from_component(c)) {
             commands.entity(root).insert(own);
@@ -557,6 +591,7 @@ fn spawn_actors(
 
 fn despawn_actors(
     host: Option<NonSend<StoryHost>>,
+    seats: Res<crate::vehicles::StorySeatRequests>,
     layers: Res<MissionLayers>,
     players: Query<&Transform, With<Player>>,
     actors: Query<(Entity, &StoryActor, &Transform, Option<&crate::npc::Npc>)>,
@@ -571,7 +606,12 @@ fn despawn_actors(
         let layer = data.entities.get(&a.id).map(|x| x.layer).unwrap_or(fc3_formats::world::DEFAULT_MISSION_LAYER);
         let gone = layer != fc3_formats::world::DEFAULT_MISSION_LAYER && !layers.present.contains(&layer);
         let loaded = host.story.is_loaded(a.id);
-        if gone || !loaded || t.translation.distance(pt.translation) > DESPAWN {
+        // (A body a script still watches stays where it fell: a VIP's, to
+        // be photographed.)
+        let watched_body = a.dead && host.story.watches_entity(a.id);
+        // (Nor one riding, or about to: he goes with his vehicle.)
+        let aboard = a.seated || seats.boarding(a.id).is_some();
+        if gone || !loaded || (t.translation.distance(pt.translation) > DESPAWN && !watched_body && !aboard) {
             commands.entity(e).despawn();
             // Called in and left behind alive: back when the player is.
             if let Some(mut entry) = called.0.remove(&a.id).filter(|_| loaded && !a.dead && !host.story.is_dead(a.id)) {
@@ -587,9 +627,18 @@ fn despawn_actors(
 fn task_for(data: &fc3_story::data::StoryData, action: u64) -> Option<Task> {
     let e = data.entities.get(&action)?;
     let ca = e.component("CAIContextualActionComponent");
-    let run = ca.and_then(|c| c.u32("selMoveToSTPSpeed")).unwrap_or(1) >= 2;
+    // (A battlefield, not an action: run there.)
+    let run = ca.map_or(true, |c| c.u32("selMoveToSTPSpeed").unwrap_or(1) >= 2);
     let params = ca.and_then(|c| c.child("Parameters"));
-    let duration = params.and_then(|p| p.u32("Duration")).unwrap_or(0) as f32;
+    // (Seconds, as a float; read as an integer, 2.4 s was a lifetime and
+    // the action never ended. A whole number stored as one still reads.)
+    let duration = params
+        .and_then(|p| {
+            p.f32("Duration")
+                .filter(|d| d.is_finite() && (0.01..3600.0).contains(d))
+                .or_else(|| p.u32("Duration").filter(|d| *d < 3600).map(|d| d as f32))
+        })
+        .unwrap_or(0.0);
     // A patrol path: the shape entity its parameters name (field 3DD4EBA2),
     // walked point by point.
     let patrol = ca
@@ -626,6 +675,7 @@ fn actor_tasks(
     mut commands: Commands,
     (mut rigs, moves, server, clips): (Query<&mut crate::characters::CharacterRig>, Res<CaMoves>, Res<AssetServer>, Res<Assets<crate::cache_assets::Fc3Clip>>),
     mut debug_actor: Local<Option<Option<u64>>>,
+    (spatial, bodies): (SpatialQuery, Query<(), Or<(With<crate::npc::Npc>, With<StoryActor>, With<Player>)>>),
 ) {
     let Some(mut host) = host else { return };
     let dt = time.delta_secs();
@@ -668,7 +718,15 @@ fn actor_tasks(
                         host.story.action_started(id);
                         points.clone()
                     }
-                    None => nav.path(t.translation, task.target).unwrap_or_else(|| vec![task.target]),
+                    // (A path stopping short of the spot, off the
+                    // navigation mesh, is finished straight to it.)
+                    None => {
+                        let mut path = nav.path(t.translation, task.target).unwrap_or_else(|| vec![task.target]);
+                        if path.last().is_none_or(|l| l.with_y(0.0).distance(task.target.with_y(0.0)) > 0.5) {
+                            path.push(task.target);
+                        }
+                        path
+                    }
                 };
                 debug!(
                     "story actor {id}: to {} ({:.0} m, {} waypoints)",
@@ -726,7 +784,22 @@ fn actor_tasks(
             } else {
                 let dir = to.normalize();
                 t.translation += dir * step;
-                if let Some(y) = nav.height_at(t.translation).or_else(|| heights.height_at(t.translation)) {
+                // On a floor the navigation mesh and the terrain don't know
+                // (a boardwalk over the water): what is under the feet,
+                // a step up at most (not someone's head).
+                let feet = t.translation.y - HALF_HEIGHT;
+                let reach = 1.2;
+                let floor = spatial
+                    .cast_ray_predicate(t.translation.with_y(feet + reach), Dir3::NEG_Y, reach + 2.0, true, &SpatialQueryFilter::default(), &|e| {
+                        e != entity && !bodies.contains(e)
+                    })
+                    .map(|h| feet + reach - h.distance);
+                let ground = nav.height_at(t.translation).or_else(|| heights.height_at(t.translation));
+                let y = match (floor, ground) {
+                    (Some(f), Some(g)) => Some(f.max(g)),
+                    (f, g) => f.or(g),
+                };
+                if let Some(y) = y {
                     t.translation.y = y + HALF_HEIGHT;
                 }
                 t.rotation = Quat::from_rotation_y((-dir.x).atan2(-dir.z));
@@ -758,6 +831,120 @@ fn actor_tasks(
                 *r = AnimRequest { kind, rate: 1.0 };
             }
         }
+    }
+}
+
+/// How far a following companion lets the player get before going after
+/// him, and how close it comes.
+const FOLLOW_FAR: f32 = 5.0;
+const FOLLOW_NEAR: f32 = 2.5;
+/// How fast companions go (m/s): leading, and catching the player up.
+const LEAD_SPEED: f32 = 2.2;
+const FOLLOW_SPEED: f32 = 3.5;
+
+/// Companions (`CAPI_Companion`): one following goes after the player when
+/// he gets away; one leading walks its path from its first point, waiting
+/// (facing him) while he is further off than its lead distance, and tells
+/// the story when it reaches the end; one waiting stands. Not while it is on a contextual action or in
+/// a scene.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn companions(
+    host: Option<NonSendMut<StoryHost>>,
+    time: Res<Time>,
+    nav: Res<crate::nav::NavMesh>,
+    heights: Res<crate::terrain::Heightfield>,
+    players: Query<&Transform, (With<crate::player::Player>, Without<StoryActor>)>,
+    mut actors: Query<(Entity, &StoryActor, &mut Transform, Option<&mut crate::npc::Npc>, Has<crate::npc::Scripted>), Without<crate::player::Player>>,
+    mut anims: Query<&mut AnimRequest>,
+    mut commands: Commands,
+    mut legs: Local<HashMap<u64, (u64, usize)>>,
+) {
+    let Some(mut host) = host else { return };
+    let orders = host.story.companions();
+    if orders.is_empty() {
+        legs.clear();
+        return;
+    }
+    let Ok(player) = players.single() else { return };
+    let data = host.story.data();
+    let dt = time.delta_secs();
+    let mut led = Vec::new();
+    for (entity, a, mut t, npc, scripted) in &mut actors {
+        let Some(&(_, order)) = orders.iter().find(|o| o.0 == a.id) else { continue };
+        if a.dead || a.seated || a.in_scene || a.task.is_some() {
+            continue;
+        }
+        // The story drives it, not its own AI.
+        if let Some(mut npc) = npc {
+            if !scripted {
+                commands.entity(entity).insert(crate::npc::Scripted);
+            }
+            npc.state = crate::npc::NpcState::Idle;
+        }
+        let to_player = (player.translation - t.translation).with_y(0.0);
+        let goal = match order {
+            fc3_story::Companion::Follow => {
+                (to_player.length() > FOLLOW_FAR).then(|| (player.translation - to_player.normalize_or_zero() * FOLLOW_NEAR, FOLLOW_SPEED))
+            }
+            fc3_story::Companion::Lead { path, distance } => {
+                let points = data.entities.get(&path).and_then(|p| shape_points(&p.fields)).unwrap_or_default();
+                let flat = |p: Vec3| (p - t.translation).with_y(0.0).length();
+                let leg = legs.entry(a.id).or_insert((path, usize::MAX));
+                if leg.0 != path || leg.1 == usize::MAX {
+                    // A new path: to its first point, then along it (a path
+                    // to a house begins at its door).
+                    debug!("story companion {}: lead along {path} ({} points, waiting past {distance} m)", a.id, points.len());
+                    *leg = (path, 0);
+                }
+                while leg.1 < points.len() && flat(points[leg.1]) < 0.6 {
+                    leg.1 += 1;
+                }
+                if leg.1 >= points.len() {
+                    led.push(a.id);
+                    None
+                } else if to_player.length() > distance {
+                    None
+                } else {
+                    Some((points[leg.1], LEAD_SPEED))
+                }
+            }
+            fc3_story::Companion::Wait => None,
+        };
+        let kind = match goal {
+            Some((at, speed)) => {
+                let to = (at - t.translation).with_y(0.0);
+                let dir = to.normalize_or_zero();
+                t.translation += dir * (speed * dt).min(to.length());
+                if let Some(y) = nav.height_at(t.translation).or_else(|| heights.height_at(t.translation)) {
+                    t.translation.y = y + HALF_HEIGHT;
+                }
+                if dir != Vec3::ZERO {
+                    t.rotation = Quat::from_rotation_y((-dir.x).atan2(-dir.z));
+                }
+                if speed > 3.0 {
+                    AnimKind::Run
+                } else {
+                    AnimKind::Walk
+                }
+            }
+            None => {
+                // Waiting for the player: turned to him.
+                if matches!(order, fc3_story::Companion::Lead { .. }) && to_player.length() > 0.5 {
+                    t.rotation = Quat::from_rotation_y((-to_player.x).atan2(-to_player.z));
+                }
+                AnimKind::Idle
+            }
+        };
+        if let Some(mut r) = a.rig.and_then(|rig| anims.get_mut(rig).ok()) {
+            if r.kind != kind && r.kind != AnimKind::Death {
+                *r = AnimRequest { kind, rate: 1.0 };
+            }
+        }
+    }
+    for id in led {
+        debug!("story companion {id}: led to its path's end");
+        legs.remove(&id);
+        host.story.companion_led(id);
     }
 }
 
@@ -877,10 +1064,46 @@ fn actor_health(
     }
 }
 
+/// A story character's body a script still watches (a VIP's, to be
+/// photographed): it doesn't sink away with the other bodies.
+#[derive(Component)]
+pub struct KeptBody;
+
+fn keep_watched_bodies(host: Option<NonSend<StoryHost>>, actors: Query<(Entity, &StoryActor, Has<KeptBody>)>, mut commands: Commands) {
+    let Some(host) = host else { return };
+    for (e, a, kept) in &actors {
+        let keep = a.dead && host.story.watches_entity(a.id);
+        if keep && !kept {
+            commands.entity(e).insert(KeptBody);
+        } else if !keep && kept {
+            commands.entity(e).remove::<KeptBody>();
+        }
+    }
+}
+
 /// A character killed: the story hears of it (group `Die` events, as the
-/// engine raises them for every group the victim is in).
-fn actor_deaths(host: Option<NonSendMut<StoryHost>>, mut actors: Query<(&mut StoryActor, &Health)>) {
+/// engine raises them for every group the victim is in). (Debug: what hurts
+/// the characters who aren't fighters, captives and the like.)
+fn actor_deaths(
+    host: Option<NonSendMut<StoryHost>>,
+    mut actors: Query<(&mut StoryActor, &Health)>,
+    mut hurts: MessageReader<crate::combat::DamageEvent>,
+    fighters: Query<(), With<crate::npc::Npc>>,
+    players: Query<(), With<Player>>,
+) {
     let Some(mut host) = host else { return };
+    for d in hurts.read() {
+        if fighters.contains(d.target) {
+            continue;
+        }
+        let Ok((a, h)) = actors.get(d.target) else { continue };
+        let by = match d.instigator {
+            Some(i) if players.contains(i) => "the player".to_string(),
+            Some(i) => actors.get(i).map_or(format!("{i:?}"), |(b, _)| b.id.to_string()),
+            None => "nothing".into(),
+        };
+        debug!("story actor {} hurt: {:.0} {:?} by {by} from {:.1?} ({:.0} health left)", a.id, d.amount, d.kind, d.source, h.current);
+    }
     for (mut a, h) in &mut actors {
         if h.dead && !a.dead {
             a.dead = true;

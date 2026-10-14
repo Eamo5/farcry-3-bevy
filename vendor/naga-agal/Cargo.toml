@@ -1,0 +1,12 @@
+[package]
+name = "naga-agal"
+authors = ["Ruffle contributors"]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+version = "0.7.1"
+
+[dependencies]
+bitflags = "2.12.1"
+naga = "29.0.4"
+num-derive = "0.4"
+num-traits = "0.2"

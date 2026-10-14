@@ -125,8 +125,9 @@ pub enum Syringe {
     NeverDrown,
     /// Faster sprint and strokes.
     SprintBurst,
-    /// Animals hurt less.
-    AnimalShield,
+    /// The player's shots and blows hurt animals more (by the recipe's
+    /// bonus, `Boosts::animal_damage`).
+    AnimalDamage,
     /// Nothing hurts.
     Invincible,
     /// Animals leave the player be.
@@ -151,7 +152,7 @@ impl Syringe {
             "fireproof" => Syringe::Fireproof,
             "never drown" => Syringe::NeverDrown,
             "super sprint burst" => Syringe::SprintBurst,
-            "animaldamage" => Syringe::AnimalShield,
+            "animaldamage" => Syringe::AnimalDamage,
             "invincible" => Syringe::Invincible,
             "animal repellant" => Syringe::AnimalRepellent,
             "onehitkill" => Syringe::OneHitKill,
@@ -173,6 +174,9 @@ pub struct Boosts {
     /// hurt; it doesn't come back), and a full heal it owes.
     pub extra_health: f32,
     pub full_heal: bool,
+    /// The share more the player's damage to animals does while the
+    /// hunter's syringe runs.
+    pub animal_damage: f32,
 }
 
 impl Boosts {
@@ -191,6 +195,9 @@ pub fn inject(p: &mut Progress, boosts: &mut Boosts, recipe: &fc3_formats::progr
         boosts.extra_health = recipe.health_slots as f32 * crate::combat::HEALTH_SEGMENT;
         boosts.full_heal = true;
         return true;
+    }
+    if effect == Syringe::AnimalDamage {
+        boosts.animal_damage = recipe.bonuses.first().map_or(0.5, |b| b.value);
     }
     let seconds = if recipe.duration > 0.0 { recipe.duration } else { 40.0 };
     boosts.left.insert(effect, seconds * if boosts.extend > 0.0 { boosts.extend } else { 1.0 });
@@ -219,6 +226,7 @@ fn syringe_key(
     mut hud: ResMut<crate::hud::HudState>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     crafting: Res<crate::crafting::CraftCatalog>,
+    original: Res<crate::hud::OriginalHud>,
 ) {
     // The syringes on hand, in the crafting menu's order.
     let owned: Vec<&fc3_formats::progression::Recipe> =
@@ -245,12 +253,13 @@ fn syringe_key(
         }
         *held = 0.0;
     }
-    // Status: effects running, then the syringe on hand.
+    // Status: effects running (the original HUD has its own timer), then
+    // the syringe on hand.
     let running: Vec<String> = crafting
         .recipes
         .iter()
         .filter_map(|r| Syringe::of(&r.id).map(|s| (r, s)))
-        .filter(|(_, s)| boosts.active(*s))
+        .filter(|(_, s)| boosts.active(*s) && !original.0)
         .map(|(r, s)| format!("{} {:.0}s", r.name, boosts.left[&s]))
         .collect();
     let on_hand = owned

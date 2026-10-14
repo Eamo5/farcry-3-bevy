@@ -573,7 +573,7 @@ fn part_test(
     if let Some(at) = std::env::var("FC3_PART_SCARE").ok().and_then(|v| v.parse::<f32>().ok()).filter(|at| !done.2 && time.elapsed_secs() >= *at) {
         done.2 = true;
         info!("part-test: a gunshot by them at {at} s");
-        noises.write(crate::npc::Noise { at: part.at + Vec3::new(6.0, 1.0, 0.0), radius: 60.0, kind: crate::npc::NoiseKind::Threatening });
+        noises.write(crate::npc::Noise { at: part.at + Vec3::new(6.0, 1.0, 0.0), radius: 60.0, kind: crate::npc::NoiseKind::Threatening, aside: false });
     }
     if !done.0 {
         done.0 = true;
@@ -1357,7 +1357,7 @@ pub fn villager_log(
     let Ok(pt) = players.single() else { return };
     if mode == "panic" && !*shot && time.elapsed_secs() > 20.0 && !villagers.is_empty() {
         *shot = true;
-        noises.write(crate::npc::Noise { at: pt.translation, radius: 90.0, kind: crate::npc::NoiseKind::Threatening });
+        noises.write(crate::npc::Noise { at: pt.translation, radius: 90.0, kind: crate::npc::NoiseKind::Threatening, aside: false });
         info!("villager-test: a shot");
     }
     if time.elapsed_secs() < *next {

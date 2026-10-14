@@ -22,8 +22,13 @@ serde = { version = "1", features = ["derive"] }
 half = "2"
 # Wakes model loads waiting on the per-frame upload budget (`upload_budget.rs`).
 event-listener = "5"
+# The original interface's movies in Ruffle (feature `original-ui`).
+fc3_ui = { path = "../fc3_ui", optional = true }
 avian3d = { version = "0.7", default-features = false, features = ["3d", "f32", "parry-f32", "parallel", "collider-from-mesh", "debug-plugin"] }
 
 [features]
 # Per-system frame profiling (see `profile.rs`).
 profile = ["bevy/trace", "bevy/debug"]
+# The original game's HUD and menus, its own Flash movies played by Ruffle
+# (needs vendor/build_playerglobal/playerglobal_avm2.abc, see vendor/README.md).
+original-ui = ["dep:fc3_ui"]

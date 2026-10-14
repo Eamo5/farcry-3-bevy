@@ -99,6 +99,8 @@ pub enum Role {
     Molotov,
     /// Armoured, with a flamethrower; closes in to burn.
     Flamer,
+    /// Runs at the player with a machete (the game's beheaders).
+    Charger,
 }
 
 /// Combat numbers for a role.
@@ -156,6 +158,7 @@ impl Role {
             (Faction::Pirate, Role::Rocket) => "Pirate_Rocket",
             (Faction::Pirate | Faction::Privateer, Role::Molotov) => "Pirate_Molotov",
             (Faction::Pirate | Faction::Privateer, Role::Flamer) => "Privateer_HeavyFlammer",
+            (Faction::Pirate | Faction::Privateer, Role::Charger) => "Pirate_Beheader",
             (Faction::Privateer, Role::Assault) => "Privateer_Assaulter",
             (Faction::Privateer, Role::Shotgunner) => "Privateer_Defender",
             (Faction::Privateer, Role::Sniper) => "Privateer_Sniper",
@@ -297,6 +300,26 @@ impl Role {
                 armour: 0.5,
                 sight: 1.0,
             },
+            // No gun: his strike is the game's (`npc_melee`), his rush its
+            // running speed.
+            Role::Charger => RoleStats {
+                health: 100.0,
+                accuracy: 0.0,
+                damage: 0.0,
+                near: 0.0,
+                far: 1.4,
+                reach: 0.0,
+                mag: 0,
+                burst: (1, 1),
+                interval: 1.0,
+                pause: (1.0, 1.0),
+                pellets: 0,
+                reload: 0.0,
+                pace: 1.0,
+                strafe: 0.35,
+                armour: 1.0,
+                sight: 1.0,
+            },
         };
         // Privateers are better trained and equipped.
         if faction == Faction::Privateer {
@@ -360,6 +383,8 @@ fn pawn_identity(name: &str) -> Option<(Faction, Role)> {
         Role::Molotov
     } else if base.contains("defender") {
         Role::Shotgunner
+    } else if base.contains("beheader") {
+        Role::Charger
     } else {
         Role::Assault
     };
@@ -387,6 +412,8 @@ fn corpse_identity(name: &str) -> Option<Result<(Faction, Role), bool>> {
         Role::Heavy
     } else if n.contains("defender") {
         Role::Shotgunner
+    } else if n.contains("beheader") {
+        Role::Charger
     } else if n.contains("molotov") {
         Role::Molotov
     } else if n.contains("sniper") {
@@ -406,7 +433,7 @@ fn post_role(name: &str, faction: Faction) -> Option<Role> {
     } else if n.contains("heavygunner") {
         Some(Role::Heavy)
     } else if n.contains("beheader") {
-        Some(Role::Shotgunner)
+        Some(if faction == Faction::Rebel { Role::Shotgunner } else { Role::Charger })
     } else if n.contains("sniper") {
         Some(Role::Sniper)
     } else {
@@ -418,7 +445,8 @@ fn random_role(faction: Faction, rng: &mut Rng) -> Role {
     let table: &[(Role, f32)] = match faction {
         Faction::Rebel => &[(Role::Assault, 80.0), (Role::Sniper, 20.0)],
         Faction::Pirate => &[
-            (Role::Assault, 52.0),
+            (Role::Assault, 46.0),
+            (Role::Charger, 6.0),
             (Role::Shotgunner, 13.0),
             (Role::Sniper, 8.0),
             (Role::Heavy, 8.0),
@@ -460,6 +488,8 @@ pub struct Npc {
     /// A rifle-butt strike under way (seconds in), and the wait before the next.
     pub melee: Option<f32>,
     pub melee_cooldown: f32,
+    /// A charger's slash under way: standing (0) or running (1).
+    pub melee_slash: usize,
     pub faction: Faction,
     pub role: Role,
     pub state: NpcState,
@@ -831,6 +861,9 @@ pub struct Noise {
     pub at: Vec3,
     pub radius: f32,
     pub kind: NoiseKind,
+    /// Made in a fight the player isn't in (someone shooting at an animal or
+    /// a rival): no sign of the player to those who hear it.
+    pub aside: bool,
 }
 
 /// What a sound means to those who hear it (animals hear each kind only so
@@ -1433,6 +1466,7 @@ pub(crate) fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker
         sees_player: false,
         melee: None,
         melee_cooldown: 0.0,
+        melee_slash: 0,
         yaw,
         velocity: Vec3::ZERO,
         state_time: rng.range(0.0, 5.0),
@@ -1714,6 +1748,9 @@ fn perceive(
             }
             npc.foe_seen = seen.is_some();
             if let Some((o, p)) = seen {
+                if npc.foe != Some(o) {
+                    debug!("npc {}: sees a foe, {o:?}, {:.0} m off", npc.marker_id, p.distance(t.translation));
+                }
                 npc.foe = Some(o);
                 npc.last_known = Some(p);
                 // Soldiers react to an armed foe faster than to a sneaking player.
@@ -1791,7 +1828,7 @@ fn perceive(
                 npc.state_time = 0.0;
                 npc.awareness = npc.awareness.max(0.8);
                 npc.last_known = Some(bt.translation);
-                shouts.push(Noise { at: bt.translation, radius: 30.0, kind: NoiseKind::Interesting });
+                shouts.push(Noise { at: bt.translation, radius: 30.0, kind: NoiseKind::Interesting, aside: false });
                 break;
             }
         }
@@ -1855,7 +1892,7 @@ fn perceive(
                 }
             }
         }
-        for n in noises.iter().filter(|_| !friendly) {
+        for n in noises.iter().filter(|n| !friendly && !n.aside) {
             if t.translation.distance(n.at) < n.radius {
                 npc.awareness = npc.awareness.max(0.6);
                 npc.last_known = Some(n.at);
@@ -1937,18 +1974,24 @@ fn act(
     mut commands: Commands,
     mut noises: MessageWriter<Noise>,
     mut damage: MessageWriter<DamageEvent>,
-    (mut loops, mut sfx, aim_table, settings): (
+    (mut loops, mut sfx, aim_table, settings, strikes): (
         MessageWriter<crate::sound::LoopSfx>,
         MessageWriter<crate::sound::PlaySfx>,
         Res<AimTable>,
         Res<crate::settings::Settings>,
+        Res<crate::combat::DamageTable>,
     ),
-    (mut alarms, mut throw_clock, nav, probe, collider_names): (
+    (mut alarms, mut throw_clock, nav, probe, collider_names, bystanders): (
         MessageWriter<crate::outposts::AlarmRaised>,
         Local<f32>,
         Res<crate::nav::NavMesh>,
         crate::surfaces::SurfaceProbe,
         Query<&Name>,
+        // The story's characters who aren't in the fight (a captive).
+        Query<
+            (&GlobalTransform, &crate::story_actors::StoryActor),
+            (Without<Npc>, Without<crate::wildlife::WildAnimal>, Without<crate::story_actors::StoryCreature>),
+        >,
     ),
     players: Query<(Entity, &Transform, &Player), Without<Npc>>,
     mut npcs: Query<
@@ -1971,6 +2014,7 @@ fn act(
     let mut plan_budget = 3;
     let Ok((pe, pt, player)) = players.single() else { return };
     *throw_clock -= dt;
+    let spare: Vec<Vec3> = bystanders.iter().filter(|(_, a)| !a.dead).map(|(t, _)| t.translation()).collect();
     let mut others: std::collections::HashMap<Entity, (Vec3, Vec3)> = npcs.iter().map(|(e, t, n, _, _, _)| (e, (t.translation, n.velocity))).collect();
     others.extend(beasts.iter().map(|(e, t)| (e, (t.translation, Vec3::ZERO))));
     for (e, mut t, mut npc, h, children, garrison) in &mut npcs {
@@ -2088,8 +2132,9 @@ fn act(
                 face = Some(yaw_to(to));
                 let dist = to.length();
                 // Riflemen, snipers and rocket and firebomb throwers take cover
-                // when they can; shotgunners, heavies and flamers keep coming.
-                let takes_cover = !matches!(npc.role, Role::Shotgunner | Role::Heavy | Role::Flamer) && tgt.seen;
+                // when they can; shotgunners, heavies, flamers and chargers
+                // keep coming.
+                let takes_cover = !matches!(npc.role, Role::Shotgunner | Role::Heavy | Role::Flamer | Role::Charger) && tgt.seen;
                 npc.cover_search -= dt;
                 if takes_cover && npc.cover.is_none() && npc.cover_search <= 0.0 && dist > 9.0 && nav.ready() {
                     npc.cover_search = rng.range(2.5, 4.5);
@@ -2130,7 +2175,7 @@ fn act(
                         npc.cover = Some(c);
                         if c.up || npc.reload > 0.0 {
                             if tgt.is_player && c.up {
-                                throw(&mut npc, e, pos, tgt.pos, dt, &mut rng, &fx, &mut commands, &mut throw_clock);
+                                throw(&mut npc, e, pos, tgt.pos, &spare, dt, &mut rng, &fx, &mut commands, &mut throw_clock);
                             }
                             shoot(
                                 &mut npc,
@@ -2149,6 +2194,7 @@ fn act(
                                 &mut loops,
                                 &mut sfx,
                                 lap.as_ref(),
+                                &spare,
                             );
                         }
                     }
@@ -2171,13 +2217,20 @@ fn act(
                     if push != Vec3::ZERO || strafe > 0.0 {
                         goal = Some(pos + (push + side * strafe) * 3.0);
                     }
-                    // Shotgunners sprint in.
+                    // Shotgunners sprint in; chargers run at him flat out,
+                    // round what is in the way.
                     speed = if push == fwd && npc.role == Role::Shotgunner { 4.4 } else { 2.6 * stats.pace };
+                    if npc.role == Role::Charger && push == fwd {
+                        speed = strike(&strikes, npc.faction, npc.role).map_or(CHARGE_SPEED, |m| m.speed.max(2.6));
+                        if dist > 6.0 {
+                            goal = Some(tgt.pos);
+                        }
+                    }
                     if rng.f32() < dt * 0.4 {
                         npc.strafe_dir = -npc.strafe_dir;
                     }
                     if tgt.is_player {
-                        throw(&mut npc, e, pos, tgt.pos, dt, &mut rng, &fx, &mut commands, &mut throw_clock);
+                        throw(&mut npc, e, pos, tgt.pos, &spare, dt, &mut rng, &fx, &mut commands, &mut throw_clock);
                     }
                     shoot(
                         &mut npc,
@@ -2196,6 +2249,7 @@ fn act(
                         &mut loops,
                         &mut sfx,
                         lap.as_ref(),
+                        &spare,
                     );
                 }
             }
@@ -2203,7 +2257,7 @@ fn act(
                 if let Some(lk) = npc.last_known {
                     // Flush the player out of cover with a grenade.
                     if npc.state_time < 8.0 && npc.faction.hostile_to_player() {
-                        throw(&mut npc, e, pos, lk, dt, &mut rng, &fx, &mut commands, &mut throw_clock);
+                        throw(&mut npc, e, pos, lk, &spare, dt, &mut rng, &fx, &mut commands, &mut throw_clock);
                     }
                     goal = Some(lk);
                     speed = 2.8;
@@ -2305,14 +2359,25 @@ fn act(
             }
         }
         let mut next = pos + npc.velocity * dt;
+        // A cliff in the ground itself drops a little each step: looked for
+        // a metre ahead (`EDGE_DROP` down there, with no floor of the
+        // navigation mesh near the feet's height).
+        let heading = Vec3::new(npc.velocity.x, 0.0, npc.velocity.z).normalize_or_zero();
+        let over_edge = |at: Vec3| {
+            let ahead = at + heading * 1.0;
+            heading != Vec3::ZERO
+                && heights.height_at(ahead).is_some_and(|g| g < feet.y - EDGE_DROP)
+                && nav.height_at(ahead - Vec3::Y * HALF_HEIGHT).is_none_or(|h| (h - feet.y).abs() > 1.0)
+        };
         // Stay on the ground and out of the sea, or on a floor the navigation
         // mesh has above the ground (platforms, upper storeys) or well below it
-        // (caves).
+        // (caves); and not over a cliff's edge (a goal beyond one is walked
+        // toward, not dropped to).
         if let Some(ground) = heights.height_at(next) {
             let floor = nav.height_at(next - Vec3::Y * HALF_HEIGHT).filter(|h| (*h > ground + 0.5 || *h < ground - 2.0) && (*h - feet.y).abs() < 1.0);
             if let Some(f) = floor {
                 next.y = f + HALF_HEIGHT;
-            } else if ground < crate::water::surface(next, Some(ground)) - 0.8 {
+            } else if ground < crate::water::surface(next, Some(ground)) - 0.8 || ground < feet.y - LEDGE_DROP || over_edge(next) {
                 next = pos;
                 npc.velocity = Vec3::ZERO;
             } else {
@@ -2408,12 +2473,28 @@ fn lob(from: Vec3, to: Vec3, gravity: f32) -> Vec3 {
 
 /// Thrown weapons: firebomb throwers lob at the player whenever they can;
 /// assault troops use grenades to flush out a player who has been hiding for
-/// a few seconds. `clock` spaces throws across the whole squad.
+/// a few seconds. `clock` spaces throws across the whole squad. Nothing is
+/// thrown where it would catch someone not in the fight (`spare`, within
+/// `SPARE_RADIUS`: a captive by where the player was).
 #[allow(clippy::too_many_arguments)]
-fn throw(npc: &mut Npc, me: Entity, pos: Vec3, target: Vec3, dt: f32, rng: &mut Rng, fx: &EffectAssets, commands: &mut Commands, clock: &mut f32) {
+fn throw(
+    npc: &mut Npc,
+    me: Entity,
+    pos: Vec3,
+    target: Vec3,
+    spare: &[Vec3],
+    dt: f32,
+    rng: &mut Rng,
+    fx: &EffectAssets,
+    commands: &mut Commands,
+    clock: &mut f32,
+) {
     npc.throw_cooldown -= dt;
     let molotov = npc.role == Role::Molotov;
     if npc.throw_cooldown > 0.0 || *clock > 0.0 || npc.reload > 0.0 || !(molotov || npc.role == Role::Assault) {
+        return;
+    }
+    if spare.iter().any(|p| p.distance(target) < SPARE_RADIUS) {
         return;
     }
     if !molotov && (npc.sees_player || npc.state != NpcState::Search || npc.state_time < 2.5) {
@@ -2448,6 +2529,17 @@ fn throw(npc: &mut Npc, me: Entity, pos: Vec3, target: Vec3, dt: f32, rng: &mut 
     ));
 }
 
+/// A step down further than this (m) is a cliff's edge: a character on foot
+/// stops there.
+const LEDGE_DROP: f32 = 2.5;
+/// Ground this far (m) below the feet a metre ahead is a cliff (steeper than
+/// about 56 degrees) in the terrain itself.
+const EDGE_DROP: f32 = 1.5;
+
+/// How near (m) a throw's mark may be to someone not in the fight (more
+/// than a grenade's blast and a firebomb's spread).
+const SPARE_RADIUS: f32 = 8.0;
+
 #[allow(clippy::too_many_arguments)]
 /// Bullets passing within this distance (m) of the listener whizz by.
 const PASS_BY_RANGE: f32 = 2.2;
@@ -2469,8 +2561,13 @@ fn shoot(
     loops: &mut MessageWriter<crate::sound::LoopSfx>,
     sfx: &mut MessageWriter<crate::sound::PlaySfx>,
     lap: Option<&Lap>,
+    spare: &[Vec3],
 ) {
     use crate::sound::ev;
+    // (A charger has nothing to shoot.)
+    if npc.role == Role::Charger {
+        return;
+    }
     let stats = npc.role.stats(npc.faction);
     let forward = Vec3::new(-npc.yaw.sin(), 0.0, -npc.yaw.cos());
     let muzzle = pos + Vec3::Y * 0.35 + forward * 0.7;
@@ -2554,6 +2651,11 @@ fn shoot(
     let hit_chance = (npc.accuracy * warmup * (1.0 - dist_to_player / stats.reach) * (1.0 - 0.45 * moving) * crouch).clamp(0.03, 0.8);
     match npc.role {
         Role::Rocket => {
+            // (Not where the blast would catch someone not in the fight, as
+            // with throws.)
+            if spare.iter().any(|p| p.distance(tgt.pos) < SPARE_RADIUS) {
+                return;
+            }
             // Rockets go for the body, or the ground at the player's feet.
             let target = if rng.f32() < hit_chance {
                 tgt.pos + tgt.vel * (dist_to_player / 45.0) * 0.6
@@ -2584,7 +2686,7 @@ fn shoot(
                 crate::particles::fx::barrel_smoke(&mut shot_fx.particles, rng, muzzle);
             }
             sfx.write(crate::sound::PlaySfx { event: ev::RPG, at: Some(muzzle), volume: 1.0 });
-            noises.write(Noise { at: muzzle, radius: 120.0, kind: NoiseKind::Threatening });
+            noises.write(Noise { at: muzzle, radius: 120.0, kind: NoiseKind::Threatening, aside: !tgt.is_player });
             return;
         }
         Role::Flamer => {
@@ -2618,7 +2720,7 @@ fn shoot(
                     shot_fx.ignite.write(crate::fire::Ignite { at: muzzle + dir * h.distance, radius: 1.5, instigator: Some(me) });
                 }
             }
-            noises.write(Noise { at: muzzle, radius: 40.0, kind: NoiseKind::Threatening });
+            noises.write(Noise { at: muzzle, radius: 40.0, kind: NoiseKind::Threatening, aside: !tgt.is_player });
             return;
         }
         _ => {}
@@ -2749,7 +2851,7 @@ fn shoot(
         _ => 1.1,
     };
     crate::particles::fx::muzzle_flash(&mut shot_fx.particles, rng, muzzle, last_dir, flash);
-    noises.write(Noise { at: muzzle, radius: if npc.role == Role::Sniper { 150.0 } else { 90.0 }, kind: NoiseKind::Threatening });
+    noises.write(Noise { at: muzzle, radius: if npc.role == Role::Sniper { 150.0 } else { 90.0 }, kind: NoiseKind::Threatening, aside: !tgt.is_player });
     // The third-person sounds of each role's weapon (M133, SVD, 6P9, PKM, AK).
     match npc.role {
         Role::Shotgunner => {
@@ -2859,10 +2961,14 @@ fn react_to_death(
     }
 }
 
-fn sink_corpses(time: Res<Time>, mut commands: Commands, mut q: Query<(Entity, &mut Corpse, &mut Transform)>) {
+fn sink_corpses(time: Res<Time>, mut commands: Commands, mut q: Query<(Entity, &mut Corpse, &mut Transform, Has<crate::story_actors::KeptBody>)>) {
     let dt = time.delta_secs();
-    for (e, mut c, mut t) in &mut q {
+    for (e, mut c, mut t, kept) in &mut q {
         c.age += dt;
+        // (A body a script still watches stays.)
+        if kept {
+            c.age = c.age.min(CORPSE_LIFE);
+        }
         if c.age < 0.6 && !c.skinned {
             // Topple over.
             t.rotate_axis(Dir3::new(c.fall_axis).unwrap_or(Dir3::X), dt * 2.6);
@@ -2991,6 +3097,7 @@ fn npc_test_spawn(
             "rocket" | "rpg" => Role::Rocket,
             "molotov" => Role::Molotov,
             "flamer" => Role::Flamer,
+            "charger" | "beheader" => Role::Charger,
             _ => Role::Assault,
         };
         let far = if role == Role::Sniper { 60.0 } else { 18.0 };
@@ -3379,7 +3486,7 @@ fn npc_test_stealth(
             let side = (b - a).normalize_or_zero().cross(Vec3::Y) * 8.0;
             let at = a + side;
             info!("stealth-test: noise at {at:.1?}");
-            noise.write(Noise { at, radius: 16.0, kind: NoiseKind::Interesting });
+            noise.write(Noise { at, radius: 16.0, kind: NoiseKind::Interesting, aside: false });
         } else {
             info!("stealth-test: killing one guard");
             damage.write(DamageEvent {
@@ -3434,7 +3541,7 @@ fn npc_test_pose(
 
 /// Lets player gunfire (and his explosions) be heard by the AI.
 pub fn player_noise(writer: &mut MessageWriter<Noise>, at: Vec3, radius: f32, kind: NoiseKind) {
-    writer.write(Noise { at, radius, kind });
+    writer.write(Noise { at, radius, kind, aside: false });
 }
 
 #[cfg(test)]
@@ -3478,17 +3585,40 @@ const MELEE_CLIPS: [&str; 3] = [
     r"graphics\characters\_common\animations\weapons\npc\lotuseaters\ak47\melee\3rdge_fulbst_idlealert_aimnormal_meleehit_v01_+000fw_ak74.mab",
     r"graphics\characters\_common\animations\weapons\npc\lotuseaters\ak47\melee\3rdge_fulbst_idlealert_aimnormal_meleehit_v02_+000fw_ak74.mab",
 ];
+/// A charger's machete slashes: standing, and on the run.
+const CHARGER_MELEE_CLIPS: [&str; 2] = [
+    r"graphics\characters\_common\animations\melee\beheader\3rdge_fulbst_short_macheteslash+0fw_+000fw_beh.mab",
+    r"graphics\characters\_common\animations\patrolkits\lotuseater\neutral\3rdge_fulbst_alert_runmacheteslash_rightphase_v00_+000fw_beh.mab",
+];
 /// Reach to start a strike, reach when it lands, when it lands, how long it
-/// holds the enemy, its damage and the wait before another.
+/// holds the enemy, its damage and the wait before another (where the
+/// game's data has none for the role).
 const MELEE_START: f32 = 1.6;
 const MELEE_REACH: f32 = 2.1;
 const MELEE_CONTACT: f32 = 0.48;
 const MELEE_TIME: f32 = 1.1;
 const MELEE_DAMAGE: f32 = 25.0;
 const MELEE_COOLDOWN: f32 = 2.5;
+/// A machete lands later in its swing (after the whoosh), and the running
+/// slash later still.
+const SLASH_CONTACT: [f32; 2] = [0.5, 0.95];
+const SLASH_TIME: [f32; 2] = [1.2, 1.5];
+/// The player's health per damage stim of a strike (a rifleman's butt takes
+/// one bar).
+const STIM_HEALTH: f32 = 0.5;
+/// A strike starts this much inside its reach.
+const STRIKE_LEAD: f32 = 0.5;
+/// A charger's rush where the game's data has no speed for him.
+const CHARGE_SPEED: f32 = 5.5;
 
+/// A role's strike from the game's data (its archetype's personality).
+fn strike(table: &crate::combat::DamageTable, faction: Faction, role: Role) -> Option<fc3_formats::counters::Melee> {
+    table.0.as_ref()?.get(role.archetype(faction))?.melee
+}
+
+/// The rifle butt strikes, and the chargers' slashes.
 #[derive(Resource)]
-struct MeleeClips(Vec<Handle<Fc3Clip>>);
+struct MeleeClips(Vec<Handle<Fc3Clip>>, Vec<Handle<Fc3Clip>>);
 
 /// Struck in close quarters (the player's machete), by side: front, left,
 /// right, back.
@@ -3504,16 +3634,20 @@ struct MeleeHitClips(Vec<Handle<Fc3Clip>>);
 
 fn load_melee_clips(mut commands: Commands, server: Res<AssetServer>) {
     let load = |p: &&str| server.load(crate::cache_assets::cache_path(&fc3_formats::cache::anim_rel(p)));
-    commands.insert_resource(MeleeClips(MELEE_CLIPS.iter().map(load).collect()));
+    commands.insert_resource(MeleeClips(MELEE_CLIPS.iter().map(load).collect(), CHARGER_MELEE_CLIPS.iter().map(load).collect()));
     commands.insert_resource(MeleeHitClips(MELEE_HIT_CLIPS.iter().map(load).collect()));
 }
 
 /// An enemy in a fight with the player at arm's length swings the rifle butt
-/// (instead of shooting), knocking the view.
+/// (instead of shooting), knocking him back; a charger slashes with his
+/// machete, the running slash when he comes in fast. Reach, angle, damage and
+/// the wait between are the game's (the role's personality) where it has
+/// them.
 #[allow(clippy::too_many_arguments)]
 fn npc_melee(
     time: Res<Time>,
     clips: Option<Res<MeleeClips>>,
+    strikes: Res<crate::combat::DamageTable>,
     mut rng: ResMut<Rng>,
     mut players: Query<(Entity, &Transform, &mut Player, &Health), Without<Npc>>,
     mut npcs: Query<(Entity, &Transform, &mut Npc, &Health), (Without<Corpse>, Without<Riding>, Without<crate::turrets::Gunner>)>,
@@ -3539,40 +3673,52 @@ fn npc_melee(
         let flat = Vec2::new(to.x, to.z);
         let facing = Vec2::new(-npc.yaw.sin(), -npc.yaw.cos());
         let ahead = flat.normalize_or_zero().dot(facing);
+        let data = strike(&strikes, npc.faction, npc.role);
+        let charger = npc.role == Role::Charger;
+        // (The running slash: which clip, its contact and length.)
+        let slash = usize::from(npc.velocity.with_y(0.0).length() > 3.5);
+        let reach = data.map_or(MELEE_REACH, |m| m.reach);
+        let start = data.map_or(MELEE_START, |m| m.reach - STRIKE_LEAD);
+        // In front: within the strike's angle (the start a little narrower).
+        let cone = data.map_or(0.3, |m| (m.angle.to_radians() * 0.5).cos());
         match npc.melee {
             None => {
                 let ready = npc.state == NpcState::Combat && npc.melee_cooldown <= 0.0 && !ph.dead && !player.noclip && !player.driving && to.y.abs() < 1.2;
-                if !ready || flat.length() > MELEE_START || ahead < 0.6 || npc.role == Role::Flamer {
+                if !ready || flat.length() > start || ahead < cone.max(0.6) || npc.role == Role::Flamer {
                     continue;
                 }
                 npc.melee = Some(0.0);
-                npc.melee_cooldown = MELEE_COOLDOWN;
-                let pick = clips.0[(rng.f32() * clips.0.len() as f32) as usize % clips.0.len()].clone();
+                npc.melee_cooldown = data.map_or(MELEE_COOLDOWN, |m| m.cooldown);
+                npc.melee_slash = slash;
+                let pick = if charger { clips.1[slash].clone() } else { clips.0[(rng.f32() * clips.0.len() as f32) as usize % clips.0.len()].clone() };
                 if let Some(mut r) = npc.rig.and_then(|r| rigs.get_mut(r).ok()) {
                     swap_clip(&mut r, AnimKind::Attack, pick);
                 }
             }
             Some(s) => {
                 let s = s + dt;
-                // The butt lands: if he's still in front and in reach.
-                if s >= MELEE_CONTACT && s - dt < MELEE_CONTACT && flat.length() < MELEE_REACH && ahead > 0.3 && to.y.abs() < 1.2 {
+                let (contact, hold) = if charger { (SLASH_CONTACT[npc.melee_slash], SLASH_TIME[npc.melee_slash]) } else { (MELEE_CONTACT, MELEE_TIME) };
+                // The butt (or blade) lands: if he's still in front and in
+                // reach.
+                if s >= contact && s - dt < contact && flat.length() < reach && ahead > cone && to.y.abs() < 1.2 {
                     damage.write(DamageEvent {
                         target: pe,
-                        amount: MELEE_DAMAGE,
+                        amount: data.map_or(MELEE_DAMAGE, |m| m.damage * STIM_HEALTH),
                         kind: DamageKind::Melee,
                         source: Some(t.translation),
                         instigator: Some(e),
                         headshot: false,
                         hit: crate::combat::Hit::Whole,
                     });
-                    sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::BUTT_HIT, at: Some(pt.translation), volume: 0.9 });
-                    // Knocked back a step, the view jolted.
+                    debug!("npc {e:?}: {:?} strike lands ({:.0} damage stim)", npc.role, data.map_or(0.0, |m| m.damage));
+                    let event = if charger { crate::sound::ev::MELEE_IMPACT } else { crate::sound::ev::BUTT_HIT };
+                    sfx.write(crate::sound::PlaySfx { event, at: Some(pt.translation), volume: 0.9 });
+                    // Knocked back a step (the view's jolt is the hit
+                    // reaction's, `shake`).
                     let push = flat.normalize_or_zero() * 2.5;
                     player.velocity += Vec3::new(push.x, 0.0, push.y);
-                    player.pitch = (player.pitch + 0.12).min(1.5);
-                    player.yaw += rng.range(-0.08, 0.08);
                 }
-                npc.melee = (s < MELEE_TIME).then_some(s);
+                npc.melee = (s < hold).then_some(s);
             }
         }
         if npc.melee.is_some() {

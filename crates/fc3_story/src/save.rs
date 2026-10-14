@@ -72,10 +72,12 @@ impl StorySave {
         for t in &self.tags {
             out += &format!("tag\t{}\n", esc(t));
         }
-        for id in &self.removed {
+        // (Not what the story spawned this session: its ids are made
+        // again after a load, for others.)
+        for id in self.removed.iter().filter(|&&id| !crate::spawned_id(id)) {
             out += &format!("removed\t{id}\n");
         }
-        for id in &self.dead {
+        for id in self.dead.iter().filter(|&&id| !crate::spawned_id(id)) {
             out += &format!("dead\t{id}\n");
         }
         out += &format!("chapter\t{}\n", self.chapter);
@@ -105,8 +107,8 @@ impl StorySave {
                 "safehouse" => s.safehouses.extend(id(0)),
                 "tower" => s.radio_towers.extend(id(0)),
                 "tag" => s.tags.push(unesc(rest)),
-                "removed" => s.removed.extend(id(0)),
-                "dead" => s.dead.extend(id(0)),
+                "removed" => s.removed.extend(id(0).filter(|&i| !crate::spawned_id(i))),
+                "dead" => s.dead.extend(id(0).filter(|&i| !crate::spawned_id(i))),
                 "chapter" => s.chapter = rest.parse().unwrap_or(0),
                 "respawn" => s.respawn = id(0),
                 "global" => s.persistent.push(rest.to_string()),
@@ -221,5 +223,16 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(StorySave::from_text(&s.to_text()).unwrap(), s);
+    }
+
+    #[test]
+    fn saves_keep_no_spawned_ids() {
+        let spawned = crate::SPAWNED_IDS | 0x2_0000_0000_0218;
+        let s = StorySave { removed: vec![7, spawned], dead: vec![spawned, 9], ..Default::default() };
+        let back = StorySave::from_text(&s.to_text()).unwrap();
+        assert_eq!((back.removed, back.dead), (vec![7], vec![9]));
+        // (Older saves that kept them.)
+        let old = StorySave::from_text(&format!("fc3story 1\nremoved\t{spawned}\ndead\t{spawned}\nremoved\t5\n")).unwrap();
+        assert_eq!((old.removed, old.dead), (vec![5], vec![]));
     }
 }

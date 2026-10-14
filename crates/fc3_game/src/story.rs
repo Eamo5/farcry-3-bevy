@@ -45,9 +45,11 @@ impl Plugin for StoryPlugin {
             .add_systems(Update, story_blasts.after(StorySet).before(crate::breakables::BreakablesSet))
             .add_systems(PreUpdate, story_boxes.after(crate::controls::update_actions))
             .add_systems(PreUpdate, story_interactions.after(story_boxes))
-            .add_systems(PreUpdate, autopilot_loot.after(story_interactions).run_if(in_state(GameState::Playing)))
+            .add_systems(PreUpdate, autopilot_loot.after(story_interactions).before(crate::controls::apply_action_maps).run_if(in_state(GameState::Playing)))
             .add_systems(PreUpdate, collect_shop_purchases)
             .add_systems(PreUpdate, collect_loot)
+            .add_systems(Update, forward_pickups)
+            .add_systems(Update, forward_camera)
             .add_systems(PreUpdate, collect_crafts)
             .add_systems(PreUpdate, collect_menu_events)
             .add_systems(Startup, setup_story_ui)
@@ -276,6 +278,34 @@ fn collect_shop_purchases(
     }
 }
 
+/// Pickups picked up: the scripts waiting on them hear of it.
+fn forward_pickups(host: Option<NonSendMut<StoryHost>>, mut picked: MessageReader<crate::pickups::PickedUp>) {
+    let Some(mut host) = host else {
+        picked.clear();
+        return;
+    };
+    for p in picked.read() {
+        debug!("story: pickup {} picked up", p.0);
+        host.story.pickup_picked(p.0);
+    }
+}
+
+/// The camera took in one of the story's characters (a VIP's body): the
+/// scripts watching for it hear it discovered, and tagged if alive.
+fn forward_camera(host: Option<NonSendMut<StoryHost>>, mut saw: MessageReader<crate::stealth::CameraSaw>) {
+    let Some(mut host) = host else {
+        saw.clear();
+        return;
+    };
+    for s in saw.read() {
+        debug!("story: camera took in {}", s.id);
+        host.story.entity_event(s.id, "Entity_Discovered", vec![Arg::id(s.id)]);
+        if s.tagged {
+            host.story.entity_event(s.id, "Entity_Tagged", vec![Arg::id(s.id)]);
+        }
+    }
+}
+
 /// Gathering may open a tutorial that pauses mission simulation; keep its
 /// event until the story can read the updated inventory on a playing frame.
 #[derive(Resource, Default)]
@@ -462,16 +492,29 @@ enum Due {
     Sound(u64),
 }
 
+/// A mission's card for the original HUD (`original_ui`): its title as
+/// it starts, its end.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MissionCard {
+    Start { title: String },
+    Complete { title: String },
+    Failed { text: String },
+}
+
 /// What the story shows on screen.
 #[derive(Resource, Default)]
 pub struct StoryUi {
     pub objective: Option<String>,
+    /// The mission under way's name (its title as it started).
+    pub mission: Option<String>,
+    /// Mission cards the original HUD hasn't shown yet.
+    pub cards: Vec<MissionCard>,
     /// A subtitle and how long it stays.
     pub subtitle: Option<(String, f32)>,
     /// A large centre banner (mission title, complete, failed).
     pub banner: Option<(String, f32)>,
-    /// Hint texts by id (tutorial boxes).
-    pub hints: HashMap<u64, String>,
+    /// Hint texts by id (tutorial boxes): title and text.
+    pub hints: HashMap<u64, (String, String)>,
     /// Authored checklist rows, updated and hidden individually by missions.
     pub checklist: std::collections::BTreeMap<u32, String>,
     /// Message and tutorial boxes waiting, the first one shown.
@@ -510,6 +553,11 @@ pub struct ScriptedPlayer {
     backup: Option<InventoryBackup>,
     /// Non-weapon inventory entries missions give and take (rock, camera).
     pub gadgets: std::collections::HashSet<String>,
+    /// A script drew the camera (`CAPI_Player.DrawGadget`): it stays up
+    /// until a script holsters it or the player puts it away.
+    pub camera_drawn: bool,
+    /// The camera is up (its view over the screen), for the scripts.
+    pub camera_up: bool,
     pub animal_looting: bool,
     pub plant_looting: bool,
 }
@@ -527,7 +575,7 @@ impl Default for ScriptedPlayer {
             ignored: Default::default(), movement: 1.0, god: false, hud_hidden: false,
             fade: (0.0, 0.0, 0.0), black_for: 0.0, backup: None,
             gadgets: ["gadgets:FC3/Rock".into(), "gadgets:Equipped/Tablet".into()].into_iter().collect(),
-            animal_looting: true, plant_looting: true,
+            animal_looting: true, plant_looting: true, camera_drawn: false, camera_up: false,
         }
     }
 }
@@ -668,9 +716,24 @@ fn draw_markers(
 
 /// A weapon by a script's archetype name (`weapons:FC3/machete`): the
 /// game's weapon whose name or model folder it is.
-fn weapon_def(inv: &crate::weapons::Inventory, archetype: &str) -> Option<usize> {
+fn weapon_def(inv: &crate::weapons::Inventory, archetype: &str, data: &fc3_story::data::StoryData) -> Option<usize> {
     let short = archetype.rsplit(['/', ':']).next().unwrap_or(archetype).to_ascii_lowercase();
-    inv.defs.iter().position(|d| d.name.to_ascii_lowercase() == short || d.model.split('\\').next().is_some_and(|folder| folder.eq_ignore_ascii_case(&short)))
+    let in_folder = |folder: &str| inv.defs.iter().position(|d| d.model.split('\\').next().is_some_and(|f| f.eq_ignore_ascii_case(folder)));
+    if let Some(def) = inv.defs.iter().position(|d| d.name.to_ascii_lowercase() == short).or_else(|| in_folder(&short)) {
+        return Some(def);
+    }
+    // By its family (`LPO-50` of `LPO-50.LPO-50_NPC`): the folder of the
+    // model the game's weapons of that family draw.
+    let family = short.split('.').next().filter(|f| !f.is_empty())?;
+    data.entities.values().filter(|e| e.has("CFCXWeapon") && e.name.to_ascii_lowercase().contains(family)).find_map(|e| {
+        let mut folder = None;
+        e.component("CGraphicComponent")?.walk(&mut |o, _| {
+            if folder.is_none() {
+                folder = o.str_h(0x3182_766C).filter(|m| m.to_ascii_lowercase().ends_with(".xbg")).and_then(|m| m.rsplit('\\').nth(1).map(str::to_string));
+            }
+        });
+        in_folder(&folder?)
+    })
 }
 
 impl ScriptedPlayer {
@@ -680,6 +743,11 @@ impl ScriptedPlayer {
 
     pub fn has_camera(&self) -> bool {
         self.gadgets.iter().any(|g| camera_gadget(g))
+    }
+
+    /// The camera the player carries, as the scripts name it.
+    fn camera(&self) -> Option<&String> {
+        self.gadgets.iter().filter(|g| camera_gadget(g)).min()
     }
 
     fn backup_inventory(&mut self, inv: &crate::weapons::Inventory) {
@@ -754,7 +822,7 @@ pub fn plain(text: &str) -> String {
 
 /// Replaces action placeholders with the current device's bound controls;
 /// unfamiliar bracketed text (including subtitles) is kept verbatim.
-fn prompt_text(text: &str, actions: &crate::controls::ActionState, settings: &crate::settings::Settings) -> String {
+pub(crate) fn prompt_text(text: &str, actions: &crate::controls::ActionState, settings: &crate::settings::Settings) -> String {
     let mut rest = text;
     let mut out = String::new();
     while let Some(open) = rest.find('[') {
@@ -776,7 +844,7 @@ fn prompt_text(text: &str, actions: &crate::controls::ActionState, settings: &cr
     out
 }
 
-fn timer_text(timer: &fc3_story::Timer) -> String {
+pub(crate) fn timer_text(timer: &fc3_story::Timer) -> String {
     if !timer.append_time && !timer.label.is_empty() {
         return plain(&timer.label);
     }
@@ -919,7 +987,12 @@ fn run_story(
         Res<crate::progression::ShopCatalog>, ResMut<crate::progression::ShopOverride>,
         ResMut<crate::progression::PauseMenu>, ResMut<NextState<GameState>>, ResMut<StoryMenuEvents>,
     ),
-    (mut area, mut cinema, mut placements): (ResMut<MissionArea>, ResMut<crate::cinema::Cinema>, ResMut<EntityPlacements>),
+    (mut area, mut cinema, mut placements, original_hud): (
+        ResMut<MissionArea>,
+        ResMut<crate::cinema::Cinema>,
+        ResMut<EntityPlacements>,
+        Res<crate::hud::OriginalHud>,
+    ),
     (actions, mut markers, heights, mut voices, driving, vehicle_views, mut seat_requests, mut vehicle_paths): (
         Res<crate::controls::ActionState>,
         ResMut<ObjectiveMarkers>,
@@ -1116,6 +1189,11 @@ fn run_story(
             class: if camera { "binoculars" } else { "" }.into(),
         }
     }));
+    // The camera up is the gadget in the player's hands.
+    if let Some(camera) = scripted.camera().filter(|_| scripted.camera_up) {
+        view.player_state.in_hands = Some(camera.clone());
+        view.player_state.gadget = Some(fc3_story::Item { name: camera.clone(), count: 1, category: "binoculars".into(), class: "binoculars".into() });
+    }
     // FC3_STORY_LOOK=<entity id>: face that character once it is in (tests).
     if let Some(id) = std::env::var("FC3_STORY_LOOK").ok().and_then(|v| v.parse::<u64>().ok()) {
         if let Some((_, at, _)) = actors.iter().find(|(a, _, _)| a.id == id) {
@@ -1215,8 +1293,13 @@ fn run_story(
     if commands.iter().any(|c| !matches!(c, Command::Layer { .. } | Command::Print(_) | Command::Dialog { .. })) {
         host.quiet = 0.0;
     }
-    if gameplay && (std::env::var("FC3_STORY_AUTOPILOT").is_ok() || std::env::var("FC3_STORY_WAIT_DEBUG").is_ok())
-        && host.quiet > 20.0 && host.quiet - dt <= 20.0 {
+    // (With FC3_STORY_WAIT_DEBUG, a minute on too: a script's looping bark
+    // can keep the story from ever going quiet.)
+    let minute = std::env::var("FC3_STORY_WAIT_DEBUG").is_ok() && (time.elapsed_secs() / 60.0) as u32 != ((time.elapsed_secs() - dt) / 60.0) as u32;
+    if gameplay
+        && (std::env::var("FC3_STORY_AUTOPILOT").is_ok() || std::env::var("FC3_STORY_WAIT_DEBUG").is_ok())
+        && ((host.quiet > 20.0 && host.quiet - dt <= 20.0) || minute)
+    {
         info!("story autopilot: stalled; triggers {:?}, signals {:?}", host.story.watched_triggers(), host.story.watched_signals());
         for w in host.story.waiting_on() {
             info!("story autopilot: waiting on {w}");
@@ -1239,7 +1322,17 @@ fn run_story(
         if host.quiet > 25.0 {
             host.used.retain(|u| !watched.iter().any(|w| w.0 == u.0 && w.1 == u.1));
         }
-        if let Some((id, event, point, _)) = watched.iter().find(|w| !awaiting_rock && w.3 && !host.used.contains(&(w.0, w.1.clone()))) {
+        let tails: Vec<u64> = host.story.tail_targets().into_iter().map(|t| t.0).collect();
+        // (Not while a companion leads: going on ahead leaves it behind.)
+        // (While a companion leads, none; while one is about, only those
+        // near it: going on ahead leaves it behind.)
+        let companions = host.story.companions();
+        let leading = companions.iter().any(|c| matches!(c.1, fc3_story::Companion::Lead { .. }));
+        let kept: Vec<Vec3> = actors.iter().filter(|(a, _, _)| !a.dead && companions.iter().any(|c| c.0 == a.id)).map(|(_, t, _)| t.translation).collect();
+        let near_companion = |p: [f32; 3]| kept.is_empty() || kept.iter().any(|c| c.distance(to_bevy(p)) < COMPANION_REACH);
+        if let Some((id, event, point, _)) = watched.iter().find(|w| {
+            !awaiting_rock && !leading && near_companion(w.2) && w.3 && !host.used.contains(&(w.0, w.1.clone())) && !(w.1 == "EnterFOV" && tails.contains(&w.0))
+        }) {
             info!("story autopilot: {event} {}", data.name_of(*id).unwrap_or("?"));
             host.used.insert((*id, event.clone()));
             // A region: somewhere its heights reach the ground.
@@ -1255,8 +1348,9 @@ fn run_story(
                 p.spawning = false;
             }
             if event == "EnterFOV" {
-                // Stand back from the spot and look at it.
-                let at = to_bevy(point);
+                // Stand back from the spot and look at it (where it is now:
+                // one riding on a character has gone with him).
+                let at = to_bevy(host.story.look_at_point(*id).unwrap_or(point));
                 t.translation = at + Vec3::new(0.0, 0.0, 2.0);
                 p.yaw = 0.0;
                 p.pitch = ((at.y - t.translation.y - 0.6) / 2.0).atan();
@@ -1282,8 +1376,13 @@ fn run_story(
             host.used.insert((id, "distract".into()));
             if let Some(test) = rock_test.as_mut() { test.0 = Some(target); }
             host.quiet = 0.0;
-        } else if let Some((id, radius, point)) =
-            host.story.watched_proximity_in_graph(graph.as_deref()).into_iter().find(|w| !host.used.contains(&(w.0, "near".into()))).filter(|_| {
+        } else if let Some((id, radius, point)) = host
+            .story
+            .watched_proximity_in_graph(graph.as_deref())
+            .into_iter()
+            .find(|w| !host.used.contains(&(w.0, format!("near {}", w.1))))
+            .filter(|_| tails.is_empty())
+            .filter(|_| {
                 // (Not with a fight on: a block's counted foes close by, the
                 // reinforcements it waits on still coming.)
                 let counted = host.story.counted_members();
@@ -1293,9 +1392,11 @@ fn run_story(
             })
         {
             // A place a script waits for the player to come near (a quest
-            // giver's spot): just inside its radius, on the side he's on.
+            // giver's spot): just inside its radius, on the side he's on
+            // (again for a nearer radius: a companion who wants him closer
+            // still at the end).
             info!("story autopilot: near {} ({radius} m)", data.name_of(id).unwrap_or("?"));
-            host.used.insert((id, "near".into()));
+            host.used.insert((id, format!("near {radius}")));
             let at = to_bevy(point);
             let side = (t.translation - at).with_y(0.0).normalize_or(Vec3::Z);
             teleport(&mut t, &mut p, to_dunia(at + side * (radius * 0.5).min(1.5)), 0.0);
@@ -1315,8 +1416,9 @@ fn run_story(
                     }
                 }
             }
-        } else if let Some((id, name)) = host.story.gameplays().into_iter().find(|g| g.1 != "QTEGSF") {
-            // A minigame or QTE the game doesn't play yet: done.
+        } else if let Some((id, name)) = host.story.gameplays().into_iter().find(|g| g.1 != "QTEGSF" && !sniping_challenge(&g.1)) {
+            // A minigame or QTE the game doesn't play yet: done. (A sniping
+            // challenge is played: its targets shot, see `autopilot_loot`.)
             info!("story autopilot: end gameplay {name}");
             host.story.gameplay_ended(id);
             host.quiet = 0.0;
@@ -1372,7 +1474,8 @@ fn run_story(
             }
             Command::Objective { text, .. } => {
                 info!("story: objective {:?}", text.as_deref().map(plain));
-                if let Some(t) = &text {
+                // (The original HUD's objective box announces it itself.)
+                if let Some(t) = text.as_ref().filter(|_| !original_hud.0) {
                     hud.notify(format!("New objective: {}", plain(t)));
                 }
                 ui.objective = text.map(|t| plain(&t));
@@ -1380,11 +1483,14 @@ fn run_story(
             Command::MissionTitle { title, .. } => {
                 if let Some(t) = title {
                     ui.banner = Some((plain(&t), 5.0));
+                    ui.mission = Some(plain(&t));
+                    ui.cards.push(MissionCard::Start { title: plain(&t) });
                 }
             }
             Command::MissionComplete { title, xp, money, .. } => {
                 let name = title.map(|t| plain(&t)).unwrap_or_default();
                 ui.banner = Some((format!("{name}\nMission complete"), 6.0));
+                ui.cards.push(MissionCard::Complete { title: name.clone() });
                 if xp > 0 {
                     xp_gain.write(crate::progression::XpGain { amount: xp, reason: "Mission complete" });
                 }
@@ -1395,7 +1501,9 @@ fn run_story(
             }
             Command::MissionFailed { text, reload } => {
                 info!("story: mission failed ({:?}), reload {reload}", text.as_deref().map(plain));
-                ui.banner = Some((format!("Mission failed\n{}", text.map(|t| plain(&t)).unwrap_or_default()), 5.0));
+                let text = text.map(|t| plain(&t)).unwrap_or_default();
+                ui.banner = Some((format!("Mission failed\n{text}"), 5.0));
+                ui.cards.push(MissionCard::Failed { text });
                 if reload && host.reload_at.is_none() {
                     host.reload_at = Some(now + 4.0);
                 }
@@ -1488,6 +1596,35 @@ fn run_story(
                         pause_menu.override_page(a(1) == "true", a(2) == "true", name == "OverridePauseMenuTutorial");
                         if a(0) == "true" { next.set(GameState::Journal); }
                     }
+                    // `group, battlefield, kind`: a character who isn't a
+                    // fighter (Oliver being freed) goes to the battlefield
+                    // he is given to be at (kind 0), as an action with no
+                    // move of its own. (Fighters keep to their own AI.)
+                    "SetBattlefields" if a(2) == "0" => {
+                        if let Ok(field) = a(1).parse::<u64>() {
+                            let data = host.story.data();
+                            if let Some(region) = data.entities.get(&field) {
+                                // (To the battlefield's strategic point, where
+                                // its characters take up their places, else
+                                // its middle.)
+                                let at = region.pos;
+                                let spot = data
+                                    .entities
+                                    .values()
+                                    .filter(|e| e.class == "CStrategicPoint")
+                                    .map(|e| (e.id, (e.pos[0] - at[0]).hypot(e.pos[1] - at[1])))
+                                    .filter(|(_, d)| *d < STRATEGIC_REACH)
+                                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                                    .map_or(field, |(id, _)| id);
+                                for pawn in host.story.group_members(&a(0)) {
+                                    if crate::story_actors::walks_to_battlefields(&data, pawn) && host.story.current_action(pawn).is_none() {
+                                        debug!("story: {pawn} to battlefield {field} ({spot})");
+                                        orders.0.insert(pawn, Some(spot));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // `point, mode, battlefield, vehicle id=archetype (or
                     // nothing), id=archetype...` (the mercs)
                     "SpawnReinforcement" => {
@@ -1570,8 +1707,7 @@ fn run_story(
                         host.due.push((now + 2.0, Due::Sound(a(0).parse().unwrap_or(0))));
                     }
                     "HudText" => {
-                        let text = [a(2), a(3)].iter().filter(|s| !s.is_empty()).map(|s| plain(s)).collect::<Vec<_>>().join("\n");
-                        ui.hints.insert(a(0).parse().unwrap_or(0), text);
+                        ui.hints.insert(a(0).parse().unwrap_or(0), (plain(&a(2)), plain(&a(3))));
                     }
                     "MusicState" => music.request(&a(0), a(1) == "play"),
                     "CAPI_Player.StartPhoneCall" => ui.phone = Some((plain(&a(2)), a(3) == "true", 0.0)),
@@ -1675,6 +1811,11 @@ fn run_story(
                             _ => progress.money = amount.min(progress.money_cap()),
                         }
                     }
+                    // The camera drawn by a script, and put away.
+                    "CAPI_Player.DrawGadget" if a(0) == fc3_story::PLAYER.to_string() && a(1).eq_ignore_ascii_case("binoculars") => {
+                        scripted.camera_drawn = scripted.has_camera();
+                    }
+                    "CAPI_Pawn.Holster" | "CAPI_Pawn.ForceHolster" if a(0) == fc3_story::PLAYER.to_string() => scripted.camera_drawn = false,
                     "CAPI_Player.AddArmor" if a(0) == fc3_story::PLAYER.to_string() => {
                         progress.armour = progress.armour.max(a(1).parse::<f32>().unwrap_or(0.0));
                     }
@@ -1737,15 +1878,24 @@ fn run_story(
                             scripted.gadgets.insert(a(1));
                         }
                         if let Ok(mut inv) = inventory.single_mut() {
-                            if let Some(def) = weapon_def(&inv, &a(1)) {
+                            if let Some(def) = weapon_def(&inv, &a(1), &data) {
                                 let wname = inv.defs[def].name;
                                 crate::weapons::grant_weapon(&mut inv, wname, 4);
+                            } else {
+                                // One the game carries as no weapon of its own
+                                // (the IED's remote: the charges it sets off):
+                                // carried as far as the story can tell, so what
+                                // waits for it to spawn hears it.
+                                if a(1).to_ascii_lowercase().contains("ied") {
+                                    inv.c4 = (inv.c4 + 1).min(perks.explosive_cap.max(1));
+                                }
+                                scripted.gadgets.insert(a(1));
                             }
                         }
                     }
                     "CAPI_Pawn.RemoveWeapon" if a(0) == fc3_story::PLAYER.to_string() => {
                         if let Ok(mut inv) = inventory.single_mut() {
-                            if let Some(def) = weapon_def(&inv, &host.story.item_name(&a(1))) {
+                            if let Some(def) = weapon_def(&inv, &host.story.item_name(&a(1)), &data) {
                                 inv.slots.retain(|w| w.def != def);
                                 inv.current = inv.current.min(inv.slots.len().saturating_sub(1));
                                 crate::weapons::settle_unarmed(&mut inv);
@@ -2270,6 +2420,7 @@ fn show_story_ui(
     settings: Res<crate::settings::Settings>,
     actions: Res<crate::controls::ActionState>,
     mut ui: ResMut<StoryUi>,
+    original: Res<crate::hud::OriginalHud>,
     mut texts: ParamSet<(
         Query<&mut Text, With<ObjectiveText>>,
         Query<&mut Text, With<SubtitleText>>,
@@ -2290,18 +2441,32 @@ fn show_story_ui(
             }
         }
     }
-    let objective = ui.objective.as_ref().map(|s| prompt_text(s, &actions, &settings)).unwrap_or_default();
-    let subtitle = if settings.subtitles { ui.subtitle.as_ref().map(|s| s.0.clone()).unwrap_or_default() } else { String::new() };
-    let banner = ui.banner.as_ref().map(|s| s.0.clone()).unwrap_or_default();
-    let mut hint_ids: Vec<_> = ui.hints.keys().copied().collect();
+    // (The original HUD shows these itself while it runs; without it, no
+    // one takes its cards.)
+    let own = !original.0;
+    if own {
+        ui.cards.clear();
+    }
+    let objective = ui.objective.as_ref().filter(|_| own).map(|s| prompt_text(s, &actions, &settings)).unwrap_or_default();
+    let subtitle = if settings.subtitles && own { ui.subtitle.as_ref().map(|s| s.0.clone()).unwrap_or_default() } else { String::new() };
+    let banner = ui.banner.as_ref().filter(|_| own).map(|s| s.0.clone()).unwrap_or_default();
+    // (The original HUD's tutorial box shows the hints; checklists stay.)
+    let mut hint_ids: Vec<_> = ui.hints.keys().copied().filter(|_| own).collect();
     hint_ids.sort_unstable();
-    let hints = hint_ids.iter().map(|id| &ui.hints[id]).chain(ui.checklist.values())
-        .map(|text| prompt_text(text, &actions, &settings)).collect::<Vec<_>>().join("\n\n");
+    let joined: Vec<String> = hint_ids
+        .iter()
+        .map(|id| {
+            let (title, text) = &ui.hints[id];
+            [title, text].iter().filter(|s| !s.is_empty()).map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
+        })
+        .collect();
+    let hints = joined.iter().chain(ui.checklist.values()).map(|text| prompt_text(text, &actions, &settings)).collect::<Vec<_>>().join("\n\n");
     set_text(&mut texts.p0(), &objective);
     set_text(&mut texts.p1(), &subtitle);
     set_text(&mut texts.p2(), &banner);
     set_text(&mut texts.p3(), &hints);
-    let timers = ui.timers.iter().map(timer_text).collect::<Vec<_>>().join("\n");
+    // (The original HUD has its own timer.)
+    let timers = ui.timers.iter().filter(|_| own).map(timer_text).collect::<Vec<_>>().join("\n");
     set_text(&mut texts.p5(), &timers);
     // The call: ringing first, then its running time (it ends with the
     // scripts' `PhoneCallEnd`, or after two minutes at most).
@@ -2340,6 +2505,38 @@ fn set_text<F: bevy::ecs::query::QueryFilter>(q: &mut Query<&mut Text, F>, value
     }
 }
 
+/// Tests: how far from a companion the autopilot steps into a trigger.
+const COMPANION_REACH: f32 = 30.0;
+
+/// Tests: seconds the autopilot tries to take a foe down without hurting
+/// him before it shoots him instead (out of the knife's reach: in the
+/// water, on a ledge).
+const TAKEDOWN_PATIENCE: f32 = 6.0;
+
+/// Tests: how far from a foe the autopilot shoots him from, when it has to
+/// come nearer (m).
+const SHOOT_FROM: f32 = 15.0;
+
+/// How far (m) from a battlefield's middle its strategic point may be.
+const STRATEGIC_REACH: f32 = 15.0;
+
+/// Tests: how far the autopilot keeps from a character it isn't fighting (a
+/// captive) while it fights (m): the foes' grenades and firebombs come where
+/// the player is.
+const KEEP_CLEAR: f32 = 10.0;
+
+/// A sniping set-piece (`CSnipingChallenge_...`): the player shoots its
+/// targets from where they stand.
+fn sniping_challenge(gameplay: &str) -> bool {
+    gameplay.starts_with("CSnipingChallenge")
+}
+
+/// Tests: how far behind a character the autopilot keeps when tailing him
+/// (it goes back there outside `TAIL_NEAR..TAIL_FAR` metres).
+const TAIL_DISTANCE: f32 = 14.0;
+const TAIL_NEAR: f32 = 8.0;
+const TAIL_FAR: f32 = 30.0;
+
 /// Smoke-test hunting/gathering uses the same controls, finite ammunition,
 /// damage, carcasses and pickup transactions as a player. Repositioning still
 /// makes this automation evidence, not manual traversal or UX validation.
@@ -2360,7 +2557,7 @@ fn autopilot_loot(
     plants: Query<(&crate::pickups::Pickup, &GlobalTransform)>,
     mut actions: ResMut<crate::controls::ActionState>,
     mut last: Local<Option<(u64, &'static str)>>,
-    (npcs, crafting, mut next_press, mut shooting, mut skipped): (
+    (npcs, crafting, mut next_press, mut shooting, mut skipped, story_actors, action_maps, mut came_near, mut blocked, mut kept_clear): (
         Query<
             (
                 &Transform,
@@ -2380,6 +2577,15 @@ fn autopilot_loot(
         // and foes left alone a while (until when).
         Local<Option<(u64, f32, f32)>>,
         Local<HashMap<u64, f32>>,
+        // The story's characters, fighters or not (a companion to keep up with).
+        Query<(&Transform, &crate::story_actors::StoryActor, Has<crate::story_actors::StoryCreature>), Without<Player>>,
+        Res<crate::controls::ScriptActionMaps>,
+        // Foes shot at in vain from afar, gone right up to since.
+        Local<std::collections::HashSet<u64>>,
+        // Since when someone not to be shot has stood in the line of fire.
+        Local<Option<f32>>,
+        // When the player last stepped away from someone to keep safe.
+        Local<f32>,
     ),
 ) {
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() { return }
@@ -2393,6 +2599,61 @@ fn autopilot_loot(
     }
     if host.reload_at.is_some() {
         return;
+    }
+    // A camera a script drew and no longer holds the player in (no action
+    // map left in force, or a sniping challenge on), with no one to
+    // photograph: put away, as a player would.
+    let sniping = host.story.gameplays().iter().any(|g| sniping_challenge(&g.1));
+    if scripted.camera_drawn && (sniping || (action_maps.in_force().is_none() && host.quiet > 3.0)) && host.story.awaited_discoveries().is_empty() {
+        info!("story autopilot: camera put away");
+        actions.press(crate::controls::Action::Tag);
+        return;
+    }
+    // A character to keep in sight (a tail: a look-at trigger riding on him
+    // whose leaving the view a script watches): some way behind him, looking
+    // at him, and nothing else meanwhile (a fight would give the player away).
+    let tails = host.story.tail_targets();
+    let nearest_tail = tails.iter().min_by(|a, b| to_bevy(a.1).distance(at.translation).total_cmp(&to_bevy(b.1).distance(at.translation)));
+    if let Some(&(id, point, _)) = nearest_tail {
+        let target = to_bevy(point);
+        let flat = (at.translation - target).with_y(0.0);
+        if *last != Some((id, "tail")) {
+            info!("story autopilot: keep {} in sight", host.story.data().name_of(id).unwrap_or("?"));
+            *last = Some((id, "tail"));
+        }
+        if !(TAIL_NEAR..TAIL_FAR).contains(&flat.length()) {
+            let side = flat.normalize_or(Vec3::Z);
+            let mut feet = target + side * TAIL_DISTANCE;
+            feet.y = heights.height_at(feet).unwrap_or(target.y - crate::player::EYE_HEIGHT);
+            teleport(&mut at, &mut player, to_dunia(feet), 0.0);
+            return;
+        }
+        let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
+        let aim = target - eye;
+        player.yaw = (-aim.x).atan2(-aim.z);
+        player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
+        return;
+    }
+    // A companion leading the way: kept up with (back to a few metres
+    // behind it when it gets away), so it doesn't stop to wait; fights on
+    // the way are still the takedown step's.
+    let leading = host.story.companions().into_iter().find(|c| matches!(c.1, fc3_story::Companion::Lead { .. }));
+    if let Some((id, fc3_story::Companion::Lead { distance, .. })) = leading {
+        if let Some((t, _, _)) = story_actors.iter().find(|(_, a, _)| a.id == id && !a.dead) {
+            let flat = (at.translation - t.translation).with_y(0.0);
+            if flat.length() > distance.min(12.0) {
+                if *last != Some((id, "escort")) {
+                    info!("story autopilot: keep up with {}", host.story.data().name_of(id).unwrap_or("?"));
+                    *last = Some((id, "escort"));
+                }
+                let mut feet = t.translation + flat.normalize_or(Vec3::Z) * 4.0;
+                feet.y = heights.height_at(feet).unwrap_or(t.translation.y - crate::player::HALF_HEIGHT);
+                teleport(&mut at, &mut player, to_dunia(feet), 0.0);
+                let aim = t.translation - at.translation;
+                player.yaw = (-aim.x).atan2(-aim.z);
+                return;
+            }
+        }
     }
     // A mission's character carrying one of its items (a radio operator and
     // his codes): once the story has stalled, taken down from behind with an
@@ -2423,9 +2684,26 @@ fn autopilot_loot(
     let counted = host.story.counted_members();
     // (Not while a script waits for an alarm to be switched off: that comes
     // first, before a guard runs for it.)
-    let alarm_first = host.story.awaits_group_event("Alarm_Disabled");
+    let alarm_first = !host.story.alarms_to_disable().is_empty();
     let now = time.elapsed_secs();
     skipped.retain(|_, until| *until > now);
+    // The story's people not in the fight (a captive): where the autopilot
+    // goes to fight is kept `KEEP_CLEAR` from them (the foes' grenades come
+    // where the player is).
+    let kept: Vec<Vec3> = {
+        let hostile: std::collections::HashSet<u64> = npcs.iter().filter(|q| q.5.faction.hostile_to_player()).map(|q| q.4.id).collect();
+        story_actors.iter().filter(|(_, a, creature)| !a.dead && !creature && !hostile.contains(&a.id)).map(|(t, _, _)| t.translation).collect()
+    };
+    let clear_of_kept = |mut feet: Vec3| {
+        for p in &kept {
+            let off = (feet - *p).with_y(0.0);
+            if off.length() < KEEP_CLEAR {
+                feet = *p + off.normalize_or(Vec3::X) * (KEEP_CLEAR + 2.0);
+                feet.y = heights.height_at(feet).unwrap_or(feet.y);
+            }
+        }
+        feet
+    };
     let quest = quest.or_else(|| {
         if alarm_first {
             return None;
@@ -2438,19 +2716,34 @@ fn autopilot_loot(
                     && !actor.seated
                     && !skipped.contains_key(&actor.id)
                     && npc.faction.hostile_to_player()
-                    && (counted.contains(&actor.id) || npc.state != crate::npc::NpcState::Idle)
+                    && (counted.contains(&actor.id) || npc.state != crate::npc::NpcState::Idle || sniping)
                     && near(t) < 150.0
             })
             .min_by(|a, b| (!counted.contains(&a.4.id)).cmp(&!counted.contains(&b.4.id)).then(near(a.0).total_cmp(&near(b.0))))
     });
+    // (Held in the camera by a script, the player watches: a scene plays out
+    // before him that needs its characters.)
+    let quest = quest.filter(|_| !scripted.camera_drawn);
     let on_call = host.story.is_speaking(fc3_story::PLAYER);
+    // A take-down that hasn't hurt him in a while (`shooting` keeps when it
+    // began and his health then): he is shot instead.
+    let stubborn = quest.is_some_and(|q| {
+        !q.1.dead
+            && (*last == Some((q.4.id, "shoot"))
+                || player.swimming
+                // (One on his guard can't be taken down: shot at once.)
+                || q.5.state != crate::npc::NpcState::Idle
+                || (*last == Some((q.4.id, "take down")) && shooting.is_some_and(|(id, _, since)| id == q.4.id && now - since > TAKEDOWN_PATIENCE)))
+    });
     // Riding as a passenger: the foe nearest is shot from the seat, gun in
-    // hand (the knife put away).
-    if player.armed_passenger {
-        let Some((nt, nh, _, _, actor, _, head)) = quest.filter(|q| host.quiet > 3.0 && !q.1.dead) else { return };
+    // hand (the knife put away); in a sniping challenge, from where he
+    // stands.
+    if player.armed_passenger || stubborn || sniping {
+        let Some((nt, nh, _, _, actor, _, head)) = quest.filter(|q| (stubborn || sniping || host.quiet > 3.0) && !q.1.dead) else { return };
         if *last != Some((actor.id, "shoot")) {
             info!("story autopilot: shoot {} ({})", host.story.data().name_of(actor.id).unwrap_or("?"), actor.id);
             *last = Some((actor.id, "shoot"));
+            *shooting = None;
         }
         // Not hurt after a while of shooting: another one for a time.
         match *shooting {
@@ -2458,6 +2751,19 @@ fn autopilot_loot(
                 if nh.current < hp {
                     *shooting = Some((id, nh.current, now));
                 } else if now - since > 8.0 {
+                    // On foot, the first time: right up to him (a cliff or
+                    // the water's edge between), on the ground beside him.
+                    if !player.armed_passenger && came_near.insert(actor.id) {
+                        info!("story autopilot: {} out of reach; going up to him", actor.id);
+                        let flat = (at.translation - nt.translation).with_y(0.0).normalize_or(Vec3::Z);
+                        let mut feet = nt.translation + flat * 3.0;
+                        feet.y =
+                            heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT).max(nt.translation.y - crate::player::HALF_HEIGHT);
+                        teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
+                        host.quiet = 0.0;
+                        *shooting = None;
+                        return;
+                    }
                     info!("story autopilot: {} out of reach; another for a while", actor.id);
                     skipped.insert(actor.id, now + 20.0);
                     *shooting = None;
@@ -2465,10 +2771,115 @@ fn autopilot_loot(
             }
             _ => *shooting = Some((actor.id, nh.current, now)),
         }
+        // In the water no gun fires: out onto dry ground near him, the
+        // nearest that sees him over the terrain (a foe at the waterline
+        // under a cliff isn't seen from its top), else the highest.
+        if player.swimming && !player.armed_passenger {
+            let chest = nt.translation + Vec3::Y * 0.4;
+            let sees = |feet: Vec3| {
+                let eye = feet + Vec3::Y * 1.6;
+                (1..20).all(|i| {
+                    let p = eye.lerp(chest, i as f32 / 20.0);
+                    heights.height_at(p).is_none_or(|h| h < p.y - 0.2)
+                })
+            };
+            let spots: Vec<(f32, Vec3)> = (0..8)
+                .flat_map(|i| [6.0f32, 10.0, 15.0, 20.0].map(move |r| (i, r)))
+                .filter_map(|(i, r)| {
+                    let a = i as f32 * std::f32::consts::TAU / 8.0;
+                    let p = nt.translation + Vec3::new(a.cos() * r, 0.0, a.sin() * r);
+                    heights.height_at(p).filter(|h| *h > crate::water::surface(p, Some(*h)) + 0.2).map(|h| (r, p.with_y(h)))
+                })
+                .collect();
+            let ground = spots
+                .iter()
+                .filter(|(_, p)| sees(*p))
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .or_else(|| spots.iter().max_by(|a, b| a.1.y.total_cmp(&b.1.y)))
+                .map(|(_, p)| *p);
+            if let Some(feet) = ground {
+                teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
+                host.quiet = 0.0;
+                *shooting = None;
+                return;
+            }
+        }
+        // On foot and beyond the guns' reach: nearer first.
+        let reach = inventory
+            .slots
+            .iter()
+            .map(|s| &inventory.defs[s.def])
+            .filter(|d| d.class != crate::weapons::WeaponClass::Melee)
+            .map(|d| d.range)
+            .fold(0.0, f32::max);
+        let flat = (nt.translation - at.translation).with_y(0.0);
+        if !player.armed_passenger && flat.length() > (reach * 0.6).max(SHOOT_FROM * 1.5) {
+            let mut feet = nt.translation - flat.normalize_or(Vec3::Z) * SHOOT_FROM;
+            feet.y = heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT);
+            teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
+            host.quiet = 0.0;
+            *shooting = None;
+            return;
+        }
         let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
         let aim = head.map_or(nt.translation + Vec3::Y * 0.4, |h| h.0 - Vec3::Y * 0.1) - eye;
         player.yaw = (-aim.x).atan2(-aim.z);
         player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
+        if std::env::var("FC3_STORY_WAIT_DEBUG").is_ok() && (now - time.delta_secs()) as u32 / 3 != now as u32 / 3 {
+            info!(
+                "story autopilot: shooting {}: him at {:?} ({:.0} health), the player at {:?} (swimming {}), {} with {} in the magazine",
+                actor.id,
+                to_dunia(nt.translation),
+                nh.current,
+                to_dunia(at.translation),
+                player.swimming,
+                inventory.def().name,
+                inventory.slot().mag
+            );
+        }
+        let hostile: std::collections::HashSet<u64> = npcs.iter().filter(|q| q.5.faction.hostile_to_player()).map(|q| q.4.id).collect();
+        // Not beside someone to keep safe (`KEEP_CLEAR`; people, not the
+        // story's animals): away from them first (now and then: a companion
+        // keeps coming).
+        let beside = story_actors
+            .iter()
+            .filter(|(_, a, creature)| !a.dead && !creature && a.id != actor.id && !hostile.contains(&a.id))
+            .map(|(t, a, _)| (t.translation, a.id))
+            .find(|(p, _)| p.with_y(0.0).distance(at.translation.with_y(0.0)) < KEEP_CLEAR);
+        if let Some((by, who)) = beside.filter(|_| !player.armed_passenger && now - *kept_clear > 15.0) {
+            *kept_clear = now;
+            let away = (at.translation - by).with_y(0.0).normalize_or(Vec3::X);
+            let mut feet = by + away * (KEEP_CLEAR + 4.0);
+            feet.y = heights.height_at(feet).unwrap_or(at.translation.y - crate::player::HALF_HEIGHT);
+            info!("story autopilot: {who}, someone to keep safe, beside the player; stepping away");
+            teleport(&mut at, &mut player, to_dunia(feet), 0.0);
+            host.quiet = 0.0;
+            *shooting = None;
+            return;
+        }
+        // No shot past someone not to be shot (a captive among his
+        // guards): held, and after a while taken from the foe's other side.
+        let target = aim + eye;
+        let in_line = story_actors.iter().filter(|(_, a, _)| !a.dead && a.id != actor.id && !hostile.contains(&a.id)).find_map(|(t, _, _)| {
+            let p = t.translation + Vec3::Y * 0.3;
+            let along = (p - eye).dot(aim.normalize_or_zero()).clamp(0.0, aim.length());
+            // (Wider with range: the gun's spread.)
+            ((eye + aim.normalize_or_zero() * along).distance(p) < 1.2 + along * 0.025 && along < aim.length() + 1.0).then_some(p)
+        });
+        if let Some(bystander) = in_line {
+            let since = *blocked.get_or_insert(now);
+            if now - since > 3.0 && !player.armed_passenger {
+                let away = (target - bystander).with_y(0.0).normalize_or(Vec3::X);
+                let mut feet = nt.translation + away * 6.0;
+                feet.y = heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT);
+                info!("story autopilot: {} in the line of fire; round to {}'s other side", "someone", actor.id);
+                teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
+                host.quiet = 0.0;
+                *blocked = None;
+            }
+            return;
+        }
+        *blocked = None;
         if now >= *next_press {
             *next_press = now + 0.25;
             use crate::controls::Action;
@@ -2496,6 +2907,23 @@ fn autopilot_loot(
         if *last != Some((actor.id, kind)) {
             info!("story autopilot: {kind} {}", host.story.data().name_of(actor.id).unwrap_or("?"));
             *last = Some((actor.id, kind));
+            *shooting = None;
+        }
+        // (How long he has stood it: see `stubborn`.)
+        match *shooting {
+            Some((id, hp, _)) if id == actor.id && nh.current < hp => *shooting = Some((id, nh.current, now)),
+            Some((id, ..)) if id == actor.id => {}
+            _ => *shooting = Some((actor.id, nh.current, now)),
+        }
+        if std::env::var("FC3_STORY_WAIT_DEBUG").is_ok() && (now - time.delta_secs()) as u32 / 3 != now as u32 / 3 {
+            info!(
+                "story autopilot: {kind} {}: him at {:?}, the player at {:?} (swimming {}, driving {})",
+                actor.id,
+                to_dunia(nt.translation),
+                to_dunia(at.translation),
+                player.swimming,
+                player.driving
+            );
         }
         // Behind him (the way he faces is his -z), or beside the body.
         let behind = nt.translation + (nt.rotation * Vec3::Z).with_y(0.0).normalize_or(Vec3::Z) * if nh.dead { 0.9 } else { 1.0 };
@@ -2527,6 +2955,94 @@ fn autopilot_loot(
             });
         }
         return;
+    }
+    // A pickup a script waits on (a mission's diamonds): gone to and taken
+    // (from wherever a high trigger held him up).
+    let awaited = host.story.awaited_pickups();
+    if !awaited.is_empty() && host.quiet > 6.0 {
+        let near = plants
+            .iter()
+            .filter(|(p, _)| awaited.contains(&p.id))
+            .map(|(p, t)| (p.id, t.translation()))
+            .min_by(|a, b| a.1.distance(at.translation).total_cmp(&b.1.distance(at.translation)));
+        if let Some((id, spot)) = near {
+            if *last != Some((id, "pick up")) {
+                info!("story autopilot: pick up {}", host.story.data().name_of(id).unwrap_or("?"));
+                *last = Some((id, "pick up"));
+            }
+            let feet = at.translation - Vec3::Y * crate::player::HALF_HEIGHT;
+            let to = spot - feet;
+            if Vec2::new(to.x, to.z).length() > 1.2 || to.y.abs() > 1.5 {
+                // Beside it, on its level.
+                let side = Vec3::new(-to.x, 0.0, -to.z).normalize_or(Vec3::Z);
+                teleport(&mut at, &mut player, to_dunia(spot + side * 0.8), 0.0);
+                host.quiet = 0.0;
+                return;
+            }
+            let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
+            let aim = spot - eye;
+            player.yaw = (-aim.x).atan2(-aim.z);
+            player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
+            let now = time.elapsed_secs();
+            if now >= *next_press && !scripted.ignored.contains("use") {
+                *next_press = now + 0.6;
+                debug!(
+                    "story autopilot: use at pickup {id}: {:.2} off, {:.2} up, noclip {}, spawning {}",
+                    Vec2::new(to.x, to.z).length(),
+                    to.y,
+                    player.noclip,
+                    player.spawning
+                );
+                actions.press(crate::controls::Action::Interact);
+            }
+            return;
+        }
+        if host.quiet - time.delta_secs() <= 20.0 && host.quiet > 20.0 {
+            info!("story autopilot: awaited pickups {awaited:?} aren't in the world");
+        }
+    }
+    // A character or body a script waits to see through the camera (a VIP's
+    // corpse to photograph): a few steps off, the camera raised at it.
+    let photos = host.story.awaited_discoveries();
+    if !photos.is_empty() && host.quiet > 20.0 && host.quiet - time.delta_secs() <= 20.0 {
+        let found: Vec<u64> = npcs.iter().filter(|q| photos.contains(&q.4.id)).map(|q| q.4.id).collect();
+        info!("story autopilot: to photograph {photos:?} (in the world {found:?}, camera {})", scripted.has_camera());
+    }
+    // (Once begun, it keeps the camera up: the story stirring meanwhile, as
+    // a script's timer does, mustn't drop it every few frames. An alarm to
+    // switch off comes first, as for takedowns: its own autopilot goes there.)
+    let photographing = last.is_some_and(|l| l.1 == "photograph");
+    if !photos.is_empty() && !alarm_first && (host.quiet > 6.0 || photographing) && scripted.has_camera() {
+        let near = npcs
+            .iter()
+            .filter(|(_, _, _, _, a, _, _)| photos.contains(&a.id))
+            .map(|(t, _, _, _, a, _, _)| (a.id, a.dead, t.translation))
+            .min_by(|a, b| a.2.distance(at.translation).total_cmp(&b.2.distance(at.translation)));
+        if let Some((id, dead, spot)) = near {
+            if *last != Some((id, "photograph")) {
+                info!("story autopilot: photograph {}", host.story.data().name_of(id).unwrap_or("?"));
+                *last = Some((id, "photograph"));
+            }
+            let flat = (at.translation - spot).with_y(0.0);
+            // (Held up in the air by a trigger, the camera won't come up.)
+            if player.noclip || !(1.2..10.0).contains(&flat.length()) {
+                if std::env::var("FC3_CAMERA_DEBUG").is_ok() {
+                    info!("story autopilot: photo spot: {:.1} m off the body, noclip {}, spawning {}", flat.length(), player.noclip, player.spawning);
+                }
+                let side = flat.normalize_or(Vec3::Z);
+                let mut feet = spot + side * 4.0;
+                feet.y = heights.height_at(feet).unwrap_or(spot.y - crate::player::HALF_HEIGHT).max(spot.y - crate::player::HALF_HEIGHT - 0.5);
+                teleport(&mut at, &mut player, to_dunia(feet), 0.0);
+                host.quiet = 0.0;
+                return;
+            }
+            let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
+            let aim = spot + Vec3::Y * if dead { -0.6 } else { 0.3 } - eye;
+            player.yaw = (-aim.x).atan2(-aim.z);
+            player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
+            actions.hold(crate::controls::Action::Tag);
+            return;
+        }
     }
     if player.noclip {
         return;

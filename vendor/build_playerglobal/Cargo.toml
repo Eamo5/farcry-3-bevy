@@ -1,0 +1,17 @@
+[package]
+name = "build_playerglobal"
+authors = ["Ruffle LLC <ruffle@ruffle.rs>"]
+edition = "2024"
+homepage = "https://ruffle.rs"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ruffle-rs/ruffle"
+version = "0.7.1"
+
+[dependencies]
+convert_case = "0.11.0"
+proc-macro2 = "1.0.106"
+quote = "1.0.45"
+swf = { git = "https://github.com/ruffle-rs/ruffle", rev = "2372a4e148a67d68efd796f4477b3cddd4f880cd" }
+regex = "1.12.3"
+walkdir = "2.5.0"
+rascal = "0.3.5"

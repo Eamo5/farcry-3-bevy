@@ -66,7 +66,7 @@ impl ScriptActionMaps {
     }
 
     /// The map in force, if the scripts have set one.
-    fn in_force(&self) -> Option<&String> {
+    pub(crate) fn in_force(&self) -> Option<&String> {
         self.locked.as_ref().or(self.stack.last())
     }
 

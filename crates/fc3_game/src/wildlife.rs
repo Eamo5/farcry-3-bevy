@@ -2645,7 +2645,7 @@ fn animal_test(
     if shot_at.is_some_and(|t| time.elapsed_secs() > t) {
         *shot_at = None;
         info!("animal-test: a shot");
-        noise.write(crate::npc::Noise { at: pt.translation, radius: 120.0, kind: crate::npc::NoiseKind::Threatening });
+        noise.write(crate::npc::Noise { at: pt.translation, radius: 120.0, kind: crate::npc::NoiseKind::Threatening, aside: false });
     }
     if *done || p.spawning {
         return;

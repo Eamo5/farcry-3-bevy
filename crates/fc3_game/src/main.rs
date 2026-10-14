@@ -37,6 +37,8 @@ mod nav;
 mod npc;
 mod objects;
 mod options;
+#[cfg(feature = "original-ui")]
+mod original_ui;
 mod overlays;
 mod original_shaders;
 mod outposts;
@@ -454,6 +456,7 @@ fn main() {
             world_fx::WorldFxPlugin,
         ))
         .add_plugins(vine_puff::VinePuffPlugin)
+        .add_plugins(OriginalUi)
         .insert_resource(original_shaders::OriginalShaders { enabled: args.original_shaders })
         .add_systems(Startup, setup);
     if cfg!(feature = "profile") {
@@ -468,6 +471,16 @@ fn main() {
         ));
     }
     app.run();
+}
+
+/// The original interface's movies, when built in (`original-ui`).
+struct OriginalUi;
+
+impl Plugin for OriginalUi {
+    fn build(&self, _app: &mut App) {
+        #[cfg(feature = "original-ui")]
+        _app.add_plugins(original_ui::OriginalUiPlugin);
+    }
 }
 
 /// Texture data uploaded to the GPU per frame (MB). Bevy's limit counts

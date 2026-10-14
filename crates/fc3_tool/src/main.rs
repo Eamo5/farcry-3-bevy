@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use fc3_formats::{find_install, Vfs};
 
+mod avm1_cmd;
 mod facial_cmd;
+mod playerglobal_cmd;
 
 fn filelist_dir() -> PathBuf {
     let exe_rel = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/filelists");
@@ -44,6 +46,13 @@ fn magic_of(data: &[u8]) -> String {
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // (Needs no game install.)
+    if args.first().is_some_and(|c| c == "playerglobal-abc") {
+        return playerglobal_cmd::run(&args[1..]);
+    }
+    if args.first().is_some_and(|c| c == "swf-script") {
+        return avm1_cmd::run(&args[1..]);
+    }
     let data = find_install().context("Far Cry 3 install not found; set FC3_DATA")?;
     let vfs = Vfs::open_install(&data, Some(&filelist_dir()))?;
     let cmd = args.first().map(String::as_str).unwrap_or("stats");
@@ -2411,6 +2420,13 @@ fn main() -> Result<()> {
                 fc3_formats::fcb::dump(&e.fields, &names, 16, &mut text);
                 fc3_formats::fcb::dump(&e.components, &names, 16, &mut text);
                 println!("{text}");
+                // A shape's points in full (the dump shortens them).
+                if let Some(raw) = e.fields.field("hidShapePoints").filter(|r| r.len() >= 4) {
+                    let f = |c: &[u8], i: usize| f32::from_le_bytes(c[i * 4..i * 4 + 4].try_into().unwrap());
+                    for (i, c) in raw[4..].chunks_exact(12).enumerate() {
+                        println!("  point {i}: ({:.1}, {:.1}, {:.1})", f(c, 0), f(c, 1), f(c, 2));
+                    }
+                }
             }
         }
         "proto" => {
@@ -2531,6 +2547,29 @@ fn main() -> Result<()> {
                 });
             }
         }
+        "story-markups" => {
+            // A contextual action's markups from its staged sequence:
+            // story-markups [action id] (none: how many actions have some)
+            let data = fc3_story::data::StoryData::load(&fc3_formats::cache::default_cache_root())?;
+            match args.get(1).and_then(|a| a.parse::<u64>().ok()) {
+                Some(id) => println!("{:?}", data.action_markups.get(&id)),
+                None => println!("{} actions with markups", data.action_markups.len()),
+            }
+        }
+        "story-layer" => {
+            // A mission layer: its block, whether it comes with the block,
+            // and the block's other layers: story-layer <id>
+            let id: u64 = args.get(1).context("usage: story-layer <id>")?.parse()?;
+            let data = fc3_story::data::StoryData::load(&fc3_formats::cache::default_cache_root())?;
+            let Some(layer) = data.layers.get(&id) else { anyhow::bail!("no layer {id}") };
+            println!("{layer:?}");
+            if let Some(block) = data.blocks.get(&layer.block) {
+                println!("block {} {} (zone {:?})", block.id, block.name, block.zone);
+                for l in &block.layers {
+                    println!("  {:?}", data.layers.get(l));
+                }
+            }
+        }
         "story-entities" => {
             // Searches the cache's story entity table by name, class, id,
             // layer or component: story-entities [text] (no text: a summary)
@@ -2610,6 +2649,106 @@ fn main() -> Result<()> {
         "vine-settings" => {
             let bytes = vfs.read(fc3_formats::gsf::LIBRARY)?;
             println!("{:#?}", fc3_formats::gsf::VineSettings::parse(&bytes)?);
+        }
+        "feu-swf" => {
+            // An interface movie as a standard SWF, its bitmaps embedded from
+            // the game's textures and its fonts traced from the game's font
+            // files: feu-swf <archive .feu> <out.swf>
+            use fc3_formats::{feu, ffd, texture};
+            let path = args.get(1).context("usage: feu-swf <archive .feu> <out.swf>")?;
+            let out = args.get(2).context("usage: feu-swf <archive .feu> <out.swf>")?;
+            let feu = vfs.read(path)?;
+            let pixels = |p: &str| vfs.read(p).ok().and_then(|x| texture::parse(&x).ok().and_then(|t| texture::decode_rgba(t.dds)));
+            let (mut found, mut missing) = (0, Vec::new());
+            let swf = feu::to_swf(
+                &feu,
+                |img| {
+                    let px = pixels(&img.texture());
+                    if px.is_some() { found += 1 } else { missing.push(img.texture()) }
+                    px
+                },
+                |f| {
+                    let font = ffd::parse(&vfs.read(&f.file.to_ascii_lowercase()).ok()?).ok()?;
+                    let pages: Vec<_> =
+                        (0..font.pages.len()).map(|i| font.page_texture(i).and_then(|t| pixels(&t)).map(|(w, h, px)| ffd::Page::from_rgba(w, h, &px))).collect();
+                    match ffd::TracedFont::trace(&font, &pages) {
+                        Ok(t) => {
+                            let body = t.define_font3(f.id, &f.face);
+                            println!("font {} {} ({}): {} glyphs, {} bytes", f.id, f.face, f.file, t.glyphs.len(), body.len());
+                            Some(body)
+                        }
+                        Err(e) => {
+                            println!("font {} ({}): {e:#}", f.id, f.file);
+                            None
+                        }
+                    }
+                },
+            )?;
+            std::fs::write(out, &swf)?;
+            println!("{} bytes, {found} images embedded, {} missing {:?}", swf.len(), missing.len(), missing.iter().take(5).collect::<Vec<_>>());
+        }
+        "clip-hands" => {
+            // Where a first-person clip puts the hands, seen from its camera
+            // bone (x right, y up, -z ahead): clip-hands <archive clip> [t]
+            use fc3_formats::anim;
+            let path = args.get(1).context("usage: clip-hands <archive clip> [t]")?;
+            let clip = anim::parse_clip(&vfs.read(path)?)?;
+            let skel = anim::parse_skeleton(&vfs.read(r"graphics\actors_\_skeleton_master\hips_ref.skeleton")?)?;
+            let t: f32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0.0);
+            let nodes: Vec<anim::Node> = skel
+                .bones
+                .iter()
+                .enumerate()
+                .map(|(i, b)| anim::Node {
+                    name: b.name.clone(),
+                    name_hash: b.name_hash,
+                    parent: b.parent,
+                    first_child: -1,
+                    next_sibling: -1,
+                    translation: b.translation,
+                    rotation: b.rotation,
+                    scale: [1.0; 3],
+                    bind_index: i as i32,
+                })
+                .collect();
+            let mut locals = anim::pose_locals(&nodes, &skel, &clip, t.clamp(0.0, clip.duration));
+            // Over a base pose (an additive clip): base rotation times the
+            // clip's, at the base's place.
+            if let Some(base) = args.get(3) {
+                let base = anim::parse_clip(&vfs.read(base)?)?;
+                let under = anim::pose_locals(&nodes, &skel, &base, 0.0);
+                for (l, b) in locals.iter_mut().zip(&under) {
+                    let mut m = anim::mat_mul(b, l);
+                    m[12..15].copy_from_slice(&b[12..15]);
+                    *l = m;
+                }
+            }
+            let ident = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+            let worlds = anim::compose_worlds(&nodes, &locals, &ident);
+            let at = |name: &str| skel.find(name).map(|i| worlds[i]);
+            let cam = at("Camera").context("no Camera bone")?;
+            // Into the camera's frame (rigid: rotation transposed).
+            let local = |m: [f32; 16]| {
+                let d = [m[12] - cam[12], m[13] - cam[13], m[14] - cam[14]];
+                [0, 1, 2].map(|k| d[0] * cam[k * 4] + d[1] * cam[k * 4 + 1] + d[2] * cam[k * 4 + 2])
+            };
+            println!("camera at {:.2?}, its axes x {:.2?} y {:.2?} z {:.2?}", &cam[12..15], &cam[0..3], &cam[4..7], &cam[8..11]);
+            for b in ["RightHand", "LeftHand", "Head"] {
+                if let Some(m) = at(b) {
+                    println!("{b:10} in camera space {:.2?}", local(m));
+                }
+            }
+            for b in ["Reference", "Hips", "Spine", "Spine1", "Spine2", "Neck", "Head", "Camera"] {
+                if let Some(m) = at(b) {
+                    println!("{b:10} world {:.2?} x {:.2?} y {:.2?}", &m[12..15], &m[0..3], &m[4..7]);
+                }
+            }
+            let parent = skel.find("Camera").and_then(|i| usize::try_from(skel.bones[i].parent).ok()).map(|p| skel.bones[p].name.clone());
+            let keyed = skel.find("Camera").is_some_and(|i| clip.tracks.iter().any(|t| t.bone as usize == i));
+            println!("camera's parent {parent:?}, keyed {keyed}");
+            let mut keyed_names: Vec<String> = clip.tracks.iter().filter_map(|t| skel.bones.get(t.bone as usize).map(|b| b.name.clone())).collect();
+            keyed_names.sort();
+            println!("keyed: {}", keyed_names.join(" "));
         }
         "clip-info" => {
             let path = args.get(1).context("usage: clip-info <archive animation path>")?;

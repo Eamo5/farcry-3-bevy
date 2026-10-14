@@ -196,12 +196,14 @@ fn autopilot_alarms(
     alarms: Res<StoryAlarms>,
     mut players: Query<(&mut Transform, &mut Player)>,
     mut actions: ResMut<crate::controls::ActionState>,
+    mut tries: Local<std::collections::HashMap<u64, u32>>,
 ) {
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() {
         return;
     }
     let Some(mut host) = host else { return };
-    if host.quiet() < 6.0 || !host.story.awaits_group_event("Alarm_Disabled") {
+    // (Not while tailing a character: he'd see the player go.)
+    if host.quiet() < 6.0 || !host.story.awaits_group_event("Alarm_Disabled") || !host.story.tail_targets().is_empty() {
         return;
     }
     let Ok((mut t, mut p)) = players.single_mut() else { return };
@@ -209,7 +211,11 @@ fn autopilot_alarms(
     let feet = t.translation - Vec3::Y * crate::player::HALF_HEIGHT;
     if !within_reach(feet, at) {
         info!("story autopilot: disable alarm {id}");
-        let side = (feet - at).with_y(0.0).normalize_or(Vec3::Z);
+        // Each try from another side (the first one's may be behind its
+        // wall, where he drops out of reach).
+        let n = tries.entry(id).or_default();
+        let side = Quat::from_rotation_y(*n as f32 * std::f32::consts::FRAC_PI_2) * (feet - at).with_y(0.0).normalize_or(Vec3::Z);
+        *n += 1;
         crate::story::teleport(&mut t, &mut p, crate::data::to_dunia(at + side * 1.2), 0.0);
         host.reset_quiet();
         return;

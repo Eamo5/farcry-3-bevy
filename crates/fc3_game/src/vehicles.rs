@@ -853,6 +853,11 @@ impl Vehicle {
         DEFS[self.def].kind
     }
 
+    /// Someone is in it.
+    pub fn occupied(&self) -> bool {
+        self.occupied
+    }
+
     /// Its top speed (m/s).
     pub fn top_speed(&self) -> f32 {
         tuning(self.def).top_speed
@@ -977,6 +982,11 @@ impl StorySeatRequests {
         self.0.retain(|r| r.pawn != pawn);
         self.0.push(SeatRequest { vehicle, pawn, index: args.get(2).and_then(|a| a.parse().ok()).unwrap_or(-1), kinds,
             alternate: flag(6), exit, forced: false });
+    }
+
+    /// The vehicle a character waits to board (a script's `TakeSeat`).
+    pub(crate) fn boarding(&self, pawn: u64) -> Option<u64> {
+        self.0.iter().find(|r| r.pawn == pawn && !r.exit).map(|r| r.vehicle)
     }
 
     /// A called-in crew member takes a seat: the wheel, or a passenger's

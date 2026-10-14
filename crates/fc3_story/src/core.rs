@@ -157,8 +157,22 @@ pub struct Core {
     pub moves: HashMap<u64, (String, f64)>,
     /// Markup events due on pawns (seconds left, pawn, event).
     pub markups: Vec<(f64, u64, String)>,
+    /// Contextual actions' markups due (seconds left, action, user, event).
+    pub action_markups: Vec<(f64, u64, u64, String)>,
+    /// How many of each watched group's live members were in each AI state
+    /// (relaxed, investigating, alerted, in combat) when last looked.
+    pub group_states: HashMap<String, [usize; 4]>,
+    /// Characters scripts gave a battlefield (`SetBattlefields`): fighting
+    /// there, whatever they are doing.
+    pub battlefields: HashMap<u64, u64>,
+    /// Characters getting up from a contextual action switched off under
+    /// them (seconds left, action, pawn): its end comes when they're up.
+    pub leaving: Vec<(f64, u64, u64)>,
     /// Listeners registered during the script step being run.
     pub step_listeners: Vec<u64>,
+    /// Entities the script step being run was told are loaded
+    /// (`IsEntityLoaded`).
+    pub told_loaded: HashSet<u64>,
     /// Group membership scripts changed: (group text, entity) added / removed.
     pub group_added: HashSet<(String, u64)>,
     pub group_removed: HashSet<(String, u64)>,
@@ -168,9 +182,15 @@ pub struct Core {
     pub trigger_enabled: HashMap<u64, bool>,
     /// Look-at triggers the player sees now.
     pub looked_at: HashSet<u64>,
+    /// The character each look-at trigger rides on (`triggers::carrier_of`),
+    /// found once.
+    pub look_carriers: HashMap<u64, Option<(u64, [f32; 3])>>,
     /// When the world will be ready around the player after a teleport
     /// (`DominoGameReady` then).
     pub world_ready_at: Option<f64>,
+    /// When the player's new pawn will be ready after a switch
+    /// (`LocalPlayerRespawnedReady` then).
+    pub pawn_ready_at: Option<f64>,
     /// Where the player was when triggers were last tested.
     pub last_player: Option<[f32; 3]>,
     /// Specific gameplays running (minigames, QTEs, boss fights): id ->
@@ -186,6 +206,8 @@ pub struct Core {
     pub dead: HashSet<u64>,
     /// The contextual actions characters are on.
     pub ca: crate::natives::ai::Actions,
+    /// What each companion was last told (`CAPI_Companion`).
+    pub companions: HashMap<u64, crate::Companion>,
     /// Where the player comes back after a reload (the last checkpoint's
     /// spawn point).
     pub respawn: Option<u64>,
@@ -206,6 +228,7 @@ impl Core {
         let safehouses_unlocked = data.entities.values().filter(|e| {
             e.component("CSafeHouseComponent").is_some_and(|c| !c.bool("bLocked").unwrap_or(true))
         }).map(|e| e.id).collect();
+        let ca = crate::natives::ai::Actions::from_data(&data);
         Core {
             data,
             view: View::default(),
@@ -234,20 +257,28 @@ impl Core {
             spawned: HashMap::new(),
             moves: HashMap::new(),
             markups: Vec::new(),
+            action_markups: Vec::new(),
+            group_states: HashMap::new(),
+            battlefields: HashMap::new(),
+            leaving: Vec::new(),
             step_listeners: Vec::new(),
+            told_loaded: HashSet::new(),
             group_added: HashSet::new(),
             group_removed: HashSet::new(),
             trigger_contacts: HashMap::new(),
             trigger_enabled: HashMap::new(),
             looked_at: HashSet::new(),
+            look_carriers: HashMap::new(),
             world_ready_at: None,
+            pawn_ready_at: None,
             last_player: None,
             gameplays: BTreeMap::new(),
             growths: BTreeMap::new(),
             dialogs: Default::default(),
             control_answers: Vec::new(),
             dead: HashSet::new(),
-            ca: Default::default(),
+            ca,
+            companions: HashMap::new(),
             respawn: None,
             objective_markers: BTreeMap::new(),
             binds: HashMap::new(),
@@ -309,6 +340,31 @@ impl Core {
         });
         for (pawn, event) in due {
             self.raise(&Listen::Entity(pawn, event), vec![]);
+        }
+        let mut up = Vec::new();
+        self.leaving.retain_mut(|l| {
+            l.0 -= dt;
+            if l.0 <= 0.0 {
+                up.push((l.1, l.2));
+            }
+            l.0 > 0.0
+        });
+        for (action, pawn) in up {
+            self.action_event(action, "CA_End", pawn);
+        }
+        // A contextual action's markups, while its user is still on it.
+        let mut marked = Vec::new();
+        self.action_markups.retain_mut(|m| {
+            m.0 -= dt;
+            if m.0 <= 0.0 {
+                marked.push((m.1, m.2, std::mem::take(&mut m.3)));
+            }
+            m.0 > 0.0
+        });
+        for (action, pawn, event) in marked {
+            if self.ca.current.get(&pawn).is_some_and(|c| c.action == action && c.started) {
+                self.action_event(action, &event, pawn);
+            }
         }
     }
 

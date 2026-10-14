@@ -39,6 +39,32 @@ pub use crate::values::Arg;
 /// The entity id scripts know the player by.
 pub const PLAYER: u64 = 1;
 
+/// `VehicleDamageListener`'s damage states: destroyed, and mint (whole).
+pub(crate) const VEHICLE_DESTROYED: f64 = 0.0;
+pub(crate) const VEHICLE_MINT: f64 = 5.0;
+
+/// The mark on ids the story makes for what it spawns (reinforcements,
+/// archetypes placed by scripts). They count up from the start of each
+/// session, so saves keep none of them.
+pub const SPAWNED_IDS: u64 = 0x7FFE_0000_0000_0000;
+
+/// Whether an id is one the story made this session.
+pub fn spawned_id(id: u64) -> bool {
+    id & SPAWNED_IDS == SPAWNED_IDS
+}
+
+/// What a companion was told to do (`CAPI_Companion`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Companion {
+    /// Follow the player.
+    Follow,
+    /// Walk a path (a shape entity's points), waiting while the player is
+    /// further off than `distance`; `Domino_CompanionLead` at its end.
+    Lead { path: u64, distance: f32 },
+    /// Stay where it is.
+    Wait,
+}
+
 /// A story entity the host has in the world, as it is now.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Live {
@@ -85,6 +111,8 @@ pub struct PlayerView {
     pub loot: HashMap<u32, u32>,
     /// The name of what is in the player's hands.
     pub in_hands: Option<String>,
+    /// The gadget raised in the player's hands (the camera), if any.
+    pub gadget: Option<Item>,
     /// Unlocked skills (lower-case names).
     pub skills: HashSet<String>,
     pub on_zipline: bool,
@@ -421,6 +449,10 @@ impl Story {
     /// returns what the world should do.
     pub fn update(&mut self, dt: f32, view: View) -> Vec<Command> {
         let previous_occupants = vehicles::occupants(&self.core.borrow().view);
+        let gadget_change = {
+            let was = &self.core.borrow().view.player_state.gadget;
+            (*was != view.player_state.gadget).then(|| (was.clone(), view.player_state.gadget.clone()))
+        };
         {
             let mut c = self.core.borrow_mut();
             // Inventory entities have no world placement. Their availability
@@ -431,6 +463,7 @@ impl Story {
                 _ => None,
             }).collect();
             let before: Vec<(u64, bool)> = watched.into_iter().map(|id| (id, c.is_loaded(id))).collect();
+            let vehicles_before = c.watched_vehicles();
             // Stance changes are events on the player.
             let stance = view.player_state.stance;
             if c.view.player_state.stance != stance && c.time > 0.0 {
@@ -442,6 +475,13 @@ impl Story {
                 let loaded = c.is_loaded(id);
                 if loaded != was_loaded {
                     c.raise(&if loaded { Listen::Spawn(id) } else { Listen::Remove(id) }, vec![]);
+                }
+            }
+            c.group_state_events();
+            // A watched vehicle wrecked: its damage state changes to destroyed.
+            for (id, was_dead) in vehicles_before {
+                if !was_dead && c.is_dead(id) {
+                    c.raise(&Listen::Entity(id, "OnStateChange".into()), vec![Arg::Num(VEHICLE_DESTROYED)]);
                 }
             }
             c.time += dt as f64;
@@ -466,12 +506,32 @@ impl Story {
             c.update_media(dt as f64);
             c.update_dialogs(dt as f64);
             c.update_moves(dt as f64);
+            c.offer_enabled_actions();
             // The world streamed in round a teleported player.
             if c.world_ready_at.is_some_and(|at| c.time >= at) {
                 c.world_ready_at = None;
                 c.raise(&Listen::Generic("DominoGameReady".into()), vec![]);
             }
+            // The player's pawn switched (`CAPI_Player.SwitchPlayerPawn`).
+            if c.pawn_ready_at.is_some_and(|at| c.time >= at) {
+                c.pawn_ready_at = None;
+                c.raise(&Listen::Generic("LocalPlayerRespawnedReady".into()), vec![]);
+            }
             natives::world::update_triggers(&mut c);
+        }
+        // A gadget raised or put away: the player's groups hear it drawn or
+        // holstered, with its name and category ids.
+        if let Some((old, new)) = gadget_change {
+            let ids = |g: &Item| {
+                let id = |s: &str| Arg::Num(fc3_formats::hash::crc32(s.to_ascii_lowercase().as_bytes()) as f64);
+                vec![Arg::id(PLAYER), id(&g.name), id(&g.category)]
+            };
+            if let Some(g) = old {
+                self.group_event(PLAYER, "CGadgetHolsteredEvent", ids(&g));
+            }
+            if let Some(g) = new {
+                self.group_event(PLAYER, "CGadgetDrawEvent", ids(&g));
+            }
         }
         self.pump();
         self.vehicle_changes(previous_occupants);
@@ -638,6 +698,10 @@ impl Story {
         if !self.core.borrow_mut().dead.insert(id) { return; }
         {
             let mut c = self.core.borrow_mut();
+            // (A scene's lead killed at it: its other part stops too.)
+            if let Some(action) = c.ca.current.get(&id).map(|cur| cur.action) {
+                c.release_sync_partners(action, true);
+            }
             let groups: std::collections::BTreeSet<String> = c.listeners.values().filter_map(|l| match &l.on {
                 Listen::Group(g, event) if event == "CGroupSizeEvent" || event == "CGroupCombatEvent" => Some(g.clone()),
                 _ => None,
@@ -690,6 +754,16 @@ impl Story {
             cur.started = true;
             let action = cur.action;
             c.action_event(action, "CA_Start", pawn);
+            // (Its markups, for the scripts listening for them: when its
+            // sequence has them, else a while in.)
+            let text = action.to_string();
+            let markups: Vec<(f64, String)> =
+                c.data.action_markups.get(&action).cloned().unwrap_or_else(|| natives::ai::MARKUP_SECS.iter().map(|(s, e)| (*s, e.to_string())).collect());
+            for (secs, event) in markups {
+                if c.listeners.values().any(|l| matches!(&l.on, Listen::Group(g, e) if *g == text && *e == event)) {
+                    c.action_markups.push((secs, action, pawn, event));
+                }
+            }
         }
         self.pump();
     }
@@ -700,6 +774,8 @@ impl Story {
             let mut c = self.core.borrow_mut();
             let Some(cur) = c.ca.current.remove(&pawn) else { return };
             c.action_event(cur.action, "CA_End", pawn);
+            c.release_sync_partners(cur.action, false);
+            c.take_up_action(pawn, cur.action);
         }
         self.pump();
     }
@@ -711,6 +787,7 @@ impl Story {
             let mut c = self.core.borrow_mut();
             let Some(cur) = c.ca.current.remove(&pawn) else { return };
             c.action_event(cur.action, "CA_Interrupt", pawn);
+            c.release_sync_partners(cur.action, true);
         }
         self.pump();
     }
@@ -879,6 +956,13 @@ impl Story {
             if graph.as_deref().is_some_and(|needle| !in_graph(&l.callback.target, needle)) {
                 continue;
             }
+            // One whose box counts only other characters (a companion's
+            // destination) is not for the player to step into.
+            if let Ok(filter) = l.callback.target.get::<crate::values::Text>("colliderFilterId") {
+                if !filter.0.is_empty() && !c.groups(&filter).contains(&PLAYER) {
+                    continue;
+                }
+            }
             let Some(entry) = c.data.entities.get(t) else { continue };
             let point = match triggers::shape_of(entry) {
                 Some(triggers::Shape::Prism { points, z_min, .. }) => {
@@ -922,7 +1006,8 @@ impl Story {
                 out.push((place, radius, at));
             }
         }
-        out.sort_by_key(|w| w.0);
+        // (The nearest asked for, where several listen around one place.)
+        out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
         out.dedup_by_key(|w| w.0);
         out
     }
@@ -1027,6 +1112,28 @@ impl Story {
         self.core.borrow().listeners.values().any(|l| matches!(&l.on, Listen::Group(_, e) if e == event))
     }
 
+    /// Alarms a script waits to see switched off (`Alarm_Disabled` on their
+    /// group) that are still on: not yet disabled or destroyed.
+    pub fn alarms_to_disable(&self) -> Vec<u64> {
+        let c = self.core.borrow();
+        let groups: std::collections::BTreeSet<String> = c
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Group(g, e) if e == "Alarm_Disabled" => Some(g.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut out: Vec<u64> = groups
+            .iter()
+            .flat_map(|g| c.groups(&values::Text(g.clone())))
+            .filter(|a| !c.alarms.get(a).is_some_and(|(state, _)| *state >= 2) && !c.removed.contains(a))
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// The living members of the groups scripts count (`CGroupSizeEvent`
     /// listeners: "kill them all"), for tools that drive the story.
     pub fn counted_members(&self) -> std::collections::HashSet<u64> {
@@ -1082,6 +1189,125 @@ impl Story {
             })
             .collect();
         out.sort();
+        out.dedup();
+        out
+    }
+
+    /// A pickup was picked up: scripts waiting on it (a `PickupListener` on
+    /// its id or its group) hear `DominoCallbackPickupPicked` with its id.
+    pub fn pickup_picked(&mut self, pickup: u64) {
+        self.group_event(pickup, "DominoCallbackPickupPicked", vec![Arg::id(pickup)]);
+    }
+
+    /// The characters (or bodies) scripts wait to see through the camera
+    /// (an `EntityTagListener`'s `Entity_Discovered`: a VIP's corpse to
+    /// photograph; its `Entity_Tagged`: a captive to pick out).
+    pub fn awaited_discoveries(&self) -> Vec<u64> {
+        let c = self.core.borrow();
+        let mut out: Vec<u64> = c
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Entity(id, e) if e == "Entity_Discovered" || e == "Entity_Tagged" => Some(*id),
+                _ => None,
+            })
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// The entities scripts wait on for an event of this name (a burnable
+    /// region's `FireStarted`).
+    pub fn awaited_entity_events(&self, event: &str) -> Vec<u64> {
+        let c = self.core.borrow();
+        let mut out: Vec<u64> = c
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Entity(id, e) if e == event => Some(*id),
+                _ => None,
+            })
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// The doors scripts wait to be pushed or pulled open (a `Door` box's
+    /// `Push` / `Pull`: a hut to leave by).
+    pub fn awaited_doors(&self) -> Vec<u64> {
+        let c = self.core.borrow();
+        let mut out: Vec<u64> = c
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Entity(id, e) if e == "Push" || e == "Pull" => Some(*id),
+                _ => None,
+            })
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// What each companion was last told to do.
+    pub fn companions(&self) -> Vec<(u64, Companion)> {
+        let mut out: Vec<(u64, Companion)> = self.core.borrow().companions.iter().map(|(&id, &c)| (id, c)).collect();
+        out.sort_by_key(|c| c.0);
+        out
+    }
+
+    /// A leading companion reached its path's end (`Domino_CompanionLead`'s
+    /// `EndOfPathReached`); it waits there.
+    pub fn companion_led(&mut self, companion: u64) {
+        {
+            let mut c = self.core.borrow_mut();
+            c.companions.insert(companion, Companion::Wait);
+            c.raise(&Listen::Entity(companion, "Domino_CompanionLead".into()), vec![Arg::id(companion), Arg::Str("EndOfPathReached".into())]);
+        }
+        self.pump();
+    }
+
+    /// Where a look-at trigger is now (one placed on a character rides with
+    /// it).
+    pub fn look_at_point(&self, trigger: u64) -> Option<[f32; 3]> {
+        self.core.borrow_mut().look_at_point(trigger)
+    }
+
+    /// The characters to keep in sight: look-at triggers a script watches
+    /// the player's view leave (a tail's), switched on and loaded, with where
+    /// each is now and whether the player sees it.
+    pub fn tail_targets(&self) -> Vec<(u64, [f32; 3], bool)> {
+        let mut c = self.core.borrow_mut();
+        let mut ids: Vec<u64> = c
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Entity(t, e) if e == "LeaveFOV" => Some(*t),
+                _ => None,
+            })
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids.retain(|&t| c.trigger_on(t) && c.is_loaded(t));
+        ids.into_iter().filter_map(|t| Some((t, c.look_at_point(t)?, c.looked_at.contains(&t)))).collect()
+    }
+
+    /// The pickups scripts wait to be picked up (their `PickupListener`s'
+    /// ids, groups resolved).
+    pub fn awaited_pickups(&self) -> Vec<u64> {
+        let c = self.core.borrow();
+        let mut out: Vec<u64> = c
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Group(g, e) if e == "DominoCallbackPickupPicked" => Some(c.groups(&values::Text(g.clone()))),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        out.sort_unstable();
         out.dedup();
         out
     }
@@ -1161,7 +1387,11 @@ impl Story {
         for _ in 0..200_000 {
             let next = self.core.borrow_mut().actions.pop_front();
             let Some(action) = next else { return };
-            self.core.borrow_mut().step_listeners.clear();
+            {
+                let mut c = self.core.borrow_mut();
+                c.step_listeners.clear();
+                c.told_loaded.clear();
+            }
             match action {
                 Action::Call(cb, args) => {
                     if let Err(e) = self.domino.call_with(&cb.target, &cb.method, mlua::MultiValue::from_iter(args.into_iter().map(|a| self.arg(a)))) {
@@ -1401,6 +1631,72 @@ mod tests {
         assert_eq!(story.errors(), 0);
     }
 
+    /// The camera raised: a gadget listener filtering on its category
+    /// hears it drawn, and put away, holstered.
+    #[test]
+    fn raising_the_camera_is_heard_as_a_gadget_drawn() {
+        let mut story = empty_story();
+        let mut view = View::default();
+        story.update(0.0, view.clone());
+        story
+            .domino()
+            .lua()
+            .load(
+                r##"
+            heard = {}
+            local box = { _type = {
+                Drawn = function(self, event, wielder, name, category)
+                    if category == GetNoCaseStringID("binoculars") then heard[#heard + 1] = "drawn" end
+                end,
+                Holstered = function(self, event) heard[#heard + 1] = "holstered" end,
+            } }
+            CEntityGroupManager_GetInstance():RegisterScriptEvent(GetLocalPlayerId(), "CGadgetDrawEvent", box, "Drawn")
+            CEntityGroupManager_GetInstance():RegisterScriptEvent(GetLocalPlayerId(), "CGadgetHolsteredEvent", box, "Holstered")
+        "##,
+            )
+            .exec()
+            .unwrap();
+        view.player_state.gadget = Some(Item { name: "gadgets:Equipped/Tablet".into(), category: "binoculars".into(), ..Default::default() });
+        story.update(0.1, view.clone());
+        story.update(0.1, view.clone());
+        view.player_state.gadget = None;
+        story.update(0.1, view);
+        let heard: Vec<String> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        assert_eq!(heard, ["drawn", "holstered"]);
+        assert_eq!(story.errors(), 0);
+    }
+
+    /// A vehicle a mission watches reads mint while it stands, and its
+    /// listener hears it destroyed once the host has it wrecked.
+    #[test]
+    fn a_watched_vehicle_reads_mint_until_it_is_wrecked() {
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), StoryData::default()).unwrap();
+        let mut view = View::default();
+        view.spawned.insert(40, Live { alive: true, ..Default::default() });
+        story.update(0.0, view.clone());
+        story
+            .domino()
+            .lua()
+            .load(
+                r##"
+            heard = {}
+            local box = { _type = { Changed = function(self, state) heard[#heard + 1] = state end } }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("40", box, "Changed", "OnStateChange")
+        "##,
+            )
+            .exec()
+            .unwrap();
+        let state: f64 = story.domino().lua().load("return CAPI_Vehicle.GetVehicleEngineState('40')").eval().unwrap();
+        assert_eq!(state, 5.0);
+        view.spawned.insert(40, Live { alive: false, ..Default::default() });
+        story.update(0.1, view.clone());
+        story.update(0.1, view);
+        let heard: Vec<f64> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        assert_eq!(heard, [0.0]);
+        let state: f64 = story.domino().lua().load("return CAPI_Vehicle.GetVehicleEngineState('40')").eval().unwrap();
+        assert_eq!(state, 0.0);
+    }
+
     /// An alarm box switched off: the boxes listening on its group hear who
     /// and which, and its state reads disabled from then on.
     #[test]
@@ -1509,6 +1805,143 @@ mod tests {
         story.health_changed(42, 0.0, 0.0, PLAYER);
         let heard: Vec<String> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
         assert_eq!(heard, ["CCounterEvent 100->40 by 1", "CCounterEvent 40->0 by 1"]);
+    }
+
+    /// A `PickupListener` on a pickup's id hears it picked up, with its id;
+    /// until then the pickup is awaited.
+    #[test]
+    fn a_picked_up_pickup_reaches_its_listener() {
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), StoryData::default()).unwrap();
+        story
+            .domino()
+            .lua()
+            .load(
+                r##"
+            heard = {}
+            local box = { _type = { Got = function(self, event, id) heard[#heard + 1] = event .. " " .. tostring(id) end } }
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("77", "DominoCallbackPickupPicked", box, "Got")
+        "##,
+            )
+            .exec()
+            .unwrap();
+        story.update(0.0, View::default());
+        assert_eq!(story.awaited_pickups(), vec![77]);
+        story.pickup_picked(76);
+        story.pickup_picked(77);
+        let heard: Vec<String> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        assert_eq!(heard, ["DominoCallbackPickupPicked 77"]);
+    }
+
+    /// An action point switched off sends the character on it away: its end
+    /// comes a moment later, to a listener the script registers just after
+    /// switching it off (as `NarrativeStopSTP` does).
+    #[test]
+    fn a_switched_off_action_ends_once_its_user_is_up() {
+        let mut story = empty_story();
+        // (The character is in the world: told to one who isn't, nothing
+        // happens.)
+        let mut view = View::default();
+        view.spawned.insert(5, Live { alive: true, ..Default::default() });
+        story.update(0.0, view.clone());
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            heard = {}
+            SetAIFactEntityId("5", "DominoCAOverride", "900")
+            ToggleContextualActionState("900", false)
+            local box = { _type = { Ended = function(self, event, user) heard[#heard + 1] = event .. " " .. tostring(user) end } }
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("900", "CA_End", box, "Ended")
+        "#,
+            )
+            .exec()
+            .unwrap();
+        let heard = |story: &Story| -> Vec<String> {
+            story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect()
+        };
+        story.update(0.0, view.clone());
+        assert!(heard(&story).is_empty());
+        story.update(natives::ai::LEAVE_SECS as f32 + 0.1, view);
+        assert_eq!(heard(&story), ["CA_End 5"]);
+        assert_eq!(story.errors(), 0);
+    }
+
+    /// A group's members going into combat: its combat listeners hear the
+    /// state start with the first, each member coming in, and its stop when
+    /// none is left in it.
+    #[test]
+    fn a_group_hears_its_members_go_into_combat() {
+        let mut data = StoryData::default();
+        data.groups.insert(0xABC, vec![10, 11]);
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        let live = |state: u8| Live { alive: true, ai_state: state, ..Default::default() };
+        let view = |a: u8, b: u8| {
+            let mut v = View::default();
+            v.spawned.insert(10, live(a));
+            v.spawned.insert(11, live(b));
+            v
+        };
+        story.update(0.0, view(0, 0));
+        story
+            .domino()
+            .lua()
+            .load(
+                r##"
+            heard = {}
+            local box = { _type = { Got = function(self, event, what, count) heard[#heard + 1] = what .. " " .. tostring(count) end } }
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("#00000ABC", "CGroupCombatEvent", box, "Got")
+        "##,
+            )
+            .exec()
+            .unwrap();
+        let heard = |story: &Story| -> Vec<String> {
+            story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect()
+        };
+        story.update(0.1, view(0, 0));
+        assert!(heard(&story).is_empty());
+        story.update(0.1, view(3, 0));
+        assert_eq!(heard(&story), ["CombatStart 1", "CombatMemberIn 1"]);
+        story.update(0.1, view(3, 3));
+        assert_eq!(heard(&story)[2..], ["IdleStop 0", "CombatMemberIn 2"]);
+        story.update(0.1, view(0, 0));
+        assert!(heard(&story).iter().any(|h| h == "CombatStop 0"));
+        assert_eq!(story.errors(), 0);
+    }
+
+    /// A contextual action begun: the scripts listening for its markups hear
+    /// them a while in, the first before the second.
+    #[test]
+    fn a_started_action_reaches_its_markups() {
+        let mut story = empty_story();
+        let mut view = View::default();
+        view.spawned.insert(5, Live { alive: true, ..Default::default() });
+        story.update(0.0, view.clone());
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            heard = {}
+            SetAIFactEntityId("5", "DominoCAOverride", "900")
+            local box = { _type = { Got = function(self, event, user) heard[#heard + 1] = event .. " " .. tostring(user) end } }
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("900", "CA_Markup1", box, "Got")
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("900", "CA_Markup2", box, "Got")
+        "#,
+            )
+            .exec()
+            .unwrap();
+        let heard = |story: &Story| -> Vec<String> {
+            story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect()
+        };
+        story.action_started(5);
+        story.update(1.0, view.clone());
+        assert!(heard(&story).is_empty());
+        story.update(1.1, view.clone());
+        assert_eq!(heard(&story), ["CA_Markup1 5"]);
+        story.update(2.0, view);
+        assert_eq!(heard(&story), ["CA_Markup1 5", "CA_Markup2 5"]);
+        assert_eq!(story.errors(), 0);
     }
 
     /// A sound a box plays says "started", then "finished" when the host
@@ -1773,6 +2206,82 @@ mod tests {
         assert_eq!(story.errors(), 0);
     }
 
+    /// A synchronised scene's lead broken off (alerted) takes the scene's
+    /// other part's user off it too (`CA_Interrupt`, and the host told).
+    #[test]
+    fn a_scene_lead_broken_off_frees_its_partner() {
+        use fc3_formats::{fcb::Object, hash::name_hash};
+        use std::sync::Arc;
+        let mut data = StoryData::default();
+        for (id, name) in [(900u64, "Relax/SyncAnimLeadActor.SyncAnimLeadActor_Test_1"), (901, "Relax/SyncAnimExtraActor.SyncAnimExtraActor_Test_1")] {
+            data.entities.insert(
+                id,
+                data::Entry {
+                    id,
+                    name: name.into(),
+                    class: "CEntity".into(),
+                    pos: [0.0; 3],
+                    angles: [0.0; 3],
+                    layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
+                    origin: data::Origin::Global,
+                    components: Arc::new(Object { name_hash: name_hash("Components"), fields: vec![], children: vec![] }),
+                    fields: Arc::new(Object { name_hash: name_hash("Entity"), fields: vec![], children: vec![] }),
+                },
+            );
+        }
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        let mut view = View::default();
+        view.spawned.insert(5, Live { alive: true, ..Default::default() });
+        view.spawned.insert(6, Live { alive: true, ..Default::default() });
+        story.update(0.0, view.clone());
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            heard = {}
+            SetAIFactEntityId("5", "DominoCAOverride", "900")
+            SetAIFactEntityId("6", "DominoCAOverride", "901")
+            local box = { _type = { Got = function(self, event, user) heard[#heard + 1] = event .. " " .. tostring(user) end } }
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("901", "CA_Interrupt", box, "Got")
+        "#,
+            )
+            .exec()
+            .unwrap();
+        story.update(0.1, view.clone());
+        story.take_commands();
+        story.action_interrupted(5);
+        let heard: Vec<String> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        assert_eq!(heard, ["CA_Interrupt 6"]);
+        assert!(story.take_commands().contains(&Command::Action { pawn: 6, action: None }));
+        assert_eq!(story.errors(), 0);
+    }
+
+    /// A script that finds an entity already there and deals with that
+    /// itself before subscribing to its spawns (the entity status listener)
+    /// hears of it once: the subscription isn't called at once as well.
+    #[test]
+    fn a_spawn_subscription_after_finding_the_entity_there_waits_for_a_spawn() {
+        let mut story = empty_story();
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            target = { count = 0 }
+            target._type = { Spawn = function(self) self.count = self.count + 1 end }
+            if CAPI_Entity.IsEntityLoaded("1") then target.count = target.count + 1 end
+            target.subscription = CScriptCallbackSystem_GetInstance():RegisterOnSpawnCallback("1", target, "Spawn")
+        "#,
+            )
+            .exec()
+            .unwrap();
+        story.update(0.0, View::default());
+        let target: Table = story.domino().lua().globals().get("target").unwrap();
+        assert_eq!(target.get::<u32>("count").unwrap(), 1);
+        assert_eq!(story.errors(), 0);
+    }
+
     #[test]
     fn entity_teleport_resolves_live_destination_and_updates_queries_immediately() {
         let mut story = empty_story();
@@ -1808,6 +2317,167 @@ mod tests {
         assert_eq!(story.core.borrow().pose(20), Some(pose));
         story.domino().lua().load(r#"CAPI_Entity.TeleportEntity("30", "invalid", false, false)"#).exec().unwrap();
         assert!(story.take_commands().is_empty());
+    }
+
+    /// A companion told to lead is reported leading along its path; at its
+    /// end the box listening hears `EndOfPathReached` and it waits.
+    #[test]
+    fn a_companion_leads_and_reports_its_paths_end() {
+        let mut story = empty_story();
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            heard = {}
+            local box = { _type = { OnDominoEvent = function(self, entity, event) heard[#heard + 1] = tostring(entity) .. " " .. event end } }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("40", box, "OnDominoEvent", "Domino_CompanionLead")
+            ok = CAPI_Companion.CompanionSetLead("40", "41", 12)
+        "#,
+            )
+            .exec()
+            .unwrap();
+        assert!(story.domino().lua().globals().get::<bool>("ok").unwrap());
+        assert_eq!(story.companions(), [(40, Companion::Lead { path: 41, distance: 12.0 })]);
+        story.companion_led(40);
+        let heard: Vec<String> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        assert_eq!(heard, ["40 EndOfPathReached"]);
+        assert_eq!(story.companions(), [(40, Companion::Wait)]);
+    }
+
+    /// An action point switched on is taken up by a free member of its
+    /// group close enough; one too far off, or of another group, is left be.
+    #[test]
+    fn a_switched_on_action_is_taken_up_by_its_group() {
+        use fc3_formats::{fcb::Object, hash::name_hash};
+        use std::sync::Arc;
+        let object = |name: &str, fields: Vec<(&str, Vec<u8>)>, children| {
+            Arc::new(Object { name_hash: name_hash(name), fields: fields.into_iter().map(|(n, v)| (name_hash(n), v)).collect(), children })
+        };
+        let entry = |id: u64, pos: [f32; 3], component: Arc<Object>| data::Entry {
+            id,
+            name: format!("e{id}"),
+            class: "CEntity".into(),
+            pos,
+            angles: [0.0; 3],
+            layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
+            origin: data::Origin::Global,
+            components: object("Components", vec![], vec![component]),
+            fields: object("Entity", vec![], vec![]),
+        };
+        let point = |group: u32| {
+            object(
+                "CAIContextualActionComponent",
+                vec![("GroupFilter", group.to_le_bytes().to_vec())],
+                vec![object("Idle", vec![("Radius", 5f32.to_le_bytes().to_vec())], vec![])],
+            )
+        };
+        let mut data = StoryData::default();
+        data.entities.insert(10, entry(10, [0.0, 0.0, 0.0], object("CPawn", vec![], vec![])));
+        data.entities.insert(11, entry(11, [40.0, 0.0, 0.0], object("CPawn", vec![], vec![])));
+        data.groups.insert(0xABC, vec![10, 11]);
+        data.entities.insert(20, entry(20, [1.0, 1.0, 0.0], point(0xABC)));
+        data.entities.insert(21, entry(21, [1.0, -1.0, 0.0], point(0xDEF)));
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        story.domino().lua().load(r#"ToggleContextualActionState("21", true) ToggleContextualActionState("20", true)"#).exec().unwrap();
+        let commands = story.update(0.0, View::default());
+        let given: Vec<(u64, Option<u64>)> =
+            commands.iter().filter_map(|c| if let Command::Action { pawn, action } = c { Some((*pawn, *action)) } else { None }).collect();
+        assert_eq!(given, [(10, Some(20))]);
+    }
+
+    /// A member of its group who comes within reach after a point was
+    /// switched on takes it up then (a guard arriving by truck).
+    #[test]
+    fn a_switched_on_action_waits_for_its_group_to_come() {
+        use fc3_formats::{fcb::Object, hash::name_hash};
+        use std::sync::Arc;
+        let object = |name: &str, fields: Vec<(&str, Vec<u8>)>, children| {
+            Arc::new(Object { name_hash: name_hash(name), fields: fields.into_iter().map(|(n, v)| (name_hash(n), v)).collect(), children })
+        };
+        let entry = |id: u64, pos: [f32; 3], component: Arc<Object>| data::Entry {
+            id,
+            name: format!("e{id}"),
+            class: "CEntity".into(),
+            pos,
+            angles: [0.0; 3],
+            layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
+            origin: data::Origin::Global,
+            components: object("Components", vec![], vec![component]),
+            fields: object("Entity", vec![], vec![]),
+        };
+        let point = object(
+            "CAIContextualActionComponent",
+            vec![("GroupFilter", 0xABCu32.to_le_bytes().to_vec())],
+            vec![object("Idle", vec![("Radius", 5f32.to_le_bytes().to_vec())], vec![])],
+        );
+        let mut data = StoryData::default();
+        data.entities.insert(11, entry(11, [40.0, 0.0, 0.0], object("CPawn", vec![], vec![])));
+        data.groups.insert(0xABC, vec![11]);
+        data.entities.insert(20, entry(20, [0.0, 0.0, 0.0], point));
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        story.domino().lua().load(r#"ToggleContextualActionState("20", true)"#).exec().unwrap();
+        let given = |commands: Vec<Command>| -> Vec<(u64, Option<u64>)> {
+            commands.iter().filter_map(|c| if let Command::Action { pawn, action } = c { Some((*pawn, *action)) } else { None }).collect()
+        };
+        assert!(given(story.update(0.5, View::default())).is_empty());
+        let mut view = View::default();
+        view.spawned.insert(11, Live { pos: [1.0, 0.0, 0.0], alive: true, ..Default::default() });
+        assert_eq!(given(story.update(1.0, view)), [(11, Some(20))]);
+    }
+
+    /// A look-at trigger placed on a character where it spawns rides with
+    /// it: a script keeping the character in sight sees it where the
+    /// character has walked to, and the player looking there sees it.
+    #[test]
+    fn a_look_at_trigger_on_a_character_follows_it() {
+        use fc3_formats::{fcb::Object, hash::name_hash};
+        use std::sync::Arc;
+        let object = |name: &str, fields: Vec<(&str, Vec<u8>)>, children| {
+            Arc::new(Object { name_hash: name_hash(name), fields: fields.into_iter().map(|(n, v)| (name_hash(n), v)).collect(), children })
+        };
+        let entry = |id: u64, pos: [f32; 3], component: Arc<Object>| data::Entry {
+            id,
+            name: format!("e{id}"),
+            class: "CEntity".into(),
+            pos,
+            angles: [0.0; 3],
+            layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
+            origin: data::Origin::Global,
+            components: object("Components", vec![], vec![component]),
+            fields: object("Entity", vec![], vec![]),
+        };
+        let look = object(
+            "CLookAtTriggerComponent",
+            vec![("bEnabled", vec![1]), ("fRange", 40f32.to_le_bytes().to_vec()), ("fFOVPercentage", 1f32.to_le_bytes().to_vec())],
+            vec![],
+        );
+        let mut data = StoryData::default();
+        data.entities.insert(100, entry(100, [10.0, 10.0, 0.0], object("CPawn", vec![], vec![])));
+        data.entities.insert(200, entry(200, [10.3, 10.2, 1.6], look));
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            local box = { _type = { Left = function(self) end, Came = function(self) end } }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("200", box, "Came", "EnterFOV")
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("200", box, "Left", "LeaveFOV")
+        "#,
+            )
+            .exec()
+            .unwrap();
+        // He has walked 20 m east; the player stands 10 m behind, looking at him.
+        let mut view = View { player: [20.0, 10.0, 0.0], look: [1.0, 0.0, 0.0], fov: 60.0, ..View::default() };
+        view.spawned.insert(100, Live { pos: [30.0, 10.0, 0.0], alive: true, health: 1.0, ai_state: 0 });
+        story.update(0.1, view);
+        let tails = story.tail_targets();
+        assert_eq!(tails.len(), 1);
+        let (id, at, seen) = tails[0];
+        assert_eq!(id, 200);
+        assert!((at[0] - 30.3).abs() < 1e-4 && (at[1] - 10.2).abs() < 1e-4 && (at[2] - 1.6).abs() < 1e-4, "{at:?}");
+        assert!(seen);
     }
 
     #[test]

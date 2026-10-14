@@ -207,13 +207,14 @@ pub fn allows_entity(e: &Entry, id: u64) -> bool {
     e.component("CProximityTriggerComponent").is_none_or(|c| c.bool("bAllowTriggerByNonPlayers").unwrap_or(false))
 }
 
-/// Whether the player sees a look-at trigger: within its range, and inside
-/// its share of the view's half angle around where the player looks.
-pub fn looked_at(e: &Entry, eye: [f32; 3], look: [f32; 3], fov_deg: f32) -> bool {
+/// Whether the player sees a look-at trigger standing at `at`: within its
+/// range, and inside its share of the view's half angle around where the
+/// player looks.
+pub fn looked_at(e: &Entry, at: [f32; 3], eye: [f32; 3], look: [f32; 3], fov_deg: f32) -> bool {
     let Some(c) = e.component("CLookAtTriggerComponent") else { return false };
     let range = c.f32("fRange").unwrap_or(10.0);
     let share = c.f32("fFOVPercentage").unwrap_or(1.0).clamp(0.05, 1.0);
-    let to = [e.pos[0] - eye[0], e.pos[1] - eye[1], e.pos[2] - eye[2]];
+    let to = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
     let d = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
     if d > range {
         return false;
@@ -223,6 +224,22 @@ pub fn looked_at(e: &Entry, eye: [f32; 3], look: [f32; 3], fov_deg: f32) -> bool
     }
     let cos = (to[0] * look[0] + to[1] * look[1] + to[2] * look[2]) / d;
     cos >= (fov_deg.to_radians() * 0.5 * share).cos()
+}
+
+/// The character a look-at trigger rides on, and its offset from the
+/// character's feet: the game's are placed on a character where it spawns
+/// (head, chest, hips: within a metre across, up to its height above), and
+/// follow it.
+pub fn carrier_of(trigger: &Entry, entities: &std::collections::HashMap<u64, Entry>) -> Option<(u64, [f32; 3])> {
+    trigger.component("CLookAtTriggerComponent")?;
+    let p = trigger.pos;
+    entities
+        .values()
+        .filter(|c| c.has("CPawn"))
+        .map(|c| (c, [p[0] - c.pos[0], p[1] - c.pos[1], p[2] - c.pos[2]]))
+        .filter(|(_, d)| d[0].hypot(d[1]) < 1.0 && (-0.5..2.5).contains(&d[2]))
+        .min_by(|a, b| a.1[0].hypot(a.1[1]).total_cmp(&b.1[0].hypot(b.1[1])))
+        .map(|(c, d)| (c.id, d))
 }
 
 #[cfg(test)]

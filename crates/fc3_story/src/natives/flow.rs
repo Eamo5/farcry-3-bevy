@@ -54,9 +54,12 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         let cb = callback(target, method)?;
         let entity = entity.id().unwrap_or(u64::MAX);
         let id = c.listen(Listen::Spawn(entity), cb.clone());
-        // Subscriptions often come after the layer was made present. Queue
-        // the callback so the script can finish storing its subscription id.
-        if c.is_loaded(entity) {
+        // Subscriptions often come after the layer was made present (where
+        // the engine would spawn the entity a moment later). Queue the
+        // callback so the script can finish storing its subscription id;
+        // not when the script has just been told it's there (it deals with
+        // that itself, as the entity status listener does).
+        if c.is_loaded(entity) && !c.told_loaded.contains(&entity) {
             c.call(cb, vec![]);
         }
         Some(id.to_string())

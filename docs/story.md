@@ -3277,3 +3277,366 @@ Swing doors now also tell the story they were pushed or pulled
 box raises its `OnPush`/`OnPull` on them. B30 shows a tutorial on the
 control room's door that way. Which side the game calls the front is
 assumed; both outputs lead to the same place in the graphs seen so far.
+
+## DOC_030, CIT_010 (with DEN_060) and HUR_030
+
+From JAS_130's end the autopilot runs on through DOC_030, CIT_010 (whose
+blocks run DEN_060's) and the HUR_010 and HUR_030 briefings, into
+HUR_030 itself. HUR_030 needed three things:
+
+* **Pickups tell the story.** A `PickupListener` waits for
+  `DominoCallbackPickupPicked` on a pickup's id (or its group), with the
+  id. Picking up a placed pickup now raises it (`Story::pickup_picked`),
+  and the autopilot goes to and takes any pickup a script waits on
+  (`Story::awaited_pickups`), from wherever a high trigger held it.
+* **A mission's own pickups.** A pickup can carry its own loot table
+  (`CFCXPawnLootComponent`: the temple's diamonds, a key item), which it
+  now gives, as a body's does. A `CPickupCollectible` on a mission layer
+  named for its mission rather than `Pickups/...` (the stash where the
+  diamonds are hidden) is now a pickup too.
+* **Weapons the game doesn't model.** `ManageInventory_v4:AddWeapon`
+  spawns the weapon (`CAPI_Pawn.SpawnWeapon`) and waits for it to spawn
+  before going on. A weapon with no definition here (the IED's remote) is
+  now carried as far as the story can tell, so the wait ends; the IED's
+  remote also gives a charge.
+
+HUR_030 then completes and HUR_020's briefing starts.
+
+## HUR_020 and JAS_140's poker game
+
+HUR_020 (three bodies to photograph, with the outposts' alarms switched
+off first) and JAS_140's opening (a game of poker in the bar) run side by
+side from the same checkpoint. They needed:
+
+* **The camera sees the story's characters.** An `EntityTagListener`
+  waits for `Entity_Discovered` (and, for a living foe, `Entity_Tagged`)
+  on a character; the camera now reports any of the story's characters,
+  the dead too, held in its view for a moment (`stealth::CameraSaw`,
+  forwarded by `story::forward_camera`). Bodies a script still watches are
+  kept rather than sunk (`story_actors::KeptBody`).
+* **The autopilot photographs.** It goes a few steps from the nearest body
+  still to be photographed (`Story::awaited_discoveries`) and holds the
+  camera up at it. Once begun it keeps at it however much the story stirs
+  meanwhile (a script's one-second distance check resets the autopilot's
+  quiet time), and alarms still to be switched off come first, as for
+  takedowns: the two otherwise pulled the player back and forth across the
+  map.
+* **Script action maps apply after the autopilot.** The map in force is
+  applied after the autopilot's presses (it wasn't ordered before, so a
+  map was applied on some frames and not others), so the autopilot is held
+  to the same controls as a player.
+* **Action points switched off end.** A narrative scene stops the
+  characters on its action points (`NarrativeStopSTP`: the poker players
+  at their table) by switching the points off
+  (`ToggleContextualActionState`, through `UseContextualActionModifier`)
+  and then listening for each point's `CA_End`. Switching a point off now
+  sends whoever is on it away, and its `CA_End` comes a second later
+  (`natives::ai::LEAVE_SECS`), after the script has turned to listen. Before,
+  the poker scene waited for ever and its narrative action map (which
+  leaves the camera out) stayed pushed, so HUR_020's camera never came up
+  either.
+
+The poker game itself is a cutscene; after it JAS_140_B10 completes and
+B20 (following a man through the village unseen) starts. With the autopilot
+kept to HUR_020's scripts (`FC3_STORY_AUTOPILOT_GRAPH=hur_020`), HUR_020
+completes and HUR_040's briefing starts.
+
+## JAS_140_B20: the tail
+
+The block fails if the man being followed is out of the player's view for
+twenty seconds (a countdown starts when the view leaves him) or if he ends
+up in a fight. It needed:
+
+* **Look-at triggers ride on characters.** The six the block watches are
+  placed on the man where he spawns (head, chest and hips heights, within
+  half a metre across), with no link in the data or the scripts: in the
+  game they go with him. A look-at trigger placed on a character (a pawn
+  within a metre across and up to its height below) now follows it
+  (`triggers::carrier_of`, `Core::look_at_point`); others stay put.
+* **Characters take up the actions scripts switch on.** The block doesn't
+  order the man about: it switches his walks (patrol-path actions) on and
+  lets his own AI take them. A point switched on now goes to the nearest
+  free member of its `GroupFilter` group within its idle radius, and a
+  character whose action ends takes up a switched-on point near it (not the
+  one just left), so he walks the village path, idles at the next stop and
+  walks on to his shack.
+* **The autopilot tails.** While a script watches a look-at trigger's
+  `LeaveFOV` (`Story::tail_targets`), the autopilot keeps 8 to 30 m from
+  where the trigger is now (going back to 14 m when outside that), looks
+  at it, and does nothing else: no takedowns, no alarms, no walking up to
+  proximity listeners, which before got the player seen.
+
+The block then completes, and with it JAS_140, and WIL_020's briefing
+starts.
+
+## WIL_020: the briefing's door and the drug fields
+
+* **Doors a script waits on.** The briefing ends when the player leaves the
+  hut: its `Door` box waits for the door's `Push` or `Pull`. The autopilot
+  now walks into a door a script waits on (`Story::awaited_doors`): set
+  down before its front, facing it, walking forward
+  (`doors::autopilot_doors`).
+* **Weapons by family.** Scripts hand weapons over by library archetype
+  (`weapons:FC3/<family>.<variant>`), which doesn't always share a name with
+  ours. A weapon not found by name is now found by the folder of the model
+  the game's weapons of its family draw (its placed weapons and pickups in
+  the story's data), so the briefing's flamethrower is the flamethrower.
+* **Burnable regions.** The fields are `CBurnableRegion`s: prism shapes
+  with an ignitor, whose catching (`FireStarted`), most-burnt
+  (`AlmostBurnedOut`) and going out (`FireStopped`) the block counts. The
+  fire grid now knows them (`fire::Regions`): a region catches when a cell
+  inside it burns, the fire then carries across its cells (crops catch
+  readily), its burnt cells are scorched, and it reports past 80 % burnt and
+  when its fire is out (a region that went out early can catch again). The
+  autopilot burns a region a script waits on: from a few metres off one of
+  its cells, the flamethrower out and firing, or a molotov
+  (`fire::autopilot_burn`).
+
+WIL_020 then completes (its fields each catching at the first try once the
+flamethrower is in hand), and WIL_010's and WIL_040's briefings start.
+
+## WIL_040: the rice fields and the escort
+
+WIL_040's briefing, B10 (to the observation point), B20C (the mine-field
+cutscene), B25E (clearing the field) and B30C run as they are. B35E, taking
+Rongo through the fields to the village, needed companions:
+
+* **Companions.** `CAPI_Companion.CompanionSetFollow` / `SetLead` /
+  `SetWait` are now kept by the story (`Story::companions`) and carried out
+  (`story_actors::companions`): one following goes after the player when he
+  is more than 5 m off; one leading walks its path (a shape entity's points,
+  in order from its first: the last path, to Rongo's house, starts at the
+  door and starting from its nearest point skipped it), waiting turned to
+  the player while he is
+  further off than its lead distance, and at the end the story hears
+  `Domino_CompanionLead` / `EndOfPathReached` (`Story::companion_led`) and
+  the companion waits there. B35E leads Rongo from cover to cover this
+  way, path after path.
+* **The autopilot escorts.** While a companion leads, the autopilot keeps
+  within 12 m of it (back to 4 m behind when it gets away) and steps into
+  no triggers; while one is about, only into triggers within 30 m of it,
+  and none whose box counts only other characters (a `colliderFilterId`
+  group without the player: the companion's own destination). Going on
+  ahead had left Rongo past the block's 35 m leash.
+* **A pawn switched in.** `CAPI_Player.SwitchPlayerPawn` now brings
+  `LocalPlayerRespawnedReady` a moment later, as the engine does when the
+  new pawn is in. BNG_010's opening block switches the player's pawn before
+  completing; without the event it never completed, and its pills scene
+  (which takes the player 7 km away) replayed at every load, failing any
+  escort loaded alongside it.
+
+B40, holding Rongo's house through three waves, waits for each wave's
+group to empty. The waves bring beheaders (`Pirate_Beheader`), whose
+single-player shooting preferences are all `Unused`: they carry a machete
+(personality `Beheader`, tagged as chargers), so the story had them stand
+about as non-fighters and the first wave never emptied.
+
+* **Chargers.** `npc::Role::Charger` fights with the machete: dressed in
+  the beheader kit with `machete_tp`, on the beheader's own clips (idle and
+  walk at the ready, the alert run, the standing and running slashes), no
+  cover, a rush at the player over the navigation mesh. Story pawns with
+  the beheader personality and no gun, encounter prefab beheaders and
+  posts that name them are chargers now (the posts had them as
+  shotgunners).
+* **Strikes from the data.** The converter now keeps each archetype's
+  close-quarters strike from its personality's `Melee` block (reach, angle,
+  damage stim, cooldown) and its top running speed (`fPawnSpeeds`) in the
+  damage table (`fc3-damage 5`). `npc_melee` uses them for every role: the
+  strike starts half a metre inside its reach and lands only within its
+  angle; damage to the player is the stim times 0.5 (a rifleman's butt
+  stays one bar, a machete two). Each landing strike also no longer tips
+  the view up for good: the jolt is the authored hit reaction's.
+* **Saves keep no spawned ids.** The ids the story makes for what it
+  spawns (`SPAWNED_IDS`) count up again from each load, but saves kept them
+  among the removed and the dead, so after a load new reinforcements were
+  born "removed": never in the world, never counted. Saves now leave them
+  out, and loads drop them from older saves.
+* **Near again, nearer.** Once the waves are beaten, Rongo hands over what
+  he found when the player comes within 2 m of him (a
+  `ProximityRadiusListener` on him). The autopilot had already gone "near"
+  him for an earlier 40 m listener and went near each place only once; it
+  now goes again for a nearer radius (and takes the nearest radius asked
+  for a place). B40 then completes, B50C's scene plays, WIL_040 completes
+  and WIL_050 starts.
+
+## WIL_050: the convoy
+
+* **Vehicles read whole.** `VehicleDamageListener` asks
+  `CAPI_Vehicle.GetVehicleEngineState` as soon as it is enabled, and state
+  0 is "destroyed". It was a constant 0, so the mission's listener on
+  Oliver's boat failed the mission the moment it started, and again after
+  every reload. A vehicle now reads mint (5) until the host reports it
+  wrecked, then destroyed (0), and the boxes listening for its
+  `OnStateChange` hear the change.
+* **A camera the script draws.** At the vantage point the mission draws
+  the camera itself (`WieldInventory_v3:LuaDrawGadget`, so
+  `CAPI_Player.DrawGadget(player, "binoculars")`) and waits on a
+  `GadgetWieldListener`: the player's group hearing `CGadgetDrawEvent`
+  (event, wielder, the gadget's name id, its category id, both
+  `GetNoCaseStringID`s) once the camera is up. Nothing raised that event,
+  so the mission stopped there. The host now raises the camera on
+  `DrawGadget` (`ScriptedPlayer::camera_drawn`; it stays up until a script
+  holsters it, `CAPI_Pawn.Holster`/`ForceHolster`, or the player presses
+  for the camera again) and reports the camera up in the view
+  (`PlayerView::gadget`, also what is in the player's hands), and the
+  story raises `CGadgetDrawEvent` / `CGadgetHolsteredEvent` on the
+  player's groups as it comes and goes.
+* **Tagging a captive.** The next objective waits for `Entity_Tagged` on
+  Oliver, who is a neutral character. The camera only told the scripts
+  "tagged" for hostile characters; a live story character the camera takes
+  in is now tagged whatever its side (only scripts that wait for it hear
+  it), and the autopilot raises the camera at characters scripts wait to
+  see tagged as well as discovered.
+* **Guards a takedown won't reach.** Clearing the vantage point's guards,
+  the autopilot's takedowns failed on alerted, moving guards, and the race
+  timer failed the mission each time. A foe it has tried to take down for
+  `TAKEDOWN_PATIENCE` seconds without hurting him is now shot instead (as a
+  passenger shoots from a seat). One guard stands at the water's edge, so
+  going behind him put the player in the water, where no gun fires: a
+  swimming player now shoots at once, getting out first onto the highest
+  ground near the foe. A foe already on his guard (not idle) is shot at once
+  too: takedowns fail on him, and trying one swapped the machete into the
+  player's hands (quick melee), so the guns came out seconds late. And a foe
+  shot at in vain from afar (one standing at the waterline below a cliff)
+  is gone right up to, once, before being left a while.
+* **A convoy's crew far off.** Oliver rides in a truck placed some 280 m
+  from the vantage point with its driver and gunner. The script seats the
+  three (`VehicleUse:TakeSeat`) and sends the truck along its path once
+  they are aboard. The truck is in the world with its layer, but characters
+  only spawn within 140 m, so it had no driver and never left. A character
+  a script has waiting to board a vehicle that is in the world now spawns
+  with it however far (`StorySeatRequests::boarding`), and one riding or
+  about to isn't despawned by distance.
+* **A beating that waits for its guard.** Block B20 releases the camera
+  (pops the camera's action map, so the player can fight) when the scene
+  of Oliver being beaten reaches its first markup. The action that plays
+  it is switched on (`ToggleContextualActionState`) as the convoy arrives,
+  for its group, which the guard arriving in a truck joins
+  (`MercGroupName` on his reinforcement point). We offered a switched-on
+  action only at the moment it was switched on, before the truck got
+  there, so no one took it. Switched-on actions no one is on are now
+  offered round again every second (`OFFER_EVERY`), as the characters'
+  idle AI keeps looking for one. The autopilot also no longer fights while
+  a script holds the player in the camera: it was killing the guards the
+  scene needs. And the script hands the action to a guard of the
+  scene's restart variant, whose layer is off on a normal run: the story
+  counted the action as his, so it was never offered. An action given to
+  a character who isn't in the world (`DominoCAOverride`) now does
+  nothing, and only characters in the world are offered one.
+* **An action's markups.** The beating's first markup (`CA_Markup1` on the
+  action) is what releases the camera, and its second sends the
+  helicopter off with Oliver if the guards still stand. Contextual
+  actions' markups weren't raised at all. An action that stages a sequence
+  (the `.cseq` paths among its parameters) has them as event clips there
+  (`CCASimpleEvent`, here 18 s and 33 s in), read with the story data
+  (`StoryData::action_markups`); once the action starts, the markups
+  scripts listen for on it come then, unless its user has left it. (For
+  the other actions the moves' markup times aren't read yet: they come at
+  `MARKUP_SECS`, 2 s and 4 s in.)
+* **Putting the camera away.** After the release B20 never holsters the
+  camera (a player puts it away); the autopilot now presses for the camera
+  once no script action map holds the player and no one waits to be
+  photographed.
+* **The sniping challenge.** Once released, the player is to shoot the
+  guards before the helicopter takes Oliver (`CSnipingChallenge_CIT020`, a
+  scripted gameplay with the player crouched at a rifle, the view held
+  within set angles). We don't play that gameplay yet: a player can put
+  the camera away and shoot the guards from the vantage point with their
+  own guns. The autopilot used to end it at once; it now plays it that
+  way, shooting the hostile characters in reach (idle ones too: the
+  guards beating Oliver), going nearer first when they are beyond its
+  guns' reach (`SHOOT_FROM`). When the beater dies the beating breaks off
+  and its second markup never comes, as in the game.
+* **Groups going into combat.** The engine tells the groups scripts watch
+  (`CGroupCombatEvent`) when their members' AI states change:
+  `<State>Start` as the first member enters idle, investigate, alert or
+  combat, `<State>MemberIn` as each does, `<State>Stop` when the last leaves
+  it, with how many are in it (`StateListener` boxes listen for these; B20
+  brings its next wave when the guards go into combat). Only deaths were
+  told (`DeadStart`/`DeadMemberIn`); the story now compares each watched
+  group's members' states (as the host reports them) every update and
+  tells the changes.
+* **Actions on from the start.** After the fight Oliver is sent to a
+  battlefield where an action placed on (`Enable` set) for his group waits
+  for him; we only ever offered actions a script had switched on. Actions
+  placed on with a group filter now count as switched on from the start
+  (`Actions::from_data`), and only actions whose own layer is in the world
+  are offered. An action is also only offered to a member in the state it
+  is for (its relax, cautious and combat flags): Oliver took the search, a
+  combat action, the moment B20 began, before his beating. A character a
+  script gives a battlefield (`SetBattlefields`, kinds 0 and 3) counts as
+  fighting for this (Oliver isn't a fighter, so his AI state never says
+  so).
+* **Someone else's fight.** In one run the beating broke off seconds after
+  it began: the three guards were alerted by gunfire 88 m off, an NPC
+  shooting at something that wasn't the player, and the camera stayed held
+  (only the beating's first markup releases it, in the game too). Every
+  NPC shot was heard as a sign of the player where it was fired. A shot an
+  NPC fires at an animal or a rival is now heard as such
+  (`Noise::aside`): animals still run from it, but no one goes looking for
+  the player there.
+* **Oliver in the crossfire.** Twice Oliver died to the reinforcements'
+  grenades and firebombs while the player fought on, and the mission went
+  back to its checkpoint. The script makes Oliver slow to kill by other
+  characters' weapons (`NPC_SetDamage`, the damage groups' `Slow`; not
+  played yet, as our characters' shots only ever reach whom they aim at),
+  but its own note says blasts and fire still reach him. The first time the
+  autopilot was fighting from beside him; the second, the throw went where
+  the player had last been heard, by him. The autopilot now keeps
+  `KEEP_CLEAR` (10 m) from story characters who aren't in the fight, and
+  enemies don't throw, or fire a rocket, where it would catch one
+  (`SPARE_RADIUS`, 8 m). Every spot the autopilot moves to for a fight is
+  pushed out to `KEEP_CLEAR` from them too (going up to a guard standing by
+  Oliver put the player beside him, and the blasts that followed set Oliver
+  alight). The
+  autopilot's rifle also grazed him from the vantage point, 90 m off; the
+  margin it keeps from bystanders on its line of fire now widens with range.
+* **Listeners heard twice.** After the checkpoint reload the restart branch
+  set its objective six times over. Its `EntityStatusListener`s, chained,
+  each call `Loaded` themselves when `CAPI_Entity.IsEntityLoaded` says the
+  entity is there, then subscribe to its spawns; our
+  `RegisterOnSpawnCallback` also calls back at once for an entity already
+  loaded (standing in for the engine spawning an entity a moment after its
+  layer appears), so each listener fired twice and the chain multiplied it.
+  The callback now isn't made at once for an entity the same script step
+  was just told is loaded (`Core::told_loaded`).
+* **Guards over the cliff.** Searching, the vantage point's guards walked
+  straight toward where they last heard the player, off the cliff, and
+  landed at the waterline below, where the autopilot's fire couldn't reach
+  them; it spent the race's time on them and the race was lost. A
+  character's step snapped to the ground under it however far down that
+  was; a step down more than `LEDGE_DROP` (2.5 m) is now a cliff's edge and
+  the character stops there (a floor of the navigation mesh still counts).
+  That cliff is the terrain's own, a steep slope dropping a few centimetres
+  a step, so the ground a metre ahead is looked at too: more than
+  `EDGE_DROP` (1.5 m, steeper than about 56 degrees) below the feet, with no
+  floor there, and the character stops. The story's animals (`StoryCreature`: a seagull, a dog) don't count as
+  characters to keep clear of or to spare from a throw.
+* **A beating's two parts.** The beating is a synchronised scene of two
+  contextual actions, the guard's lead part
+  (`SyncAnimLeadActor_<scene>`) and Oliver's (`SyncAnimExtraActor_<scene>`).
+  When the guard broke off (alerted) or died, Oliver stayed on his part, so
+  he was never free to take the next action the script waits for (the
+  search by the boat, placed for his group), and the mission stood still
+  with the path cleared. A scene's lead coming off its action, finished,
+  broken off or killed, now takes whoever is on the scene's other part off
+  it the same way (`Core::release_sync_partners`), and that part is switched
+  off: it was switched on for Oliver's group, and he went straight back to
+  it.
+* **Actions that never ended.** Oliver's next action, a search by the boat,
+  plays its start, loops for its `Duration` and ends; the script carries on
+  when it ends (`CA_End`). The duration is a float (2.4 s) and was read as an
+  integer, its bits making it about 34 years, so no timed action ever ended.
+  It is now read as seconds (a whole number stored as one still reads).
+* **Oliver to the boat.** After the search the script walks Oliver toward
+  the boat a stretch at a time: it gives him a battlefield
+  (`SetBattlefields`, kind 0, with `SetProgressionMode` straight on without
+  stopping) and waits for him within 5 m of a point there. The host only
+  read battlefields for reinforcements, so he never moved. A placed
+  character with an AI who isn't a fighter now goes (runs) to the
+  battlefield he is given, when he isn't on an action
+  (`story_actors::walks_to_battlefields`); fighters keep to their own AI.
+  He goes to the battlefield's strategic point (`CStrategicPoint`, the
+  nearest within `STRATEGIC_REACH`, 15 m, of its middle), where its
+  characters take up their places: the point the script waits for him at
+  is that, 5.5 m from the region's middle.

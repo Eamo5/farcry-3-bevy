@@ -2,6 +2,12 @@
 //! alight; fire spreads cell by cell through grass and bushes, faster
 //! downwind, burns them away, scorches the ground and burns anything standing
 //! in it. Rain damps it down.
+//!
+//! A burnable region (`CBurnableRegion`: a field of crops a mission wants
+//! burnt) catches when fire reaches it and burns across its whole shape;
+//! it tells the story it caught (`FireStarted`), that most of it has burnt
+//! (`AlmostBurnedOut`, past [`REGION_BURNT`]) and that its fire went out
+//! (`FireStopped`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -16,7 +22,17 @@ pub struct FirePlugin;
 
 impl Plugin for FirePlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<Ignite>().init_resource::<Fires>().add_systems(Update, (ignite, spread, burn_effects, burn_damage, fire_lights).chain());
+        app.add_message::<Ignite>()
+            .init_resource::<Fires>()
+            .init_resource::<Regions>()
+            .add_systems(Update, (ignite, spread, burn_regions, burn_effects, burn_damage, fire_lights).chain())
+            .add_systems(
+                PreUpdate,
+                autopilot_burn
+                    .after(crate::controls::update_actions)
+                    .before(crate::controls::apply_action_maps)
+                    .run_if(in_state(crate::menu::GameState::Playing)),
+            );
     }
 }
 
@@ -198,6 +214,201 @@ fn spread(
     }
 }
 
+/// The share of a burnable region burnt when it reports it has almost
+/// burnt out.
+const REGION_BURNT: f32 = 0.8;
+/// Chance a burning cell of a region lights each unburnt neighbour of the
+/// region, each spread step (crops catch faster than grass).
+const REGION_SPREAD: f32 = 0.35;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RegionState {
+    Unlit,
+    Burning,
+    AlmostOut,
+    Out,
+}
+
+/// A burnable region: its fire cells, those burnt, and how far it has got.
+struct Region {
+    id: u64,
+    cells: Vec<Cell>,
+    burnt: HashSet<Cell>,
+    state: RegionState,
+    /// Its centre (Bevy space, at its own height).
+    centre: Vec3,
+}
+
+/// The story's burnable regions, read once its data is in.
+#[derive(Resource, Default)]
+pub struct Regions {
+    list: Option<Vec<Region>>,
+    next: f32,
+}
+
+impl Regions {
+    /// Where to set a region alight while it has yet to catch: its cell
+    /// nearest its centre (the centre of a bent field may lie outside it).
+    pub fn unlit(&self, id: u64) -> Option<Vec3> {
+        let r = self.list.as_ref()?.iter().find(|r| r.id == id && r.state == RegionState::Unlit)?;
+        r.cells.iter().map(|&c| cell_centre(c, r.centre.y)).min_by(|a, b| a.distance_squared(r.centre).total_cmp(&b.distance_squared(r.centre)))
+    }
+}
+
+fn read_regions(data: &fc3_story::data::StoryData) -> Vec<Region> {
+    use fc3_story::triggers::{shape_of, Shape};
+    let mut out = Vec::new();
+    for e in data.entities.values().filter(|e| e.class == "CBurnableRegion" || e.has("CIgnitorComponent")) {
+        let Some(shape @ Shape::Prism { .. }) = shape_of(e) else { continue };
+        let Shape::Prism { points, .. } = &shape else { continue };
+        let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for p in points {
+            lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+            hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+        }
+        // Fire cells are on Bevy's x and z (Dunia's x and -y).
+        let (c0, c1) = (cell_of(crate::data::to_bevy([lo[0], hi[1], 0.0])), cell_of(crate::data::to_bevy([hi[0], lo[1], 0.0])));
+        let mut cells = Vec::new();
+        for x in c0.0..=c1.0 {
+            for z in c0.1..=c1.1 {
+                let at = crate::data::to_dunia(cell_centre((x, z), 0.0));
+                if shape.contains([at[0], at[1], e.pos[2]]) {
+                    cells.push((x, z));
+                }
+            }
+        }
+        if cells.is_empty() {
+            continue;
+        }
+        let centre = crate::data::to_bevy([(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, e.pos[2]]);
+        out.push(Region { id: e.id, cells, burnt: HashSet::new(), state: RegionState::Unlit, centre });
+    }
+    out
+}
+
+/// Burnable regions catch from the fire around them, burn across their
+/// shape and tell the story how far they have got.
+fn burn_regions(
+    time: Res<Time>,
+    mut regions: ResMut<Regions>,
+    mut fires: ResMut<Fires>,
+    mut rng: ResMut<Rng>,
+    heights: Res<crate::terrain::Heightfield>,
+    mut decals: ResMut<crate::particles::Decals>,
+    mut host: Option<NonSendMut<crate::story::StoryHost>>,
+) {
+    let Some(host) = host.as_mut() else { return };
+    if regions.list.is_none() {
+        let list = read_regions(&host.story.data());
+        debug!("fire: {} burnable regions", list.len());
+        regions.list = Some(list);
+    }
+    regions.next -= time.delta_secs();
+    if regions.next > 0.0 {
+        return;
+    }
+    regions.next = 0.4;
+    let Some(list) = regions.list.as_mut() else { return };
+    for r in list.iter_mut().filter(|r| r.state != RegionState::Out) {
+        let burning: Vec<Cell> = r.cells.iter().copied().filter(|c| fires.burning.contains_key(c)).collect();
+        // Cells whose fire has gone out are burnt (and scorched).
+        let out: Vec<Cell> = r.cells.iter().copied().filter(|c| fires.burnt.contains(c) && !r.burnt.contains(c)).collect();
+        for c in out {
+            r.burnt.insert(c);
+            let y = heights.height_at(cell_centre(c, 0.0)).unwrap_or(r.centre.y);
+            decals.add_tinted(crate::particles::DecalSheet::Sand, cell_centre(c, y), Vec3::Y, CELL * 1.4, rng.f32(), 0.12);
+        }
+        if r.state == RegionState::Unlit {
+            if burning.is_empty() {
+                continue;
+            }
+            debug!("fire: region {} caught", r.id);
+            r.state = RegionState::Burning;
+            host.story.entity_event(r.id, "FireStarted", vec![]);
+        }
+        // The crops carry it across the region.
+        for c in &burning {
+            for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let n = (c.0 + dx, c.1 + dz);
+                if !r.burnt.contains(&n) && !fires.burning.contains_key(&n) && r.cells.contains(&n) && rng.f32() < REGION_SPREAD {
+                    let y = heights.height_at(cell_centre(n, 0.0)).unwrap_or(r.centre.y);
+                    fires.light(n, y, &mut rng);
+                }
+            }
+        }
+        let share = r.burnt.len() as f32 / r.cells.len() as f32;
+        if r.state == RegionState::Burning && share >= REGION_BURNT {
+            r.state = RegionState::AlmostOut;
+            host.story.entity_event(r.id, "AlmostBurnedOut", vec![]);
+        }
+        if burning.is_empty() {
+            // Gone out: done if most of it burnt, else it can catch again.
+            debug!("fire: region {} out, {:.0}% burnt", r.id, share * 100.0);
+            host.story.entity_event(r.id, "FireStopped", vec![]);
+            r.state = if r.state == RegionState::AlmostOut { RegionState::Out } else { RegionState::Unlit };
+        }
+    }
+}
+
+/// Tests (`FC3_STORY_AUTOPILOT`): a burnable region a script waits to catch
+/// (a drug field), once the story has gone quiet: the player set down a few
+/// metres off it, facing it, burns it with the flamethrower, or throws a
+/// molotov into it.
+#[allow(clippy::too_many_arguments)]
+fn autopilot_burn(
+    host: Option<NonSendMut<crate::story::StoryHost>>,
+    time: Res<Time>,
+    regions: Res<Regions>,
+    heights: Res<crate::terrain::Heightfield>,
+    mut actions: ResMut<crate::controls::ActionState>,
+    mut players: Query<(&mut Transform, &mut crate::player::Player, &crate::weapons::Inventory)>,
+    mut burning: Local<Option<(u64, f32)>>,
+) {
+    if std::env::var("FC3_STORY_AUTOPILOT").is_err() {
+        return;
+    }
+    let Some(mut host) = host else { return };
+    let Ok((mut t, mut p, inventory)) = players.single_mut() else { return };
+    if let Some((id, left)) = burning.as_mut() {
+        if regions.unlit(*id).is_none() || *left <= 0.0 {
+            *burning = None;
+            return;
+        }
+        if p.spawning {
+            return;
+        }
+        *left -= time.delta_secs();
+        let flamer = inventory.slots.iter().position(|s| inventory.defs[s.def].class == crate::weapons::WeaponClass::Flamethrower);
+        if (*left * 2.0) as u32 != ((*left + time.delta_secs()) * 2.0) as u32 {
+            debug!("story autopilot: burning {id}: flamethrower slot {flamer:?} (holding {}), molotovs {}", inventory.current, inventory.molotovs);
+        }
+        match flamer {
+            Some(slot) if slot != inventory.current => actions.cycle = 1,
+            Some(_) => actions.hold(crate::controls::Action::Fire),
+            None if inventory.molotovs > 0 => actions.press(crate::controls::Action::Molotov),
+            None => {}
+        }
+        return;
+    }
+    if host.quiet() < 6.0 {
+        return;
+    }
+    let awaited = host.story.awaited_entity_events("FireStarted");
+    let Some((id, centre)) = awaited.iter().find_map(|&id| Some((id, regions.unlit(id)?))) else { return };
+    // A few metres off it, on the player's side, looking down at it.
+    let side = (t.translation - centre).with_y(0.0).normalize_or(Vec3::Z);
+    let mut feet = centre + side * 3.0;
+    feet.y = heights.height_at(feet).unwrap_or(centre.y);
+    info!("story autopilot: burn region {id}");
+    crate::story::teleport(&mut t, &mut p, crate::data::to_dunia(feet), 0.0);
+    let ground = centre.with_y(heights.height_at(centre).unwrap_or(centre.y));
+    let aim = ground - (feet + Vec3::Y * crate::player::EYE_HEIGHT);
+    p.yaw = (-aim.x).atan2(-aim.z);
+    p.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
+    *burning = Some((id, 6.0));
+    host.reset_quiet();
+}
+
 /// Flames, smoke and embers over burning cells near the camera.
 fn burn_effects(
     time: Res<Time>,
@@ -317,5 +528,50 @@ fn fire_lights(time: Res<Time>, mut fires: ResMut<Fires>, mut lights: Query<(&mu
             }
             None => *vis = Visibility::Hidden,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fc3_formats::{fcb::Object, hash::name_hash};
+    use std::sync::Arc;
+
+    /// A burnable region's fire cells are the cells whose centres fall in
+    /// its shape (Dunia's x and y onto Bevy's x and -z).
+    #[test]
+    fn a_burnable_region_covers_the_cells_in_its_shape() {
+        let object = |name: &str, fields: Vec<(&str, Vec<u8>)>| {
+            Arc::new(Object { name_hash: name_hash(name), fields: fields.into_iter().map(|(n, v)| (name_hash(n), v)).collect(), children: vec![] })
+        };
+        // A 10 m square from (100, 200) in Dunia x and y.
+        let mut shape = 4u32.to_le_bytes().to_vec();
+        for (x, y) in [(100.0f32, 200.0f32), (110.0, 200.0), (110.0, 210.0), (100.0, 210.0)] {
+            shape.extend([x, y, 0.0f32].iter().flat_map(|v| v.to_le_bytes()));
+        }
+        let mut data = fc3_story::data::StoryData::default();
+        data.entities.insert(
+            7,
+            fc3_story::data::Entry {
+                id: 7,
+                name: "field".into(),
+                class: "CBurnableRegion".into(),
+                pos: [105.0, 205.0, 0.0],
+                angles: [0.0; 3],
+                layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
+                origin: fc3_story::data::Origin::Global,
+                components: Arc::new(Object { name_hash: name_hash("Components"), fields: vec![], children: vec![object("CIgnitorComponent", vec![])] }),
+                fields: object("Entity", vec![("hidShapePoints", shape)]),
+            },
+        );
+        let regions = read_regions(&data);
+        assert_eq!(regions.len(), 1);
+        let r = &regions[0];
+        assert_eq!(r.id, 7);
+        // 10 m across is five 2 m cells each way.
+        assert_eq!(r.cells.len(), 25);
+        assert!(r.cells.contains(&cell_of(crate::data::to_bevy([101.0, 201.0, 0.0]))));
+        assert!(!r.cells.contains(&cell_of(crate::data::to_bevy([99.0, 201.0, 0.0]))));
+        assert_eq!(r.state, RegionState::Unlit);
     }
 }

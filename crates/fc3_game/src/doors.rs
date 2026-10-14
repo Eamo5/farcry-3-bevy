@@ -17,7 +17,10 @@ pub struct DoorsPlugin;
 
 impl Plugin for DoorsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Doors>().add_systems(Update, (find_doors, tag_doors, push_doors, swing_doors).chain());
+        app.init_resource::<Doors>().add_systems(Update, (find_doors, tag_doors, push_doors, swing_doors).chain()).add_systems(
+            PreUpdate,
+            autopilot_doors.after(crate::controls::update_actions).before(crate::controls::apply_action_maps).run_if(in_state(crate::menu::GameState::Playing)),
+        );
     }
 }
 
@@ -154,6 +157,53 @@ fn push_doors(
             sfx.write(crate::sound::PlaySfx { event: door.sound, at: Some(hinge), volume: 1.0 });
         }
     }
+}
+
+/// Tests (`FC3_STORY_AUTOPILOT`): a door a script waits to be pushed or
+/// pulled (a hut's, to leave by), once the story has gone quiet: the player
+/// set down before its front, facing it, walks into it.
+#[allow(clippy::type_complexity)]
+fn autopilot_doors(
+    host: Option<NonSendMut<crate::story::StoryHost>>,
+    time: Res<Time>,
+    models: Res<Assets<crate::cache_assets::Fc3Model>>,
+    mut actions: ResMut<crate::controls::ActionState>,
+    mut players: Query<(&mut Transform, &mut Player), Without<Door>>,
+    placed: Query<(&Door, &WorldObject, &GlobalTransform, &Transform), (Without<Swing>, Without<Player>)>,
+    mut walking: Local<Option<f32>>,
+    mut tried: Local<HashSet<u64>>,
+) {
+    if std::env::var("FC3_STORY_AUTOPILOT").is_err() {
+        return;
+    }
+    let Some(mut host) = host else { return };
+    let Ok((mut pt, mut p)) = players.single_mut() else { return };
+    if let Some(left) = walking.as_mut() {
+        if !p.spawning {
+            actions.movement = Vec2::Y;
+            *left -= time.delta_secs();
+        }
+        if *left <= 0.0 {
+            *walking = None;
+        }
+        return;
+    }
+    if host.quiet() < 6.0 {
+        return;
+    }
+    let awaited = host.story.awaited_doors();
+    let Some((door, object, global, t)) = placed.iter().find(|(d, ..)| awaited.contains(&d.id) && !tried.contains(&d.id)) else { return };
+    let (_, closed, hinge) = global.to_scale_rotation_translation();
+    let width = models.get(&object.model).map_or(1.0, |m| m.aabb_max.x * t.scale.x).clamp(0.4, 3.0);
+    let (along, across) = (closed * Vec3::X, closed * Vec3::Z);
+    let stand = hinge + along * width * 0.5 + across * 1.2;
+    info!("story autopilot: walk into door {}", door.id);
+    crate::story::teleport(&mut pt, &mut p, crate::data::to_dunia(stand), 0.0);
+    // Facing back across it (forward is -z turned by the yaw).
+    p.yaw = across.x.atan2(across.z);
+    tried.insert(door.id);
+    *walking = Some(2.0);
+    host.reset_quiet();
 }
 
 fn swing_doors(time: Res<Time>, mut swings: Query<(&mut Swing, &mut Transform)>) {

@@ -1,0 +1,31 @@
+[package]
+name = "ruffle_render_wgpu"
+authors = ["Nathan Adams <dinnerbone@dinnerbone.com>", "Ruffle contributors"]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+version = "0.7.1"
+
+[dependencies]
+wgpu = { version = "29.0.4", features = ["naga-ir"] }
+tracing = "0.1.43"
+ruffle_render = { git = "https://github.com/ruffle-rs/ruffle", rev = "2372a4e148a67d68efd796f4477b3cddd4f880cd", features = ["tessellator"] }
+bytemuck = { version = "1.25.0", features = ["derive"] }
+enum-map = "2.7.3"
+fnv = "1.0.7"
+swf = { git = "https://github.com/ruffle-rs/ruffle", rev = "2372a4e148a67d68efd796f4477b3cddd4f880cd" }
+image = { version = "0.25.10", default-features = false }
+naga-agal = { path = "../naga-agal" }
+naga-pixelbender = { path = "../naga-pixelbender" }
+lru = "0.18.2"
+naga = { version = "29.0.4", features = ["wgsl-out"] }
+indexmap = "2.13.0"
+smallvec = { version = "1.15.1", features = ["const_new", "union"] }
+wgpu-profiler = "0.27.0"
+futures = "0.3.32"
+
+[features]
+render_debug_labels = []
+
+# Ruffle's `clap` and `profile-with-tracy` features are left out.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("clap", "profile-with-tracy"))'] }

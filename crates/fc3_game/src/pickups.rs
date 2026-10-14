@@ -20,7 +20,7 @@ pub struct PickupsPlugin;
 
 impl Plugin for PickupsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WorldState>().add_systems(
+        app.init_resource::<WorldState>().add_message::<PickedUp>().add_systems(
             Update,
             (
                 attach_pickup_models,
@@ -349,6 +349,10 @@ pub fn classify(name: &str) -> Option<Classified> {
 #[derive(Component)]
 pub struct LootSource(pub String);
 
+/// A placed pickup was picked up (its editor id): the story hears of it.
+#[derive(Message, Clone, Copy)]
+pub struct PickedUp(pub u64);
+
 #[derive(Component)]
 pub struct Pickup {
     pub kind: PickupKind,
@@ -470,7 +474,7 @@ fn interact(
     mut players: Query<(&Transform, &Player, &mut Inventory, &Health, &mut PlayerStats)>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     (busy, mut gestures, mut xp, mut looted, scripted): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>, MessageWriter<crate::progression::XpGain>, MessageWriter<crate::progression::ItemLooted>, Res<crate::story::ScriptedPlayer>),
-    (crafting, sources): (Option<Res<crate::crafting::CraftCatalog>>, Query<&LootSource>),
+    (crafting, sources, owns, mut picked): (Option<Res<crate::crafting::CraftCatalog>>, Query<&LootSource>, Query<&OwnLoot>, MessageWriter<PickedUp>),
 ) {
     let Ok((pt, player, mut inv, health, mut stats)) = players.single_mut() else { return };
     if health.dead || player.noclip || player.driving || busy.busy() {
@@ -510,12 +514,17 @@ fn interact(
     if matches!(p.kind, PickupKind::Plant(_)) && !player.swimming {
         gestures.write(crate::fp::FpAction::LootPlant { crouch: player.crouching });
     }
-    let rolled = match (p.kind, sources.get(e), crafting.as_ref()) {
-        (PickupKind::Loot, Ok(source), Some(c)) => c.roll_container(&source.0, &mut rng).map(|loot| (loot, c)),
+    // (Its own loot when its entity names some: a mission's diamonds.)
+    let rolled = match (p.kind, owns.get(e), sources.get(e), crafting.as_ref()) {
+        (PickupKind::Loot, Ok(own), _, Some(c)) => Some((c.roll_groups(&own.0, &mut rng), c)),
+        (PickupKind::Loot, _, Ok(source), Some(c)) => c.roll_container(&source.0, &mut rng).map(|loot| (loot, c)),
         _ => None,
     };
     let msg = if let Some((loot, c)) = rolled {
-        let (found, full, _) = take_loot(&loot, c, &mut progress, &mut inv, &mut stats, &perks);
+        let (found, full, items) = take_loot(&loot, c, &mut progress, &mut inv, &mut stats, &perks);
+        for id in items {
+            looted.write(crate::progression::ItemLooted(crate::progression::LootKind::Item(id)));
+        }
         let mut note = if found.is_empty() { "Nothing useful".to_string() } else { format!("Found {}", found.join(", ")) };
         if full {
             note += " (rucksack full)";
@@ -547,6 +556,7 @@ fn interact(
     }
     sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 0.6 });
     world.removed.insert(p.id);
+    picked.write(PickedUp(p.id));
     if let Some(v) = p.visual {
         commands.entity(v).despawn();
     }
@@ -698,6 +708,7 @@ mod tests {
             .init_resource::<crate::story::ScriptedPlayer>().insert_resource(Rng::seeded(1))
             .add_message::<ItemLooted>().add_message::<crate::fp::FpAction>()
             .add_message::<crate::progression::XpGain>().add_message::<crate::sound::PlaySfx>()
+            .add_message::<PickedUp>()
             .add_systems(Update, interact);
         let defs = crate::weapons::weapon_defs();
         let unarmed = defs.iter().position(|d| d.name == crate::weapons::UNARMED).unwrap();

@@ -229,9 +229,11 @@ No game data is included in this repository, and none is written into it.
   shows its canopy overhead.
 - **Collectibles**: the island's 120 relics, 20 lost letters and 16 memory cards, each worth cash and XP.
 - **Plants and syringes**: the island's plants go into a satchel. Arrowroot becomes medkits; the
-  others mix into syringes in the journal: hunter (marks nearby animals), fighter (half damage),
-  explorer (faster sprint), diver (four times the breath, faster swimming) and fireproof. Y picks the
-  syringe on hand and holding it injects. Underwater you hold your breath, and drown when it runs out.
+  others mix into the game's syringe recipes in the journal, each lasting as its recipe says: marking
+  animals, enemies or plants nearby, extra damage to animals, keeping animals away, steadier aim,
+  fireproofing, a long breath underwater, a burst of sprinting and swimming, invincibility, one-hit
+  kills and extra health. Y picks the syringe on hand and holding it injects. Underwater you hold
+  your breath, and drown when it runs out.
 - **Vehicles**: the world's ~400 vehicle spawns: 4x4s, technicals, quad bikes, cars, buggies and
   trucks on raycast suspension (weight carried low at the axles), boats and jet skis that float, and
   hang gliders. The cars, trucks, buggies and quad bikes drive by their archetypes' own drivetrains (the

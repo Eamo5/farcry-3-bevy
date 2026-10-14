@@ -677,7 +677,7 @@ fn drive_gunners(
             ));
         }
         crate::particles::fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle, dir, 1.5);
-        noises.write(crate::npc::Noise { at: muzzle, radius: 120.0, kind: crate::npc::NoiseKind::Threatening });
+        noises.write(crate::npc::Noise { at: muzzle, radius: 120.0, kind: crate::npc::NoiseKind::Threatening, aside: false });
         loops.write(crate::sound::LoopSfx { key: g.turret.to_bits(), event: crate::sound::ev::LMG_LOOP, at: Some(muzzle), volume: 1.0, ..default() });
     }
 }

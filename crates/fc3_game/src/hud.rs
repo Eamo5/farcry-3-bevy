@@ -33,25 +33,29 @@ fn ui_font(mut fonts: ResMut<Assets<Font>>) {
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(FrameTimeDiagnosticsPlugin::default()).init_resource::<HudState>().add_systems(Startup, (ui_font, setup_hud)).add_systems(
-            Update,
-            (
-                update_crosshair,
-                update_scope,
-                update_hit_marker,
-                update_health,
-                update_ammo,
-                update_compass,
-                update_damage,
-                update_grenades,
-                update_overlays,
-                update_detection,
-                apply_hud_settings,
-                update_status,
-                hud_visibility,
-            )
-                .in_set(HudSet),
-        );
+        app.add_plugins(FrameTimeDiagnosticsPlugin::default())
+            .init_resource::<HudState>()
+            .init_resource::<OriginalHud>()
+            .add_systems(Startup, (ui_font, setup_hud))
+            .add_systems(
+                Update,
+                (
+                    update_crosshair,
+                    update_scope,
+                    update_hit_marker,
+                    update_health,
+                    update_ammo,
+                    update_compass,
+                    update_damage,
+                    update_grenades,
+                    update_overlays,
+                    update_detection,
+                    apply_hud_settings,
+                    update_status,
+                    hud_visibility,
+                )
+                    .in_set(HudSet),
+            );
     }
 }
 
@@ -62,13 +66,17 @@ pub struct HudSet;
 
 #[derive(Resource, Default)]
 pub struct HudState {
-    hit_timer: f32,
-    hit_kill: bool,
+    /// Seconds the hit marker has left, and whether it marks a kill.
+    pub hit_timer: f32,
+    pub hit_kill: bool,
     pub show_help: bool,
     /// Transient centre-screen message (pickups, objectives).
     pub message: Option<(String, f32)>,
     /// Interaction prompt, set every frame by whoever offers one.
     pub prompt: Option<String>,
+    /// The prompt shown this frame (the original HUD's, `original_ui`,
+    /// reads it after the HUD has run).
+    pub shown_prompt: Option<String>,
     /// Context line under the compass (e.g. inside an enemy outpost).
     pub status: Option<String>,
 }
@@ -130,6 +138,15 @@ struct StatusText;
 /// Gameplay HUD element, hidden in menus, the map and the journal.
 #[derive(Component)]
 pub struct HudElement;
+
+/// A piece of this HUD that the original game's interface draws itself
+/// while it runs (`original_ui`): health, ammo, the compass.
+#[derive(Component)]
+pub struct ReplacedByOriginal;
+
+/// Whether the original game's HUD is up (`original_ui`).
+#[derive(Resource, Default, PartialEq)]
+pub struct OriginalHud(pub bool);
 
 const HUD_WHITE: Color = Color::srgba(0.95, 0.95, 0.92, 0.9);
 
@@ -200,6 +217,7 @@ fn setup_hud(mut commands: Commands) {
             },
             GlobalZIndex(1),
             HudElement,
+            ReplacedByOriginal,
         ))
         .id();
     commands.spawn((text("HEALTH", 14.0), HealthText, ChildOf(health_panel)));
@@ -236,6 +254,7 @@ fn setup_hud(mut commands: Commands) {
             },
             GlobalZIndex(1),
             HudElement,
+            ReplacedByOriginal,
         ))
         .id();
     commands.spawn((text("", 16.0), WeaponText, ChildOf(ammo_panel)));
@@ -246,6 +265,7 @@ fn setup_hud(mut commands: Commands) {
         Node { position_type: PositionType::Absolute, top: Val::Px(14.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, ..default() },
         GlobalZIndex(1),
         HudElement,
+        ReplacedByOriginal,
         children![(text("", 18.0), CompassText)],
     ));
 
@@ -267,6 +287,7 @@ fn setup_hud(mut commands: Commands) {
         Node { position_type: PositionType::Absolute, top: Val::Px(70.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, ..default() },
         GlobalZIndex(1),
         HudElement,
+        ReplacedByOriginal,
         children![(text("", 20.0), DetectText)],
     ));
 
@@ -426,21 +447,29 @@ fn update_scope(
     }
 }
 
+/// The crosshair's gap from the centre (UI pixels, as the shots stray: the
+/// game's spread where the weapon has it), or none when it's down (menus,
+/// death, aiming down the sights, swimming, driving).
+pub fn crosshair_gap(inv: &Inventory, player: &Player, health: &Health, in_menu: bool) -> Option<f32> {
+    let d = inv.def();
+    let move_penalty = if player.grounded { (player.velocity.length() / 6.0).min(1.0) } else { 1.0 };
+    let cone = d
+        .spread_cone(inv.aim_blend, player.crouching, !player.grounded, inv.spread_bloom, move_penalty)
+        .unwrap_or(d.spread * (1.0 - 0.8 * inv.aim_blend) * (1.0 + inv.spread_bloom + move_penalty * 0.8));
+    let hidden = in_menu || health.dead || player.noclip || player.swimming || player.driving || inv.aim_blend > 0.7;
+    (!hidden).then_some(6.0 + cone * 9.0)
+}
+
 fn update_crosshair(
     game_state: Res<State<crate::menu::GameState>>,
     players: Query<(&Inventory, &Player, &Health)>,
     mut bars: Query<(&CrosshairBar, &mut Node, &mut Visibility)>,
+    original: Res<OriginalHud>,
 ) {
     let Ok((inv, player, health)) = players.single() else { return };
-    let d = inv.def();
-    let move_penalty = if player.grounded { (player.velocity.length() / 6.0).min(1.0) } else { 1.0 };
-    // (As the shots stray: the game's spread where the weapon has it.)
-    let cone = d
-        .spread_cone(inv.aim_blend, player.crouching, !player.grounded, inv.spread_bloom, move_penalty)
-        .unwrap_or(d.spread * (1.0 - 0.8 * inv.aim_blend) * (1.0 + inv.spread_bloom + move_penalty * 0.8));
-    let gap = 6.0 + cone * 9.0;
-    let in_menu = *game_state.get() != crate::menu::GameState::Playing;
-    let hidden = in_menu || health.dead || player.noclip || player.swimming || player.driving || inv.aim_blend > 0.7;
+    let gap = crosshair_gap(inv, player, health, *game_state.get() != crate::menu::GameState::Playing).filter(|_| !original.0);
+    let hidden = gap.is_none();
+    let gap = gap.unwrap_or(0.0);
     for (bar, mut node, mut vis) in &mut bars {
         *vis = if hidden { Visibility::Hidden } else { Visibility::Inherited };
         let (w, h, dx, dy) = match bar.0 {
@@ -464,6 +493,7 @@ fn update_hit_marker(
     mut died: MessageReader<crate::combat::Died>,
     players: Query<Entity, With<Player>>,
     mut ui: Query<(&mut Visibility, &mut TextColor), With<HitMarkerUi>>,
+    original: Res<OriginalHud>,
 ) {
     for m in markers.read() {
         state.hit_timer = 0.15;
@@ -478,7 +508,7 @@ fn update_hit_marker(
     }
     state.hit_timer -= time.delta_secs();
     let Ok((mut vis, mut color)) = ui.single_mut() else { return };
-    *vis = if state.hit_timer > 0.0 { Visibility::Inherited } else { Visibility::Hidden };
+    *vis = if state.hit_timer > 0.0 && !original.0 { Visibility::Inherited } else { Visibility::Hidden };
     color.0 = if state.hit_kill { Color::srgb(1.0, 0.25, 0.2) } else { HUD_WHITE };
 }
 
@@ -606,6 +636,7 @@ fn update_damage(
     players: Query<(&Health, &PlayerStats, &Player, &GlobalTransform)>,
     mut vignettes: Query<&mut BackgroundGradient, With<DamageVignette>>,
     mut arrow: Query<(&mut Node, &mut TextColor, &mut Text, &mut UiTransform), With<DamageArrow>>,
+    original: Res<OriginalHud>,
 ) {
     let Ok((h, ps, p, gt)) = players.single() else { return };
     let low = (1.0 - h.current / (HEALTH_SEGMENT * 1.2)).clamp(0.0, 1.0);
@@ -622,7 +653,8 @@ fn update_damage(
         *bg = vignette(Color::srgba(0.55 + 0.4 * mix, 0.32 * mix, 0.0, a), low.max(burn * 0.25));
     }
     let Ok((mut node, mut color, mut text, mut xf)) = arrow.single_mut() else { return };
-    match ps.hurt_dir {
+    // (The original HUD's hit indicators show it.)
+    match ps.hurt_dir.filter(|_| !original.0) {
         Some((dir, s)) => {
             // Angle of the damage source relative to where the player faces.
             let fwd = Vec3::new(-p.yaw.sin(), 0.0, -p.yaw.cos());
@@ -642,7 +674,7 @@ fn update_damage(
 
 const GRENADE_MARKERS: usize = 4;
 /// Grenades closer than this are flagged.
-const GRENADE_WARN: f32 = 12.0;
+pub(crate) const GRENADE_WARN: f32 = 12.0;
 
 /// Marks live grenades around the player, placed around the crosshair in
 /// their direction and brighter the closer they are.
@@ -650,6 +682,7 @@ fn update_grenades(
     players: Query<(&Player, &Transform)>,
     grenades: Query<(&crate::weapons::Projectile, &Transform), Without<Player>>,
     mut markers: Query<(&GrenadeMarker, &mut Node, &mut TextColor)>,
+    original: Res<OriginalHud>,
 ) {
     let Ok((p, pt)) = players.single() else { return };
     let mut near: Vec<(f32, Vec3)> = grenades
@@ -662,7 +695,8 @@ fn update_grenades(
     let fwd = Vec3::new(-p.yaw.sin(), 0.0, -p.yaw.cos());
     let right = Vec3::new(-fwd.z, 0.0, fwd.x);
     for (m, mut node, mut colour) in &mut markers {
-        let Some(&(d, at)) = near.get(m.0) else {
+        // (The original HUD's grenade indicators show them.)
+        let Some(&(d, at)) = near.get(m.0).filter(|_| !original.0) else {
             colour.0 = colour.0.with_alpha(0.0);
             continue;
         };
@@ -674,14 +708,19 @@ fn update_grenades(
     }
 }
 
-fn hud_visibility(state: Res<State<crate::menu::GameState>>, scripted: Res<crate::story::ScriptedPlayer>, mut q: Query<&mut Visibility, With<HudElement>>) {
-    if !state.is_changed() && !scripted.is_changed() {
+fn hud_visibility(
+    state: Res<State<crate::menu::GameState>>,
+    scripted: Res<crate::story::ScriptedPlayer>,
+    original: Res<OriginalHud>,
+    mut q: Query<(&mut Visibility, Has<ReplacedByOriginal>), With<HudElement>>,
+) {
+    if !state.is_changed() && !scripted.is_changed() && !original.is_changed() {
         return;
     }
     // Missions hide the HUD for their scenes.
     let show = matches!(state.get(), crate::menu::GameState::Playing) && !scripted.hud_hidden;
-    for mut v in &mut q {
-        *v = if show { Visibility::Inherited } else { Visibility::Hidden };
+    for (mut v, replaced) in &mut q {
+        *v = if show && !(replaced && original.0) { Visibility::Inherited } else { Visibility::Hidden };
     }
 }
 
@@ -763,9 +802,14 @@ fn update_overlays(
     mut message: Query<&mut Text, (With<MessageText>, Without<DeathText>, Without<FpsText>, Without<PromptText>)>,
     mut fps: Query<&mut Text, (With<FpsText>, Without<DeathText>, Without<MessageText>, Without<PromptText>)>,
     mut prompt: Query<&mut Text, (With<PromptText>, Without<DeathText>, Without<MessageText>, Without<FpsText>)>,
+    original: Res<OriginalHud>,
 ) {
+    state.shown_prompt = state.prompt.take();
     if let Ok(mut t) = prompt.single_mut() {
-        t.0 = state.prompt.take().unwrap_or_default();
+        let shown = state.shown_prompt.clone().filter(|_| !original.0).unwrap_or_default();
+        if t.0 != shown {
+            t.0 = shown;
+        }
     }
     if keys.just_pressed(KeyCode::F1) {
         state.show_help = !state.show_help;
