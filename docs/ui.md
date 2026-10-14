@@ -154,6 +154,15 @@ names|strings|dis <block>|fsc2` reads a converted movie's script):
   camera's legend six. The shim defines it, asking the host
   (`ExternalInterface` `engineText`), which reads the string table the
   converter keeps (`story/strings.bin`, `fc3_formats::oasis`).
+* **Tweens**: `new fire.utils.TweenEx(clip, seconds, {prop: to or
+  [from, to], ease, delay, repeat, yoyo, onComplete, onCompleteParams})`,
+  with `stop()`, is the engine's too (the movies define only
+  `fire.utils.EaseType`: None 0, Regular/Strong/Back/Bounce In, Out, InOut
+  1-12, Bezier 13). The menus fade and slide everything with it; the pause
+  menu starts its root at alpha -20 and fades it in, so without it the
+  whole menu stayed invisible. The shim defines it, stepping its tweens
+  every frame by `getTimer` (Penner's quadratic, quintic, back and bounce
+  curves; `repeat` -1 is for ever, `yoyo` runs back on each repeat).
 
 `crates/fc3_ui/src/shim.as` is the engine's side, compiled at start with
 `rascal` (the AS2 compiler Ruffle's build uses) and played at level 0:
@@ -182,6 +191,29 @@ and DPS ids:
         event SetGameMode SPHud + EnableHud 1 + SetVisible 1
 
 The minimap draws a placeholder disc where the engine paints its radar.
+
+The tool runs frames in real time (the tweens go by `getTimer`, the wall
+clock). `FC3UI_GET="_level1;_level1.mcBack"` prints what is at paths (a
+clip's frame, visibility, alpha, place and size, else the value) and
+`FC3UI_LIST="_level1"` an object's members (the shim's `getPath` and
+`listPath`).
+
+The pause menu (`UI\Singleplayer\Menu\Pause\M_PauseMenu.feu`) is a page
+manager: it asks the usual `Get`s, then `Send RequestPageToLoad`, and the
+engine answers on `SetPageToLoad` with a quick-launch id (`QUICKLAUNCH_*`:
+shop 0, weapon chest 1, world map 2, skills 3, ... inventory 13, debug
+14; any other, -1, is the pause page). The page (`M_Pause.feu`) reports
+`SinglePlayerMenuLoaded`; the engine sends `SetUnlockedMenus` (crafting,
+skills, save, checkpoint, restart, abandon as "1"/"0", then debug and the
+restart and abandon text ids) to build its list, `SetObjective` (title,
+objective, money as "have/most", rucksack as "have/most") and `NewItems`
+(skills, crafting, handbook). The page sends back `RequestPageChange`
+(quick-launch id, selection), `MissionOptionSelected`, `Resume` and
+`QuitMenu`. Off screen with made-up values:
+
+    fc3ui hud UI\Singleplayer\Menu\Pause\M_PauseMenu.feu out.png 30 \
+        event SetPageToLoad -1 + SetUnlockedMenus 1 1 1 1 0 0 0 \
+        + SetObjective "Title" "Objective" "120/500" "7/20"
 
 ## In the game (`original-ui`)
 

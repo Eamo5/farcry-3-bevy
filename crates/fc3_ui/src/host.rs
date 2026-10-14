@@ -298,6 +298,18 @@ impl Host {
         (v.len() == 4).then(|| [v[0], v[1], v[2], v[3]])
     }
 
+    /// What is at a path (`_level1.mcBack`, `_global.isInverted`), as text:
+    /// a clip's state at a glance, else the value (tools).
+    pub fn path_info(&self, path: &str) -> String {
+        text(&self.call("getPath", vec![ExternalValue::String(path.to_string())]))
+    }
+
+    /// The members of the object at a path, `name:type` (tools).
+    pub fn path_members(&self, path: &str) -> Vec<String> {
+        let ExternalValue::List(l) = self.call("listPath", vec![ExternalValue::String(path.to_string())]) else { return vec![] };
+        l.iter().map(text).collect()
+    }
+
     pub fn dps_get(&self, id: &str, property: &str) -> ExternalValue {
         self.call("dpsGet", vec![ExternalValue::String(id.to_string()), ExternalValue::String(property.to_string())])
     }
@@ -348,5 +360,15 @@ impl Host {
     /// The player, for what this doesn't cover (input, the renderer).
     pub fn player(&self) -> &Arc<Mutex<Player>> {
         &self.player
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The shim compiles (the game can't start its interface otherwise).
+    #[test]
+    fn the_shim_compiles() {
+        let swf = super::shim_swf(1280, 720).unwrap();
+        assert_eq!(&swf[..3], b"FWS");
     }
 }

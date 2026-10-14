@@ -7,6 +7,16 @@
 
 use anyhow::{Context, Result};
 
+/// One frame of the movies' clock (their tweens go by time).
+const FRAME: f64 = 1.0 / 30.0;
+
+/// One frame, in real time: the movies' tweens go by `getTimer`, the wall
+/// clock.
+fn step(host: &mut fc3_ui::Host) {
+    std::thread::sleep(std::time::Duration::from_secs_f64(FRAME));
+    host.run(FRAME);
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).with_writer(std::io::stderr).init();
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -37,10 +47,10 @@ fn main() -> Result<()> {
             host.answer("IsHighDefinition", "1");
             host.answer("GetLanguage", "english");
             host.answer("Platform", "PC");
-            host.run_frame();
+            step(&mut host);
             host.load(movie, 1);
             for _ in 0..frames.max(1) {
-                host.run_frame();
+                step(&mut host);
             }
             for call in host.take_calls() {
                 println!("engine call: {} {:?}", call.command, call.args);
@@ -53,11 +63,11 @@ fn main() -> Result<()> {
                     let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
                     host.event(channel, &rest);
                     for _ in 0..5 {
-                        host.run_frame();
+                        step(&mut host);
                     }
                 }
                 for _ in 0..frames.max(1) {
-                    host.run_frame();
+                    step(&mut host);
                 }
                 for call in host.take_calls() {
                     println!("engine call: {} {:?}", call.command, call.args);
@@ -87,8 +97,16 @@ fn main() -> Result<()> {
                 // (FC3UI_AFTER: frames to run on after, for what plays.)
                 let after: u32 = std::env::var("FC3UI_AFTER").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
                 for _ in 0..after {
-                    host.run_frame();
+                    step(&mut host);
                 }
+            }
+            // FC3UI_GET="_level1._alpha;_level1.mcBack": what is at paths;
+            // FC3UI_LIST="_level1": an object's members.
+            for path in std::env::var("FC3UI_GET").unwrap_or_default().split(';').filter(|p| !p.is_empty()) {
+                println!("{path} = {}", host.path_info(path));
+            }
+            for path in std::env::var("FC3UI_LIST").unwrap_or_default().split(';').filter(|p| !p.is_empty()) {
+                println!("{path}: {}", host.path_members(path).join(" "));
             }
             if std::env::var_os("FC3UI_INFO").is_some() {
                 for id in host.dps_ids() {

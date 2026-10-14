@@ -71,6 +71,154 @@ _global.fire.utils.Localizer.getText = function(id) {
     return t == null ? "" : t;
 };
 
+// The engine's tweens, fire.utils.TweenEx (no movie defines it; the menus
+// fade and slide everything with it): new TweenEx(clip, seconds, {prop: to
+// or [from, to], ease: fire.utils.EaseType.*, delay, repeat (-1 for ever),
+// yoyo, onComplete, onCompleteParams}), stepped by the clock every frame.
+_global.__fireTweens = new Array();
+_global.fire.utils.TweenEx = function(target, duration, props) {
+    this.target = target;
+    this.duration = Number(duration);
+    this.ease = 0;
+    this.delay = 0;
+    this.repeat = 0;
+    this.yoyo = false;
+    this.props = new Array();
+    for (var k in props) {
+        var v = props[k];
+        if (k == "ease") {
+            this.ease = Number(v);
+        } else if (k == "delay") {
+            this.delay = Number(v);
+        } else if (k == "repeat") {
+            this.repeat = Number(v);
+        } else if (k == "yoyo") {
+            this.yoyo = Boolean(v);
+        } else if (k == "onComplete") {
+            this.onComplete = v;
+        } else if (k == "onCompleteParams") {
+            this.onCompleteParams = v;
+        } else if (k == "onCompleteScope") {
+            this.onCompleteScope = v;
+        } else {
+            var p = new Object();
+            p.name = k;
+            if (v instanceof Array) {
+                p.from = Number(v[0]);
+                p.to = Number(v[1]);
+                target[k] = p.from;
+            } else {
+                p.to = Number(v);
+            }
+            this.props.push(p);
+        }
+    }
+    this.start = getTimer() + this.delay * 1000;
+    this.started = false;
+    this.backwards = false;
+    this.stopped = false;
+    _global.__fireTweens.push(this);
+};
+_global.fire.utils.TweenEx.prototype.stop = function() {
+    this.stopped = true;
+};
+// fire.utils.EaseType: None, Regular (quadratic), Strong (quintic), Back,
+// Bounce, each In/Out/InOut from 1; Bezier (13) goes as None.
+_global.__fireBounce = function(t) {
+    if (t < 1 / 2.75) {
+        return 7.5625 * t * t;
+    } else if (t < 2 / 2.75) {
+        t -= 1.5 / 2.75;
+        return 7.5625 * t * t + 0.75;
+    } else if (t < 2.5 / 2.75) {
+        t -= 2.25 / 2.75;
+        return 7.5625 * t * t + 0.9375;
+    }
+    t -= 2.625 / 2.75;
+    return 7.5625 * t * t + 0.984375;
+};
+_global.__fireEaseIn = function(kind, t) {
+    if (kind == 0) {
+        return t * t;
+    } else if (kind == 1) {
+        return t * t * t * t * t;
+    } else if (kind == 2) {
+        return t * t * (2.70158 * t - 1.70158);
+    }
+    return 1 - _global.__fireBounce(1 - t);
+};
+_global.__fireEase = function(ease, t) {
+    if (ease <= 0 || ease > 12) {
+        return t;
+    }
+    var kind = Math.floor((ease - 1) / 3);
+    var way = (ease - 1) % 3;
+    if (way == 0) {
+        return _global.__fireEaseIn(kind, t);
+    } else if (way == 1) {
+        return 1 - _global.__fireEaseIn(kind, 1 - t);
+    } else if (t < 0.5) {
+        return _global.__fireEaseIn(kind, t * 2) / 2;
+    }
+    return 1 - _global.__fireEaseIn(kind, (1 - t) * 2) / 2;
+};
+_global.__fireTweenStep = function() {
+    var now = getTimer();
+    var list = _global.__fireTweens;
+    var i = 0;
+    while (i < list.length) {
+        var t = list[i];
+        if (t.stopped || t.target == undefined) {
+            list.splice(i, 1);
+        } else if (now < t.start) {
+            i++;
+        } else {
+            var j = 0;
+            if (!t.started) {
+                t.started = true;
+                while (j < t.props.length) {
+                    if (t.props[j].from == undefined) {
+                        t.props[j].from = Number(t.target[t.props[j].name]);
+                    }
+                    j++;
+                }
+            }
+            var f = t.duration > 0 ? (now - t.start) / (t.duration * 1000) : 1;
+            var done = f >= 1;
+            if (done) {
+                f = 1;
+            }
+            var e = _global.__fireEase(t.ease, t.backwards ? 1 - f : f);
+            j = 0;
+            while (j < t.props.length) {
+                var p = t.props[j];
+                t.target[p.name] = p.from + (p.to - p.from) * e;
+                j++;
+            }
+            if (done && t.repeat != 0) {
+                if (t.repeat > 0) {
+                    t.repeat = t.repeat - 1;
+                }
+                if (t.yoyo) {
+                    t.backwards = !t.backwards;
+                }
+                t.start = now;
+                i++;
+            } else if (done) {
+                list.splice(i, 1);
+                if (t.onComplete != undefined) {
+                    t.onComplete.apply(t.onCompleteScope == undefined ? t.target : t.onCompleteScope, t.onCompleteParams == undefined ? new Array() : t.onCompleteParams);
+                }
+            } else {
+                i++;
+            }
+        }
+    }
+};
+this.onEnterFrame = function() {
+    _global.__fireTweenStep();
+};
+
 // The clips the engine drives, by DPS id (_fireDPSId), found by walking the
 // loaded movies.
 _global.__fireDps = new Object();
@@ -170,6 +318,40 @@ api.addCallback("dpsInfo", null, function(id) {
         s += " stage " + Math.round(b.xMin) + "," + Math.round(b.yMin) + " to " + Math.round(b.xMax) + "," + Math.round(b.yMax);
     }
     return s;
+});
+// (Tools) what is at a path ("_level1.mcBack", "_global.isInverted"): a
+// clip's state at a glance, else the value.
+_global.__fireAt = function(path) {
+    var parts = String(path).split(".");
+    var o = _global;
+    var i = 0;
+    if (parts[0] == "_global") {
+        i = 1;
+    } else if (parts[0].substr(0, 6) == "_level" || parts[0] == "_root") {
+        o = eval(parts[0]);
+        i = 1;
+    }
+    while (i < parts.length && o != undefined) {
+        o = o[parts[i]];
+        i++;
+    }
+    return o;
+};
+api.addCallback("getPath", null, function(path) {
+    var o = _global.__fireAt(path);
+    if (typeof(o) == "movieclip") {
+        return String(o) + " frame " + o._currentframe + "/" + o._totalframes + " visible " + o._visible + " alpha " + o._alpha + " at " + Math.round(o._x) + "," + Math.round(o._y) + " size " + Math.round(o._width) + "x" + Math.round(o._height);
+    }
+    return o == undefined ? "undefined" : String(o);
+});
+// (Tools) an object's members and their kinds.
+api.addCallback("listPath", null, function(path) {
+    var o = _global.__fireAt(path);
+    var out = new Array();
+    for (var k in o) {
+        out.push(k + ":" + typeof(o[k]));
+    }
+    return out;
 });
 // A clip's bounds on the stage: [xMin, yMin, xMax, yMax].
 api.addCallback("dpsBounds", null, function(id) {
