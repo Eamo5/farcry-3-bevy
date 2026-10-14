@@ -1739,6 +1739,28 @@ fn main() -> Result<()> {
                 }
             }
         }
+        "terrain-height" => {
+            // The converted terrain's height under Dunia points (and its
+            // sector's range): terrain-height <x> <y> [<x> <y>...]
+            let root = fc3_formats::cache::default_cache_root();
+            for pair in args[1..].chunks(2) {
+                let (Some(x), Some(y)) = (pair.first().and_then(|v| v.parse::<f32>().ok()), pair.get(1).and_then(|v| v.parse::<f32>().ok())) else {
+                    bail!("usage: terrain-height <x> <y> [<x> <y>...]")
+                };
+                let c = fc3_formats::terrain::SectorCoord::containing(x, y);
+                let bytes =
+                    std::fs::read(root.join(fc3_formats::cache::terrain_rel(c.id()))).with_context(|| format!("sector {} isn't in the cache", c.id()))?;
+                let sector = fc3_formats::cache::CachedTerrain::from_bytes(&bytes)?.to_sector();
+                let o = c.origin();
+                println!(
+                    "({x}, {y}): terrain {:.2} (sector {}: {:.1}..{:.1})",
+                    sector.sample(x - o[0], y - o[1]),
+                    c.id(),
+                    sector.min_height,
+                    sector.max_height
+                );
+            }
+        }
         "ground-check" => {
             // Entity height minus the decoded terrain under it, for entities whose name
             // contains a substring, within r metres of Dunia (x, y):

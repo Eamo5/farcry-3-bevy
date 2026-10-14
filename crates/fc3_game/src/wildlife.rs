@@ -792,6 +792,11 @@ const SPECIES: &[Species] = &[
 ];
 
 impl Species {
+    /// Lives in the water, under the boats (a shark, a fish).
+    fn swims(&self) -> bool {
+        matches!(self.habitat, Habitat::Sea | Habitat::Water)
+    }
+
     /// Keeps to its spot (the moray in its hole).
     fn stationary(&self) -> bool {
         self.run_speed <= 0.0
@@ -890,6 +895,9 @@ impl AnimalAssets {
             velocity: Vec3::ZERO, rig, attack_cooldown: 0.0, frozen: None,
             body_lift: crate::player::HALF_HEIGHT, sense: Sensing::default(),
         }, Health::new(s.health), Collider::capsule(s.size.0, s.size.1 * 2.0)));
+        if s.swims() {
+            commands.entity(root).insert(crate::vehicles::swimmer_layers());
+        }
         if let Some(rig) = rig {
             let clips = self.sets[species].clone();
             commands.entity(rig).entry::<crate::characters::CharacterRig>().and_modify(move |mut r| r.set_clips(clips.clone()));
@@ -1660,6 +1668,9 @@ fn spawn_animal(
             Name::new(s.animal.name()),
         ))
         .id();
+    if s.swims() {
+        commands.entity(root).insert(crate::vehicles::swimmer_layers());
+    }
     if let Some(rig) = dress_animal(commands, assets, models, model, species, root, Vec3::new(0.0, -(radius + 0.25), 0.0), archetype, rng) {
         commands.entity(root).entry::<WildAnimal>().and_modify(move |mut a| a.rig = Some(rig));
     }

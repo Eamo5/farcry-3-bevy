@@ -489,7 +489,9 @@ fn spawn_actors(
         let animal = if e.component("CAIDogNetworkComponent").is_some() {
             crate::wildlife::story_species("attackdog_fc3")
         } else {
-            e.component("CAnimalNetworkComponent").and_then(|_| crate::wildlife::story_species(&e.name))
+            // (A story shark has an animal's counters but no network
+            // component: it is an animal all the same.)
+            e.component("CAnimalNetworkComponent").or_else(|| e.component("CFCXCountersComponentAnimal")).and_then(|_| crate::wildlife::story_species(&e.name))
         };
         if let Some(species) = animal {
             if animals.as_ref().is_none_or(|a| !a.ready_for_story(species, &server)) {
@@ -554,7 +556,11 @@ fn spawn_actors(
             }
         }
         commands.entity(root).insert(StoryActor::new(e.id, rig, fighter.is_some()));
-        if e.component("CAnimalNetworkComponent").is_some() || e.component("CAIDogNetworkComponent").is_some() || e.name.contains("Animal") {
+        if e.component("CAnimalNetworkComponent").is_some()
+            || e.component("CFCXCountersComponentAnimal").is_some()
+            || e.component("CAIDogNetworkComponent").is_some()
+            || e.name.contains("Animal")
+        {
             commands.entity(root).insert(StoryCreature);
         }
         // Its own loot (a mission's operator and his codes).

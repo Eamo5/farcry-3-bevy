@@ -685,6 +685,22 @@ pub(crate) fn definition_for_model(path: &str) -> Option<usize> {
     DEFS.iter().position(|d| format!("{VEHICLES}{}", d.model).eq_ignore_ascii_case(path))
 }
 
+/// Physics layers (bits): everything is in the first; a vehicle's body is
+/// also in `VEHICLE_LAYER`, and what swims (a shark, a fish) only in
+/// `SWIMMER_LAYER`, which vehicles pass through: a boat runs on over a
+/// shark (as in the game) rather than stopping dead against it. Shots and
+/// the player still meet swimmers.
+pub(crate) const VEHICLE_LAYER: u32 = 1 << 1;
+pub(crate) const SWIMMER_LAYER: u32 = 1 << 2;
+
+pub(crate) fn vehicle_layers() -> CollisionLayers {
+    CollisionLayers::new(LayerMask(1 | VEHICLE_LAYER), LayerMask(!SWIMMER_LAYER))
+}
+
+pub(crate) fn swimmer_layers() -> CollisionLayers {
+    CollisionLayers::new(LayerMask(SWIMMER_LAYER), LayerMask::ALL)
+}
+
 pub(crate) fn is_boat(def: usize) -> bool {
     DEFS.get(def).is_some_and(|d| d.kind == Kind::Boat)
 }
@@ -1402,7 +1418,16 @@ fn build_vehicle_inner(commands: &mut Commands, def: usize, model: &Fc3Model, at
         }
         _ => (Collider::cuboid(half.x * 2.0, half.y * 2.0, half.z * 2.0), volume),
     };
-    let body = commands.spawn((shape, ColliderDensity(tuning(def).mass / volume), Transform::from_translation(centre), ChildOf(root))).id();
+    let body = commands
+        .spawn((
+            shape,
+            ColliderDensity(tuning(def).mass / volume),
+            vehicle_layers(),
+            CollidingEntities::default(),
+            Transform::from_translation(centre),
+            ChildOf(root),
+        ))
+        .id();
     commands.entity(root).insert((
         Vehicle {
             def,

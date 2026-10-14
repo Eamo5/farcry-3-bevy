@@ -3668,5 +3668,17 @@ about as non-fighters and the first wave never emptied.
   stretch only 17 m wide. A boat now steers for a point on along its route
   (pure pursuit, 6 m and 1 m more per m/s ahead of its place on the leg)
   and counter-steers by how fast it is already turning
-  (`YAW_DAMPING`); cars keep steering for the node. It runs the river to
-  its fiftieth node of 63, where it grounds in shallows short of the end.
+  (`YAW_DAMPING`); cars keep steering for the node. It ran the river to
+  its fiftieth node of 63, then bounced back again and again at the
+  same spot. Not shallows (the bed is 6 m down): a story shark
+  (`FC3_Aquatic/BullShark_1`) placed in the channel. It has an animal's
+  counters (`CFCXCountersComponentAnimal`) but no network component, so it
+  was never bound to the wildlife (no swimming, no AI) and kept a story
+  character's kinematic capsule standing in the river, which a boat can't
+  push. Story entities with an animal's counters are animals now, and
+  what swims is in a physics layer vehicles pass through
+  (`vehicles::SWIMMER_LAYER`; shots and the player still meet it). The
+  boat runs all 63 nodes, the player in its turret into the end trigger,
+  and B30 completes. (A stalled path driver logs what its hull overlaps and
+  touches, `held up against` / `in contact with`; `fc3tool terrain-height`
+  gives the converted ground under Dunia points.)

@@ -299,7 +299,13 @@ pub(crate) fn drive_paths(
     cinema: Res<crate::cinema::Cinema>,
     spatial: SpatialQuery,
     mut vehicles: Query<(Entity, &Transform, &LinearVelocity, &AngularVelocity, &RigidBody, &mut Vehicle, Option<&crate::combat::Health>)>,
-    (colliders, bodies, cars): (Query<&ColliderOf>, Query<&RigidBody, Without<Vehicle>>, Query<(), With<Vehicle>>),
+    (colliders, bodies, cars, names, contacts): (
+        Query<&ColliderOf>,
+        Query<&RigidBody, Without<Vehicle>>,
+        Query<(), With<Vehicle>>,
+        Query<&Name>,
+        Query<&CollidingEntities>,
+    ),
 ) {
     let mut interrupted = Vec::new();
     for (entity, pose, velocity, spin, body, mut vehicle, health) in &mut vehicles {
@@ -324,6 +330,25 @@ pub(crate) fn drive_paths(
                 path.next,
                 flat(path.points[path.next] - pose.translation).length()
             );
+            // Held up (pushing on at a crawl): what its hull touches.
+            if throttle > 0.5 && velocity.0.length() < 1.5 {
+                let filter = SpatialQueryFilter::from_excluded_entities([entity, vehicle.body()]);
+                let (min, max) = vehicle.bounds();
+                let hull = Collider::cuboid((max.x - min.x) + 0.6, (max.y - min.y) + 0.6, (max.z - min.z) + 0.6);
+                for touched in spatial.shape_intersections(&hull, pose.transform_point((min + max) / 2.0), pose.rotation, &filter) {
+                    let body = colliders.get(touched).map_or(touched, |c| c.body);
+                    if body == entity {
+                        continue;
+                    }
+                    let name = names.get(touched).or_else(|_| names.get(body)).map_or_else(|_| "?".to_string(), |n| n.to_string());
+                    debug!("vehicle path {id}: held up against {touched:?} ({name}), its body {body:?}");
+                }
+                for touched in contacts.get(vehicle.body()).map(|c| c.iter().copied().collect::<Vec<_>>()).unwrap_or_default() {
+                    let body = colliders.get(touched).map_or(touched, |c| c.body);
+                    let name = names.get(touched).or_else(|_| names.get(body)).map_or_else(|_| "?".to_string(), |n| n.to_string());
+                    debug!("vehicle path {id}: in contact with {touched:?} ({name}), its body {body:?}");
+                }
+            }
         }
         // Round a fixed obstacle between it and the next node (a corner of
         // rock the straight line cuts across, as the road bends round it):
