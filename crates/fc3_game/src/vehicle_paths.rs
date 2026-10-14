@@ -155,6 +155,10 @@ pub(crate) fn story_paths(mut paths: ResMut<StoryVehiclePaths>, host: Option<Non
 }
 
 const REACHED: f32 = 2.5;
+/// A node already behind the vehicle this near counts as passed: one that
+/// slid by a few metres wide (a boat at speed) would otherwise circle it for
+/// good, out of the corridor its mission keeps it in.
+const PASSED_WITHIN: f32 = 10.0;
 /// Pushing on this long at a crawl (s), a driver backs off for `BACK_OFF`
 /// (steering the other way) and tries the turn again.
 const STUCK_AFTER: f32 = 2.0;
@@ -184,7 +188,8 @@ impl FollowPath {
         (throttle, steer, brake)
     }
 
-    fn advance(&mut self, at: Vec3) {
+    /// `heading`: which way the vehicle faces (zero when not known).
+    fn advance(&mut self, at: Vec3, heading: Vec3) {
         if self.arrived { return; }
         // Consume coincident or already crossed points, but never skip a turn
         // by choosing a nearest point further down the route.
@@ -195,13 +200,22 @@ impl FollowPath {
             let passed = if self.next > 0 {
                 let leg = flat(target - self.points[self.next - 1]).normalize_or_zero();
                 let along = to.dot(leg);
-                along >= 0.0 && along < REACHED * 2.0 && (to - leg * along).length() <= REACHED
-                    && (at.y - target.y).abs() < 4.0
-            } else { false };
-            if !near && !passed { break; }
-            if self.next + 1 < self.points.len() { self.next += 1; }
-            else if self.looped { self.next = 0; }
-            else { self.arrived = true; break; }
+                along >= 0.0 && along < REACHED * 2.0 && (to - leg * along).length() <= REACHED && (at.y - target.y).abs() < 4.0
+            } else {
+                false
+            };
+            let behind = heading != Vec3::ZERO && to.length() <= PASSED_WITHIN && to.dot(flat(heading)) > 0.0 && (at.y - target.y).abs() < 4.0;
+            if !near && !passed && !behind {
+                break;
+            }
+            if self.next + 1 < self.points.len() {
+                self.next += 1;
+            } else if self.looped {
+                self.next = 0;
+            } else {
+                self.arrived = true;
+                break;
+            }
         }
     }
 
@@ -241,7 +255,7 @@ pub(crate) fn drive_paths(
         let Some(driver) = vehicle.driver() else { vehicle.control(0.0, 0.0, true); continue };
         if driver == fc3_story::PLAYER && path.interruptible { interrupted.push(id); continue; }
         let previous = path.next;
-        path.advance(pose.translation);
+        path.advance(pose.translation, pose.rotation * Vec3::NEG_Z);
         if previous != path.next { info!("vehicle path {id}: reached node {previous}, next {} at {:?}", path.next, pose.translation); }
         let (mut throttle, mut steer, mut brake) = path.controls(pose, velocity.0);
         // Round a fixed obstacle between it and the next node (a corner of
@@ -339,24 +353,52 @@ mod tests {
     }
 
     #[test]
+    fn a_node_slid_past_wide_counts_once_it_is_behind() {
+        let mut p = route();
+        p.next = 1;
+        // Going on south, 4 m beside the node and 3 m short of it: not yet.
+        p.advance(Vec3::new(4.0, 0.0, -7.0), Vec3::NEG_Z);
+        assert_eq!(p.next, 1);
+        // 3 m beyond it: passed, rather than circled back to.
+        p.advance(Vec3::new(4.0, 0.0, -13.0), Vec3::NEG_Z);
+        assert_eq!(p.next, 2);
+        // Further off than that, it must still be reached.
+        let mut far = route();
+        far.next = 1;
+        far.advance(Vec3::new(12.0, 0.0, -13.0), Vec3::NEG_Z);
+        assert_eq!(far.next, 1);
+    }
+
+    #[test]
     fn route_progress_requires_ordered_physical_arrival_not_time_or_nearest_point() {
         let mut p = route();
-        p.advance(p.points[2]);
-        assert_eq!(p.next, 0); assert!(!p.arrived);
-        p.advance(Vec3::ZERO); assert_eq!(p.next, 1);
-        p.advance(Vec3::new(0.0, 8.0, -10.0)); assert_eq!(p.next, 1);
-        p.advance(Vec3::new(0.0, 0.0, -11.0)); assert_eq!(p.next, 2);
-        p.advance(Vec3::new(-8.0, 0.0, -10.0)); assert!(p.arrived);
+        p.advance(p.points[2], Vec3::ZERO);
+        assert_eq!(p.next, 0);
+        assert!(!p.arrived);
+        p.advance(Vec3::ZERO, Vec3::ZERO);
+        assert_eq!(p.next, 1);
+        p.advance(Vec3::new(0.0, 8.0, -10.0), Vec3::ZERO);
+        assert_eq!(p.next, 1);
+        p.advance(Vec3::new(0.0, 0.0, -11.0), Vec3::ZERO);
+        assert_eq!(p.next, 2);
+        p.advance(Vec3::new(-8.0, 0.0, -10.0), Vec3::ZERO);
+        assert!(p.arrived);
         assert_eq!(p.controls(&Transform::IDENTITY, Vec3::NEG_Z * 11.0), (0.0, 0.0, true));
-        p.advance(Vec3::ZERO); assert!(p.arrived);
-        let mut looped = route(); looped.looped = true;
-        for at in looped.points.clone() { looped.advance(at); }
-        assert_eq!(looped.next, 0); assert!(!looped.arrived);
+        p.advance(Vec3::ZERO, Vec3::ZERO);
+        assert!(p.arrived);
+        let mut looped = route();
+        looped.looped = true;
+        for at in looped.points.clone() {
+            looped.advance(at, Vec3::ZERO);
+        }
+        assert_eq!(looped.next, 0);
+        assert!(!looped.arrived);
     }
 
     #[test]
     fn controller_steers_slows_for_turns_obeys_zero_speed_and_continues_when_requested() {
-        let mut p = route(); p.advance(Vec3::ZERO);
+        let mut p = route();
+        p.advance(Vec3::ZERO, Vec3::ZERO);
         let (throttle, steer, brake) = p.controls(&Transform::IDENTITY, Vec3::ZERO);
         assert_eq!((throttle, steer, brake), (1.0, 0.0, false));
         p.next = 2;

@@ -3656,3 +3656,10 @@ about as non-fighters and the first wave never emptied.
   B30. The autopilot now waits out a scene playing the player through
   (`Cinema::plays_player`: a player part with tracks, not held at a pause
   or its end, not a loop), view or no view.
+* **The boat that circled.** B30's boat ride is watched by a corridor
+  around its path (`LOG_VehiculeStuckManager`): the player out of it for
+  3 s and the boat blows up, failing the mission. Oliver's boat slid past a
+  bend's node 3-4 m wide at speed, and a node counted only within 2.5 m, so
+  it turned back to circle it and swung out of the corridor. A node within
+  `PASSED_WITHIN` (10 m) that is already behind the vehicle now counts as
+  passed.
