@@ -251,6 +251,10 @@ pub struct Item {
     pub armour: f32,
     /// XP for picking it up (collectibles).
     pub xp: u32,
+    /// Its icon in the menus (`sShopIconName`): an exported symbol of the
+    /// pages that list it (`TX_AnimalHideBoar`), or a shared one
+    /// (`AnimalLoot`).
+    pub icon: String,
 }
 
 /// The shop subcategories supplies are sold under.
@@ -690,6 +694,7 @@ pub fn crafting(f: &CraftingFiles, strings: &dyn Fn(u32) -> String) -> Crafting 
             description: located(strings, u32f(e, "locidDescriptionId")),
             armour: uint(e, "arkArchetype").and_then(|a| armour.get(&a)).copied().unwrap_or(0.0),
             xp: num(e, "iXPOnLoot"),
+            icon: text(e, "sShopIconName"),
         });
     }
     out.items.sort_by_key(|i| i.id);
@@ -976,7 +981,7 @@ impl Handbook {
 // ------------------------------------------------------------ text form ---
 
 const SKILLS_MAGIC: &str = "fc3-skills 1";
-const RECIPES_MAGIC: &str = "fc3-recipes 7";
+const RECIPES_MAGIC: &str = "fc3-recipes 8";
 
 /// A string as one tab-free, newline-free field.
 fn esc(s: &str) -> String {
@@ -1138,7 +1143,7 @@ impl Crafting {
         }
         for i in &self.items {
             s += &format!(
-                "item\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "item\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 i.id,
                 u8::from(i.loot),
                 u8::from(i.rare),
@@ -1154,7 +1159,8 @@ impl Crafting {
                 esc(&i.unlock),
                 esc(&i.description),
                 i.armour,
-                i.xp
+                i.xp,
+                esc(&i.icon)
             );
         }
         for r in &self.recipes {
@@ -1245,6 +1251,7 @@ impl Crafting {
                     description: unesc(f[14]),
                     armour: f[15].parse().unwrap_or(0.0),
                     xp: f.get(16).and_then(|v| v.parse().ok()).unwrap_or(0),
+                    icon: f.get(17).map(|v| unesc(v)).unwrap_or_default(),
                 }),
                 "item" => bail!("item entry lacks its shop fields"),
                 "recipe" if f.len() >= 16 => {

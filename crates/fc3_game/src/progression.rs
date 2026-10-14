@@ -3501,7 +3501,7 @@ pub(crate) mod loot_tests {
 
     pub(crate) fn metadata() -> fc3_formats::progression::Crafting {
         fc3_formats::progression::Crafting::from_text(concat!(
-            "fc3-recipes 7\n",
+            "fc3-recipes 8\n",
             "item\t10\t1\t0\t0\tBoar hide\tHide\t900\t0\t0\t4294967295\t0\t0\t\t\t0\n",
             "item\t11\t1\t0\t0\tGreen leaf\tLeaf\t901\t0\t0\t4294967295\t0\t0\t\t\t0\n",
             "item\t12\t1\t0\t0\tCrimson leaf\tLeaf\t902\t0\t0\t4294967295\t0\t0\t\t\t0\n",
