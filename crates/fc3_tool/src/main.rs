@@ -2705,6 +2705,10 @@ fn main() -> Result<()> {
                         }
                     }
                 },
+                |url| {
+                    let path = url.split(['\\', '/']).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\\");
+                    vfs.read(&path).ok().and_then(|b| feu::exports(&b).ok()).unwrap_or_default()
+                },
             )?;
             std::fs::write(out, &swf)?;
             println!("{} bytes, {found} images embedded, {} missing {:?}", swf.len(), missing.len(), missing.iter().take(5).collect::<Vec<_>>());

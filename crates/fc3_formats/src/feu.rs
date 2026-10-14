@@ -44,6 +44,9 @@ const IMPORT_ASSETS2: u16 = 71;
 /// The first id of the copies of a movie's exported sprites (see
 /// `export_copies`): above every movie's own (the most any has is ~1000).
 const EXPORT_COPY_BASE: u16 = 0x8000;
+/// The first id of the library symbols a movie is given besides those it
+/// imports (see `whole_imports`).
+const IMPORT_EXTRA_BASE: u16 = 0xA000;
 
 /// The global function a converted movie calls the engine through, with the
 /// command and its arguments (what `FSCommand2` took): the host defines it.
@@ -87,7 +90,7 @@ pub fn is_feu(data: &[u8]) -> bool {
 }
 
 /// Marks the cache's movies as made by this version of [`to_swf`].
-pub const MOVIES_STAMP_REL: &str = "ui/stamp-movies-export-copies-first.txt";
+pub const MOVIES_STAMP_REL: &str = "ui/stamp-movies-whole-imports.txt";
 
 /// Where a movie lives in the cache as standard SWF (`ui/.../name.swf`), by
 /// its archive path or by the path another movie imports it by (which may be
@@ -118,6 +121,68 @@ fn tags_start(data: &[u8]) -> Result<usize> {
 struct Tag<'a> {
     code: u16,
     body: &'a [u8],
+}
+
+/// The names a movie exports (a library's symbols), in order.
+pub fn exports(feu: &[u8]) -> Result<Vec<String>> {
+    let tags = read_tags(feu, tags_start(feu)?, feu.len())?;
+    Ok(tags
+        .iter()
+        .filter(|t| t.code == EXPORT_ASSETS)
+        .filter_map(|t| parse_exports(t.body))
+        .flatten()
+        .map(|(_, n)| String::from_utf8_lossy(n).into_owned())
+        .collect())
+}
+
+/// An ImportAssets tag (1 or 2): its URL, the bytes between the URL and
+/// the count (two reserved ones in version 2), and its (id, name) pairs.
+fn parse_imports(code: u16, body: &[u8]) -> Option<(&[u8], &[u8], Vec<(u16, &[u8])>)> {
+    let url_end = body.iter().position(|&b| b == 0)?;
+    let at = url_end + 1 + if code == IMPORT_ASSETS2 { 2 } else { 0 };
+    let entries = parse_exports(body.get(at..)?)?;
+    Some((&body[..url_end], body.get(url_end + 1..at)?, entries))
+}
+
+/// Each ImportAssets tag again, with every other symbol its library exports
+/// added (under ids from `IMPORT_EXTRA_BASE`), save those the movie makes
+/// itself and the libraries' class packages.
+///
+/// The game resolved a symbol name across the libraries a menu took in: the
+/// crafting page builds its lists from lib.feu's `ScrollList` without
+/// importing it, as the rucksack does. In Ruffle a movie attaches only what
+/// it defines or imports, so such a list never appeared.
+fn whole_imports(tags: &[Tag<'_>], library: &mut dyn FnMut(&str) -> Vec<String>) -> Vec<Vec<u8>> {
+    let mut known: std::collections::HashSet<Vec<u8>> =
+        tags.iter().filter(|t| t.code == EXPORT_ASSETS).filter_map(|t| parse_exports(t.body)).flatten().map(|(_, n)| n.to_vec()).collect();
+    for t in tags.iter().filter(|t| matches!(t.code, IMPORT_ASSETS | IMPORT_ASSETS2)) {
+        known.extend(parse_imports(t.code, t.body).map(|(_, _, e)| e).unwrap_or_default().into_iter().map(|(_, n)| n.to_vec()));
+    }
+    let mut next = IMPORT_EXTRA_BASE;
+    let mut out = Vec::new();
+    for t in tags.iter().filter(|t| matches!(t.code, IMPORT_ASSETS | IMPORT_ASSETS2)) {
+        let Some((url, reserved, mut entries)) = parse_imports(t.code, t.body) else {
+            out.push(t.body.to_vec());
+            continue;
+        };
+        let names = library(&String::from_utf8_lossy(url));
+        let extra: Vec<Vec<u8>> = names.into_iter().map(String::into_bytes).filter(|n| !n.starts_with(b"__Packages.") && known.insert(n.clone())).collect();
+        let mut body = url.to_vec();
+        body.push(0);
+        body.extend_from_slice(reserved);
+        for name in &extra {
+            entries.push((next, name));
+            next += 1;
+        }
+        body.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (id, name) in entries {
+            body.extend_from_slice(&id.to_le_bytes());
+            body.extend_from_slice(name);
+            body.push(0);
+        }
+        out.push(body);
+    }
+    out
 }
 
 /// An ExportAssets tag's (id, name) pairs.
@@ -656,6 +721,7 @@ pub fn to_swf(
     feu: &[u8],
     mut image: impl FnMut(&ExternalImage) -> Option<(u32, u32, Vec<u8>)>,
     mut font: impl FnMut(&ExternalFont) -> Option<Vec<u8>>,
+    mut library: impl FnMut(&str) -> Vec<String>,
 ) -> Result<Vec<u8>> {
     if !is_feu(feu) {
         bail!("not an interface movie (no UEF signature)");
@@ -667,6 +733,7 @@ pub fn to_swf(
         font: &mut FontSource,
         atlases: &mut Atlases,
         copies: &mut Vec<u8>,
+        imports: &mut std::collections::VecDeque<Vec<u8>>,
     ) -> Result<()> {
         for t in tags {
             match t.code {
@@ -716,13 +783,14 @@ pub fn to_swf(
                 }
                 DEFINE_SPRITE if t.body.len() >= 4 => {
                     let mut body = t.body[..4].to_vec();
-                    rewrite(read_tags(t.body, 4, t.body.len())?, &mut body, image, font, atlases, &mut Vec::new())?;
+                    rewrite(read_tags(t.body, 4, t.body.len())?, &mut body, image, font, atlases, &mut Vec::new(), &mut Default::default())?;
                     write_tag(out, DEFINE_SPRITE, &body);
                 }
                 // The exported sprites' copies first (`export_copies`).
                 IMPORT_ASSETS | IMPORT_ASSETS2 => {
                     out.append(copies);
-                    write_tag(out, t.code, t.body);
+                    let body = imports.pop_front().unwrap_or_else(|| t.body.to_vec());
+                    write_tag(out, t.code, &body);
                 }
                 code => write_tag(out, code, t.body),
             }
@@ -735,7 +803,8 @@ pub fn to_swf(
     out.extend_from_slice(&feu[3..start]);
     let tags = read_tags(feu, start, feu.len())?;
     let mut copies = export_copies(&tags)?;
-    rewrite(tags, &mut out, &mut image, &mut font, &mut Atlases::default(), &mut copies)?;
+    let mut imports = whole_imports(&tags, &mut library).into();
+    rewrite(tags, &mut out, &mut image, &mut font, &mut Atlases::default(), &mut copies, &mut imports)?;
     let len = out.len() as u32;
     out[4..8].copy_from_slice(&len.to_le_bytes());
     Ok(out)
@@ -760,8 +829,9 @@ mod tests {
     }
 
     /// A movie that imports has each sprite it exports written again under
-    /// a high id, without its definitions, and exported, before the import;
-    /// one that doesn't import is left as it is.
+    /// a high id, without its definitions, and exported, before the import,
+    /// and imports all its library's symbols; one that doesn't import is
+    /// left as it is.
     #[test]
     fn an_importing_movie_exports_copies_of_its_sprites() {
         let movie = |import: bool| {
@@ -781,7 +851,7 @@ mod tests {
             feu.extend(tag(END, &[]));
             let len = feu.len() as u32;
             feu[4..8].copy_from_slice(&len.to_le_bytes());
-            to_swf(&feu, |_| None, |_| None).unwrap()
+            to_swf(&feu, |_| None, |_| None, |_| vec!["Tile".into(), "ScrollList".into(), "__Packages.A".into(), "TX_Icon".into()]).unwrap()
         };
         let swf = movie(true);
         let tags = read_tags(&swf, tags_start(&swf).unwrap(), swf.len()).unwrap();
@@ -794,6 +864,11 @@ mod tests {
         assert_eq!(frames(tags[3].body), vec![DEFINE_BITS_LOSSLESS2, 1, END]);
         assert_eq!(parse_exports(tags[1].body).unwrap(), vec![(EXPORT_COPY_BASE, &b"TX_Icon"[..])]);
         assert_eq!(parse_exports(tags[4].body).unwrap(), vec![(7, &b"TX_Icon"[..])]);
+        // The import takes the library's other symbols too, not the class
+        // packages nor what the movie makes itself.
+        let (url, _, entries) = parse_imports(IMPORT_ASSETS, tags[2].body).unwrap();
+        assert_eq!(url, br"UI\Common\lib.feu");
+        assert_eq!(entries, vec![(5, &b"Tile"[..]), (IMPORT_EXTRA_BASE, &b"ScrollList"[..])]);
         let swf = movie(false);
         let tags = read_tags(&swf, tags_start(&swf).unwrap(), swf.len()).unwrap();
         assert_eq!(tags.iter().map(|t| t.code).collect::<Vec<_>>(), vec![DEFINE_SPRITE, EXPORT_ASSETS, END]);
@@ -832,7 +907,7 @@ mod tests {
         for y in 0..2 {
             px[(y * 4 + 3) * 4..(y * 4 + 3) * 4 + 4].copy_from_slice(&[255, 0, 0, 255]);
         }
-        let swf = to_swf(&feu, |_| Some((4, 2, px.clone())), |_| None).unwrap();
+        let swf = to_swf(&feu, |_| Some((4, 2, px.clone())), |_| None, |_| Vec::new()).unwrap();
         assert_eq!(&swf[..4], b"FWS\x08");
         assert_eq!(u32::from_le_bytes(swf[4..8].try_into().unwrap()) as usize, swf.len());
         let tags = read_tags(&swf, tags_start(&swf).unwrap(), swf.len()).unwrap();
@@ -989,6 +1064,7 @@ mod tests {
                 Some((512, 512, vec![128; 512 * 512 * 4]))
             },
             |_| None,
+            |_| Vec::new(),
         )
         .unwrap();
         assert_eq!(asked, 1);

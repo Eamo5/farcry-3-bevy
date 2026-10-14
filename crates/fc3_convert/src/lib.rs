@@ -2566,6 +2566,12 @@ fn convert_movies(job: &Job) -> Result<()> {
             }
         })
         .collect();
+    // What a library a movie imports exports (its URL in any case, with
+    // either slash, sometimes doubled).
+    let library = |url: &str| {
+        let path = url.split(['\\', '/']).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\\");
+        job.vfs.read(&path).ok().and_then(|b| feu::exports(&b).ok()).unwrap_or_default()
+    };
     job.run(Stage::Story, &paths, |path| {
         let rel = feu::movie_rel(path);
         if !refresh && !job.should_write(&rel) {
@@ -2583,6 +2589,7 @@ fn convert_movies(job: &Job) -> Result<()> {
                 px
             },
             |font| fonts.get(&font.file.to_ascii_lowercase()).map(|t| t.define_font3(font.id, &font.face)),
+            library,
         );
         if !missing.is_empty() {
             job.error(format!("movie {path}: {} images not found, as {}", missing.len(), missing[0]));
@@ -2595,7 +2602,7 @@ fn convert_movies(job: &Job) -> Result<()> {
     write_atomic(
         job.root(),
         feu::MOVIES_STAMP_REL,
-        b"standard SWF, external images (atlases whole) and fonts embedded, engine calls as function calls\n",
+        b"standard SWF, external images (atlases whole) and fonts embedded, engine calls as function calls, exports copied ahead of imports, libraries imported whole\n",
         job.ctx,
     )
 }

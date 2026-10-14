@@ -65,9 +65,18 @@ imports, each sprite it exports is written again under an id from 0x8000
 (no movie has a thousand and more), its frames only (the definitions in it
 are the original's), and exported, ahead of its first import; the original
 and its export follow as before, so in the movie itself the name stays the
-original's (and its class). The cache's movies are stamped
-(`ui/stamp-movies-export-copies-first.txt`) so a converter that predates
-this makes them again.
+original's (and its class).
+
+The game also resolved a symbol name across the libraries a menu took in:
+the crafting page builds its lists from lib.feu's `ScrollList`, which it
+never imports (the rucksack does). In Ruffle a movie attaches only what it
+defines or imports, so that page had no lists. So each `ImportAssets` is
+written with every other symbol its library exports added (ids from
+0xA000; `feu::exports` reads a library's names, the converter's callback
+finds the library by its URL), save what the movie makes itself and the
+libraries' class packages. The cache's movies are stamped
+(`ui/stamp-movies-whole-imports.txt`) so a converter that predates this
+makes them again.
 
 A few movies name textures the game doesn't ship (demo, multiplayer and
 leftover menus); those images are left transparent, as the game would show
