@@ -1537,6 +1537,9 @@ fn run_story(
         for w in host.story.watched_triggers() {
             info!("story autopilot: trigger {} {}: {}", w.0, w.1, host.story.trigger_debug(w.0));
         }
+        for g in host.story.counted_report() {
+            info!("story autopilot: counting {g}");
+        }
     }
     // Slow inspection runs deliberately pause between actions. Chase/escape
     // fixtures can request a shorter pause without changing gameplay AI.

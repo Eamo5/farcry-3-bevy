@@ -1195,6 +1195,33 @@ impl Story {
         groups.into_iter().flat_map(|g| c.groups(&values::Text(g))).filter(|&id| c.is_loaded(id) && !c.dead.contains(&id)).collect()
     }
 
+    /// The groups blocks count down, each with its members still alive
+    /// (whether in the host's world, and where): for working out why a
+    /// count never reaches its end.
+    pub fn counted_report(&self) -> Vec<String> {
+        let c = self.core.borrow();
+        let groups: std::collections::BTreeSet<_> = c
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Group(g, event) if event == "CGroupSizeEvent" || event == "CCounterEvent" => Some(g.clone()),
+                _ => None,
+            })
+            .collect();
+        groups
+            .into_iter()
+            .map(|g| {
+                let alive: Vec<String> = c
+                    .groups(&values::Text(g.clone()))
+                    .into_iter()
+                    .filter(|id| !c.dead.contains(id))
+                    .map(|id| format!("{id} {} {:?}", if c.is_loaded(id) { "in" } else { "out" }, c.position(id).map(|p| p.map(|v| v.round()))))
+                    .collect();
+                format!("{g}: {} alive [{}]", alive.len(), alive.join(", "))
+            })
+            .collect()
+    }
+
     /// What scripts wait on now, one line each (what, and the box method
     /// it calls), with running delays: for working out where a story stalls.
     pub fn waiting_on(&self) -> Vec<String> {

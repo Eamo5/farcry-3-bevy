@@ -4021,3 +4021,8 @@ of Sam's, 28 m near and 32 m far, that warns on the screen).
   Sam, who walked off to it and never reached his path's end
   (`Domino_CompanionLead`). A companion leading or following the player
   is no longer offered points (`Core::offer_action`).
+
+* **What a count waits for.** The autopilot's stall report now lists the
+  groups blocks count down with their members still alive, whether in
+  the world and where (`Story::counted_report`): the block's last foe,
+  in the world but out of the fight, showed there.
