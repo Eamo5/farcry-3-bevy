@@ -4008,3 +4008,9 @@ of Sam's, 28 m near and 32 m far, that warns on the screen).
   on, to one the player has left (`NEAR_AGAIN`). A warning coming and
   going on the screen (`HudText`) no longer counts as the story stirring,
   which kept the autopilot waiting.
+
+* **Burning.** HOY_010 also listens for its weed fields catching fire (a
+  buzz for burning them, not the mission). The autopilot's burn step went
+  to one every few seconds with nothing to burn it with, drawing the
+  player off Sam. It now burns only with a flamethrower or molotovs, and
+  leaves a field that didn't catch for two minutes (`BURN_AGAIN`).

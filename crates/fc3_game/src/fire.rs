@@ -350,10 +350,15 @@ fn burn_regions(
     }
 }
 
+/// Tests: how long before the autopilot tries again a region that didn't catch.
+const BURN_AGAIN: f32 = 120.0;
+
 /// Tests (`FC3_STORY_AUTOPILOT`): a burnable region a script waits to catch
 /// (a drug field), once the story has gone quiet: the player set down a few
 /// metres off it, facing it, burns it with the flamethrower, or throws a
-/// molotov into it.
+/// molotov into it. Not with nothing to burn it with, and one that didn't
+/// catch is left a while (HOY_010's weed, burnt for a buzz, drew the player
+/// away from Sam every few seconds).
 #[allow(clippy::too_many_arguments)]
 fn autopilot_burn(
     host: Option<NonSendMut<crate::story::StoryHost>>,
@@ -363,14 +368,19 @@ fn autopilot_burn(
     mut actions: ResMut<crate::controls::ActionState>,
     mut players: Query<(&mut Transform, &mut crate::player::Player, &crate::weapons::Inventory)>,
     mut burning: Local<Option<(u64, f32)>>,
+    mut tried: Local<std::collections::HashMap<u64, f32>>,
 ) {
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() {
         return;
     }
     let Some(mut host) = host else { return };
     let Ok((mut t, mut p, inventory)) = players.single_mut() else { return };
+    let now = time.elapsed_secs();
     if let Some((id, left)) = burning.as_mut() {
         if regions.unlit(*id).is_none() || *left <= 0.0 {
+            if regions.unlit(*id).is_some() {
+                tried.insert(*id, now);
+            }
             *burning = None;
             return;
         }
@@ -390,11 +400,15 @@ fn autopilot_burn(
         }
         return;
     }
-    if host.quiet() < 6.0 {
+    let can_burn = inventory.molotovs > 0 || inventory.slots.iter().any(|s| inventory.defs[s.def].class == crate::weapons::WeaponClass::Flamethrower);
+    if host.quiet() < 6.0 || !can_burn {
         return;
     }
     let awaited = host.story.awaited_entity_events("FireStarted");
-    let Some((id, centre)) = awaited.iter().find_map(|&id| Some((id, regions.unlit(id)?))) else { return };
+    let Some((id, centre)) = awaited.iter().filter(|id| tried.get(*id).is_none_or(|at| now - at > BURN_AGAIN)).find_map(|&id| Some((id, regions.unlit(id)?)))
+    else {
+        return;
+    };
     // A few metres off it, on the player's side, looking down at it.
     let side = (t.translation - centre).with_y(0.0).normalize_or(Vec3::Z);
     let mut feet = centre + side * 3.0;
