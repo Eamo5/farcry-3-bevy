@@ -225,11 +225,11 @@ fn pause_toggle(
     mut next: ResMut<NextState<GameState>>,
     mut journal: ResMut<crate::progression::PauseMenu>,
     original: Res<OriginalPause>,
-    credits: Res<crate::credits::EndCredits>,
+    credits: Option<Res<crate::credits::EndCredits>>,
 ) {
     use bevy::input::gamepad::GamepadButton as B;
     // (Esc and Start skip the end credits instead.)
-    if credits.on() && *state.get() == GameState::Playing {
+    if credits.is_some_and(|c| c.on()) && *state.get() == GameState::Playing {
         return;
     }
     let pad = |b: B| gamepads.iter().any(|g| g.just_pressed(b));
