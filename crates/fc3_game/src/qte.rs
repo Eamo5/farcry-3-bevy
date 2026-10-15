@@ -118,6 +118,49 @@ struct Asked {
     last: f32,
 }
 
+impl Asked {
+    /// The answer this frame (the QTE's input pressed, or held; or the
+    /// autopilot's, after a moment), given the QTE's result (a hold let go
+    /// is in progress again): whether it decides the QTE, won or lost.
+    fn answer(&mut self, dt: f32, pressed: bool, held: bool, autopilot: bool, result: &mut u8) -> Option<bool> {
+        self.t += dt;
+        let auto = autopilot && self.t > AUTOPILOT_ANSWER;
+        match self.kind {
+            Kind::Press if pressed || auto => Some(true),
+            Kind::Press => (self.values[1] > 0.0 && self.t > self.values[1]).then_some(false),
+            Kind::Hold => {
+                if held || auto {
+                    self.progress += dt;
+                } else {
+                    // Let go: in progress again until held long enough.
+                    self.progress = 0.0;
+                    if *result == q::SUCCEEDED {
+                        *result = q::IN_PROGRESS;
+                    }
+                }
+                if self.progress >= self.values[0].max(0.01) && *result != q::SUCCEEDED {
+                    Some(true)
+                } else {
+                    (self.values[1] > 0.0 && self.t > self.values[1] && self.progress <= 0.0 && *result == q::IN_PROGRESS).then_some(false)
+                }
+            }
+            Kind::Mash => {
+                if (pressed && self.t - self.last >= self.values[2]) || (auto && self.t - self.last >= 0.1) {
+                    self.progress += 1.0;
+                    self.last = self.t;
+                }
+                self.progress = (self.progress - self.values[1] * dt).max(0.0);
+                if self.progress >= self.values[0].max(1.0) {
+                    Some(true)
+                } else {
+                    (self.values[3] > 0.0 && self.t > self.values[3]).then_some(false)
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
 struct Qte {
     id: u64,
     /// The player's move, and the opponent's (both keys of the table).
@@ -288,45 +331,10 @@ fn run_qtes(
     let autopilot = std::env::var_os("FC3_STORY_AUTOPILOT").is_some();
     for id in 0..SLOTS {
         let Some(a) = qt.asked[id].as_mut() else { continue };
-        a.t += dt;
         let acts = answers(a.input);
         let pressed = acts.iter().any(|&x| actions.just_pressed(x));
         let held = acts.iter().any(|&x| actions.pressed(x));
-        let auto = autopilot && a.t > AUTOPILOT_ANSWER;
-        let outcome = match a.kind {
-            Kind::Press if pressed || auto => Some(true),
-            Kind::Press => (a.values[1] > 0.0 && a.t > a.values[1]).then_some(false),
-            Kind::Hold => {
-                if held || auto {
-                    a.progress += dt;
-                } else {
-                    // Let go: in progress again until held long enough.
-                    a.progress = 0.0;
-                    if qt.results[id] == q::SUCCEEDED {
-                        qt.results[id] = q::IN_PROGRESS;
-                    }
-                }
-                if a.progress >= a.values[0].max(0.01) && qt.results[id] != q::SUCCEEDED {
-                    Some(true)
-                } else {
-                    (a.values[1] > 0.0 && a.t > a.values[1] && a.progress <= 0.0 && qt.results[id] == q::IN_PROGRESS).then_some(false)
-                }
-            }
-            Kind::Mash => {
-                if (pressed && a.t - a.last >= a.values[2]) || (auto && a.t - a.last >= 0.1) {
-                    a.progress += 1.0;
-                    a.last = a.t;
-                }
-                a.progress = (a.progress - a.values[1] * dt).max(0.0);
-                if a.progress >= a.values[0].max(1.0) {
-                    Some(true)
-                } else {
-                    (a.values[3] > 0.0 && a.t > a.values[3]).then_some(false)
-                }
-            }
-            _ => None,
-        };
-        if let Some(won) = outcome {
+        if let Some(won) = a.answer(dt, pressed, held, autopilot, &mut qt.results[id]) {
             // A hold stays asked: let go, it is in progress again.
             if !(a.kind == Kind::Hold && won) {
                 qt.asked[id] = None;
@@ -502,5 +510,80 @@ mod tests {
         assert_eq!(answers(6), [Action::Aim]);
         assert_eq!(answers(13), [Action::Left]);
         assert_eq!(answers(1)[0], Action::Interact);
+    }
+
+    fn asked(kind: Kind, values: [f32; 4]) -> Asked {
+        Asked { kind, input: 1, prompt: None, values, t: 0.0, progress: 0.0, last: -1.0 }
+    }
+
+    /// Frames of `dt` until the answer decides the QTE (won, and when), or
+    /// none within `secs`.
+    fn play(a: &mut Asked, secs: f32, input: impl Fn(f32) -> (bool, bool), autopilot: bool, result: &mut u8) -> Option<(bool, f32)> {
+        let dt = 1.0 / 60.0;
+        let mut t = 0.0;
+        while t < secs {
+            t += dt;
+            let (pressed, held) = input(t);
+            if let Some(won) = a.answer(dt, pressed, held, autopilot, result) {
+                return Some((won, t));
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn a_press_is_won_by_pressing_and_lost_by_waiting() {
+        let mut r = q::IN_PROGRESS;
+        let mut a = asked(Kind::Press, [0.0, 1.5, 0.0, 0.0]);
+        assert_eq!(play(&mut a, 3.0, |t| ((0.5..0.52).contains(&t), t > 0.5), false, &mut r).map(|x| x.0), Some(true));
+        let mut a = asked(Kind::Press, [0.0, 1.5, 0.0, 0.0]);
+        let (won, at) = play(&mut a, 3.0, |_| (false, false), false, &mut r).unwrap();
+        assert!(!won && (1.5..1.6).contains(&at), "{at}");
+        // No time limit: it waits.
+        let mut a = asked(Kind::Press, [0.0; 4]);
+        assert_eq!(play(&mut a, 10.0, |_| (false, false), false, &mut r), None);
+        // The autopilot answers after a moment.
+        let mut a = asked(Kind::Press, [0.0; 4]);
+        let (won, at) = play(&mut a, 3.0, |_| (false, false), true, &mut r).unwrap();
+        assert!(won && at > AUTOPILOT_ANSWER && at < AUTOPILOT_ANSWER + 0.05, "{at}");
+    }
+
+    #[test]
+    fn a_hold_is_won_by_holding_long_enough_and_let_go_is_in_progress_again() {
+        let mut r = q::IN_PROGRESS;
+        let mut a = asked(Kind::Hold, [1.0, 0.0, 0.0, 0.0]);
+        // Let go halfway: it starts over.
+        let (won, at) = play(&mut a, 5.0, |t| (false, !(0.5..0.6).contains(&t)), false, &mut r).unwrap();
+        assert!(won && (1.55..1.7).contains(&at), "{at}");
+        r = q::SUCCEEDED;
+        // Still held: no news.
+        assert_eq!(a.answer(0.1, false, true, false, &mut r), None);
+        // Let go: in progress again, and held again it succeeds again.
+        assert_eq!(a.answer(0.1, false, false, false, &mut r), None);
+        assert_eq!(r, q::IN_PROGRESS);
+        assert_eq!(play(&mut a, 5.0, |_| (false, true), false, &mut r).map(|x| x.0), Some(true));
+        // Never held within its time: lost.
+        let mut r = q::IN_PROGRESS;
+        let mut a = asked(Kind::Hold, [1.0, 2.0, 0.0, 0.0]);
+        assert_eq!(play(&mut a, 5.0, |_| (false, false), false, &mut r).map(|x| x.0), Some(false));
+    }
+
+    #[test]
+    fn a_mash_is_won_by_pressing_faster_than_it_decays() {
+        let mut r = q::IN_PROGRESS;
+        // 10 presses, losing 2 a second, at least 0.05 s apart; 6 s to do it.
+        let values = [10.0, 2.0, 0.05, 6.0];
+        // A press on the first frame of each 1/rate of a second.
+        let presses = |rate: f32| move |t: f32| ((t * rate).fract() < rate / 60.0, false);
+        // Eight a second: won.
+        let mut a = asked(Kind::Mash, values);
+        assert_eq!(play(&mut a, 7.0, presses(8.0), false, &mut r).map(|x| x.0), Some(true));
+        // Two a second: no faster than it decays; lost at the time limit.
+        let mut a = asked(Kind::Mash, values);
+        let (won, at) = play(&mut a, 7.0, presses(2.0), false, &mut r).unwrap();
+        assert!(!won && (6.0..6.1).contains(&at), "{at}");
+        // The autopilot mashes ten a second.
+        let mut a = asked(Kind::Mash, values);
+        assert_eq!(play(&mut a, 7.0, |_| (false, false), true, &mut r).map(|x| x.0), Some(true));
     }
 }
