@@ -4070,3 +4070,14 @@ start, its crew seated, then driven along its way), and being seen fails it.
   turns to listen for its end. We raised `CA_End` the moment it was asked,
   heard by nobody, and the meeting never began. It now comes a second
   later (`LEAVE_SECS`), as when a point is switched off.
+
+* **The meeting through the camera.** What the scripts wait to see
+  photographed is a base-world prop where the meeting is held (a guard rail
+  on a catwalk over a canyon), with no placed object of its own in the
+  world; the camera only took in placed things, and the photo never
+  counted. One with none now counts where the story placed it
+  (`CameraTargets::spots`), with nothing but itself in the way. The
+  autopilot, sent to stand beside it, stepped off the catwalk into the
+  canyon: for a thing, it now takes the photo from where it stands if it
+  can see it from there, else from the nearest spot with a floor under it
+  that can.

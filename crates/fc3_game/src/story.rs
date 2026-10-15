@@ -399,6 +399,8 @@ fn forward_camera(
         *next = 0.5;
         let awaited = host.story.awaited_discoveries();
         if targets.awaited != awaited {
+            let data = host.story.data();
+            targets.spots = awaited.iter().filter_map(|id| data.entities.get(id).map(|e| (*id, to_bevy(e.pos)))).collect();
             targets.awaited = awaited;
         }
     }
@@ -2970,7 +2972,7 @@ fn autopilot_loot(
     catalog: Res<crate::progression::LootCatalog>,
     progress: Res<crate::progression::Progress>,
     heights: Res<crate::terrain::Heightfield>,
-    mut players: Query<(&mut Transform, &mut Player, &crate::combat::Health, &crate::weapons::Inventory)>,
+    mut players: Query<(Entity, &mut Transform, &mut Player, &crate::combat::Health, &crate::weapons::Inventory)>,
     animals: Query<(Entity, &Transform, &crate::wildlife::WildAnimal, &crate::combat::Health, Option<&crate::wildlife::Carcass>, Option<&crate::story_actors::StoryActor>), Without<Player>>,
     plants: Query<(&crate::pickups::Pickup, &GlobalTransform)>,
     mut actions: ResMut<crate::controls::ActionState>,
@@ -2989,6 +2991,8 @@ fn autopilot_loot(
         mut far_pickups,
         taken,
         placed,
+        spatial,
+        mut photo_stand,
     ): (
         Query<
             (
@@ -3023,6 +3027,10 @@ fn autopilot_loot(
         // What the camera has taken in, and things placed in the world.
         Res<crate::stealth::CameraTargets>,
         Query<(&crate::objects::PlacedId, &GlobalTransform)>,
+        avian3d::prelude::SpatialQuery,
+        // Where to stand to photograph a thing (its id, the feet, and how
+        // often the player was put there).
+        Local<Option<(u64, Vec3, u8)>>,
     ),
 ) {
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() { return }
@@ -3032,7 +3040,7 @@ fn autopilot_loot(
     if time.is_paused() || !ui.boxes.is_empty() || cinema.view.is_some() || cinema.plays_player() || qtes.active() || busy.busy() {
         return;
     }
-    let Ok((mut at, mut player, health, inventory)) = players.single_mut() else { return };
+    let Ok((me, mut at, mut player, health, inventory)) = players.single_mut() else { return };
     // (Held up where a high trigger was stepped into, the player may still
     // go after a character: getting there sets him down.)
     if health.dead || player.spawning || (player.driving && !player.armed_passenger) || landing_awaited(&host, &player) {
@@ -3526,6 +3534,54 @@ fn autopilot_loot(
                 *last = Some((id, "photograph"));
             }
             let flat = (at.translation - spot).with_y(0.0);
+            // A thing (not a character): from where it can be seen, standing
+            // on something (JAS_200's meeting, held on a catwalk over a
+            // canyon: from the spot the player was sent to watch it from,
+            // not off the catwalk's edge, down in the canyon under it).
+            if !npcs.iter().any(|q| q.4.id == id) {
+                let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+                let aim = spot + Vec3::Y * rise;
+                // (Not steeply up or down at it: the view's pitch has its
+                // limits.)
+                let sees = |eye: Vec3| {
+                    let to = aim - eye;
+                    let dist = to.length();
+                    to.y.abs() < to.with_y(0.0).length() * 1.7
+                        && dist < 60.0
+                        && Dir3::new(to).is_ok_and(|dir| spatial.cast_ray(eye, dir, dist, true, &filter).is_none_or(|hit| hit.distance > dist - 1.0))
+                };
+                let feet_now = at.translation - Vec3::Y * crate::player::HALF_HEIGHT;
+                if photo_stand.is_none_or(|s| s.0 != id) {
+                    let toward = flat.normalize_or(Vec3::Z);
+                    let stand = if !player.noclip && sees(feet_now + Vec3::Y * player.eye) {
+                        Some(feet_now)
+                    } else {
+                        [10.0f32, 16.0, 24.0, 32.0].into_iter().flat_map(|d| (0..8).map(move |k| (d, k))).find_map(|(d, k)| {
+                            let side = Quat::from_rotation_y(k as f32 * std::f32::consts::FRAC_PI_4) * toward;
+                            let probe = spot + side * d + Vec3::Y * 6.0;
+                            let floor = spatial.cast_ray(probe, Dir3::NEG_Y, 80.0, true, &filter)?;
+                            let feet = probe - Vec3::Y * floor.distance;
+                            sees(feet + Vec3::Y * player.eye).then_some(feet)
+                        })
+                    };
+                    info!("story autopilot: photo stand {:?}", stand.map(to_dunia));
+                    *photo_stand = stand.map(|feet| (id, feet, 0));
+                }
+                if let Some((_, feet, tries)) = photo_stand.as_mut() {
+                    if feet_now.distance(*feet) > 2.0 && *tries < 2 {
+                        *tries += 1;
+                        teleport(&mut at, &mut player, to_dunia(*feet), 0.0);
+                        host.quiet = 0.0;
+                        return;
+                    }
+                    let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
+                    let to = aim - eye;
+                    player.yaw = (-to.x).atan2(-to.z);
+                    player.pitch = to.y.atan2(Vec2::new(to.x, to.z).length().max(0.3));
+                    actions.hold(crate::controls::Action::Tag);
+                    return;
+                }
+            }
             // (Held up in the air by a trigger, the camera won't come up.)
             if player.noclip || !(1.2..10.0).contains(&flat.length()) {
                 if std::env::var("FC3_CAMERA_DEBUG").is_ok() {

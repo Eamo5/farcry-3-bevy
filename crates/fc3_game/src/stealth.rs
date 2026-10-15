@@ -76,6 +76,10 @@ pub struct CameraSaw {
 #[derive(Resource, Default)]
 pub struct CameraTargets {
     pub awaited: Vec<u64>,
+    /// Where the story placed them: for one with no placed object of its
+    /// own in the world (a base-world prop: JAS_200's meeting, a guard rail
+    /// on the catwalk it is held on).
+    pub spots: Vec<(u64, Vec3)>,
     pub taken: std::collections::HashSet<u64>,
 }
 
@@ -347,7 +351,7 @@ fn binoculars(
         Query<(Entity, &GlobalTransform, &crate::story_actors::StoryActor)>,
         MessageWriter<CameraSaw>,
         Local<std::collections::HashSet<u64>>,
-        Local<HashMap<Entity, f32>>,
+        Local<HashMap<u64, f32>>,
         Query<(Entity, &GlobalTransform, &crate::objects::PlacedId)>,
         ResMut<CameraTargets>,
     ),
@@ -435,13 +439,18 @@ fn binoculars(
         }
         let Ok(dir) = Dir3::new(to) else { continue };
         if spatial.cast_ray(eye, dir, dist, true, &filter).is_none_or(|hit| hit.entity == e || hit.distance > dist - 0.8) {
-            story_seen.push((e, actor.id, !actor.dead));
+            story_seen.push((actor.id, !actor.dead));
         }
     }
     // Things the scripts wait to see (not characters): their middle.
     if !targets.awaited.is_empty() {
+        let mut in_world = Vec::new();
         for (e, gt, id) in &placed {
-            if !targets.awaited.contains(&id.0) || reported.contains(&id.0) {
+            if !targets.awaited.contains(&id.0) {
+                continue;
+            }
+            in_world.push(id.0);
+            if reported.contains(&id.0) {
                 continue;
             }
             let to = gt.translation() - eye;
@@ -451,7 +460,23 @@ fn binoculars(
             }
             let Ok(dir) = Dir3::new(to) else { continue };
             if spatial.cast_ray(eye, dir, dist, true, &filter).is_none_or(|hit| hit.entity == e || hit.distance > dist - 0.8) {
-                story_seen.push((e, id.0, false));
+                story_seen.push((id.0, false));
+            }
+        }
+        // (One not placed in the world as a thing of its own: where the story
+        // placed it, nothing but itself in the way.)
+        for &(id, spot) in &targets.spots {
+            if in_world.contains(&id) || reported.contains(&id) {
+                continue;
+            }
+            let to = spot - eye;
+            let dist = to.length();
+            if dist > range * perks.tag_range || to.normalize_or_zero().dot(fwd) < 4f32.to_radians().cos() {
+                continue;
+            }
+            let Ok(dir) = Dir3::new(to) else { continue };
+            if spatial.cast_ray(eye, dir, dist, true, &filter).is_none_or(|hit| hit.distance > dist - 1.0) {
+                story_seen.push((id, false));
             }
         }
     }
@@ -459,9 +484,9 @@ fn binoculars(
         trace!("camera: {} of the story's characters in view", story_seen.len());
     }
     bino.on_target = !seen.is_empty() || !story_seen.is_empty();
-    story_dwell.retain(|e, _| story_seen.iter().any(|s| s.0 == *e));
-    for (e, id, hostile) in story_seen {
-        let t = story_dwell.entry(e).or_insert(0.0);
+    story_dwell.retain(|id, _| story_seen.iter().any(|s| s.0 == *id));
+    for (id, hostile) in story_seen {
+        let t = story_dwell.entry(id).or_insert(0.0);
         *t += dt;
         if *t >= 0.35 && reported.insert(id) {
             saw.write(CameraSaw { id, tagged: hostile });
