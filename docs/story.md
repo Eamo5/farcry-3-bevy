@@ -4345,8 +4345,15 @@ then kill the rare animal with that weapon (B20) and skin it to craft
   after a while, from a quarter round and nearer (to 6 m). The quarry is
   kept while it lives, and the hunt's spare ammo isn't gone after while
   the weapon has some.
-* **Seen.** SQA_D5's rare komodo falls to the bow and the kill counts (the
-  objective moves on to skinning it).
-* **Not yet.** Skinning the rare animal (a story creature, not one of the
-  wildlife's, leaves no carcass) and the arrows the script spawns from an
-  archetype (`Arrow_Bundle_Pickup`) aren't there.
+* **Skinning it.** A rare animal is a story creature, not one of the
+  wildlife's (its loot is its own: `CFCXPawnLootComponent`, the rare skin),
+  and left no carcass. A story creature carrying its own loot is now a body
+  to skin when it dies (`LootableBody::skin`: "skin the animal", the
+  skinning move), its own loot taken and `OnLooting` heard
+  (`LootEntityListener`); the autopilot skins the one whose looting a
+  script awaits.
+* **Seen.** SQA_D5 from the poster to its end: the bow taken, the rare
+  komodo shot with it (the kill counts), skinned; B20 and the hunt
+  complete.
+* **Not yet.** The arrows the script spawns from an archetype
+  (`Arrow_Bundle_Pickup`) aren't there (the hunt needs none of them).

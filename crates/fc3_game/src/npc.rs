@@ -2952,7 +2952,7 @@ fn react_to_death(
         }
         commands.entity(d.entity).remove::<(Collider, RigidBody)>().insert(Corpse { age: 0.0, fall_axis: side, skinned, found: false });
         if npc.faction.hostile_to_player() {
-            commands.entity(d.entity).insert(crate::pickups::LootableBody { role: npc.role, rig: npc.rig });
+            commands.entity(d.entity).insert(crate::pickups::LootableBody { role: npc.role, rig: npc.rig, skin: false });
         }
         // A flamer's fuel tank goes up when he falls.
         if npc.role == Role::Flamer {

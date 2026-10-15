@@ -1144,28 +1144,34 @@ fn keep_watched_bodies(
 /// the characters who aren't fighters, captives and the like.)
 fn actor_deaths(
     host: Option<NonSendMut<StoryHost>>,
-    mut actors: Query<(&mut StoryActor, &Health)>,
+    mut actors: Query<(Entity, &mut StoryActor, &Health, Has<StoryCreature>, Has<crate::pickups::OwnLoot>)>,
     mut hurts: MessageReader<crate::combat::DamageEvent>,
     fighters: Query<(), With<crate::npc::Npc>>,
     players: Query<(), With<Player>>,
+    mut commands: Commands,
 ) {
     let Some(mut host) = host else { return };
     for d in hurts.read() {
         if fighters.contains(d.target) {
             continue;
         }
-        let Ok((a, h)) = actors.get(d.target) else { continue };
+        let Ok((_, a, h, _, _)) = actors.get(d.target) else { continue };
         let by = match d.instigator {
             Some(i) if players.contains(i) => "the player".to_string(),
-            Some(i) => actors.get(i).map_or(format!("{i:?}"), |(b, _)| b.id.to_string()),
+            Some(i) => actors.get(i).map_or(format!("{i:?}"), |b| b.1.id.to_string()),
             None => "nothing".into(),
         };
         debug!("story actor {} hurt: {:.0} {:?} by {by} from {:.1?} ({:.0} health left)", a.id, d.amount, d.kind, d.source, h.current);
     }
-    for (mut a, h) in &mut actors {
+    for (e, mut a, h, creature, own) in &mut actors {
         if h.dead && !a.dead {
             a.dead = true;
             let id = a.id;
+            // An animal carrying its own loot is skinned for it (a hunt's
+            // rare one: its skin).
+            if creature && own {
+                commands.entity(e).insert(crate::pickups::LootableBody { role: crate::npc::Role::Assault, rig: a.rig, skin: true });
+            }
             if std::env::var("FC3_STORY_WAIT_DEBUG").is_ok() {
                 info!("story actor death: {id}");
             }

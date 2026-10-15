@@ -60,6 +60,8 @@ pub struct LootableBody {
     pub role: crate::npc::Role,
     /// The body's rig (its graphic kit picks the game's loot for it).
     pub rig: Option<Entity>,
+    /// An animal's, skinned (a hunt's rare one: its own loot, its skin).
+    pub skin: bool,
 }
 
 /// A character's own loot groups (its entity's `CFCXPawnLootComponent`:
@@ -136,11 +138,12 @@ pub(crate) fn loot_bodies(
         return;
     };
     if taken.is_none() {
-        hud.prompt = Some(format!("{}  search the body", actions.label(crate::controls::Action::Interact, &settings)));
+        let what = if body.skin { "skin the animal" } else { "search the body" };
+        hud.prompt = Some(format!("{}  {what}", actions.label(crate::controls::Action::Interact, &settings)));
         if !actions.just_pressed(crate::controls::Action::Interact) {
             return;
         }
-        gestures.write(crate::fp::FpAction::LootBody { crouch: player.crouching });
+        gestures.write(if body.skin { crate::fp::FpAction::Skin { large: true } } else { crate::fp::FpAction::LootBody { crouch: player.crouching } });
     }
     *progress.stats.entry(crate::progression::stat::BODIES_LOOTED).or_insert(0) += 1;
     // What the game gives this kind of enemy: cash, loot to sell, ammunition.

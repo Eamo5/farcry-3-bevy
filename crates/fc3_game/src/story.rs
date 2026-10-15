@@ -3944,6 +3944,28 @@ fn autopilot_loot(
             }
             return;
         }
+        // The quarry down, skinned (its looting awaited).
+        let skin = story_actors
+            .iter()
+            .filter(|(_, a, creature)| *creature && a.dead && host.story.awaits_event(a.id, "OnLooting"))
+            .min_by(|a, b| a.0.translation.distance(at.translation).total_cmp(&b.0.translation.distance(at.translation)));
+        if let Some((bt, body, _)) = skin {
+            if *last != Some((body.id, "skin")) {
+                info!("story autopilot: skin {}", body.id);
+                *last = Some((body.id, "skin"));
+            }
+            let flat = (bt.translation - at.translation).with_y(0.0);
+            if flat.length() > 1.6 || (bt.translation.y - at.translation.y).abs() > 1.5 {
+                let mut feet = bt.translation - flat.normalize_or(Vec3::Z) * 1.0;
+                feet.y = heights.height_at(feet).unwrap_or(bt.translation.y);
+                teleport(&mut at, &mut player, to_dunia(feet), 0.0);
+                host.quiet = 0.0;
+            } else if now >= *next_press {
+                *next_press = now + 0.6;
+                actions.press(crate::controls::Action::Interact);
+            }
+            return;
+        }
     }
     if looted_wanted.is_empty() {
         *last = None;
