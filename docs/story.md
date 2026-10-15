@@ -4282,3 +4282,10 @@ while Hurk mends it under attack (B20, B30), and sees it to the beach
 * **Not done.** The Blackhawk reinforcement B40 also waits for along its
   path (`HUR_040_Reinforce_B30_BlackHawk_02`) isn't flown; B40 completes
   without it. The tripod's turning parts stand still; the gun turns.
+
+## HUR_050: the sub pens
+
+After HUR_040, Hurk's last mission starts with its brief and runs through
+as the autopilot stands: the charges planted on the pillars (B10, B20),
+the freight elevator (B30, B40C), the way out found (B50) and Hurk spoken
+to (B90C). HUR_050 completes; with it every main mission does.
