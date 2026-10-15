@@ -1382,12 +1382,24 @@ fn autopilot_exit(
     *last = time.elapsed_secs();
     let (watched, following, locked, entry) =
         (host.story.watches_entity(id), paths.following(id), host.story.vehicle_rules(id).exit_disabled, host.story.awaits_vehicle_entry(fc3_story::PLAYER));
-    if following || locked || (!fight && (watched || entry)) {
+    // Something near a script waits for the player to use (a bomb to
+    // plant), which isn't done from a seat: out on foot, the vehicle still
+    // listened to (SAM_015's four key areas, driven into with Sam).
+    let graph = std::env::var("FC3_STORY_AUTOPILOT_GRAPH").ok();
+    let to_use = !fight
+        && host
+            .story
+            .watched_triggers_in_graph(graph.as_deref())
+            .iter()
+            .any(|w| w.3 && w.1 == "Use" && crate::data::to_bevy(w.2).distance(vt.translation) < ON_FOOT_REACH);
+    if following || locked || (!fight && !to_use && (watched || entry)) {
         debug!("story autopilot: staying in vehicle {id} (listened to {watched}, on a path {following}, exit disabled {locked}, entry awaited {entry})");
         return;
     }
     if fight {
         info!("story autopilot: out of vehicle {id} to fight");
+    } else if to_use {
+        info!("story autopilot: out of vehicle {id}, something to use near");
     } else {
         info!("story autopilot: out of vehicle {id}, which the story is done with");
     }
@@ -1397,6 +1409,8 @@ fn autopilot_exit(
 /// How near foes a block counts down must be for the autopilot to get out
 /// of the vehicle it drives to fight them.
 const FIGHT_FROM_VEHICLE: f32 = 150.0;
+/// How near something to use must be for it to get out to use it.
+const ON_FOOT_REACH: f32 = 150.0;
 
 fn seat_story_actors(
     mut vehicles: Query<(&Transform, &mut Vehicle), Without<crate::story_actors::StoryActor>>,

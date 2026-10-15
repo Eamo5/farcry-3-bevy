@@ -4133,3 +4133,9 @@ its four key areas, its alarms to be switched off first.
   and the tries, every 6 s for good, kept the story from going quiet
   long enough for anything else. It now leaves the boxes be from a seat,
   and one never reached after 8 tries (`ALARM_TRIES`).
+
+* **Out on foot.** The bomb spots are used, which the autopilot doesn't do
+  from a seat, and the jeep is listened to (Sam is kept from harm in it),
+  so it stayed in. It now gets out when something a script waits for it
+  to use is near (`ON_FOOT_REACH`), switches the alarms off, plants the
+  four bombs, and the block completes.
