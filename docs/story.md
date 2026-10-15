@@ -1785,6 +1785,12 @@ With world graphs now running, the unrestricted helper otherwise visits
 waterfall effects and DLC triggers instead of staying on the tested mission.
 This filter affects test trigger selection, not normal gameplay listeners.
 
+`FC3_STORY_FATAL=<file>` keeps the triggers the autopilot learned to leave
+alone (stepped into just before the mission failed or the player was
+killed), one `id event` a line, and reads them back at the start: a run
+from a checkpoint need not fail the mission again to learn them (JAS_200's
+tunnel exit and the ground under the bridge cost a reload each, every run).
+
 `fc3-doctor-focused` used `doc_020` from the paired post-outpost checkpoint,
 played the 66-second doctor briefing and 70-second Daisy scene without skips,
 and completed DOC_020_BRIEF_B10, DOC_020_BRIEF, DOC_020_B05C and DOC_020_B10E.

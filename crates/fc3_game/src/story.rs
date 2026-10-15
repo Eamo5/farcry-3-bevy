@@ -650,7 +650,7 @@ impl StoryHost {
             recent: Default::default(),
             used: Default::default(),
             last_step: None,
-            fatal: Default::default(),
+            fatal: fatal_learned(),
             checkpoint,
             reload_at: None,
             was_dead: false,
@@ -1827,7 +1827,7 @@ fn run_story(
                 info!("story: mission failed ({:?}), reload {reload}", text.as_deref().map(plain));
                 if let Some((id, event, _)) = host.last_step.take().filter(|s| now - s.2 < FATAL_WITHIN) {
                     info!("story autopilot: {event} {} failed the mission; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
-                    host.fatal.insert((id, event));
+                    learn_fatal(&mut host.fatal, id, event);
                 }
                 let text = text.map(|t| plain(&t)).unwrap_or_default();
                 ui.banner = Some((format!("Mission failed\n{text}"), 5.0));
@@ -1985,7 +1985,7 @@ fn run_story(
                             if pawn == fc3_story::PLAYER && amount >= KILLING_BLOW {
                                 if let Some((id, event, _)) = host.last_step.take().filter(|s| now - s.2 < FATAL_WITHIN) {
                                     info!("story autopilot: {event} {} killed the player; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
-                                    host.fatal.insert((id, event));
+                                    learn_fatal(&mut host.fatal, id, event);
                                 }
                             }
                             host.damages.push((pawn, amount));
@@ -2496,6 +2496,30 @@ const DESTROY_REACH: f32 = 80.0;
 /// A mission failing this soon after the autopilot stepped into a trigger
 /// failed for it.
 const FATAL_WITHIN: f32 = 2.0;
+
+/// The triggers the autopilot learned to leave alone in earlier runs, kept
+/// in the file `FC3_STORY_FATAL` names (one `id event` a line), if any: a
+/// run from a checkpoint need not fail the mission again to learn them.
+fn fatal_learned() -> std::collections::HashSet<(u64, String)> {
+    let Some(text) = std::env::var_os("FC3_STORY_FATAL").and_then(|p| std::fs::read_to_string(p).ok()) else { return Default::default() };
+    parse_fatal(&text)
+}
+
+fn parse_fatal(text: &str) -> std::collections::HashSet<(u64, String)> {
+    text.lines().filter_map(|l| l.trim().split_once(' ')).filter_map(|(id, event)| Some((id.parse().ok()?, event.trim().to_string()))).collect()
+}
+
+fn learn_fatal(fatal: &mut std::collections::HashSet<(u64, String)>, id: u64, event: String) {
+    if fatal.insert((id, event.clone())) {
+        if let Some(path) = std::env::var_os("FC3_STORY_FATAL") {
+            use std::io::Write;
+            let file = std::fs::OpenOptions::new().create(true).append(true).open(&path);
+            if let Err(e) = file.and_then(|mut f| writeln!(f, "{id} {event}")) {
+                warn!("story autopilot: can't keep the trigger left alone in {path:?}: {e}");
+            }
+        }
+    }
+}
 /// How long before the autopilot goes near a place again, gone out of reach.
 const NEAR_AGAIN: f32 = 20.0;
 /// Harm a script deals that kills whoever takes it.
@@ -3676,6 +3700,14 @@ mod tests {
     use super::*;
     use crate::controls::{Action, ActionState, Binding};
     use crate::settings::Settings;
+
+    #[test]
+    fn triggers_left_alone_are_read_back_a_line_each() {
+        let fatal = parse_fatal("2075603644094367013 Enter\n\nnot-an-id Enter\n2077037199833972030 Enter \n12\n");
+        assert_eq!(fatal.len(), 2);
+        assert!(fatal.contains(&(2075603644094367013, "Enter".to_string())));
+        assert!(fatal.contains(&(2077037199833972030, "Enter".to_string())));
+    }
 
     #[test]
     fn script_medpack_adjustments_obey_capacity_underflow_and_player_identity() {
