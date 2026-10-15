@@ -3245,7 +3245,9 @@ fn autopilot_loot(
             .filter(|(t, h, _, own, actor, npc, _)| {
                 !h.dead
                     && !quest_of(*own)
-                    && !actor.seated
+                    // (A seated one only when a block counts him: JAS_200's
+                    // boss, fleeing in his 4x4, is shot at the wheel.)
+                    && (!actor.seated || counted.contains(&actor.id))
                     && !skipped.contains_key(&actor.id)
                     && npc.faction.hostile_to_player()
                     && (to_kill.contains(&actor.id) || npc.state != crate::npc::NpcState::Idle || sniping)

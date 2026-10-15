@@ -1421,6 +1421,39 @@ fn spread_dir(rng: &mut Rng, forward: Vec3, right: Vec3, up: Vec3, deg: f32) -> 
 }
 
 /// Finds the damageable entity owning a hit collider (itself or an ancestor).
+/// A seated body's reach about the line from its head down (the hips 0.8 m
+/// below), and how far inside a vehicle's hull a shot still finds one.
+const RIDER_RADIUS: f32 = 0.3;
+const RIDER_HEIGHT: f32 = 0.8;
+const RIDER_DEPTH: f32 = 2.5;
+
+/// A shot that hit a vehicle's body `hull` metres along the ray: the rider
+/// it goes on into instead (through a window, over an open side: the
+/// game's drivers are shot at the wheel), the nearest whose seated body
+/// (head to hips) it passes within a body's width of, not far inside the
+/// hull. The rider and how far along the ray.
+pub(crate) fn shot_rider(origin: Vec3, dir: Vec3, hull: f32, heads: impl Iterator<Item = (Entity, Vec3)>) -> Option<(Entity, f32)> {
+    heads
+        .filter_map(|(e, head)| {
+            let (t, off) = ray_to_segment(origin, dir, head - Vec3::Y * RIDER_HEIGHT, head);
+            (off < RIDER_RADIUS && t > hull - 0.3 && t < hull + RIDER_DEPTH).then_some((e, t))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+}
+
+/// The ray's nearest approach to a segment: how far along the (unit) ray,
+/// and how far off.
+fn ray_to_segment(origin: Vec3, dir: Vec3, a: Vec3, b: Vec3) -> (f32, f32) {
+    let v = b - a;
+    let w = origin - a;
+    let (bv, c, d, e) = (dir.dot(v), v.dot(v), dir.dot(w), v.dot(w));
+    let denom = c - bv * bv;
+    let s = if denom.abs() < 1e-6 { 0.0 } else { ((e - bv * d) / denom).clamp(0.0, 1.0) };
+    let on_segment = a + v * s;
+    let t = (on_segment - origin).dot(dir).max(0.0);
+    (t, (origin + dir * t).distance(on_segment))
+}
+
 pub fn damage_target(e: Entity, health: &Query<&Health>, parents: &Query<&ChildOf>) -> Option<Entity> {
     let mut cur = e;
     for _ in 0..6 {
@@ -1458,12 +1491,17 @@ fn fire(
     parents: Query<&ChildOf>,
     writers: (MessageWriter<DamageEvent>, MessageWriter<HitMarker>, MessageWriter<crate::npc::Noise>),
     sounds: (MessageWriter<crate::sound::PlaySfx>, MessageWriter<crate::sound::LoopSfx>, crate::surfaces::SurfaceProbe),
-    (mut shot_fx, boosts, mount, driving, vehicles): (
+    (mut shot_fx, boosts, mount, driving, vehicles, riders): (
         crate::particles::ShotFx,
         Option<Res<crate::syringes::Boosts>>,
         Res<crate::traversal::Mount>,
         Res<crate::vehicles::Driving>,
         Query<&crate::vehicles::Vehicle>,
+        // Who rides in vehicles: patrol crews, the story's seated characters.
+        Query<
+            (Entity, &GlobalTransform, Option<&crate::npc::Riding>, Option<&crate::story_actors::StoryActor>),
+            Or<(With<crate::npc::Riding>, With<crate::story_actors::StoryActor>)>,
+        >,
     ),
 ) {
     use crate::controls::Action;
@@ -1712,8 +1750,23 @@ fn fire(
             }
             continue;
         };
-        let point = origin + dir * h.distance;
-        let target = damage_target(h.entity, &healths, &parents);
+        let mut point = origin + dir * h.distance;
+        let mut target = damage_target(h.entity, &healths, &parents);
+        // A vehicle hit: one of its riders, if the shot goes on into him
+        // (not a hidden one: a patrol's driver, drawn with no seat pose).
+        if let Some((ve, v)) = target.and_then(|t| vehicles.get(t).ok().map(|v| (t, v))) {
+            let seated = riders
+                .iter()
+                .filter(|(_, _, ride, actor)| {
+                    ride.is_some_and(|r| r.vehicle == ve && r.visible) || actor.is_some_and(|a| a.seated && !a.dead && v.carries(a.id))
+                })
+                .map(|(e, gt, _, _)| (e, heads.get(e).map_or(gt.translation() + Vec3::Y * RIDER_HEIGHT, |h| h.0)));
+            if let Some((rider, t)) = shot_rider(origin, dir, h.distance, seated) {
+                debug!("shot into {ve:?} went on into its rider {rider:?}, {:.1} m inside", t - h.distance);
+                target = Some(rider);
+                point = origin + dir * t;
+            }
+        }
         // The body is a standing capsule: a hit well above the head of a
         // crouched (or falling) enemy goes over it.
         let over = target.and_then(|t| heads.get(t).ok()).is_some_and(|head| point.y > head.0.y + 0.3);
@@ -2473,6 +2526,27 @@ pub(crate) fn test_inventory() -> Inventory {
 #[cfg(test)]
 mod stats_tests {
     use super::*;
+
+    /// A shot into a vehicle goes on into a rider it passes close to, just
+    /// inside the hull; not one it passes wide of, nor one far behind.
+    #[test]
+    fn a_shot_into_a_vehicle_finds_the_rider_in_its_way() {
+        let mut world = World::new();
+        let (driver, passenger) = (world.spawn_empty().id(), world.spawn_empty().id());
+        // Shooting along +X at chest height through a door 1 m before the
+        // driver, the passenger a metre further on.
+        let heads = [(driver, Vec3::new(1.0, 1.5, 0.0)), (passenger, Vec3::new(2.0, 1.5, 0.0))];
+        let origin = Vec3::new(-20.0, 1.2, 0.0);
+        let hit = shot_rider(origin, Vec3::X, 20.0, heads.into_iter());
+        assert_eq!(hit.map(|h| h.0), Some(driver));
+        assert!((hit.unwrap().1 - 21.0).abs() < 1e-3);
+        // Wide of them both.
+        assert_eq!(shot_rider(Vec3::new(-20.0, 1.2, 1.0), Vec3::X, 20.0, heads.into_iter()), None);
+        // Over their heads.
+        assert_eq!(shot_rider(Vec3::new(-20.0, 2.2, 0.0), Vec3::X, 20.0, heads.into_iter()), None);
+        // The hull hit far short of them (the vehicle's other end).
+        assert_eq!(shot_rider(origin, Vec3::X, 15.0, heads.into_iter()), None);
+    }
 
     #[test]
     fn the_games_handling_goes_on_the_weapons_its_model_names() {

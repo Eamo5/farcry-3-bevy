@@ -912,6 +912,22 @@ impl Vehicle {
         self.seats.iter().any(|s| s.pawn == Some(pawn))
     }
 
+    /// A pawn killed in his seat leaves it free; a driver's leaves the car
+    /// to roll to a stop (no one drives it on along its way).
+    pub(crate) fn release(&mut self, pawn: u64) {
+        for s in &mut self.seats {
+            if s.pawn == Some(pawn) {
+                s.pawn = None;
+                if s.kind == 1 {
+                    self.parked = true;
+                    self.throttle = 0.0;
+                    self.steer = 0.0;
+                }
+            }
+        }
+        self.occupied = self.seats.iter().any(|s| s.pawn.is_some());
+    }
+
     /// Never play a driver pose for a passenger, gunner or unsupported seat.
     pub(crate) fn first_person_clip(&self, seat: usize) -> Option<&'static str> {
         let s = self.seats.get(seat)?;
@@ -1383,11 +1399,24 @@ fn autopilot_exit(
 const FIGHT_FROM_VEHICLE: f32 = 150.0;
 
 fn seat_story_actors(
-    vehicles: Query<(&Transform, &Vehicle), Without<crate::story_actors::StoryActor>>,
+    mut vehicles: Query<(&Transform, &mut Vehicle), Without<crate::story_actors::StoryActor>>,
     mut actors: Query<(Entity, &mut Transform, &mut crate::story_actors::StoryActor), Without<Vehicle>>,
     mut commands: Commands,
 ) {
     for (e, mut at, mut actor) in &mut actors {
+        // Killed in his seat (shot at the wheel): the seat is his no
+        // longer, and the body stays where it fell.
+        if actor.dead && actor.seated {
+            for (_, mut v) in &mut vehicles {
+                if v.carries(actor.id) {
+                    info!("vehicle: pawn {} killed in his seat in {}", actor.id, v.spawn_id);
+                    v.release(actor.id);
+                }
+            }
+            actor.seated = false;
+            commands.entity(e).remove::<ColliderDisabled>();
+            continue;
+        }
         let occupied = vehicles.iter().find_map(|(vt, v)| v.seats.iter().find(|s| s.pawn == Some(actor.id)).map(|s| (*vt, s.pose)));
         if let Some((vt, seat)) = occupied {
             if !actor.in_scene { *at = vt * seat; }

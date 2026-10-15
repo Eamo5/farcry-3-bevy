@@ -4110,3 +4110,15 @@ start, its crew seated, then driven along its way), and being seen fails it.
   (`PHOTO_PATIENCE`) is now left for the next one. With
   `FC3_CAMERA_DEBUG`, the camera logs each awaited thing's distance,
   angle off the view and what a ray to it hits first.
+
+* **Shot at the wheel.** The boss flees in his 4x4 if he isn't stopped,
+  and the block fails when it gets to the end of its way. A seated pawn's
+  capsule is switched off (it would push the vehicle about), so nothing
+  could shoot a driver or a passenger, and the autopilot let a seated foe
+  be. A shot that hits a vehicle now goes on into a rider it passes
+  within a body's width of, just inside the hull (`shot_rider`: the
+  story's seated characters and a patrol's shown crew), as the game's
+  drivers are shot through a window. One killed in his seat gives it up
+  (`Vehicle::release`), and a driverless car rolls to a stop instead of
+  driving on along its way. The autopilot goes after a seated foe a
+  block counts.
