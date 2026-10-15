@@ -3707,7 +3707,8 @@ never let it go quiet:
   BAM_030's ruins play and stop their particles on their own entities. Any
   command the very same as one within the last 30 s (as it reads: a
   native's name and arguments, an entity and its event) isn't the story
-  stirring. (The lights themselves don't move yet: lamps
+  stirring. A sound counts as the same whatever its instance number (its
+  first argument): BAM_040's collapsing temple rumbles every second. (The lights themselves don't move yet: lamps
   carry no placed id for a scene to bind.)
 
 The stall dump (every minute with `FC3_STORY_WAIT_DEBUG`) says how long the

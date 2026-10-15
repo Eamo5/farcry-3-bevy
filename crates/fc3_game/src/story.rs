@@ -482,7 +482,13 @@ impl StoryHost {
     /// scene started again (under a new meta id) or stopped.
     fn replayed(&mut self, c: &Command, now: f32) -> bool {
         const WITHIN: f32 = 30.0;
-        let same = self.recent.insert(format!("{c:?}"), now).is_some_and(|at| now - at < WITHIN);
+        // (A sound is the same one again whatever its instance number, the
+        // first argument: BAM_040's collapsing temple rumbles every second.)
+        let key = match c {
+            Command::Native { name, args } if name == "PlaySound" => format!("{name}{:?}", args.get(1..)),
+            _ => format!("{c:?}"),
+        };
+        let same = self.recent.insert(key, now).is_some_and(|at| now - at < WITHIN);
         if self.recent.len() > 1024 {
             self.recent.retain(|_, at| now - *at < WITHIN);
         }
