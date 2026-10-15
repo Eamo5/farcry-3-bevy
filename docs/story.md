@@ -4152,3 +4152,10 @@ its four key areas, its alarms to be switched off first.
   places it, across the depot from where it was driven, so it was never
   near enough to get out for. One with no trigger shape of its own (a
   vehicle) is now listed where it is, and B30 completes.
+
+* **Moving over.** Sam comes back to drive (`VehicleUseTakeSeat` on the
+  wheel's seat) while the player mans the turret; the autopilot, in at
+  the wheel, kept the seat, Sam's request was dropped and B40 never went
+  on. A script's character given the seat the player sits in now has the
+  player move over to a free seat, not the wheel (`move_over`), and B40
+  completes.

@@ -1077,6 +1077,16 @@ fn requested_seat(v: &Vehicle, request: &SeatRequest) -> Option<usize> {
     by_slot.or_else(by_kind).or_else(|| request.alternate.then(|| v.seats.iter().position(|s| s.pawn.is_none())).flatten())
 }
 
+/// Where the player moves over to for a script's character to have the seat
+/// he sits in: his seat, and a free one not at the wheel.
+fn move_over(v: &Vehicle, request: &SeatRequest) -> Option<(usize, usize)> {
+    let mine = v.seats.iter().position(|s| {
+        s.pawn == Some(fc3_story::PLAYER) && (request.index < 0 || s.slot == request.index) && (request.kinds.is_empty() || request.kinds.contains(&s.kind))
+    })?;
+    let other = v.seats.iter().position(|s| s.pawn.is_none() && s.kind != 1)?;
+    Some((mine, other))
+}
+
 /// Script requests wait for both physical entities. NPC driver requests may
 /// use a player-locked driver seat, but never overwrite another occupant.
 /// How long a seat request waits for its vehicle or character to be in
@@ -1133,6 +1143,24 @@ fn story_seats(
             } else if let Ok((_, mut at_pose, mut a)) = actors.get_mut(pawn) { a.seated = false; at_pose.translation = at; }
             commands.entity(pawn).remove::<ColliderDisabled>();
         } else {
+            // The seat a script gives a character is the player's: he moves
+            // over to a free one, not at the wheel (SAM_015's Sam comes back
+            // to drive, the player to man the turret).
+            if request.pawn != fc3_story::PLAYER && requested_seat(&v, request).is_none() {
+                if let Some((mine, other)) = move_over(&v, request) {
+                    info!("vehicle: the player moves over from seat {mine} to {other} of {} for pawn {}", v.spawn_id, request.pawn);
+                    if v.seats[mine].kind == 1 {
+                        v.parked = true;
+                        v.throttle = 0.0;
+                        v.steer = 0.0;
+                    }
+                    v.seats[mine].pawn = None;
+                    v.seats[other].pawn = Some(fc3_story::PLAYER);
+                    if driving.vehicle == Some(ve) {
+                        driving.seat = other;
+                    }
+                }
+            }
             let Some(seat) = requested_seat(&v, request) else { return false };
             let rules = host.story.vehicle_rules(v.spawn_id);
             if request.pawn == fc3_story::PLAYER && !request.forced && (rules.unusable || rules.locked.contains(&(v.seats[seat].kind, v.seats[seat].index))) { return false; }
@@ -1982,6 +2010,23 @@ mod story_vehicle_tests {
             sliding: None,
             dragging: false,
         }
+    }
+
+    /// A character a script seats where the player sits has the player move
+    /// over to a free seat (not the wheel); not when none is free, nor for a
+    /// seat someone else has.
+    #[test]
+    fn the_player_moves_over_for_a_character_given_his_seat() {
+        let mut v = vehicle();
+        v.seats[0].pawn = Some(fc3_story::PLAYER);
+        let request = SeatRequest { vehicle: 100, pawn: 200, kinds: Vec::new(), index: 0, alternate: false, exit: false, forced: false };
+        assert_eq!(requested_seat(&v, &request), None);
+        assert_eq!(move_over(&v, &request), Some((0, 1)));
+        v.seats[1].pawn = Some(999);
+        assert_eq!(move_over(&v, &request), None);
+        v.seats[1].pawn = None;
+        v.seats[0].pawn = Some(999);
+        assert_eq!(move_over(&v, &request), None);
     }
 
     #[test]
