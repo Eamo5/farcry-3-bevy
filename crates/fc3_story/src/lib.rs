@@ -938,15 +938,19 @@ impl Story {
         self.watched_triggers_where(graph, |_, _| true)
     }
 
-    /// The main missions running that hold the player (exclusive: the
-    /// story's own, not a side quest's), by their names' stem (`CIT_020`).
-    pub fn exclusive_running(&self) -> Vec<String> {
+    /// The missions running that hold the player, by their names' stem
+    /// (`CIT_020`): main graphs the player has taken (acknowledged), not a
+    /// giver's brief (which runs while its mission waits to be taken), nor
+    /// one running unacknowledged (the DLC's, from the start). (Not the
+    /// exclusive ones: those are the quests, HUR_020; the story's own,
+    /// CIT_020, are not.)
+    pub fn missions_running(&self) -> Vec<String> {
         let c = self.core.borrow();
         let mut out: Vec<String> = c
             .missions
             .by_id
             .values()
-            .filter(|m| m.exclusive && m.block.is_none() && m.state == missions::State::Running)
+            .filter(|m| !m.giver && m.acknowledged && m.block.is_none() && m.state == missions::State::Running)
             .map(|m| m.name.trim_end_matches("_MAIN").to_string())
             .collect();
         out.sort();
@@ -957,6 +961,14 @@ impl Story {
     /// scripts wait on, as `watched_triggers_in_graph` lists them.
     pub fn watched_triggers_of(&self, graph: Option<&str>, missions: &[String]) -> Vec<(u64, String, [f32; 3], bool)> {
         self.watched_triggers_where(graph, |c, target| mission_of(c, target).is_some_and(|(name, _)| missions.iter().any(|m| name.starts_with(m.as_str()))))
+    }
+
+    /// The triggers scripts wait on that belong to no mission (a cave's
+    /// exits, a base script's), as `watched_triggers_in_graph` lists them:
+    /// not another mission's start (a quest giver's brief runs too) while
+    /// one of the story's own holds the player.
+    pub fn watched_triggers_unowned(&self, graph: Option<&str>) -> Vec<(u64, String, [f32; 3], bool)> {
+        self.watched_triggers_where(graph, |c, target| mission_of(c, target).is_none())
     }
 
     fn watched_triggers_where(&self, graph: Option<&str>, keep: impl Fn(&Core, &Table) -> bool) -> Vec<(u64, String, [f32; 3], bool)> {

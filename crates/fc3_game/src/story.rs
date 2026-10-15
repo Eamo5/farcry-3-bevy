@@ -1432,16 +1432,19 @@ fn run_story(
         && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
         && host.quiet > autopilot_delay && host.story.watched_loot_filters().is_empty() {
         let graph = std::env::var("FC3_STORY_AUTOPILOT_GRAPH").ok();
-        let watched = host.story.watched_triggers_in_graph(graph.as_deref());
-        // The story's own mission running goes first (CIT_020 holds the
-        // player on its water tower while side quests' starts wait): its
-        // triggers before the others'.
-        let focus = host.story.exclusive_running();
+        // The missions running go first (CIT_020 holds the player on its
+        // water tower while quests' starts wait): their triggers before the
+        // others', and no other mission is started meanwhile (HUR_040
+        // started across the island failed for CIT_020's triggers drawing
+        // the player out of its zone).
+        let focus = host.story.missions_running();
+        let watched =
+            if focus.is_empty() { host.story.watched_triggers_in_graph(graph.as_deref()) } else { host.story.watched_triggers_unowned(graph.as_deref()) };
         let focused = if focus.is_empty() { Vec::new() } else { host.story.watched_triggers_of(graph.as_deref(), &focus) };
         let awaiting_rock = host.story.watched_signals().iter().any(|s| s == "throw_rock");
         // Stuck: triggers stepped into before they were armed go again.
         if host.quiet > 25.0 {
-            host.used.retain(|u| !watched.iter().any(|w| w.0 == u.0 && w.1 == u.1));
+            host.used.retain(|u| !focused.iter().chain(watched.iter()).any(|w| w.0 == u.0 && w.1 == u.1));
         }
         let tails: Vec<u64> = host.story.tail_targets().into_iter().map(|t| t.0).collect();
         // (Not while a companion leads: going on ahead leaves it behind.)

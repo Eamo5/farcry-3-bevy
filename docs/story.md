@@ -3815,6 +3815,18 @@ plays the player, and only goes for a box within `ALARM_REACH` (150 m).
 * **The story's own mission first.** With two of the story's missions
   running (an old checkpoint's WIL_010, picked up late, beside CIT_020),
   the autopilot went back and forth between them. Its trigger step now
-  takes the running exclusive missions' triggers first
-  (`Story::exclusive_running`, `watched_triggers_of`), the others when
-  those have none.
+  takes the running missions' triggers first (`Story::missions_running`,
+  `watched_triggers_of`), the others when those have none.
+* **No other mission meanwhile.** It also started other missions (HUR_020,
+  HUR_040, by stepping into their starts) while one of the story's ran, and
+  HUR_040 then failed for the player being drawn back to CIT_020's
+  triggers out of its zone. HUR_040's start is its quest giver's brief,
+  a mission running too, so leaving alone only missions that aren't
+  running was not enough: while a mission runs (a main graph the player
+  has taken, not a giver's brief nor the DLC's, running untaken from the
+  start), the trigger step now takes its triggers and those of no
+  mission (a cave's exits), and no other mission's
+  (`watched_triggers_unowned`). The missions running are not told by their
+  exclusive flag: the quests are registered exclusive (HUR_020, by
+  `Lib_Mission.QuestGiver`), the story's own not (CIT_020, by
+  `Lib_Mission.MissionGiver`).
