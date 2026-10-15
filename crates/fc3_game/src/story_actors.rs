@@ -77,6 +77,15 @@ pub struct Reinforcement {
     /// The vehicle bringing them (its id and archetype), if the point has one.
     pub vehicle: Option<(u64, u64)>,
     pub mercs: Vec<(u64, u64)>,
+    /// Called in relaxed (`SpawnInRelax`): at their posts, not on their way.
+    pub relaxed: bool,
+}
+
+/// Where a relaxed point's mercs stand: at the point itself, on whatever it
+/// stands on (JAS_190's boat crew on the cenote's dock, the sea under it),
+/// when no way in brings them and the point isn't out in the sea.
+fn at_post(relaxed: bool, way_in: bool, point: Vec3) -> Option<Vec3> {
+    (relaxed && !way_in && point.y >= crate::sky::SEA_LEVEL - 0.25).then_some(point)
 }
 
 /// Called-in characters, placed and waiting to be spawned like the story's
@@ -164,6 +173,21 @@ fn land_reinforcements(
         }
         if order.vehicle.is_some() {
             debug!("story: reinforcement vehicle of {} not ridden (no model or no way in near the player); the mercs come ashore", order.point);
+        }
+        if let Some(post) = at_post(order.relaxed, !points.is_empty(), to_bevy(point.pos)) {
+            for (i, (id, ark)) in order.mercs.iter().enumerate() {
+                let Some(archetype) = data.archetypes.get(ark) else {
+                    warn!("story: reinforcement archetype {ark:016x} isn't in the cache (reconvert)");
+                    continue;
+                };
+                let mut e = archetype.clone();
+                e.id = *id;
+                e.pos = crate::data::to_dunia(post + Vec3::X * i as f32 * 1.2);
+                e.angles = point.angles;
+                debug!("story: reinforcement {} ({id}) at its post {post:.1}", e.name);
+                arrivals.0.push((e, None));
+            }
+            continue;
         }
         let start = points.last().copied().unwrap_or_else(|| to_bevy(point.pos));
         let Some(ashore) = landing(start, field, |p| heights.height_at(p)) else {
@@ -1156,5 +1180,16 @@ mod tests {
         // At sea with nowhere to head, or the ground not loaded.
         assert_eq!(landing(Vec3::ZERO, None, beach), None);
         assert_eq!(landing(Vec3::ZERO, Some(Vec3::new(50.0, 0.0, 0.0)), |_| None), None);
+    }
+
+    /// Relaxed mercs stand at their point, a dock's over the sea too; not
+    /// those a way in brings, nor any called in on alert, nor at sea.
+    #[test]
+    fn relaxed_reinforcements_stand_at_their_posts() {
+        let dock = Vec3::new(1.0, crate::sky::SEA_LEVEL + 0.085, 2.0);
+        assert_eq!(at_post(true, false, dock), Some(dock));
+        assert_eq!(at_post(true, true, dock), None);
+        assert_eq!(at_post(false, false, dock), None);
+        assert_eq!(at_post(true, false, dock - Vec3::Y * 3.0), None);
     }
 }

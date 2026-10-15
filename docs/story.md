@@ -3943,3 +3943,11 @@ way out.
   kept the takedowns already taken away, and a reload had none to take.
   The progress is now the one at the story's save
   (`StoryHost::checkpoint_progress`).
+
+* **Mercs at their posts.** B20 calls the cenote's crew in relaxed
+  (`SpawnInRelax`) at their reinforcement points, two of them on the dock
+  over the water. Every order was landed on the shore nearest the
+  battlefield, as boats' mercs come ashore, and with only water under the
+  dock it waited for ever: nobody came, and the boat they were to take
+  never left. An order called in relaxed, with no way in to bring it, now
+  puts its mercs at the point itself, whatever is under it (`at_post`).

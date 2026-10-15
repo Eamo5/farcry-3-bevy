@@ -1942,6 +1942,7 @@ fn run_story(
                             battlefield: a(2).parse().ok().filter(|&b| b != u64::MAX),
                             vehicle: args.get(3).and_then(pair),
                             mercs: args.iter().skip(4).filter_map(pair).collect(),
+                            relaxed: a(1) == "0",
                         });
                     }
                     "LogEventInAIDiary" => host.ai_events.extend(a(0).parse::<u64>().ok()),
