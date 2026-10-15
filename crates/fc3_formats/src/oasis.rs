@@ -81,6 +81,13 @@ impl Strings {
         self.by_id.get(&id).map(String::as_str)
     }
 
+    /// The ids of the strings that read `text` (in any case), lowest first.
+    pub fn find(&self, text: &str) -> Vec<u32> {
+        let mut ids: Vec<u32> = self.by_id.iter().filter(|(_, t)| t.eq_ignore_ascii_case(text)).map(|(id, _)| *id).collect();
+        ids.sort_unstable();
+        ids
+    }
+
     /// A string's id by section and symbolic name.
     pub fn id_of(&self, section: &str, name: &str) -> Option<u32> {
         self.by_name.get(&(crc32(section.as_bytes()), crc32(name.as_bytes()))).copied()

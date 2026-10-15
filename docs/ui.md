@@ -474,6 +474,27 @@ collectibles 1, tutorials 4, the manual 6, by `iObjectID`), `SubCategory
 statistics (`StatsCategory`) go empty for now, and the manual (`Emanual`,
 its own movie) isn't answered.
 
+**Options** (`M_Options_PC.feu`, quick launch 12): on `OnOptionLoaded` the
+game sends `OptionSections`, at the places the PC page's code
+(`OptionsPage_PC`) takes them by: video 0, calibration 1, video quality 2,
+controls 3, gameplay 4, audio 5 (the shared page's own order, gameplay
+first, put video's third row where the PC page draws its controller
+widget). `OnRequestOptions <section>` gets `OptionValues`, a row each:
+`sName` and `sDescription` (the game's strings: `Host::text`; `fc3tool
+oasis find <text>` finds a string's id), `iWidgetType` (0 a choice, 1 a
+slider 0-100, 7 a row the page opens itself), `sLocCurrentValues` (a list
+of `sLocCurrentValue` labels: ON/OFF, LOW..ULTRA, the difficulties...; the
+row's binder wraps it in a list of its own), `iNbValues`,
+`iCurrentValue`, `bEnable`. Some places are the page's: brightness first
+in calibration (its own popup; we have no brightness), the control type
+third and customizing the controls fourth among controls. `SetOptions
+<values> <section>` brings the section's values back, comma-separated in
+row order, into `settings::Settings` (sliders over the native menu's
+ranges: sensitivity 0.1-5, field of view 55-110, volumes 0-1), which saves
+as it changes. Display resolution, the calibration popup's gamma and
+contrast, the key bindings page and the vegetation, terrain and water
+qualities aren't ours to set yet.
+
 While the pause menu is up the HUD's level is hidden (`Host::level_visible`;
 the shim's `levelVisible`), as the game's was: subtitles showed through.
 

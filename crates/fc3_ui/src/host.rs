@@ -235,6 +235,11 @@ impl Host {
         self.call("unload", vec![ExternalValue::Number(level as f64)]);
     }
 
+    /// One of the game's strings by its id ("" if there is none).
+    pub fn text(&self, id: u32) -> String {
+        self.bridge.strings.get(id).unwrap_or_default().to_string()
+    }
+
     /// Shows or hides the movie at a level.
     pub fn level_visible(&self, level: u32, on: bool) {
         self.call("levelVisible", vec![ExternalValue::Number(level as f64), ExternalValue::Bool(on)]);

@@ -219,11 +219,12 @@ fn drive_pause(
     mut next: ResMut<NextState<crate::menu::GameState>>,
     mut original: ResMut<crate::menu::OriginalPause>,
     mut calls: ResMut<UiCalls>,
-    (ui, mut progress, crafting, time): (
+    (ui, mut progress, crafting, time, mut settings): (
         Res<crate::story::StoryUi>,
         ResMut<crate::progression::Progress>,
         Option<Res<crate::crafting::CraftCatalog>>,
         Res<Time>,
+        ResMut<crate::settings::Settings>,
     ),
     (loot, perks, skills, handbook): (
         Option<Res<crate::progression::LootCatalog>>,
@@ -313,9 +314,16 @@ fn drive_pause(
             "Quit" | "QuitToDesktop" => {
                 exit.write(AppExit::Success);
             }
-            // Skills (3), crafting (8), the handbook (10) and the rucksack
-            // (13) are the original's, and back (-1) is the pause page.
-            "RequestPageChange" if matches!(arg(1), "3" | "8" | "10" | "13" | "-1") => open_page(host, arg(1)),
+            // Skills (3), crafting (8), the handbook (10), the options (12)
+            // and the rucksack (13) are the original's, and back (-1) is the
+            // pause page.
+            "RequestPageChange" if matches!(arg(1), "3" | "8" | "10" | "12" | "13" | "-1") => open_page(host, arg(1)),
+            "OnOptionLoaded" => send_option_sections(host),
+            "OnRequestOptions" => send_options(host, &settings, arg(1).parse().unwrap_or(0)),
+            "SetOptions" => {
+                let values: Vec<i32> = arg(1).split(',').map(|v| v.trim().parse().unwrap_or(0)).collect();
+                set_options(&mut settings, arg(2).parse().unwrap_or(u32::MAX), &values);
+            }
             "OnEncyclopediaRequest" => {
                 if let Some(book) = handbook.as_deref().and_then(|b| b.0.as_ref()) {
                     send_handbook(host, book, &progress, arg(1).parse().unwrap_or(0), arg(2));
@@ -690,6 +698,162 @@ fn send_handbook(host: &fc3_ui::Host, book: &fc3_formats::progression::Handbook,
         _ => return,
     };
     host.set_data(list, items);
+}
+
+/// The options page's sections (`OptionSections`), at the places the PC
+/// page's code takes them by (`OptionsPage_PC`): video, calibration, video
+/// quality, controls, gameplay, audio (their names are the game's strings).
+const OPTION_SECTIONS: [u32; 6] = [150004, 172617, 172551, 150002, 150001, 150003];
+
+const OPTIONS_VIDEO: u32 = 0;
+const OPTIONS_CALIBRATION: u32 = 1;
+const OPTIONS_QUALITY: u32 = 2;
+const OPTIONS_CONTROLS: u32 = 3;
+const OPTIONS_GAMEPLAY: u32 = 4;
+const OPTIONS_AUDIO: u32 = 5;
+
+/// ON and OFF, and the quality levels LOW, MEDIUM, HIGH and ULTRA, as the
+/// game's strings.
+const OPTION_ON_OFF: [u32; 2] = [150702, 150703];
+const OPTION_QUALITY: [u32; 4] = [167389, 167390, 167391, 167393];
+
+/// A row of the options page: its name and description (the game's
+/// strings), how it is set (`iWidgetType`: 0 a choice among labels, 1 a
+/// slider 0-100, 7 nothing: the page opens something of its own), and its
+/// value (a label's place, or the slider's).
+struct OptionRow {
+    name: u32,
+    desc: u32,
+    widget: u32,
+    labels: Vec<u32>,
+    current: i32,
+}
+
+/// A section's rows from the settings. Some places are the page's own:
+/// brightness first in calibration (its own popup), the control type third
+/// and customizing the controls fourth among controls.
+fn option_rows(section: u32, s: &crate::settings::Settings) -> Vec<OptionRow> {
+    use crate::settings::{Difficulty, Quality};
+    let choice = |name, desc, labels: &[u32], current: usize| OptionRow { name, desc, widget: 0, labels: labels.to_vec(), current: current as i32 };
+    let on_off = |name, desc, on: bool| choice(name, desc, &OPTION_ON_OFF, if on { 0 } else { 1 });
+    let bar = |name, desc, v: f32, lo: f32, hi: f32| OptionRow {
+        name,
+        desc,
+        widget: 1,
+        labels: Vec::new(),
+        current: ((v - lo) / (hi - lo) * 100.0).round().clamp(0.0, 100.0) as i32,
+    };
+    let quality = |name, desc, q: Quality| choice(name, desc, &OPTION_QUALITY, Quality::ALL.iter().position(|x| *x == q).unwrap_or(2));
+    match section {
+        OPTIONS_VIDEO => vec![
+            // Window mode: fullscreen, windowed.
+            choice(172054, 172055, &[167839, 167837], if s.fullscreen { 0 } else { 1 }),
+            on_off(150291, 150292, s.vsync),
+            bar(172598, 150270, s.fov, 55.0, 110.0),
+        ],
+        // (Brightness: the page's own popup; not one of ours.)
+        OPTIONS_CALIBRATION => vec![OptionRow { name: 91542, desc: 0, widget: 1, labels: Vec::new(), current: 50 }],
+        OPTIONS_QUALITY => vec![quality(150397, 150398, s.shadows), quality(150393, 150394, s.effects), quality(150391, 150392, s.view_distance)],
+        OPTIONS_CONTROLS => vec![
+            on_off(91540, 0, s.invert_y),
+            bar(150281, 150282, s.sensitivity, 0.1, 5.0),
+            // Control type: keyboard and mouse, gamepad.
+            choice(150276, 150277, &[167702, 167703], 0),
+            OptionRow { name: 150279, desc: 150280, widget: 7, labels: Vec::new(), current: 0 },
+            bar(91554, 0, s.gamepad_sensitivity, 0.1, 5.0),
+        ],
+        OPTIONS_GAMEPLAY => vec![
+            // Difficulty: casual, adventurer, warrior, infamous.
+            choice(160731, 0, &[160421, 150451, 150453, 31459], Difficulty::ALL.iter().position(|d| *d == s.difficulty).unwrap_or(1)),
+            on_off(91553, 0, s.subtitles),
+            on_off(91557, 0, s.aim_assist),
+            on_off(91556, 0, s.vibration),
+        ],
+        OPTIONS_AUDIO => vec![bar(152306, 152307, s.master_volume, 0.0, 1.0), on_off(160662, 160663, s.music_volume > 0.0)],
+        _ => Vec::new(),
+    }
+}
+
+fn send_option_sections(host: &fc3_ui::Host) {
+    use fc3_ui::ExternalValue as V;
+    let items = OPTION_SECTIONS
+        .iter()
+        .enumerate()
+        .map(|(i, &name)| [("iIndex", V::Number(i as f64)), ("sName", V::String(host.text(name)))].into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+        .collect();
+    host.set_data("OptionSections", items);
+}
+
+/// A section's rows (`OptionValues`): each its name, description, widget,
+/// labels (`sLocCurrentValues`, a list of `sLocCurrentValue`s: the row's
+/// binder wraps it in a list of its own), the number of them (100 for a
+/// slider) and its value.
+fn send_options(host: &fc3_ui::Host, settings: &crate::settings::Settings, section: u32) {
+    use fc3_ui::ExternalValue as V;
+    let items = option_rows(section, settings)
+        .into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let labels: Vec<V> =
+                row.labels.iter().map(|&l| V::Object([("sLocCurrentValue".to_string(), V::String(host.text(l)))].into_iter().collect())).collect();
+            let count = if row.widget == 1 { 100 } else { row.labels.len() };
+            [
+                ("iIndex", V::Number(i as f64)),
+                ("sName", V::String(host.text(row.name))),
+                ("sDescription", V::String(if row.desc == 0 { String::new() } else { host.text(row.desc) })),
+                ("iWidgetType", V::Number(row.widget as f64)),
+                ("iNbValues", V::Number(count as f64)),
+                ("iCurrentValue", V::Number(row.current as f64)),
+                ("sLocCurrentValues", V::List(labels)),
+                ("bEnable", V::Bool(true)),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+        })
+        .collect();
+    host.set_data("OptionValues", items);
+}
+
+/// The values the options page sends for a section (`SetOptions`, its rows'
+/// values in order) into the settings (saved as they change).
+fn set_options(s: &mut crate::settings::Settings, section: u32, values: &[i32]) {
+    use crate::settings::{Difficulty, Quality};
+    let v = |i: usize| values.get(i).copied();
+    let on = |i: usize, was: bool| v(i).map_or(was, |x| x == 0);
+    let bar = |i: usize, was: f32, lo: f32, hi: f32| v(i).map_or(was, |x| lo + (hi - lo) * x.clamp(0, 100) as f32 / 100.0);
+    let quality = |i: usize, was: Quality| v(i).and_then(|x| Quality::ALL.get(x as usize).copied()).unwrap_or(was);
+    match section {
+        OPTIONS_VIDEO => {
+            s.fullscreen = on(0, s.fullscreen);
+            s.vsync = on(1, s.vsync);
+            s.fov = bar(2, s.fov, 55.0, 110.0);
+        }
+        OPTIONS_QUALITY => {
+            s.shadows = quality(0, s.shadows);
+            s.effects = quality(1, s.effects);
+            s.view_distance = quality(2, s.view_distance);
+        }
+        OPTIONS_CONTROLS => {
+            s.invert_y = on(0, s.invert_y);
+            s.sensitivity = bar(1, s.sensitivity, 0.1, 5.0);
+            s.gamepad_sensitivity = bar(4, s.gamepad_sensitivity, 0.1, 5.0);
+        }
+        OPTIONS_GAMEPLAY => {
+            s.difficulty = v(0).and_then(|x| Difficulty::ALL.get(x as usize).copied()).unwrap_or(s.difficulty);
+            s.subtitles = on(1, s.subtitles);
+            s.aim_assist = on(2, s.aim_assist);
+            s.vibration = on(3, s.vibration);
+        }
+        OPTIONS_AUDIO => {
+            s.master_volume = bar(0, s.master_volume, 0.0, 1.0);
+            let music = on(1, s.music_volume > 0.0);
+            if music != (s.music_volume > 0.0) {
+                s.music_volume = if music { crate::settings::Settings::default().music_volume } else { 0.0 };
+            }
+        }
+        _ => {}
+    }
 }
 
 /// What the crafting page is on: its tab, group and the recipe last
