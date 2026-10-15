@@ -4087,3 +4087,12 @@ start, its crew seated, then driven along its way), and being seen fails it.
   canyon: for a thing, it now takes the photo from where it stands if it
   can see it from there, else from the nearest spot with a floor under it
   that can.
+
+* **The role sheet.** The next block waits for the boss's role sheet to be
+  looted. The autopilot's carrier check compared a loot group's items (the
+  catalog's ids: the sheet is item 997) with the ids scripts know items by
+  (its name id, 104540), and so found no carrier anywhere; since the
+  check began to require a watched item, that also hid every other
+  mission's carriers. It now goes by an item's name id (`OwnLoot::gives`).
+  A body carrying an item a script waits to see looted no longer sinks
+  away with the others (after 75 s) before it is searched (`KeptBody`).

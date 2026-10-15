@@ -1103,14 +1103,27 @@ fn actor_health(
 }
 
 /// A story character's body a script still watches (a VIP's, to be
-/// photographed): it doesn't sink away with the other bodies.
+/// photographed), or one carrying an item a script waits to see looted
+/// until it is searched (JAS_200's boss and the role sheet): it doesn't
+/// sink away with the other bodies.
 #[derive(Component)]
 pub struct KeptBody;
 
-fn keep_watched_bodies(host: Option<NonSend<StoryHost>>, actors: Query<(Entity, &StoryActor, Has<KeptBody>)>, mut commands: Commands) {
+fn keep_watched_bodies(
+    host: Option<NonSend<StoryHost>>,
+    actors: Query<(Entity, &StoryActor, Has<KeptBody>, Option<&crate::pickups::OwnLoot>, Has<crate::pickups::Searched>)>,
+    crafting: Option<Res<crate::crafting::CraftCatalog>>,
+    mut commands: Commands,
+) {
     let Some(host) = host else { return };
-    for (e, a, kept) in &actors {
-        let keep = a.dead && host.story.watches_entity(a.id);
+    // (Asked of the scripts only when there is a body to ask about.)
+    let mut wanted: Option<Vec<u32>> = None;
+    for (e, a, kept, own, searched) in &actors {
+        let carries = |own: &crate::pickups::OwnLoot| {
+            let wanted = wanted.get_or_insert_with(|| host.story.watched_loot_filters());
+            crafting.as_ref().is_some_and(|c| own.gives(&c.groups, |id| c.item(id).map(|i| i.name_id), wanted))
+        };
+        let keep = a.dead && (host.story.watches_entity(a.id) || (!searched && own.is_some_and(carries)));
         if keep && !kept {
             commands.entity(e).insert(KeptBody);
         } else if !keep && kept {
@@ -1157,6 +1170,27 @@ fn actor_deaths(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A body is kept for an item scripts wait to see looted only when one
+    /// of its own loot groups can give it: the group names the catalog's
+    /// item, the scripts its name id.
+    #[test]
+    fn a_body_carrying_a_wanted_item_is_known_by_its_loot_groups() {
+        use fc3_formats::progression::LootGroup;
+        let groups =
+            vec![LootGroup { id: 1021, items: vec![(997, 100.0)], ..Default::default() }, LootGroup { id: 8, items: vec![(5, 50.0)], ..Default::default() }];
+        let name_of = |id: u32| match id {
+            997 => Some(104540),
+            5 => Some(20),
+            _ => None,
+        };
+        let own = crate::pickups::OwnLoot(vec![(1021, 100.0)]);
+        assert!(own.gives(&groups, name_of, &[104540]));
+        assert!(!own.gives(&groups, name_of, &[997]));
+        assert!(!own.gives(&groups, name_of, &[]));
+        assert!(!own.gives(&groups, name_of, &[20]));
+        assert!(!crate::pickups::OwnLoot(vec![(1021, 0.0)]).gives(&groups, name_of, &[104540]));
+    }
 
     /// An event point puts its army's soldiers within reach on to the
     /// player (combat), or sends them to the point (suspicious); others it

@@ -3059,6 +3059,27 @@ fn autopilot_loot(
 ) {
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() { return }
     let Some(mut host) = host else { return };
+    // (Once the story has stalled a while: what holds this step back, if
+    // anything.)
+    let report = host.quiet > 20.0 && host.quiet - time.delta_secs() <= 20.0;
+    if report {
+        if let Ok((_, _, p, h, _)) = players.single() {
+            info!(
+                "story autopilot: loot step: paused {}, boxes {}, scene view {}, scene plays the player {}, qte {}, hands busy {}, dead {}, spawning {}, driving {}, landing awaited {}, reload due {}",
+                time.is_paused(),
+                ui.boxes.len(),
+                cinema.view.is_some(),
+                cinema.plays_player(),
+                qtes.active(),
+                busy.busy(),
+                h.dead,
+                p.spawning,
+                p.driving && !p.armed_passenger,
+                landing_awaited(&host, p),
+                host.reload_at.is_some()
+            );
+        }
+    }
     // (Nor while a scene plays the player through without its own view: a
     // quest giver's brief walked out of left its pickup untaken.)
     if time.is_paused() || !ui.boxes.is_empty() || cinema.view.is_some() || cinema.plays_player() || qtes.active() || busy.busy() {
@@ -3150,15 +3171,8 @@ fn autopilot_loot(
     let looted_wanted = host.story.watched_loot_filters();
     let carries_quest = |own: &crate::pickups::OwnLoot| {
         crafting.as_ref().is_some_and(|c| {
-            own.0.iter().any(|&(group, chance)| {
-                chance > 0.0
-                    && c.groups.iter().any(|g| {
-                        g.id == group
-                            && g.items.iter().any(|&(id, _)| {
-                                looted_wanted.contains(&id) && c.item(id).is_some_and(|i| i.key.starts_with(fc3_formats::progression::QUEST_ITEMS))
-                            })
-                    })
-            })
+            let quest_name = |id| c.item(id).filter(|i| i.key.starts_with(fc3_formats::progression::QUEST_ITEMS)).map(|i| i.name_id);
+            own.gives(&c.groups, quest_name, &looted_wanted)
         })
     };
     let engaged = last.is_some_and(|l| l.1 == "take down" || l.1 == "search");
@@ -3173,6 +3187,10 @@ fn autopilot_loot(
             (quest_of(*own) || host.story.awaits_event(actor.id, "OnLooting")) && (!h.dead || body.is_some()) && !to_photograph.contains(&actor.id)
         })
         .min_by(|a, b| b.1.dead.cmp(&a.1.dead).then(near(a.0).total_cmp(&near(b.0))));
+    if report {
+        let carriers: Vec<(u64, bool, bool)> = npcs.iter().filter(|q| quest_of(q.3)).map(|q| (q.4.id, q.1.dead, q.2.is_some())).collect();
+        info!("story autopilot: items looked for {looted_wanted:?}, their carriers (id, dead, body) {carriers:?}, to go after {:?}", quest.map(|q| q.4.id));
+    }
     // Then the story's hostile characters out after the player, or in a
     // group a block counts down (the reinforcements and guards it waits on
     // to die), taken down the same way.

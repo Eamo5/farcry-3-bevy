@@ -79,6 +79,17 @@ impl OwnLoot {
             .collect();
         (!groups.is_empty()).then_some(OwnLoot(groups))
     }
+
+    /// Whether one of its groups can give one of the items `wanted`, by the
+    /// name id scripts know an item by (`name_of` gives a group item's; a
+    /// group names the catalog's own ids: JAS_200's role sheet is item 997,
+    /// named 104540).
+    pub fn gives(&self, groups: &[fc3_formats::progression::LootGroup], name_of: impl Fn(u32) -> Option<u32>, wanted: &[u32]) -> bool {
+        !wanted.is_empty()
+            && self.0.iter().any(|&(group, chance)| {
+                chance > 0.0 && groups.iter().any(|g| g.id == group && g.items.iter().any(|&(id, _)| name_of(id).is_some_and(|n| wanted.contains(&n))))
+            })
+    }
 }
 
 /// A body the player has searched (the story hears it: `OnLooting`).
