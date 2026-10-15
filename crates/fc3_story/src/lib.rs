@@ -953,7 +953,7 @@ impl Story {
                 }
                 continue;
             }
-            if graph.as_deref().is_some_and(|needle| !in_graph(&l.callback.target, needle)) {
+            if graph.as_deref().is_some_and(|needle| !in_graph(&l.callback.target, needle) || of_finished_mission(&c, &l.callback.target)) {
                 continue;
             }
             // One whose box counts only other characters (a companion's
@@ -990,7 +990,7 @@ impl Story {
         let mut out = Vec::new();
         for d in c.delays.values().filter(|d| d.running && d.callback.method == "CheckDistance") {
             let t = &d.callback.target;
-            if graph.as_deref().is_some_and(|needle| !in_graph(t, needle)) {
+            if graph.as_deref().is_some_and(|needle| !in_graph(t, needle) || of_finished_mission(&c, t)) {
                 continue;
             }
             let near = t.get::<mlua::Function>("Near").ok();
@@ -1500,6 +1500,29 @@ fn in_sectors(e: &data::Entry, sectors: Option<&HashSet<u32>>) -> bool {
     }
 }
 
+/// Whether a box belongs to a mission that has completed or failed (its
+/// graph's file names it: `BAM_055_MAIN.SHA_Fire_DangerZone.lua`): a main
+/// graph stays after its mission ends, and its sub-graphs' listeners with
+/// it, left over.
+fn of_finished_mission(c: &Core, target: &Table) -> bool {
+    let mut table = target.clone();
+    for _ in 0..16 {
+        if let Ok(path) = table.get::<Table>("_type").and_then(|ty| ty.get::<String>("_path")) {
+            let file = path.rsplit(['/', '\\']).next().unwrap_or(&path);
+            let name = file.split('.').next().unwrap_or(file).to_ascii_uppercase();
+            if let Some(m) = c.missions.by_id.values().find(|m| m.name == name) {
+                return matches!(m.state, missions::State::Completed | missions::State::Failed);
+            }
+        }
+        let Ok(parent) = table.get::<Table>("_graph") else { break };
+        if parent == table {
+            break;
+        }
+        table = parent;
+    }
+    false
+}
+
 /// Whether a box belongs to a graph whose script path contains `needle`
 /// (lower case; any of several split by `|`): the box's own, or one it is
 /// nested in.
@@ -1775,6 +1798,54 @@ mod tests {
         story.update(0.0, View { player: [5.0, 6.0, 7.0], ..View::default() });
         assert_eq!(story.watched_proximity_in_graph(None), vec![(PLAYER, 4.0, [5.0, 6.0, 7.0])]);
         assert!(story.watched_proximity_in_graph(Some("some_other_graph")).is_empty());
+    }
+
+    /// A completed mission's main graph stays, its sub-graphs' listeners with
+    /// it: the autopilot leaves those alone, and goes on with a running one's.
+    #[test]
+    fn listeners_of_a_finished_mission_are_left_to_it() {
+        let mut story = empty_story();
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            local function listen(path)
+                local graph = { _type = { _path = path } }
+                local box = { Near = function() end, Entities = "1", id2 = "1", nearZone = 4, _graph = graph }
+                local timer = CDominoDelayManager_GetInstance():CreateDelay(1, box, "CheckDistance")
+                CDominoDelayManager_GetInstance():SendCommand(timer, "start")
+            end
+            listen("Domino/user/fc3/FC3_MainMissions/OLD_010/OLD_010_MAIN.DangerZone.lua")
+        "#,
+            )
+            .exec()
+            .unwrap();
+        story.update(0.0, View { player: [5.0, 6.0, 7.0], ..View::default() });
+        let mission = |state| missions::Mission {
+            id: "1".into(),
+            script: String::new(),
+            name: "OLD_010_MAIN".into(),
+            giver: false,
+            type_name: String::new(),
+            objective: None,
+            spawn: None,
+            exclusive: false,
+            title_screen: false,
+            end_screen: false,
+            state,
+            acknowledged: true,
+            owner: 7,
+            block: None,
+            current_objective: None,
+            fast_travel: false,
+        };
+        story.core.borrow_mut().missions.by_id.insert("1".into(), mission(missions::State::Running));
+        assert_eq!(story.watched_proximity_in_graph(Some("fc3_mainmissions")).len(), 1);
+        story.core.borrow_mut().missions.by_id.insert("1".into(), mission(missions::State::Completed));
+        assert!(story.watched_proximity_in_graph(Some("fc3_mainmissions")).is_empty());
+        // (Not for other uses: the world still hears it.)
+        assert_eq!(story.watched_proximity_in_graph(None).len(), 1);
     }
 
     /// A pawn's health change reaches `HealthListener`-style callbacks on its

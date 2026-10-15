@@ -3749,3 +3749,30 @@ the autopilot's alarm step (a script somewhere waits for `Alarm_Disabled`)
 carried him to an outpost's alarm box across the island, every 6 s. That
 step now waits, as the trigger step does, while a scene holds the view or
 plays the player, and only goes for a box within `ALARM_REACH` (150 m).
+
+## BAM_055's escape and BAM_060's door
+
+* **The crawl.** BAM_055's tomb ends with the rolling rock and the crawl
+  out, a QTE the move data runs (see "Quick-time events"): the script
+  waits to hear the zombie QTE 2 start before it watches for the player
+  near the way out. The old QTE player only knew the struggles' QTE 0, so
+  the block failed at the rock's "DeathHeight" point every time.
+* **A finished mission's listeners.** A main graph stays after its mission
+  ends (its outputs wire the chapter), and its sub-graphs' listeners with
+  it: BAM_055's fire danger zones kept the autopilot going back to the
+  tomb's hot water from Badtown. The autopilot now leaves triggers and
+  near-points of a graph whose mission (named by the graph's file,
+  `BAM_055_MAIN.SHA_Fire_DangerZone.lua`) has completed or failed.
+* **Doors close.** Buck's hut (BAM_060_B10C) waits for its door to shut
+  behind the player: the trigger inside locks it (`CDoor_Disable`) and the
+  `Door` box hears `Closed`. Swing doors stood open for good; they now
+  swing shut once the player is clear of the leaf (`CLOSE_AFTER`, 3 s), or
+  at once when a script locks them, and tell the story they `Closed`.
+* **The door first.** The autopilot stepped into the trigger inside the hut
+  before it ever pushed the door, which locked it shut. A door a script
+  waits on now goes first: triggers within `DOOR_REACH` (12 m) of it wait
+  until the player has been walked through it, and one not yet in the
+  world near him (across the island) is gone to first, so that it streams
+  in. He comes at a door from the side standing in fewer of the triggers
+  the scripts watch (set down on its front, he stood inside the hut, in the
+  trigger that locks it), else from the side he is on.

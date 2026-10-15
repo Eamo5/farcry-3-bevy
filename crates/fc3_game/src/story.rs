@@ -1414,6 +1414,17 @@ fn run_story(
         let leading = companions.iter().any(|c| matches!(c.1, fc3_story::Companion::Lead { .. }));
         let kept: Vec<Vec3> = actors.iter().filter(|(a, _, _)| !a.dead && companions.iter().any(|c| c.0 == a.id)).map(|(_, t, _)| t.translation).collect();
         let near_companion = |p: [f32; 3]| kept.is_empty() || kept.iter().any(|c| c.distance(to_bevy(p)) < COMPANION_REACH);
+        // A door a script waits to see opened goes first: the triggers past
+        // it (BAM_060's inside Buck's hut, which lock the door behind him)
+        // are for walking through it into.
+        let doors_ahead: Vec<Vec3> = host
+            .story
+            .awaited_doors()
+            .into_iter()
+            .filter(|d| !doors.walked.contains(d))
+            .filter_map(|d| data.entities.get(&d).map(|e| to_bevy(e.pos)))
+            .collect();
+        let past_door = |p: [f32; 3]| doors_ahead.iter().any(|d| d.distance(to_bevy(p)) < DOOR_REACH);
         // Something a script waits to see destroyed, near (BAM_030's boards
         // across the flooded tunnel): gone up to and broken, as the player
         // would with the machete.
@@ -1431,7 +1442,13 @@ fn run_story(
             breaks.break_now(id);
             host.quiet = 0.0;
         } else if let Some((id, event, point, _)) = watched.iter().find(|w| {
-            !awaiting_rock && !leading && near_companion(w.2) && w.3 && !host.used.contains(&(w.0, w.1.clone())) && !(w.1 == "EnterFOV" && tails.contains(&w.0))
+            !awaiting_rock
+                && !leading
+                && near_companion(w.2)
+                && !past_door(w.2)
+                && w.3
+                && !host.used.contains(&(w.0, w.1.clone()))
+                && !(w.1 == "EnterFOV" && tails.contains(&w.0))
         }) {
             info!("story autopilot: {event} {}", data.name_of(*id).unwrap_or("?"));
             host.used.insert((*id, event.clone()));
@@ -2228,6 +2245,10 @@ pub(crate) fn story_interactions(
         host.story.entity_event(target.entity, "Use", vec![Arg::id(fc3_story::PLAYER)]);
     }
 }
+
+/// How near a door a script waits to see opened a trigger must be for the
+/// autopilot to walk through the door rather than step into the trigger.
+const DOOR_REACH: f32 = 12.0;
 
 /// How near something a script waits to see destroyed must be for the
 /// autopilot to go and break it (not across the island).
