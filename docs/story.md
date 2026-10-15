@@ -4139,3 +4139,10 @@ its four key areas, its alarms to be switched off first.
   so it stayed in. It now gets out when something a script waits for it
   to use is near (`ON_FOOT_REACH`), switches the alarms off, plants the
   four bombs, and the block completes.
+
+* **To the marker.** Sam is to be brought to a building, and the box there
+  listens only once the vehicle has stopped after moving (a
+  `MovementListener` going from moving to idle): with nothing to drive
+  into, the autopilot sat at the wheel. At the wheel with nothing to drive
+  into, it now drives to the nearest objective marker between 15 and
+  400 m off (`MARKER_DRIVE_NEAR`, `MARKER_DRIVE_FAR`).

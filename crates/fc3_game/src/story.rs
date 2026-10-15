@@ -1642,6 +1642,27 @@ fn run_story(
                     drive.0 = Some((to_bevy(host.story.trigger_ground_point(*id, ground).unwrap_or(*point)), None));
                 }
                 host.quiet = 0.0;
+            } else if host.quiet > 20.0 && !cinema.drives_vehicle() {
+                // Nothing to drive into: on to an objective marker near
+                // (SAM_015's, Sam to be brought to a building: its box
+                // listens only once the vehicle has stopped there).
+                let here = t.translation;
+                let marker = host
+                    .story
+                    .objective_markers()
+                    .into_iter()
+                    .map(|(id, p)| (id, to_bevy(p)))
+                    .filter(|(id, at)| {
+                        (MARKER_DRIVE_NEAR..MARKER_DRIVE_FAR).contains(&at.with_y(0.0).distance(here.with_y(0.0)))
+                            && !host.used.contains(&(*id, "drive to".to_string()))
+                    })
+                    .min_by(|a, b| a.1.distance(here).total_cmp(&b.1.distance(here)));
+                if let Some((id, at)) = marker {
+                    info!("story autopilot: drive to the marker {}", data.name_of(id).unwrap_or("?"));
+                    host.used.insert((id, "drive to".into()));
+                    drive.0 = Some((at.with_y(heights.height_at(at).unwrap_or(at.y)), None));
+                    host.quiet = 0.0;
+                }
             }
         } else if let Some((id, at)) = destructible {
             info!("story autopilot: breaking {}", data.name_of(id).unwrap_or("?"));
@@ -2498,6 +2519,11 @@ const DESTROY_REACH: f32 = 80.0;
 /// A mission failing this soon after the autopilot stepped into a trigger
 /// failed for it.
 const FATAL_WITHIN: f32 = 2.0;
+/// How far an objective marker may be for the autopilot at the wheel to
+/// drive to it, nothing else to drive into: not one beside it (on a
+/// passenger), nor one across the island (a quest giver's).
+const MARKER_DRIVE_NEAR: f32 = 15.0;
+const MARKER_DRIVE_FAR: f32 = 400.0;
 
 /// The triggers the autopilot learned to leave alone in earlier runs, kept
 /// in the file `FC3_STORY_FATAL` names (one `id event` a line), if any: a
