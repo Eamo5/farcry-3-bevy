@@ -492,6 +492,9 @@ pub struct StoryHost {
     quiet: f32,
     /// What last kept the story from going quiet (tests: the stall dump).
     stirred_by: String,
+    /// When the autopilot last went near a place a script waits for the
+    /// player to come near, by the place.
+    near_at: HashMap<u64, f32>,
     /// Scenes by file: when last started and how often (a script's own
     /// loop isn't the story moving on), and the files of their meta ids.
     replays: std::collections::HashMap<String, (f32, u32)>,
@@ -639,6 +642,7 @@ impl StoryHost {
             scene_in_last: false,
             quiet: 0.0,
             stirred_by: String::new(),
+            near_at: HashMap::new(),
             replays: Default::default(),
             replay_metas: Default::default(),
             recent: Default::default(),
@@ -1495,12 +1499,14 @@ fn run_story(
     // seconds: BAM_020's ship; nor one repeating itself: BNG_010's club
     // replays its light scenes, each start clearing arrows first, and
     // switches the same action on again and again; BAM_030's ruins play
-    // and stop their particles.)
+    // and stop their particles; nor a warning on the screen coming and
+    // going: HOY_010's to stay close to Sam.)
     let now = time.elapsed_secs();
     let mut stirred = None;
     for c in &commands {
         let quiet = matches!(c, Command::Layer { .. } | Command::Print(_) | Command::Dialog { .. })
-            || matches!(c, Command::Native { name, .. } if name == "SetTimeOfDay" || name == "DeleteAllArrowPickups");
+            || matches!(c, Command::Native { name, .. }
+                if name == "SetTimeOfDay" || name == "DeleteAllArrowPickups" || name == "HudText" || name == "HudTextHidden");
         if !quiet && !host.replayed(c, now) {
             stirred.get_or_insert(c);
         }
@@ -1678,7 +1684,12 @@ fn run_story(
             .story
             .watched_proximity_in_graph(graph.as_deref())
             .into_iter()
-            .find(|w| !host.used.contains(&(w.0, format!("near {}", w.1))))
+            // (Again a while later, gone out of its radius since: HOY_010's
+            // Sam, defusing a bomb with the player kept near him.)
+            .find(|w| {
+                !host.used.contains(&(w.0, format!("near {}", w.1)))
+                    || (to_bevy(w.2).distance(t.translation) > w.1 + 2.0 && now - host.near_at.get(&w.0).copied().unwrap_or(f32::MIN) > NEAR_AGAIN)
+            })
             .filter(|_| tails.is_empty())
             .filter(|_| {
                 // (Not with a fight on: a block's counted foes close by, the
@@ -1695,6 +1706,7 @@ fn run_story(
             // still at the end).
             info!("story autopilot: near {} ({radius} m)", data.name_of(id).unwrap_or("?"));
             host.used.insert((id, format!("near {radius}")));
+            host.near_at.insert(id, now);
             let at = to_bevy(point);
             let side = (t.translation - at).with_y(0.0).normalize_or(Vec3::Z);
             teleport(&mut t, &mut p, to_dunia(at + side * (radius * 0.5).min(1.5)), 0.0);
@@ -2472,6 +2484,8 @@ const DESTROY_REACH: f32 = 80.0;
 /// A mission failing this soon after the autopilot stepped into a trigger
 /// failed for it.
 const FATAL_WITHIN: f32 = 2.0;
+/// How long before the autopilot goes near a place again, gone out of reach.
+const NEAR_AGAIN: f32 = 20.0;
 /// Harm a script deals that kills whoever takes it.
 const KILLING_BLOW: f32 = 1000.0;
 

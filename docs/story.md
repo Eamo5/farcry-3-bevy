@@ -4001,3 +4001,10 @@ of Sam's, 28 m near and 32 m far, that warns on the screen).
   ahead (`ESCORT_IN_FIGHT`), comes back to clear of it, and doesn't turn to
   it; and it doesn't fire within half a second of being moved (the aim was
   taken from where the player stood).
+
+* **Near again.** The step that goes near a place a script waits for the
+  player to come near went once to each; Sam, defusing, wants the player
+  near throughout, and the fights draw him off. It now goes again, 20 s
+  on, to one the player has left (`NEAR_AGAIN`). A warning coming and
+  going on the screen (`HudText`) no longer counts as the story stirring,
+  which kept the autopilot waiting.
