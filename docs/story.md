@@ -3971,3 +3971,9 @@ way out.
   does. A vehicle that burns out and blows up is logged
   (`vehicle: ... wrecked`), to tell its blast (heard 200 m off) from
   others.
+
+* **The autopilot's gun.** It fought with the gun that reaches furthest,
+  a pistol, and stood minutes before a heavy at the cenote's ship with a
+  rifle on its back. It now draws the gun that harms the foe most from
+  where it stands (damage over the interval between shots), of those that
+  reach him.

@@ -3285,18 +3285,23 @@ fn autopilot_loot(
         if now >= *next_press {
             *next_press = now + 0.25;
             use crate::controls::Action;
-            // The gun that reaches furthest (the next weapon round, as the
-            // wheel would turn it, until it's in hand).
-            let reach = |slot: usize| {
+            // The gun that harms him most from here, of those that reach him
+            // (a heavy stood a pistol for minutes beside the rifle carried),
+            // else the one that reaches furthest: the next weapon round, as
+            // the wheel would turn it, until it's in hand.
+            let dist = aim.length();
+            let score = |slot: usize| {
                 let d = &inventory.defs[inventory.slots[slot].def];
                 if d.class == crate::weapons::WeaponClass::Melee {
-                    0.0
+                    (false, 0.0)
+                } else if d.range >= dist {
+                    (true, d.damage * d.pellets.max(1) as f32 / d.interval.max(0.05))
                 } else {
-                    d.range
+                    (false, d.range)
                 }
             };
-            let best = (0..inventory.slots.len()).max_by(|a, b| reach(*a).total_cmp(&reach(*b)));
-            if best.is_some_and(|b| b != inventory.current && reach(b) > reach(inventory.current)) {
+            let best = (0..inventory.slots.len()).max_by(|a, b| score(*a).partial_cmp(&score(*b)).unwrap_or(std::cmp::Ordering::Equal));
+            if best.is_some_and(|b| b != inventory.current && score(b) > score(inventory.current)) {
                 actions.cycle = 1;
             } else {
                 actions.press(Action::Fire);
