@@ -4317,3 +4317,36 @@ told the story of an outpost taken, so no activity ever opened.
   appeared.
 * **`CAPI_Player.IsInQTE`.** Asked as the flag scene's action map is
   popped; answered from the QTEs (`PlayerView::in_qte`).
+
+### Hunts (SQA, Path of the Hunter)
+
+An outpost's hunting poster (`Lib_SideQuest.AnimalSideQuestGiver`) starts
+its hunt: gear up (B10: the weapon laid out, `SQA_Weapon_Bow`'s `weapon`),
+then kill the rare animal with that weapon (B20) and skin it to craft
+(SQA_D5: a rare komodo, with a bow).
+
+* **What hurt it.** A hunt takes its kill only with the weapon it asks for
+  (`AnimalSQWeaponsClassCheck`, on the health counter's source type and
+  emitter: `arrow` for a bow, else the gun's class by
+  `CAPI_Pawn.GetWeaponClassFromName`). The story's `CCounterEvent` now
+  carries them: the last harm each thing took (`combat::LastHarm`) gives
+  the source type (`BulletImpact`, `WeaponMeleeAttack`, `FirePropagation`,
+  `explosion`, `Generic`), an arrow names itself, and a round the player
+  fired names the gun in their hands; the weapon classes are the engine's
+  numbers.
+* **Its weapon and arrows.** A weapon pickup of a mission's own name gives
+  the weapon its model is (`weapons\bow\`: the Recurve Bow), not a mission
+  item; ammo a mission lays out under its own names
+  (`CPickupMultipleAmmo`: `AmmoStart1`) is ammo.
+* **The autopilot hunts.** With a hunt on (its box's `WeaponClass`,
+  `Story::hunt_weapon`), the story's creatures a block counts or weighs
+  the harm of (the rare target) are hunted: the weapon asked for taken
+  from its pickup if not carried, then in hand, shot from 18 m; not down
+  after a while, from a quarter round and nearer (to 6 m). The quarry is
+  kept while it lives, and the hunt's spare ammo isn't gone after while
+  the weapon has some.
+* **Seen.** SQA_D5's rare komodo falls to the bow and the kill counts (the
+  objective moves on to skinning it).
+* **Not yet.** Skinning the rare animal (a story creature, not one of the
+  wildlife's, leaves no carcass) and the arrows the script spawns from an
+  archetype (`Arrow_Bundle_Pickup`) aren't there.

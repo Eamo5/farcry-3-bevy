@@ -3066,6 +3066,33 @@ const TAKEDOWN_PATIENCE: f32 = 6.0;
 /// come nearer (m).
 const SHOOT_FROM: f32 = 15.0;
 
+/// Tests: how far (m) the autopilot stands from a hunt's quarry, shooting
+/// and with a blade.
+const HUNT_FROM: f32 = 18.0;
+const HUNT_MELEE: f32 = 1.4;
+/// Tests: how long (s) the autopilot shoots at a hunt's quarry from one
+/// spot before trying another, and the nearest it comes (m).
+const HUNT_TRY: f32 = 12.0;
+const HUNT_NEAREST: f32 = 6.0;
+
+/// Our weapon class for a hunt's (`WeaponClass`).
+fn hunt_class(class: &str) -> Option<crate::weapons::WeaponClass> {
+    use crate::weapons::WeaponClass as W;
+    Some(match class.to_ascii_lowercase().as_str() {
+        "bow" => W::Bow,
+        "shotgun" => W::Shotgun,
+        "assault" => W::Rifle,
+        "pistol" | "handgun" => W::Pistol,
+        "smg" => W::Smg,
+        "sniper" => W::Sniper,
+        "lmg" => W::Lmg,
+        "rpg" => W::Launcher,
+        "flamethrower" => W::Flamethrower,
+        "machete" | "melee" => W::Melee,
+        _ => return None,
+    })
+}
+
 /// Tests: how much nearer (m) another foe must be for the autopilot to turn
 /// from the one it goes after (two about as near were swapped every frame).
 const TARGET_STICK: f32 = 4.0;
@@ -3151,6 +3178,7 @@ fn autopilot_loot(
         placed,
         spatial,
         mut photo_stand,
+        mut hunting,
     ): (
         Query<
             (
@@ -3187,6 +3215,8 @@ fn autopilot_loot(
         Query<(&crate::objects::PlacedId, &GlobalTransform)>,
         avian3d::prelude::SpatialQuery,
         Local<PhotoStand>,
+        // The quarry being hunted, and since when.
+        Local<Option<(u64, f32)>>,
     ),
 ) {
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() { return }
@@ -3625,7 +3655,13 @@ fn autopilot_loot(
     // A pickup a script waits on (a mission's diamonds): gone to and taken
     // (from wherever a high trigger held him up).
     let awaited = host.story.awaited_pickups();
-    if !awaited.is_empty() && host.quiet > 6.0 {
+    // (Not in a hunt with its quarry about and the weapon for it, with
+    // ammo: its ammo laid out is spare.)
+    let hunt_ready = host.story.hunt_weapon().and_then(|c| hunt_class(&c)).is_some_and(|w| {
+        story_actors.iter().any(|(_, a, creature)| creature && !a.dead && (to_kill.contains(&a.id) || counted.contains(&a.id)))
+            && inventory.slots.iter().any(|s| inventory.defs[s.def].class == w && s.mag + s.reserve > 0)
+    });
+    if !awaited.is_empty() && host.quiet > 6.0 && !hunt_ready {
         let near = plants
             .iter()
             .filter(|(p, _)| awaited.contains(&p.id))
@@ -3802,6 +3838,112 @@ fn autopilot_loot(
     }
     if player.noclip {
         return;
+    }
+    // A hunt (the animal quests): the quarry a block counts, with the weapon
+    // it asks for in hand (another fails the hunt).
+    if let Some(class) = host.story.hunt_weapon() {
+        // (The story's creatures: a rare one isn't one of the wildlife's. The
+        // one whose harm is weighed, the rare target, as well as those a
+        // block counts down.)
+        let quarry = story_actors
+            .iter()
+            .filter(|(_, a, creature)| *creature && !a.dead && (to_kill.contains(&a.id) || counted.contains(&a.id)))
+            // (The one being hunted kept while it lives.)
+            .min_by(|a, b| {
+                let held = |id: u64| hunting.is_some_and(|h| h.0 == id);
+                held(b.1.id).cmp(&held(a.1.id)).then(a.0.translation.distance(at.translation).total_cmp(&b.0.translation.distance(at.translation)))
+            });
+        if let Some((qt, actor, _)) = quarry {
+            let id = actor.id;
+            if *last != Some((id, "hunt")) {
+                info!("story autopilot: hunt {id} with a {class}");
+                *last = Some((id, "hunt"));
+            }
+            let want = hunt_class(&class);
+            let melee = want == Some(crate::weapons::WeaponClass::Melee);
+            if std::env::var("FC3_STORY_WAIT_DEBUG").is_ok() && (now - time.delta_secs()) as u32 / 5 != now as u32 / 5 {
+                let have = want.is_some_and(|w| inventory.slots.iter().any(|s| inventory.defs[s.def].class == w));
+                info!(
+                    "story autopilot: hunting {id} at {:?}, {:.0} m off; a {class} ({want:?}) asked for, {} ({:?}) in hand with {} loaded, one carried {have}",
+                    to_dunia(qt.translation),
+                    qt.translation.distance(at.translation),
+                    inventory.def().name,
+                    inventory.def().class,
+                    inventory.slot().mag
+                );
+            }
+            // The weapon asked for, not carried: one of its kind laid out for
+            // the hunt (its bow, by the gear-up spot) taken first.
+            let carried = |w| inventory.slots.iter().any(|s| inventory.defs[s.def].class == w);
+            let to_take = want.filter(|w| !carried(*w)).and_then(|w| {
+                plants
+                    .iter()
+                    .filter(
+                        |(p, _)| matches!(p.kind, crate::pickups::PickupKind::Weapon(name) if inventory.defs.iter().any(|d| d.name == name && d.class == w)),
+                    )
+                    .min_by(|a, b| a.1.translation().distance(at.translation).total_cmp(&b.1.translation().distance(at.translation)))
+            });
+            if let Some((pickup, pt)) = to_take {
+                let spot = pt.translation();
+                let feet = at.translation - Vec3::Y * crate::player::HALF_HEIGHT;
+                if Vec2::new(spot.x - feet.x, spot.z - feet.z).length() > 1.5 || (spot.y - feet.y).abs() > 1.5 {
+                    info!("story autopilot: to the {:?} for the hunt", pickup.kind);
+                    let mut stand = spot + Vec3::X * 0.8;
+                    stand.y = heights.height_at(stand).unwrap_or(spot.y).max(spot.y - 0.5);
+                    teleport(&mut at, &mut player, to_dunia(stand), 0.0);
+                    host.quiet = 0.0;
+                } else if now >= *next_press {
+                    *next_press = now + 0.5;
+                    let aim = spot - (at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT));
+                    player.yaw = (-aim.x).atan2(-aim.z);
+                    player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
+                    actions.press(crate::controls::Action::Interact);
+                }
+                return;
+            }
+            let target = qt.translation + Vec3::Y * 0.3;
+            // Not down after a while from one side (a rock in the way): from
+            // another, a quarter round and nearer.
+            let since = match *hunting {
+                Some((hid, s)) if hid == id => s,
+                _ => {
+                    *hunting = Some((id, now));
+                    now
+                }
+            };
+            let tries = ((now - since) / HUNT_TRY) as u32;
+            let reach = if melee { HUNT_MELEE } else { (HUNT_FROM / (1.0 + tries as f32 * 0.5)).max(HUNT_NEAREST) };
+            let side = Quat::from_rotation_y(tries as f32 * std::f32::consts::FRAC_PI_2) * Vec3::Z;
+            let mut stand = qt.translation + side * reach;
+            stand.y = heights.height_at(stand).unwrap_or(qt.translation.y);
+            let feet = at.translation - Vec3::Y * crate::player::HALF_HEIGHT;
+            if Vec2::new(stand.x - feet.x, stand.z - feet.z).length() > if melee { 1.0 } else { 3.0 } {
+                teleport(&mut at, &mut player, to_dunia(stand), 0.0);
+                host.quiet = 0.0;
+                return;
+            }
+            let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
+            let aim = target - eye;
+            player.yaw = (-aim.x).atan2(-aim.z);
+            player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
+            if now >= *next_press && !player.spawning {
+                *next_press = now + 0.25;
+                use crate::controls::Action;
+                let held = inventory.def().class;
+                let has = |c| inventory.slots.iter().any(|s| inventory.defs[s.def].class == c);
+                if want.is_some_and(|w| w != held && has(w)) {
+                    actions.cycle = 1;
+                } else if inventory.slot().mag == 0 && !melee {
+                    actions.press(Action::Reload);
+                } else {
+                    if !melee {
+                        actions.hold(Action::Aim);
+                    }
+                    actions.press(Action::Fire);
+                }
+            }
+            return;
+        }
     }
     if looted_wanted.is_empty() {
         *last = None;

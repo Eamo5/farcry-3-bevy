@@ -10,6 +10,7 @@ impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<DamageEvent>()
             .add_message::<Died>()
+            .init_resource::<LastHarm>()
             .init_resource::<DamageTable>()
             .add_systems(OnExit(crate::menu::GameState::Loading), load_damage_table)
             .add_systems(Startup, add_player_health.after(crate::player::PlayerSpawn))
@@ -83,6 +84,25 @@ pub enum DamageKind {
     Drown,
     Fire,
 }
+
+impl DamageKind {
+    /// How the game names a harm's source to scripts (`HealthListener`'s
+    /// `sourceType`).
+    pub fn source_type(self) -> &'static str {
+        match self {
+            DamageKind::Bullet => "BulletImpact",
+            DamageKind::Explosion => "explosion",
+            DamageKind::Melee => "WeaponMeleeAttack",
+            DamageKind::Fire => "FirePropagation",
+            DamageKind::Fall | DamageKind::Drown => "Generic",
+        }
+    }
+}
+
+/// The last harm each thing took, for the story's health counter (what hurt
+/// it: a hunt takes its kill only with the weapon it asks for).
+#[derive(Resource, Default)]
+pub struct LastHarm(pub std::collections::HashMap<Entity, (DamageKind, Hit)>);
 
 #[derive(Message, Clone, Copy)]
 pub struct DamageEvent {
@@ -293,8 +313,14 @@ fn apply_damage(
     players: Query<(), With<crate::player::Player>>,
     driving: Option<Res<crate::vehicles::Driving>>,
     mut progress: ResMut<crate::progression::Progress>,
+    mut harm: ResMut<LastHarm>,
 ) {
     for ev in events.read() {
+        // (Kept a while: those gone are let go now and then.)
+        if harm.0.len() > 4096 {
+            harm.0.clear();
+        }
+        harm.0.insert(ev.target, (ev.kind, ev.hit));
         let Ok((mut h, gt, ps, armour, scale, counters)) = targets.get_mut(ev.target) else { continue };
         if h.dead {
             continue;

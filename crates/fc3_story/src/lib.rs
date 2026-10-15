@@ -731,17 +731,23 @@ impl Story {
 
     /// A pawn's health went from `old` to `new` (hurt by `by`): the groups it
     /// is in hear `CCounterEvent` on its health counter, as `HealthListener`
-    /// boxes read it (counter, old, new, instigator, source, victim,
-    /// emitter).
-    pub fn health_changed(&mut self, pawn: u64, old: f32, new: f32, by: u64) {
+    /// boxes read it (counter, old, new, instigator, source type, victim,
+    /// emitter: `BulletImpact` and the gun, `arrow`...). A round the player
+    /// fired with no emitter given came from the weapon in their hands (a
+    /// hunt's weapon check: `GetWeaponClassFromName`).
+    pub fn health_changed(&mut self, pawn: u64, old: f32, new: f32, by: u64, source: &str, emitter: Option<&str>) {
         if old == new {
             return;
         }
         let counter = fc3_formats::hash::crc32(b"health") as f64;
+        let emitter = emitter.map(str::to_string).unwrap_or_else(|| {
+            let c = self.core.borrow();
+            (by == PLAYER && source == "BulletImpact").then(|| c.view.player_state.in_hands.clone()).flatten().unwrap_or_default()
+        });
         self.group_event(
             pawn,
             "CCounterEvent",
-            vec![Arg::Num(counter), Arg::Num(old as f64), Arg::Num(new as f64), Arg::id(by), Arg::Num(0.0), Arg::id(pawn), Arg::Str(String::new())],
+            vec![Arg::Num(counter), Arg::Num(old as f64), Arg::Num(new as f64), Arg::id(by), Arg::Str(source.to_string()), Arg::id(pawn), Arg::Str(emitter)],
         );
     }
 
@@ -842,6 +848,28 @@ impl Story {
     pub fn message(&mut self, message: &str) {
         self.core.borrow_mut().raise(&Listen::Message(message.to_string()), vec![]);
         self.pump();
+    }
+
+    /// The weapon a running hunt asks its quarry be killed with (its animal
+    /// quest box's `WeaponClass`: `bow`, `shotgun`, `machete`...), if one is.
+    pub fn hunt_weapon(&self) -> Option<String> {
+        let c = self.core.borrow();
+        // (Its listeners are its own boxes': up their graphs to it.)
+        c.listeners.values().find_map(|l| {
+            let mut table = l.callback.target.clone();
+            for _ in 0..16 {
+                let path = table.get::<mlua::Table>("_type").and_then(|ty| ty.get::<String>("_path")).unwrap_or_default();
+                if path.to_ascii_lowercase().contains("animalsidequestb20lib") {
+                    return table.get::<String>("WeaponClass").ok().filter(|w| !w.is_empty());
+                }
+                let parent = table.get::<mlua::Table>("_graph").ok()?;
+                if parent == table {
+                    return None;
+                }
+                table = parent;
+            }
+            None
+        })
     }
 
     /// The safe houses the player may hold (outposts' and towns'): their
@@ -2108,20 +2136,22 @@ mod tests {
                 r##"
             heard = {}
             local health = GetNoCaseStringID("health")
-            local box = { _type = { Got = function(self, event, counter, old, new, by, source, victim)
-                if counter == health and source ~= nil then heard[#heard + 1] = string.format("%s %d->%d by %s", event, old, new, tostring(by)) end
+            local box = { _type = { Got = function(self, event, counter, old, new, by, source, victim, emitter)
+                if counter == health and source ~= nil then heard[#heard + 1] = string.format("%s %d->%d by %s: %s %s", event, old, new, tostring(by), source, emitter) end
             end } }
             CEntityGroupManager_GetInstance():RegisterScriptEvent("#0BADF00D", "CCounterEvent", box, "Got")
         "##,
             )
             .exec()
             .unwrap();
-        story.update(0.0, View::default());
-        story.health_changed(42, 100.0, 40.0, PLAYER);
-        story.health_changed(42, 40.0, 0.0, PLAYER);
-        story.health_changed(42, 0.0, 0.0, PLAYER);
+        let mut view = View::default();
+        view.player_state.in_hands = Some("weapons:FC3/AK47".into());
+        story.update(0.0, view);
+        story.health_changed(42, 100.0, 40.0, PLAYER, "BulletImpact", None);
+        story.health_changed(42, 40.0, 0.0, PLAYER, "BulletImpact", Some("arrow"));
+        story.health_changed(42, 0.0, 0.0, PLAYER, "Generic", None);
         let heard: Vec<String> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
-        assert_eq!(heard, ["CCounterEvent 100->40 by 1", "CCounterEvent 40->0 by 1"]);
+        assert_eq!(heard, ["CCounterEvent 100->40 by 1: BulletImpact weapons:FC3/AK47", "CCounterEvent 40->0 by 1: BulletImpact arrow"]);
     }
 
     /// A `PickupListener` on a pickup's id hears it picked up, with its id;

@@ -51,8 +51,10 @@ fn stream_layers(
     world: Res<crate::pickups::WorldState>,
     host: Option<NonSend<crate::story::StoryHost>>,
     vehicles: Query<(Entity, &crate::vehicles::Vehicle, Has<crate::vehicles::MissionVehicle>)>,
+    inventories: Query<&crate::weapons::Inventory, With<crate::player::Player>>,
 ) {
     let data = host.as_ref().map(|h| h.story.data());
+    let weapons = inventories.single().map(|i| i.defs.as_slice()).unwrap_or(&[]);
     let reset = std::mem::take(&mut layers.reset);
     if reset {
         for (_, _, spawned) in &mut roots {
@@ -146,7 +148,7 @@ fn stream_layers(
                 }
             }
             for (i, entity) in content.entities.iter().enumerate() {
-                if let Some(kind) = layer_pickup(entity, &world.removed, data.as_deref()) {
+                if let Some(kind) = layer_pickup(entity, &world.removed, data.as_deref(), weapons) {
                     let pickup = commands.spawn((crate::pickups::Pickup { kind, id: entity.id, visual: placed.get(&(i as u32)).copied() },
                         Transform::from_translation(Vec3::from_array(entity.translation)), Visibility::Visible, ChildOf(lroot))).id();
                     if kind == crate::pickups::PickupKind::Loot {
@@ -164,18 +166,20 @@ fn stream_layers(
     }
 }
 
-fn layer_pickup(entity: &fc3_formats::cache::CachedEntity, removed: &HashSet<u64>, data: Option<&fc3_story::data::StoryData>) -> Option<crate::pickups::PickupKind> {
+fn layer_pickup(
+    entity: &fc3_formats::cache::CachedEntity,
+    removed: &HashSet<u64>,
+    data: Option<&fc3_story::data::StoryData>,
+    weapons: &[crate::weapons::WeaponDef],
+) -> Option<crate::pickups::PickupKind> {
     if removed.contains(&entity.id) { return None }
+    let has = |component: &str| data.and_then(|d| d.entities.get(&entity.id)).is_some_and(|e| e.component(component).is_some());
     // Some plants have a colocated _02 minimap marker. Only the original
     // collectible gets a transaction, not its marker or a similarly named prop.
-    if data.is_some_and(|d| {
-        !d.entities
-            .get(&entity.id)
-            .is_some_and(|e| e.component("CPickupCollectible").is_some() || e.component("CPickupAmmo").is_some() || e.component("CPickupWeapon").is_some())
-    }) {
+    if data.is_some() && !["CPickupCollectible", "CPickupAmmo", "CPickupMultipleAmmo", "CPickupWeapon"].into_iter().any(has) {
         return None;
     }
-    let weapon = data.is_some_and(|d| d.entities.get(&entity.id).is_some_and(|e| e.component("CPickupWeapon").is_some()));
+    let weapon = has("CPickupWeapon");
     match crate::pickups::classify(&entity.name) {
         Some(crate::pickups::Classified::Pickup(kind)) => Some(kind),
         Some(crate::pickups::Classified::Explosive) => None,
@@ -186,10 +190,26 @@ fn layer_pickup(entity: &fc3_formats::cache::CachedEntity, removed: &HashSet<u64
         {
             Some(crate::pickups::PickupKind::Loot)
         }
-        // A weapon pickup we don't know as a weapon: the mission's own item.
-        None if weapon => Some(crate::pickups::PickupKind::Mission),
+        // A weapon pickup of a mission's own name: the weapon its model is
+        // (a hunt's bow), else the mission's own item.
+        None if weapon => Some(
+            data.and_then(|d| d.entities.get(&entity.id))
+                .and_then(|e| pickup_weapon(e, weapons))
+                .map_or(crate::pickups::PickupKind::Mission, crate::pickups::PickupKind::Weapon),
+        ),
+        // Ammo a mission lays out under its own names (a hunt's arrows:
+        // SQA's `AmmoStart`), taken as ammo.
+        None if has("CPickupMultipleAmmo") || has("CPickupAmmo") => Some(crate::pickups::PickupKind::Ammo),
         None => None,
     }
+}
+
+/// Our weapon a weapon pickup gives, by its model's folder (`weapons\bow\`),
+/// if we have one.
+fn pickup_weapon(entry: &fc3_story::data::Entry, weapons: &[crate::weapons::WeaponDef]) -> Option<&'static str> {
+    let path = entry.component("CFileDescriptorComponent")?.str_h(0x2A7B_CA49)?.to_ascii_lowercase();
+    let folder = path.split_once(r"\weapons\")?.1.split('\\').next()?.to_string();
+    weapons.iter().find(|w| w.model.to_ascii_lowercase().split('\\').next() == Some(folder.as_str())).map(|w| w.name)
 }
 
 #[cfg(test)]
@@ -205,11 +225,11 @@ mod tests {
             (2077840889587192723, crate::syringes::Plant::TorchGinger)] {
             let original = data.entities.get(&id).unwrap();
             let entity = fc3_formats::cache::CachedEntity { id, name: original.name.clone(), ..default() };
-            assert!(matches!(layer_pickup(&entity, &HashSet::new(), Some(&data)), Some(crate::pickups::PickupKind::Plant(p)) if p == plant));
-            assert!(layer_pickup(&entity, &HashSet::from([id]), Some(&data)).is_none());
+            assert!(matches!(layer_pickup(&entity, &HashSet::new(), Some(&data), &[]), Some(crate::pickups::PickupKind::Plant(p)) if p == plant));
+            assert!(layer_pickup(&entity, &HashSet::from([id]), Some(&data), &[]).is_none());
             let marker = data.entities.get(&(id + 1)).unwrap();
             let entity = fc3_formats::cache::CachedEntity { id: id + 1, name: marker.name.clone(), ..default() };
-            assert!(layer_pickup(&entity, &HashSet::new(), Some(&data)).is_none());
+            assert!(layer_pickup(&entity, &HashSet::new(), Some(&data), &[]).is_none());
         }
     }
 }

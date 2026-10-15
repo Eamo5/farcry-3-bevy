@@ -1088,16 +1088,23 @@ fn actor_idle(
 /// them on the health counter (`CCounterEvent`), before any death.
 fn actor_health(
     host: Option<NonSendMut<StoryHost>>,
-    actors: Query<(&StoryActor, &Health), Changed<Health>>,
-    players: Query<&Health, (With<Player>, Changed<Health>)>,
+    actors: Query<(Entity, &StoryActor, &Health), Changed<Health>>,
+    players: Query<(Entity, &Health), (With<Player>, Changed<Health>)>,
+    harm: Res<crate::combat::LastHarm>,
     mut seen: Local<HashMap<u64, f32>>,
 ) {
     let Some(mut host) = host else { return };
-    let changes = actors.iter().map(|(a, h)| (a.id, h.current)).chain(players.iter().map(|h| (fc3_story::PLAYER, h.current)));
-    for (id, now) in changes {
+    let changes = actors.iter().map(|(e, a, h)| (e, a.id, h.current)).chain(players.iter().map(|(e, h)| (e, fc3_story::PLAYER, h.current)));
+    for (e, id, now) in changes {
         let before = seen.insert(id, now);
         if let Some(before) = before.filter(|b| *b != now) {
-            host.story.health_changed(id, before, now.max(0.0), fc3_story::PLAYER);
+            // What hurt it (an arrow names itself; a round, the gun in hand).
+            let (source, emitter) = match harm.0.get(&e).filter(|_| now < before) {
+                Some((_, crate::combat::Hit::Arrow(_))) => ("BulletImpact", Some("arrow")),
+                Some((kind, _)) => (kind.source_type(), None),
+                None => ("Generic", None),
+            };
+            host.story.health_changed(id, before, now.max(0.0), fc3_story::PLAYER, source, emitter);
         }
     }
 }

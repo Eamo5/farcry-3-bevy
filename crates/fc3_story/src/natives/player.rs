@@ -92,8 +92,11 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         let items = c.view.player_state.weapons.clone();
         where_is(c, &items, |i| eq(&i.name, &name.0) || i.name.to_ascii_lowercase().ends_with(&format!("/{}", name.0.to_ascii_lowercase())))
     })?;
+    // The engine's weapon classes, as the hunts' weapon checks number them
+    // (`Lib_SideQuest.AnimalSQWeaponsClassCheck`), of a weapon the player has.
     r.f("CAPI_Pawn.GetWeaponClassFromName", |c, (_pawn, name): (Text, Text)| {
-        c.view.player_state.weapons.iter().position(|w| w.name.eq_ignore_ascii_case(&name.0)).map(|_| 1.0).unwrap_or(0.0)
+        let class = c.view.player_state.weapons.iter().find(|w| w.name.eq_ignore_ascii_case(&name.0)).map(|w| w.class.as_str());
+        weapon_class_number(class.unwrap_or_default())
     })?;
     r.f("CAPI_Pawn.GetWeaponIdInSlot", |c, (_pawn, slot): (Text, Num)| {
         let name = c.view.player_state.weapons.get(slot.or(0.0) as usize).map(|w| w.name.clone()).unwrap_or_default();
@@ -264,4 +267,21 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         if locked.0 { rules.locked.insert(key); } else { rules.locked.remove(&key); }
     })?;
     Ok(())
+}
+
+/// The engine's number for a weapon class (`CAPI_Pawn.GetWeaponClassFromName`),
+/// -1 for one it doesn't number.
+fn weapon_class_number(class: &str) -> f64 {
+    match class {
+        "flamethrower" => 0.0,
+        "handgun" | "pistol" => 1.0,
+        "melee" => 2.0,
+        "lmg" => 3.0,
+        "rpg" => 4.0,
+        "sniper" => 5.0,
+        "shotgun" => 6.0,
+        "assault" => 9.0,
+        "smg" => 15.0,
+        _ => -1.0,
+    }
 }
