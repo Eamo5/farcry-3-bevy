@@ -173,6 +173,18 @@ impl Cinema {
             .any(|p| !p.paused && !p.seq.looping && p.t < p.seq.duration && p.seq.groups.iter().any(|g| g.kind == GroupKind::Player && !g.clips.is_empty()))
     }
 
+    /// A scene drives a vehicle along its recorded track now (CIT_020's
+    /// convoy getting away, its sync points setting off the ambushes on the
+    /// way), not held at a pause or its end.
+    pub fn drives_vehicle(&self) -> bool {
+        self.playing.iter().any(|p| {
+            !p.paused
+                && !p.seq.looping
+                && p.t < p.seq.duration
+                && p.seq.groups.iter().any(|g| p.bindings.contains_key(&g.uid) && g.clips.iter().any(|c| matches!(c.kind, ClipKind::VehicleMovement { .. })))
+        })
+    }
+
     /// A scene plays the player's own body (a player group with tracks)
     /// and doesn't have this vehicle in it: he's out of it for the scene.
     pub fn plays_player_without(&self, vehicle: u64) -> bool {

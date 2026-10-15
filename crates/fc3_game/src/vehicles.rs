@@ -26,10 +26,11 @@ impl Plugin for VehiclesPlugin {
         app.init_resource::<Driving>()
             .init_resource::<Repairing>()
             .init_resource::<StorySeatRequests>()
+            .init_resource::<AutopilotDrive>()
             .init_resource::<crate::vehicle_paths::StoryVehiclePaths>()
             .add_systems(
                 PreUpdate,
-                (story_board_test, story_exit_test, autopilot_exit)
+                (story_board_test, story_exit_test, autopilot_exit, autopilot_board)
                     .chain()
                     .after(crate::controls::update_actions)
                     .after(crate::story::story_interactions)
@@ -50,6 +51,7 @@ impl Plugin for VehiclesPlugin {
                     vehicle_hud.before(crate::hud::HudSet),
                     drive_test.before(enter_exit),
                     crate::vehicle_paths::story_paths.after(crate::story::StorySet).before(crate::cinema::CinemaSet),
+                    autopilot_drive.after(crate::story::StorySet),
                 )
                     .run_if(in_state(crate::menu::GameState::Playing)),
             )
@@ -898,6 +900,11 @@ impl Vehicle {
         self.seats.iter().find(|s| s.kind == 1).and_then(|s| s.pawn)
     }
 
+    /// This seat is the wheel.
+    pub(crate) fn is_driver_seat(&self, seat: usize) -> bool {
+        self.seats.get(seat).is_some_and(|s| s.kind == 1)
+    }
+
     /// This pawn has a seat in it.
     pub(crate) fn carries(&self, pawn: u64) -> bool {
         self.seats.iter().any(|s| s.pawn == Some(pawn))
@@ -1156,6 +1163,90 @@ fn story_board_test(
     actions.press(Action::Interact);
 }
 
+/// The story autopilot gets into the vehicle a script waits for the player
+/// to take (CIT_020's cargo truck, whose health it listens to), as a player
+/// would: beside it, the normal interaction.
+fn autopilot_board(
+    host: Option<NonSend<crate::story::StoryHost>>,
+    cinema: Res<crate::cinema::Cinema>,
+    time: Res<Time>,
+    vehicles: Query<(&Transform, &Vehicle), Without<Player>>,
+    mut players: Query<(&mut Transform, &mut Player), Without<Vehicle>>,
+    mut actions: ResMut<ActionState>,
+    mut last: Local<f32>,
+) {
+    if std::env::var_os("FC3_STORY_AUTOPILOT").is_none() || std::env::var_os("FC3_STORY_BOARD").is_some() {
+        return;
+    }
+    let Some(host) = host else { return };
+    let Ok((mut pt, mut p)) = players.single_mut() else { return };
+    if p.driving || p.spawning || cinema.cutscene() || cinema.plays_player() || host.quiet() < 3.0 || !host.story.awaits_vehicle_entry(fc3_story::PLAYER) {
+        return;
+    }
+    // (A press a second at most: the interaction sees it the next frame.)
+    let now = time.elapsed_secs();
+    if now - *last < 1.0 {
+        return;
+    }
+    let here = pt.translation;
+    let Some((vt, v)) = vehicles
+        .iter()
+        .filter(|(_, v)| host.story.watches_entity(v.spawn_id) && v.available_seat(&host.story.vehicle_rules(v.spawn_id)).is_some())
+        .min_by(|a, b| a.0.translation.distance(here).total_cmp(&b.0.translation.distance(here)))
+    else {
+        return;
+    };
+    *last = now;
+    info!("story autopilot: into vehicle {}", host.story.data().name_of(v.spawn_id).unwrap_or("?"));
+    pt.translation = vt.transform_point(Vec3::new(v.max.x + 0.8, 0.8, 0.0));
+    p.yaw = vt.rotation.to_euler(EulerRot::YXZ).0 + std::f32::consts::FRAC_PI_2;
+    p.velocity = Vec3::ZERO;
+    actions.press(Action::Interact);
+}
+
+/// Where the story autopilot takes the vehicle the player drives (into a box
+/// a script waits on), and its heading (else kept).
+#[derive(Resource, Default)]
+pub struct AutopilotDrive(pub Option<(Vec3, Option<f32>)>);
+
+fn autopilot_drive(
+    mut drive: ResMut<AutopilotDrive>,
+    driving: Res<Driving>,
+    time: Res<Time>,
+    spatial: SpatialQuery,
+    mut vehicles: Query<(Entity, &mut Transform, &mut LinearVelocity, &mut AngularVelocity, &Vehicle)>,
+    mut held: Local<Option<(Vec3, Quat, f32)>>,
+) {
+    let Some(Ok((root, mut t, mut linear, mut angular, v))) = driving.vehicle.map(|e| vehicles.get_mut(e)) else {
+        if let Some((at, _)) = drive.0.take() {
+            warn!("story autopilot: no vehicle to drive to {at:.1?}");
+        }
+        *held = None;
+        return;
+    };
+    if let Some((at, heading)) = drive.0.take() {
+        debug!("story autopilot: the vehicle from {:.1?} to {at:.1?}", t.translation);
+        let yaw = heading.unwrap_or_else(|| t.rotation.to_euler(EulerRot::YXZ).0);
+        *held = Some((at + Vec3::Y * 0.6, Quat::from_rotation_y(yaw), 0.0));
+    }
+    // Held there until the ground under it is in: set down where the
+    // terrain's collider hasn't streamed in yet, it falls through the world.
+    let Some((at, rotation, since)) = held.as_mut() else { return };
+    t.translation = *at;
+    t.rotation = *rotation;
+    linear.0 = Vec3::ZERO;
+    angular.0 = Vec3::ZERO;
+    *since += time.delta_secs();
+    let filter = SpatialQueryFilter::from_excluded_entities([root, v.body]);
+    if spatial.cast_ray(*at + Vec3::Y * 1.5, Dir3::NEG_Y, 6.0, true, &filter).is_some() || *since > GROUND_WAIT {
+        *held = None;
+    }
+}
+
+/// The longest the autopilot holds a vehicle it set down for the ground
+/// under it to come in.
+const GROUND_WAIT: f32 = 15.0;
+
 /// Explicit test-only dismount: wait for the authored leave listener and
 /// enabled exit, then press normal Interact. Never inject a stand-up callback.
 fn story_exit_test(
@@ -1220,7 +1311,8 @@ fn autopilot_exit(
     cinema: Res<crate::cinema::Cinema>,
     driving: Res<Driving>,
     paths: Res<crate::vehicle_paths::StoryVehiclePaths>,
-    vehicles: Query<&Vehicle>,
+    vehicles: Query<(&Vehicle, &Transform)>,
+    foes: Query<(&Transform, &crate::story_actors::StoryActor, &crate::npc::Npc, &Health)>,
     mut actions: ResMut<ActionState>,
     mut last: Local<f32>,
     time: Res<Time>,
@@ -1229,21 +1321,35 @@ fn autopilot_exit(
         return;
     }
     let Some(host) = host else { return };
-    let Some(v) = driving.vehicle.and_then(|e| vehicles.get(e).ok()) else { return };
+    let Some((v, vt)) = driving.vehicle.and_then(|e| vehicles.get(e).ok()) else { return };
     let id = v.spawn_id;
-    if host.quiet() < 20.0 || time.elapsed_secs() - *last < 5.0 {
+    // Foes a block counts down near (CIT_020 B30's privateers where the
+    // convoy stopped): out to fight them, the vehicle still listened to.
+    let counted = host.story.counted_members();
+    let fight = foes.iter().any(|(t, a, npc, h)| {
+        !h.dead && counted.contains(&a.id) && npc.faction.hostile_to_player() && t.translation.distance(vt.translation) < FIGHT_FROM_VEHICLE
+    });
+    if host.quiet() < if fight { 3.0 } else { 20.0 } || time.elapsed_secs() - *last < 5.0 {
         return;
     }
     *last = time.elapsed_secs();
     let (watched, following, locked, entry) =
         (host.story.watches_entity(id), paths.following(id), host.story.vehicle_rules(id).exit_disabled, host.story.awaits_vehicle_entry(fc3_story::PLAYER));
-    if watched || following || locked || entry {
+    if following || locked || (!fight && (watched || entry)) {
         debug!("story autopilot: staying in vehicle {id} (listened to {watched}, on a path {following}, exit disabled {locked}, entry awaited {entry})");
         return;
     }
-    info!("story autopilot: out of vehicle {id}, which the story is done with");
+    if fight {
+        info!("story autopilot: out of vehicle {id} to fight");
+    } else {
+        info!("story autopilot: out of vehicle {id}, which the story is done with");
+    }
     actions.press(Action::Interact);
 }
+
+/// How near foes a block counts down must be for the autopilot to get out
+/// of the vehicle it drives to fight them.
+const FIGHT_FROM_VEHICLE: f32 = 150.0;
 
 fn seat_story_actors(
     vehicles: Query<(&Transform, &Vehicle), Without<crate::story_actors::StoryActor>>,

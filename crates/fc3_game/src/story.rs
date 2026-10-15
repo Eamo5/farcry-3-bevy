@@ -409,6 +409,11 @@ pub struct StoryHost {
     /// When each command (as it reads) last came.
     recent: std::collections::HashMap<String, f32>,
     used: std::collections::HashSet<(u64, String)>,
+    /// The trigger last stepped into and when; those that failed a mission
+    /// at once (CIT_020 B30's escaping-on-foot box), left alone since, over
+    /// reloads.
+    last_step: Option<(u64, String, f32)>,
+    fatal: std::collections::HashSet<(u64, String)>,
     /// The last checkpoint's progress, and when a reload to it is due.
     checkpoint: Option<fc3_story::save::StorySave>,
     reload_at: Option<f32>,
@@ -540,6 +545,8 @@ impl StoryHost {
             replay_metas: Default::default(),
             recent: Default::default(),
             used: Default::default(),
+            last_step: None,
+            fatal: Default::default(),
             checkpoint,
             reload_at: None,
             was_dead: false,
@@ -1064,7 +1071,7 @@ fn run_story(
         ResMut<EntityPlacements>,
         Res<crate::hud::OriginalHud>,
     ),
-    (actions, mut markers, heights, mut voices, driving, vehicle_views, mut seat_requests, mut vehicle_paths): (
+    (actions, mut markers, heights, mut voices, driving, vehicle_views, mut seat_requests, mut vehicle_paths, mut drive): (
         Res<crate::controls::ActionState>,
         ResMut<ObjectiveMarkers>,
         Res<crate::terrain::Heightfield>,
@@ -1073,6 +1080,7 @@ fn run_story(
         Query<(Entity, &crate::vehicles::Vehicle, &Transform, Option<&crate::combat::Health>), Without<Player>>,
         ResMut<crate::vehicles::StorySeatRequests>,
         ResMut<crate::vehicle_paths::StoryVehiclePaths>,
+        ResMut<crate::vehicles::AutopilotDrive>,
     ),
     (info, slot, fov, mut bought, mut towers, ways, mut looted, loot_catalog, mut crafted, mut crafting): (
         Res<CacheInfo>,
@@ -1424,9 +1432,11 @@ fn run_story(
     let autopilot_delay = std::env::var("FC3_STORY_AUTOPILOT_DELAY").ok()
         .and_then(|s| s.parse::<f32>().ok()).filter(|s| s.is_finite())
         .unwrap_or(6.0).max(0.5);
+    // (At the wheel, the autopilot drives into the boxes scripts wait on.)
+    let at_wheel = p.driving && vehicle_views.iter().any(|(e, v, _, _)| driving.vehicle == Some(e) && v.is_driver_seat(driving.seat));
     if gameplay
         && health.as_ref().is_none_or(|h| !h.dead)
-        && !p.driving
+        && (!p.driving || at_wheel)
         && cinema.view.is_none()
         && !cinema.plays_player()
         && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
@@ -1475,23 +1485,48 @@ fn run_story(
             .into_iter()
             .filter(|(id, _)| !host.used.contains(&(*id, "destroy".to_string())))
             .find(|(_, at)| to_bevy(*at).distance(here) < DESTROY_REACH);
-        if let Some((id, at)) = destructible {
-            info!("story autopilot: breaking {}", data.name_of(id).unwrap_or("?"));
-            host.used.insert((id, "destroy".into()));
-            teleport(&mut t, &mut p, at, 0.0);
-            breaks.break_now(id);
-            host.quiet = 0.0;
-        } else if let Some((id, event, point, _)) = focused.iter().chain(watched.iter()).find(|w| {
+        let next = focused.iter().chain(watched.iter()).find(|w| {
             !awaiting_rock
                 && !leading
                 && near_companion(w.2)
                 && !past_door(w.2)
                 && w.3
                 && !host.used.contains(&(w.0, w.1.clone()))
+                && !host.fatal.contains(&(w.0, w.1.clone()))
                 && !(w.1 == "EnterFOV" && tails.contains(&w.0))
-        }) {
+                && (!p.driving || matches!(w.1.as_str(), "Enter" | "EnterFOV"))
+        });
+        if p.driving {
+            // At the wheel (CIT_020's chase after the convoy): the vehicle
+            // goes into the box, the player with it; or before a spot to be
+            // seen, facing it. Not while a scene drives the vehicle chased:
+            // the player follows (cutting ahead to where it stops stops it
+            // short of the ambushes it sets off on the way).
+            if let Some((id, event, point, _)) = next.filter(|_| !cinema.drives_vehicle()) {
+                info!("story autopilot: drive {} {}", if event == "EnterFOV" { "up to" } else { "into" }, data.name_of(*id).unwrap_or("?"));
+                host.used.insert((*id, event.clone()));
+                host.last_step = Some((*id, event.clone(), now));
+                if event == "EnterFOV" {
+                    let at = to_bevy(host.story.look_at_point(*id).unwrap_or(*point));
+                    let mut from = at + Vec3::Z * FOV_DRIVE_BACK;
+                    from.y = heights.height_at(from).unwrap_or(at.y);
+                    drive.0 = Some((from, Some(0.0)));
+                } else {
+                    let ground = |x: f32, y: f32| heights.height_at(to_bevy([x, y, 0.0]));
+                    drive.0 = Some((to_bevy(host.story.trigger_ground_point(*id, ground).unwrap_or(*point)), None));
+                }
+                host.quiet = 0.0;
+            }
+        } else if let Some((id, at)) = destructible {
+            info!("story autopilot: breaking {}", data.name_of(id).unwrap_or("?"));
+            host.used.insert((id, "destroy".into()));
+            teleport(&mut t, &mut p, at, 0.0);
+            breaks.break_now(id);
+            host.quiet = 0.0;
+        } else if let Some((id, event, point, _)) = next {
             info!("story autopilot: {event} {}", data.name_of(*id).unwrap_or("?"));
             host.used.insert((*id, event.clone()));
+            host.last_step = Some((*id, event.clone(), now));
             // A region: somewhere its heights reach the ground.
             let ground = |x: f32, y: f32| heights.height_at(to_bevy([x, y, 0.0]));
             let point = host.story.trigger_ground_point(*id, ground).unwrap_or(*point);
@@ -1658,6 +1693,10 @@ fn run_story(
             }
             Command::MissionFailed { text, reload } => {
                 info!("story: mission failed ({:?}), reload {reload}", text.as_deref().map(plain));
+                if let Some((id, event, _)) = host.last_step.take().filter(|s| now - s.2 < FATAL_WITHIN) {
+                    info!("story autopilot: {event} {} failed the mission; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
+                    host.fatal.insert((id, event));
+                }
                 let text = text.map(|t| plain(&t)).unwrap_or_default();
                 ui.banner = Some((format!("Mission failed\n{text}"), 5.0));
                 ui.cards.push(MissionCard::Failed { text });
@@ -2297,6 +2336,14 @@ const DOOR_REACH: f32 = 12.0;
 /// How near something a script waits to see destroyed must be for the
 /// autopilot to go and break it (not across the island).
 const DESTROY_REACH: f32 = 80.0;
+
+/// A mission failing this soon after the autopilot stepped into a trigger
+/// failed for it.
+const FATAL_WITHIN: f32 = 2.0;
+
+/// How far back from a spot to be seen the autopilot stops the vehicle it
+/// drives, facing it.
+const FOV_DRIVE_BACK: f32 = 10.0;
 
 /// Explosives scripts set off go off where they are (a mission's bomb: a
 /// C4 charge's blast), and blasts reach what scripts wait to see destroyed:

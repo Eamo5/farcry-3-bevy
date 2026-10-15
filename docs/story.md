@@ -3840,3 +3840,22 @@ plays the player, and only goes for a box within `ALARM_REACH` (150 m).
   while a vehicle it drives is in the story's world but not yet in ours, or
   someone still waits to board it (`StorySeatRequests::awaited`), as the
   original seats them at once.
+* **B30's chase.** B30 has the player take a cargo truck and chase the
+  convoy, whose scene sets off two road ambushes and calls the privateers
+  in at its sync points, then fight them where it stops. The autopilot
+  now does that:
+  * gets into a vehicle a script waits for the player to take (an
+    `IsInVehicle` listener, a vehicle it listens to with a seat free:
+    beside it, the normal interaction);
+  * at the wheel, takes the vehicle into the boxes scripts wait on (or
+    stops it facing a look-at spot), holding it there until the ground
+    under it has streamed in (set down 200 m off, it fell through the
+    world);
+  * leaves the boxes alone while a scene drives a vehicle
+    (`Cinema::drives_vehicle`): cutting ahead to where the convoy stops
+    stopped it short of the ambushes;
+  * gets out to fight foes a block counts down within 150 m, even of a
+    vehicle a script listens to; `CCounterEvent` groups count with the
+    `CGroupSizeEvent` ones (B30's two privateers, each counted on its own);
+  * leaves alone a box that failed the mission as it stepped in (within
+    2 s), over reloads: B30's on-foot box fails it whenever entered.
