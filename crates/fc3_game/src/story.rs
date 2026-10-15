@@ -2727,7 +2727,21 @@ fn autopilot_loot(
     plants: Query<(&crate::pickups::Pickup, &GlobalTransform)>,
     mut actions: ResMut<crate::controls::ActionState>,
     mut last: Local<Option<(u64, &'static str)>>,
-    (npcs, crafting, mut next_press, mut shooting, mut skipped, story_actors, action_maps, mut came_near, mut blocked, mut kept_clear, mut far_pickups, taken): (
+    (
+        npcs,
+        crafting,
+        mut next_press,
+        mut shooting,
+        mut skipped,
+        story_actors,
+        action_maps,
+        mut came_near,
+        mut blocked,
+        mut kept_clear,
+        mut far_pickups,
+        taken,
+        placed,
+    ): (
         Query<
             (
                 &Transform,
@@ -2758,8 +2772,9 @@ fn autopilot_loot(
         Local<f32>,
         // Awaited pickups gone to from afar, so that they stream in.
         Local<std::collections::HashSet<u64>>,
-        // What the camera has taken in.
+        // What the camera has taken in, and things placed in the world.
         Res<crate::stealth::CameraTargets>,
+        Query<(&crate::objects::PlacedId, &GlobalTransform)>,
     ),
 ) {
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() { return }
@@ -3213,8 +3228,16 @@ fn autopilot_loot(
             .map(|(t, _, _, _, a, _, _)| (a.id, if a.dead { -0.6 } else { 0.3 }, t.translation))
             .min_by(by_distance)
             .or_else(|| {
+                // (Where it is now, if it is in the world: one on a truck
+                // moves with it. Else where it was placed.)
                 let data = host.story.data();
-                photos.iter().filter_map(|id| data.entities.get(id).map(|e| (*id, 0.1, to_bevy(e.pos)))).min_by(by_distance)
+                photos
+                    .iter()
+                    .filter_map(|id| {
+                        let live = placed.iter().find(|(p, _)| p.0 == *id).map(|(_, gt)| gt.translation());
+                        live.or_else(|| data.entities.get(id).map(|e| to_bevy(e.pos))).map(|at| (*id, 0.1, at))
+                    })
+                    .min_by(by_distance)
             });
         if let Some((id, rise, spot)) = near {
             if *last != Some((id, "photograph")) {
