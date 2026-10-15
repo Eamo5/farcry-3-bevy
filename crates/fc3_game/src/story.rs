@@ -1093,9 +1093,10 @@ fn start_story(world: &mut World, mut tried: Local<bool>) {
     let Some(root) = world.get_resource::<CacheInfo>().map(|c| c.root.clone()) else { return };
     let continued = world.get_resource::<crate::save::SaveContinued>().is_some_and(|c| c.0);
     // FC3_STORY_LOAD=<file> (tests): from a kept checkpoint (see
-    // FC3_STORY_CHECKPOINTS), at its respawn point.
+    // FC3_STORY_CHECKPOINTS), at its respawn point (unless `--pos` places
+    // the player: an outpost to take, from the story as it stands).
     let test_load = std::env::var("FC3_STORY_LOAD").ok().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| fc3_story::save::StorySave::from_text(&t));
-    let to_respawn = test_load.is_some();
+    let to_respawn = test_load.is_some() && world.get_resource::<crate::Args>().is_none_or(|a| !a.placed);
     let saved = test_load.or_else(|| {
         world
             .get_resource::<crate::save::SaveSlot>()
@@ -1367,6 +1368,7 @@ fn run_story(
         view.player_state.max_health = h.max;
     }
     view.player_state.money = progress.money;
+    view.player_state.in_qte = qtes.active();
     view.player_state.loot = loot_catalog.quantities(&progress);
     view.player_state.medpacks = stats.single().map_or(0, |s| s.medkits);
     view.player_state.weapon_slots = perks.weapon_slots as u32;

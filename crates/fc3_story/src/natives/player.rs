@@ -145,6 +145,7 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         })?;
     }
     r.f("CAPI_Player.GetMovementSensitivity", |_, _p: Text| 1.0)?;
+    r.f("CAPI_Player.IsInQTE", |c, _p: Text| c.view.player_state.in_qte)?;
     r.lua("CAPI_Player.GetPlayerLookAngles", |lua, c, _p: Text| vec3(lua, c.view.player_state.look_angles))?;
 
     // Actions with a success result: asked of the host, reported done.

@@ -4289,3 +4289,31 @@ After HUR_040, Hurk's last mission starts with its brief and runs through
 as the autopilot stands: the charges planted on the pillars (B10, B20),
 the freight elevator (B30, B40C), the way out found (B50) and Hurk spoken
 to (B90C). HUR_050 completes; with it every main mission does.
+
+## Outposts, safe houses and the country's activities
+
+An outpost taken is a safe house unlocked: the engine unlocks the safe
+house in an outpost when it is cleared, and the scripts take it from
+there. The outpost's flag controller (`Lib_Common.flag_controler`,
+streamed with its sector) hears `SafeHouseUnlockedEvent` and plays the
+taking (the flag raised, `flag_sequence`); the outposts manager
+(`FC3_OutpostsManager`) hears it too and broadcasts the country's
+`<cell>_OutpostIsUnlocked`, on which the activities masters
+(`FC3_ActivitiesMaster.<cell>_Activities`) open that country's activities
+(a mission block layer each, with its signs, and a map marker). Nothing
+told the story of an outpost taken, so no activity ever opened.
+
+* **The pairing.** Our outposts come from the alarm markers; each is
+  paired with the nearest safe house (`CSafeHouseComponent`) within its
+  bounds and 40 m past them (34 of 37). One taken unlocks its safe house
+  (`Story::unlock_safe_house`, as `UnlockSafeHouse` does: the state
+  scripts read, `SafeHouseUnlockedEvent` raised once); one a script
+  unlocks has its outpost taken with it; on a load the two agree again
+  (`outposts::sync_safe_houses`).
+* **Seen working.** Outpost 22 taken (`--outpost-test`, placed beside it
+  with `--pos` over a kept checkpoint, which no longer sends the player to
+  its respawn point then): its safe house unlocked, its flag scene played,
+  and a use trigger at the outpost (the activity's sign) and a map marker
+  appeared.
+* **`CAPI_Player.IsInQTE`.** Asked as the flag scene's action map is
+  popped; answered from the QTEs (`PlayerView::in_qte`).

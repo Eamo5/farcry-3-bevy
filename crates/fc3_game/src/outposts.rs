@@ -30,6 +30,7 @@ impl Plugin for OutpostsPlugin {
                 reinforce,
                 sabotage_alarms.before(crate::hud::HudSet).after(crate::turrets::man_turrets),
                 liberate,
+                sync_safe_houses,
                 outpost_status.before(crate::hud::HudSet),
                 outpost_test,
                 convoy_test,
@@ -37,6 +38,52 @@ impl Plugin for OutpostsPlugin {
                 .chain()
                 .run_if(in_state(crate::menu::GameState::Playing)),
         );
+    }
+}
+
+/// How far (m) past an outpost's edge its safe house may stand.
+const SAFE_HOUSE_REACH: f32 = 40.0;
+
+/// Each outpost's safe house (the game's: `CSafeHouseComponent`), the
+/// nearest within its bounds: the two kept as one. An outpost taken
+/// unlocks its safe house in the story, as the engine does (its flag
+/// controller plays the taking, and the outposts manager opens the
+/// country's activities: hunting, wanted dead, supplies); one a script
+/// unlocks (JAS_100's first outpost) has its outpost taken with it. On
+/// a load the two agree again.
+fn sync_safe_houses(host: Option<NonSendMut<crate::story::StoryHost>>, mut outposts: ResMut<Outposts>, mut matched: Local<Option<Vec<Option<u64>>>>) {
+    let Some(mut host) = host else { return };
+    if outposts.list.is_empty() {
+        return;
+    }
+    let matched = matched.get_or_insert_with(|| {
+        let houses = host.story.safe_houses();
+        let found: Vec<Option<u64>> = outposts
+            .list
+            .iter()
+            .map(|o| {
+                houses
+                    .iter()
+                    .map(|(id, at, _)| (*id, crate::data::to_bevy(*at)))
+                    .map(|(id, at)| (id, Vec2::new(at.x - o.centre.x, at.z - o.centre.z).length()))
+                    .filter(|(_, d)| *d < o.radius + SAFE_HOUSE_REACH)
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(id, _)| id)
+            })
+            .collect();
+        info!("outposts: {} of {} with their safe house", found.iter().flatten().count(), found.len());
+        found
+    });
+    for (o, house) in outposts.list.iter_mut().zip(matched.iter()) {
+        let Some(id) = *house else { continue };
+        let unlocked = host.story.safe_house_unlocked(id);
+        if o.liberated && !unlocked {
+            info!("outpost taken: safe house {id} unlocked");
+            host.story.unlock_safe_house(id);
+        } else if unlocked && !o.liberated {
+            info!("safe house {id} unlocked: its outpost taken");
+            o.liberated = true;
+        }
     }
 }
 

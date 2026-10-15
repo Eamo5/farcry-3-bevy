@@ -92,6 +92,8 @@ pub struct Item {
 /// The player as scripts ask about them.
 #[derive(Debug, Clone, Default)]
 pub struct PlayerView {
+    /// In a QTE (scripts keep their action maps through one).
+    pub in_qte: bool,
     pub health: f32,
     pub max_health: f32,
     pub money: u32,
@@ -840,6 +842,44 @@ impl Story {
     pub fn message(&mut self, message: &str) {
         self.core.borrow_mut().raise(&Listen::Message(message.to_string()), vec![]);
         self.pump();
+    }
+
+    /// The safe houses the player may hold (outposts' and towns'): their
+    /// ids, places (Dunia) and whether each is the player's.
+    pub fn safe_houses(&self) -> Vec<(u64, [f32; 3], bool)> {
+        let c = self.core.borrow();
+        let mut out: Vec<(u64, [f32; 3], bool)> = c
+            .data
+            .entities
+            .values()
+            .filter(|e| e.component("CSafeHouseComponent").is_some())
+            .map(|e| (e.id, e.pos, c.safehouses_unlocked.contains(&e.id)))
+            .collect();
+        out.sort_by_key(|s| s.0);
+        out
+    }
+
+    pub fn safe_house_unlocked(&self, id: u64) -> bool {
+        self.core.borrow().safehouses_unlocked.contains(&id)
+    }
+
+    /// A safe house the player has taken (an outpost liberated), as the
+    /// engine unlocks one: the state scripts read, and their listeners told
+    /// (an outpost's flag controller; the outposts manager, which opens the
+    /// country's activities).
+    pub fn unlock_safe_house(&mut self, id: u64) {
+        let fresh = {
+            let mut c = self.core.borrow_mut();
+            let fresh = c.safehouses_unlocked.insert(id);
+            if fresh {
+                c.emit(Command::SafeHouse { id, unlocked: true, silent: false });
+                c.raise(&Listen::Entity(id, "SafeHouseUnlockedEvent".into()), vec![]);
+            }
+            fresh
+        };
+        if fresh {
+            self.pump();
+        }
     }
 
     /// A cinematic sequence's progress, as the host plays it: `Started`,
@@ -1900,6 +1940,30 @@ mod tests {
         assert_eq!(heard, [0.0]);
         let state: f64 = story.domino().lua().load("return CAPI_Vehicle.GetVehicleEngineState('40')").eval().unwrap();
         assert_eq!(state, 0.0);
+    }
+
+    /// A safe house the host takes is unlocked as a script would have it:
+    /// the state scripts read, and their listeners told, once.
+    #[test]
+    fn a_safe_house_taken_is_unlocked_and_its_listeners_told_once() {
+        let mut story = empty_story();
+        story
+            .domino()
+            .lua()
+            .load(
+                r##"
+            heard = 0
+            local box = { _type = { OnUnlocked = function(self) heard = heard + 1 end } }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("77", box, "OnUnlocked", "SafeHouseUnlockedEvent")
+        "##,
+            )
+            .exec()
+            .unwrap();
+        story.unlock_safe_house(77);
+        story.unlock_safe_house(77);
+        let (unlocked, heard): (bool, i32) = story.domino().lua().load(r#"return IsSafeHouseUnlocked("77"), heard"#).eval().unwrap();
+        assert!(unlocked);
+        assert_eq!(heard, 1);
     }
 
     /// An alarm box switched off: the boxes listening on its group hear who
