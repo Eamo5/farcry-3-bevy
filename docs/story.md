@@ -3713,3 +3713,10 @@ never let it go quiet:
 The stall dump (every minute with `FC3_STORY_WAIT_DEBUG`) says how long the
 story has been quiet, what last stirred it, and whether a scene holds the
 view or plays the player.
+
+BAM_030's flooded tunnel (B50) waits for three wooden boards across it
+(`GPE/Wood_Prybar03_*`) to be broken (`CDestroyEvent`); the autopilot only
+walked into triggers, so it went back and forth between two far-off
+waterfall triggers. It now goes up to something a script waits to see
+destroyed, within `DESTROY_REACH` (80 m), and breaks it, before it tries
+triggers.
