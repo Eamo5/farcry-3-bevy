@@ -3365,6 +3365,9 @@ fn autopilot_loot(
     // a health listener watches is fought once he fights, JAS_200's
     // visitor not before the meeting is photographed.)
     let to_kill = host.story.size_counted_members();
+    // (A wanted poster's target: gone after wherever he is, and taken down
+    // or cut down, never shot: its death check takes only a blade's.)
+    let wanted = host.story.wanted_dead();
     // (Not while a script waits for an alarm to be switched off: that comes
     // first, before a guard runs for it.)
     let alarm_first = !host.story.alarms_to_disable().is_empty();
@@ -3401,8 +3404,8 @@ fn autopilot_loot(
                     && (!actor.seated || counted.contains(&actor.id))
                     && !skipped.contains_key(&actor.id)
                     && npc.faction.hostile_to_player()
-                    && (to_kill.contains(&actor.id) || npc.state != crate::npc::NpcState::Idle || sniping)
-                    && (near(t) < FIGHT_REACH || (to_kill.contains(&actor.id) && host.quiet > FAR_FOE_AFTER))
+                    && (to_kill.contains(&actor.id) || wanted.contains(&actor.id) || npc.state != crate::npc::NpcState::Idle || sniping)
+                    && (near(t) < FIGHT_REACH || wanted.contains(&actor.id) || (to_kill.contains(&actor.id) && host.quiet > FAR_FOE_AFTER))
             })
             .min_by(|a, b| {
                 let held = |id: u64| if last.is_some_and(|l| l.0 == id) { TARGET_STICK } else { 0.0 };
@@ -3417,6 +3420,7 @@ fn autopilot_loot(
     // began and his health then): he is shot instead.
     let stubborn = quest.is_some_and(|q| {
         !q.1.dead
+            && !wanted.contains(&q.4.id)
             && (*last == Some((q.4.id, "shoot"))
                 || player.swimming
                 // (One on his guard can't be taken down: shot at once.)
@@ -3598,7 +3602,7 @@ fn autopilot_loot(
         }
         return;
     }
-    if let Some((nt, nh, _, _, actor, _, head)) = quest.filter(|_| (engaged || host.quiet > 6.0) && !on_call) {
+    if let Some((nt, nh, _, _, actor, _, head)) = quest.filter(|q| (engaged || host.quiet > 6.0 || wanted.contains(&q.4.id)) && !on_call) {
         let kind = if nh.dead { "search" } else { "take down" };
         if *last != Some((actor.id, kind)) {
             info!("story autopilot: {kind} {}", host.story.data().name_of(actor.id).unwrap_or("?"));

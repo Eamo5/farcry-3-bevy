@@ -1329,6 +1329,24 @@ impl Story {
         groups.into_iter().flat_map(|g| c.groups(&values::Text(g))).filter(|&id| c.is_loaded(id) && !c.dead.contains(&id)).collect()
     }
 
+    /// The characters a wanted poster's death check watches (its target, to
+    /// be killed with a blade or a takedown: `Lib_SideQuest.WantedSQDeathCheck`
+    /// takes only `WeaponMeleeAttack`).
+    pub fn wanted_dead(&self) -> std::collections::HashSet<u64> {
+        let c = self.core.borrow();
+        let groups: std::collections::BTreeSet<_> = c
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Group(g, event) if (event == "Die" || event == "CCounterEvent") && in_graph(&l.callback.target, "wantedsqdeathcheck") => {
+                    Some(g.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        groups.into_iter().flat_map(|g| c.groups(&values::Text(g))).filter(|&id| c.is_loaded(id) && !c.dead.contains(&id)).collect()
+    }
+
     pub fn counted_members(&self) -> std::collections::HashSet<u64> {
         let c = self.core.borrow();
         let groups: std::collections::BTreeSet<_> = c

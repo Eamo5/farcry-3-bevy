@@ -4357,3 +4357,18 @@ then kill the rare animal with that weapon (B20) and skin it to craft
   complete.
 * **Not yet.** The arrows the script spawns from an archetype
   (`Arrow_Bundle_Pickup`) aren't there (the hunt needs none of them).
+
+### Wanted Dead (SQW)
+
+A region's second outpost (or its radio tower) opens its other quests: a
+wanted poster (`Lib_SideQuest.WantedSideQuestGiver`) sends the player to
+kill a commander with a blade or a takedown; its death check
+(`WantedSQDeathCheck`) takes only `WeaponMeleeAttack`, which takedowns and
+the machete's blows now report.
+
+* **The autopilot.** The characters a death check watches
+  (`Story::wanted_dead`) are gone after wherever they are, even with the
+  story stirring all the while (the outpost's people), and taken or cut
+  down, never shot.
+* **Seen.** D5's second outpost (ours 25, beside its safe house) taken,
+  SQW_D5's poster used, its commander taken down: the quest completes.
