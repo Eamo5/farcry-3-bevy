@@ -4159,3 +4159,23 @@ its four key areas, its alarms to be switched off first.
   on. A script's character given the seat the player sits in now has the
   player move over to a free seat, not the wheel (`move_over`), and B40
   completes.
+
+## HOY_040: Hoyt's poker table
+
+HOY_040 sits the player at Hoyt's poker table (`CPokerMiniGame_JAS_220_
+PokerGym_G3`), and the table's story is told in scenes between hands: the
+script starts the game (a `StartPokerJAS220` GSF event), plays
+`HOY_040_B10C_0N.seq` as the game broadcasts each `JAS220_B10C_*` message,
+tells the game when a scene has played (`CinemaSequenceFinished`), and
+ends when the game says the player leaves the table (`JasonLeavesPoker`).
+
+* **The table's story.** The autopilot ended any gameplay we don't play,
+  and the block waited for messages that never came. The scripted
+  sequences the game's instance lists (`ScriptedSequenceIDList`) aren't in
+  any database we read, so the game (`poker.rs`) follows the script
+  instead: once started, after a hand's time (`HAND_SECS`) it broadcasts
+  the next scene a running mission's script waits for
+  (`Story::mission_messages`), the next once the script says it has played,
+  and last the game's own end (`JasonWinsGame`, `JasonLeavesPoker`). All
+  five scenes play, and B10 completes. The hands themselves (cards, bets,
+  the table's movie) and the bars' tables are not played yet.

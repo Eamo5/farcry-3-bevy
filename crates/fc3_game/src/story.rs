@@ -542,6 +542,10 @@ pub struct StoryHost {
     /// Explosives scripts set off (`CAPI_Entity.SendDetonateEvent`), not
     /// yet gone off.
     pub detonations: Vec<u64>,
+    /// GSF generic events scripts send (`SendGSFGenericEventToEntity`'s
+    /// first parameter: `StartPokerJAS220`, `CinemaSequenceFinished`), for
+    /// the minigames to read.
+    pub gsf_events: Vec<String>,
     /// Harm scripts deal (`HealthModifier`'s `DamagePawn`: JAS_190's
     /// fall into the cenote's depths kills), by pawn.
     pub damages: Vec<(u64, f32)>,
@@ -666,6 +670,7 @@ impl StoryHost {
             reinforcements: Vec::new(),
             ai_events: Vec::new(),
             detonations: Vec::new(),
+            gsf_events: Vec::new(),
             damages: Vec::new(),
             spawned_props: Vec::new(),
         }
@@ -1761,8 +1766,11 @@ fn run_story(
                     }
                 }
             }
-        } else if let Some((id, name)) =
-            host.story.gameplays().into_iter().find(|g| g.1 != "QTEGSF" && !host.story.is_qte_gameplay(g.0) && !sniping_challenge(&g.1))
+        } else if let Some((id, name)) = host
+            .story
+            .gameplays()
+            .into_iter()
+            .find(|g| g.1 != "QTEGSF" && !host.story.is_qte_gameplay(g.0) && !sniping_challenge(&g.1) && !g.1.starts_with("CPokerMiniGame"))
         {
             // A minigame or QTE the game doesn't play yet: done. (A sniping
             // challenge is played: its targets shot, see `autopilot_loot`.)
@@ -2073,6 +2081,7 @@ fn run_story(
                     "SendGSFGenericEventToEntity" if a(2) == "QteSetResult" => {
                         qtes.decided.push((a(3).parse().unwrap_or(0), a(4).eq_ignore_ascii_case("success")));
                     }
+                    "SendGSFGenericEventToEntity" => host.gsf_events.push(a(2).to_string()),
                     "DestroySpecificGameplay" => {
                         let id = a(0).parse().unwrap_or(0);
                         qtes.cancelled.push(id);

@@ -949,6 +949,25 @@ impl Story {
     /// one running unacknowledged (the DLC's, from the start). (Not the
     /// exclusive ones: those are the quests, HUR_020; the story's own,
     /// CIT_020, are not.)
+    /// The messages the running missions' scripts wait for (their enabled
+    /// `MessageListener`s), by name: what a minigame broadcasts as its story
+    /// goes on (HOY_040's poker table, `JAS220_B10C_01`...).
+    pub fn mission_messages(&self) -> Vec<String> {
+        let missions = self.missions_running();
+        let c = self.core.borrow();
+        let mut out: Vec<String> = c
+            .listeners
+            .values()
+            .filter_map(|l| {
+                let Listen::Message(m) = &l.on else { return None };
+                mission_of(&c, &l.callback.target).is_some_and(|(name, _)| missions.iter().any(|r| name.starts_with(r.as_str()))).then(|| m.clone())
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
     pub fn missions_running(&self) -> Vec<String> {
         let c = self.core.borrow();
         let mut out: Vec<String> = c

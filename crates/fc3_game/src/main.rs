@@ -59,6 +59,7 @@ mod barks;
 mod breakables;
 mod shake;
 mod aim_assist;
+mod poker;
 mod qte;
 mod stims;
 mod vine;
@@ -438,6 +439,7 @@ fn main() {
         .add_plugins(unlit_effects::UnlitEffectsPlugin)
         .add_plugins(doors::DoorsPlugin)
         .add_plugins(stims::StimsPlugin)
+        .add_plugins(poker::PokerPlugin)
         .add_plugins(story_alarms::StoryAlarmsPlugin)
         .add_plugins(story_props::StoryPropsPlugin)
         .add_plugins(story_rides::StoryRidesPlugin)
