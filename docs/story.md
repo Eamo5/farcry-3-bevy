@@ -4179,3 +4179,29 @@ ends when the game says the player leaves the table (`JasonLeavesPoker`).
   and last the game's own end (`JasonWinsGame`, `JasonLeavesPoker`). All
   five scenes play, and B10 completes. The hands themselves (cards, bets,
   the table's movie) and the bars' tables are not played yet.
+
+## JAS_220: from Hoyt's compound to the airport
+
+JAS_220 starts in Hoyt's compound: the player is to get out of it
+(`TriggerRegionShape_HOYTHQ`), fight off the guards on the way, and reach
+the airport where Riley is held, within twelve minutes.
+
+* **Out of a region.** The autopilot only stepped into triggers; nothing
+  took it out of a region a script waits for the player to leave. Once the
+  story has been quiet `LEAVE_AFTER` (20 s), it now steps just outside such
+  a region it is in (`Story::watched_leaves_of`, `exit_point`), learning a
+  region whose leaving fails the mission as it learns fatal triggers.
+* **Not the mission's area.** A mission's own area is guarded by an exit
+  zone warning (`Lib_Common.ExitZoneWarningListener`): leaving it is warned
+  of, then fails. Its regions are no longer left, nor stepped into (its
+  middle, across the north-west, took the autopilot away from the fight
+  at the compound).
+* **Distance both ways.** The way to the airport is measured from its
+  places to the player (`Entities` the place, `id2` the player), the other
+  way round from the checks the autopilot knew. Both now count
+  (`watched_proximity_in_graph`), and the stall report lists every running
+  distance check (`Story::proximity_debug`).
+* **A fight that won't end.** The two last guards, out of the autopilot's
+  reach in a building, kept it from going near places with a fight on; it
+  now goes after a minute's quiet regardless (`NEAR_DESPITE_FIGHT`), and B05
+  completes.

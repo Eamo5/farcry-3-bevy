@@ -1004,6 +1004,12 @@ impl Story {
             if !matches!(e.as_str(), "Enter" | "Use" | "EnterFOV") || !c.is_loaded(*t) {
                 continue;
             }
+            // (Not a mission's area, entered again to stop its leaving
+            // being warned of: JAS_220's spans the north-west, and going to
+            // its middle left the fight at Hoyt's compound behind.)
+            if in_graph(&l.callback.target, "exitzonewarning") {
+                continue;
+            }
             // A spot a script spawned to be used (a bomb's): where it stands.
             if e == "Use" && c.spawned.contains_key(t) && !c.data.entities.contains_key(t) {
                 if graph.as_deref().is_some_and(|needle| !in_graph(&l.callback.target, needle)) || !keep(&c, &l.callback.target) {
@@ -1051,6 +1057,31 @@ impl Story {
     /// (`ProximityRadiusListener` boxes polling their distance with a plugged
     /// `Near`), optionally only in graphs whose path contains `graph`: the
     /// place's entity, the radius and where it is now (Dunia).
+    /// The distance checks running (`CheckDistance` delays), for working out
+    /// stalls: each one's `Entities`, `id2`, near radius, whether its `Near`
+    /// is plugged, and its graph.
+    pub fn proximity_debug(&self) -> Vec<String> {
+        let c = self.core.borrow();
+        let dummy = self.domino.lua().globals().get::<mlua::Function>("DummyFunction").ok();
+        let text = |t: &Table, k: &str| t.get::<mlua::Value>(k).ok().map(|v| format!("{v:?}")).unwrap_or_default();
+        c.delays
+            .values()
+            .filter(|d| d.running && d.callback.method == "CheckDistance")
+            .map(|d| {
+                let t = &d.callback.target;
+                let near = t.get::<mlua::Function>("Near").ok();
+                let path = t.get::<Table>("_graph").and_then(|g| g.get::<Table>("_type")).and_then(|ty| ty.get::<String>("_path")).unwrap_or_default();
+                format!(
+                    "Entities {} id2 {} near {} plugged {} in {path}",
+                    text(t, "Entities"),
+                    text(t, "id2"),
+                    text(t, "nearZone"),
+                    near.is_some() && near != dummy
+                )
+            })
+            .collect()
+    }
+
     pub fn watched_proximity_in_graph(&self, graph: Option<&str>) -> Vec<(u64, f32, [f32; 3])> {
         let c = self.core.borrow();
         let graph = graph.map(str::to_ascii_lowercase);
@@ -1065,10 +1096,18 @@ impl Story {
             if near.is_none() || near == dummy {
                 continue;
             }
-            let Some(place) = t.get::<values::Text>("id2").ok().and_then(|x| x.id()) else { continue };
-            if !t.get::<values::Text>("Entities").is_ok_and(|e| c.groups(&e).contains(&PLAYER)) {
-                continue;
-            }
+            // (The player among the `Entities` and the place as `id2`, or the
+            // other way round: JAS_220's way to the airport measures from its
+            // places to the player.)
+            let (entities, id2) = (t.get::<values::Text>("Entities").ok(), t.get::<values::Text>("id2").ok());
+            let place = if entities.as_ref().is_some_and(|e| c.groups(e).contains(&PLAYER)) {
+                id2.and_then(|x| x.id())
+            } else if id2.and_then(|x| x.id()) == Some(PLAYER) {
+                entities.and_then(|e| e.id())
+            } else {
+                None
+            };
+            let Some(place) = place else { continue };
             let radius = t.get::<f64>("nearZone").ok().unwrap_or(2.0) as f32;
             if let Some(at) = c.position(place) {
                 out.push((place, radius, at));
@@ -1446,6 +1485,30 @@ impl Story {
     /// Active player-only regions with exit listeners. Automated gathering
     /// keeps targets inside these authored boundaries instead of disabling
     /// their legitimate mission-failure callbacks.
+    /// The regions running missions' scripts wait for the player to leave
+    /// (enabled `Leave` listeners on triggers that are on): their ids and
+    /// shapes (JAS_220's start: out of Hoyt's compound).
+    pub fn watched_leaves_of(&self, missions: &[String]) -> Vec<(u64, triggers::Shape)> {
+        let c = self.core.borrow();
+        let mut out: Vec<(u64, triggers::Shape)> = c
+            .listeners
+            .values()
+            .filter_map(|l| {
+                let Listen::Entity(id, event) = &l.on else { return None };
+                // (Not a mission's boundary, its leaving warned of and then
+                // failed: JAS_220's area, left, fails the search for Riley.)
+                if event != "Leave" || !c.is_loaded(*id) || !c.trigger_on(*id) || in_graph(&l.callback.target, "exitzonewarning") {
+                    return None;
+                }
+                mission_of(&c, &l.callback.target).filter(|(name, _)| missions.iter().any(|m| name.starts_with(m.as_str())))?;
+                Some((*id, triggers::shape_of(c.data.entities.get(id)?)?))
+            })
+            .collect();
+        out.sort_by_key(|o| o.0);
+        out.dedup_by_key(|o| o.0);
+        out
+    }
+
     pub fn watched_exit_regions(&self) -> Vec<triggers::Shape> {
         let c = self.core.borrow();
         let mut ids: Vec<_> = c.listeners.values().filter_map(|l| {

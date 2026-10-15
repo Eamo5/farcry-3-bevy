@@ -1542,6 +1542,9 @@ fn run_story(
         for w in host.story.waiting_on() {
             info!("story autopilot: waiting on {w}");
         }
+        for p in host.story.proximity_debug() {
+            info!("story autopilot: distance check: {p}");
+        }
         for w in host.story.watched_triggers() {
             info!("story autopilot: trigger {} {}: {}", w.0, w.1, host.story.trigger_debug(w.0));
         }
@@ -1616,6 +1619,21 @@ fn run_story(
             .into_iter()
             .filter(|(id, _)| !host.used.contains(&(*id, "destroy".to_string())))
             .find(|(_, at)| to_bevy(*at).distance(here) < DESTROY_REACH);
+        // A region a running mission waits for the player to leave, him in
+        // it (JAS_220's start: out of Hoyt's compound for the airport), the
+        // story quiet a while: just outside it.
+        let leave = if host.quiet > LEAVE_AFTER && !p.driving {
+            let feet = to_dunia(t.translation - Vec3::Y * crate::player::HALF_HEIGHT);
+            host.story.watched_leaves_of(&focus).into_iter().find_map(|(id, shape)| {
+                let key = (id, "Leave".to_string());
+                (shape.contains(feet) && !host.used.contains(&key) && !host.fatal.contains(&key))
+                    .then(|| exit_point(&shape, feet, |x, y| heights.height_at(to_bevy([x, y, 0.0])).map(|h| to_dunia(Vec3::Y * h)[2])))
+                    .flatten()
+                    .map(|at| (id, at))
+            })
+        } else {
+            None
+        };
         let next = focused.iter().chain(watched.iter()).find(|w| {
             !awaiting_rock
                 && !leading
@@ -1669,6 +1687,12 @@ fn run_story(
                     host.quiet = 0.0;
                 }
             }
+        } else if let Some((id, at)) = leave {
+            info!("story autopilot: Leave {}", data.name_of(id).unwrap_or("?"));
+            host.used.insert((id, "Leave".into()));
+            host.last_step = Some((id, "Leave".into(), now));
+            teleport(&mut t, &mut p, at, 0.0);
+            host.quiet = 0.0;
         } else if let Some((id, at)) = destructible {
             info!("story autopilot: breaking {}", data.name_of(id).unwrap_or("?"));
             host.used.insert((id, "destroy".into()));
@@ -1733,11 +1757,18 @@ fn run_story(
             .filter(|_| tails.is_empty())
             .filter(|_| {
                 // (Not with a fight on: a block's counted foes close by, the
-                // reinforcements it waits on still coming.)
+                // reinforcements it waits on still coming. Unless the story
+                // has long been quiet: JAS_220's last two guards at Hoyt's,
+                // out of the autopilot's reach, held it from the airport till
+                // the search for Riley ran out of time.)
                 let counted = host.story.counted_members();
-                !actors.iter().any(|(a, at, npc)| {
-                    !a.dead && counted.contains(&a.id) && npc.is_some_and(|n| n.faction.hostile_to_player()) && at.translation.distance(t.translation) < 200.0
-                })
+                host.quiet > NEAR_DESPITE_FIGHT
+                    || !actors.iter().any(|(a, at, npc)| {
+                        !a.dead
+                            && counted.contains(&a.id)
+                            && npc.is_some_and(|n| n.faction.hostile_to_player())
+                            && at.translation.distance(t.translation) < 200.0
+                    })
             })
         {
             // A place a script waits for the player to come near (a quest
@@ -2528,6 +2559,29 @@ const DESTROY_REACH: f32 = 80.0;
 /// A mission failing this soon after the autopilot stepped into a trigger
 /// failed for it.
 const FATAL_WITHIN: f32 = 2.0;
+/// How long the story is quiet before the autopilot leaves a region a
+/// mission waits for the player to leave (short of the 25 s after which
+/// it steps into triggers it used again).
+const LEAVE_AFTER: f32 = 20.0;
+/// How long the story is quiet before the autopilot goes near a place a
+/// script waits for with a fight on still.
+const NEAR_DESPITE_FIGHT: f32 = 60.0;
+
+/// Just outside a region (Dunia), the nearest a few metres' steps away from
+/// `from` in one of 16 directions, on the ground `ground` gives.
+fn exit_point(shape: &fc3_story::triggers::Shape, from: [f32; 3], ground: impl Fn(f32, f32) -> Option<f32>) -> Option<[f32; 3]> {
+    (0..16)
+        .filter_map(|k| {
+            let (s, c) = (k as f32 * std::f32::consts::TAU / 16.0).sin_cos();
+            (1..100).map(|i| i as f32 * 4.0).find_map(|d| {
+                let (x, y) = (from[0] + c * d, from[1] + s * d);
+                let z = ground(x, y).unwrap_or(from[2]);
+                (!shape.contains([x, y, z + 0.5])).then_some((d, [x + c * 2.0, y + s * 2.0, z]))
+            })
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, p)| p)
+}
 /// How far an objective marker may be for the autopilot at the wheel to
 /// drive to it, nothing else to drive into: not one beside it (on a
 /// passenger), nor one across the island (a quest giver's).
@@ -3787,6 +3841,15 @@ mod tests {
     use super::*;
     use crate::controls::{Action, ActionState, Binding};
     use crate::settings::Settings;
+
+    /// A region is left by its nearest side, a step beyond it, on the ground.
+    #[test]
+    fn a_region_is_left_by_its_nearest_side() {
+        let shape = fc3_story::triggers::Shape::Box { centre: [0.0, 0.0, 0.0], half: [10.0, 50.0, 20.0], yaw: 0.0 };
+        let at = exit_point(&shape, [0.0, 0.0, 0.0], |_, _| Some(1.0)).unwrap();
+        assert!(!shape.contains([at[0], at[1], 1.5]));
+        assert!(at[0].abs() > 10.0 && at[0].abs() < 16.0 && at[1].abs() < 1.0 && at[2] == 1.0, "{at:?}");
+    }
 
     #[test]
     fn triggers_left_alone_are_read_back_a_line_each() {
