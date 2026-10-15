@@ -2980,6 +2980,20 @@ fn sniping_challenge(gameplay: &str) -> bool {
 /// Tests: how far behind a character the autopilot keeps when tailing him
 /// (it goes back there outside `TAIL_NEAR..TAIL_FAR` metres).
 const TAIL_DISTANCE: f32 = 14.0;
+/// Where the autopilot stands to photograph a thing.
+#[derive(Default)]
+struct PhotoStand {
+    /// The thing, the feet, how often the player was put there, and how
+    /// long the camera has been up at it from there.
+    at: Option<(u64, Vec3, u8, f32)>,
+    /// Stands that gave no photo (JAS_200's meeting, seen from a bridge
+    /// beside it at first and then not: its people came between).
+    tried: Vec<Vec3>,
+}
+
+/// How long the camera is held up at a thing from one stand before another.
+const PHOTO_PATIENCE: f32 = 6.0;
+
 const TAIL_NEAR: f32 = 8.0;
 const TAIL_FAR: f32 = 30.0;
 
@@ -3054,9 +3068,7 @@ fn autopilot_loot(
         Res<crate::stealth::CameraTargets>,
         Query<(&crate::objects::PlacedId, &GlobalTransform)>,
         avian3d::prelude::SpatialQuery,
-        // Where to stand to photograph a thing (its id, the feet, and how
-        // often the player was put there).
-        Local<Option<(u64, Vec3, u8)>>,
+        Local<PhotoStand>,
     ),
 ) {
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() { return }
@@ -3596,9 +3608,14 @@ fn autopilot_loot(
                         && Dir3::new(to).is_ok_and(|dir| spatial.cast_ray(eye, dir, dist, true, &filter).is_none_or(|hit| hit.distance > dist - 1.0))
                 };
                 let feet_now = at.translation - Vec3::Y * crate::player::HALF_HEIGHT;
-                if photo_stand.is_none_or(|s| s.0 != id) {
+                if photo_stand.at.is_none_or(|s| s.0 != id) {
+                    if photo_stand.at.is_some() {
+                        photo_stand.tried.clear();
+                    }
+                    let tried = &photo_stand.tried;
+                    let fresh = |feet: Vec3| tried.iter().all(|t| t.distance(feet) > 3.0);
                     let toward = flat.normalize_or(Vec3::Z);
-                    let stand = if !player.noclip && sees(feet_now + Vec3::Y * player.eye) {
+                    let stand = if !player.noclip && fresh(feet_now) && sees(feet_now + Vec3::Y * player.eye) {
                         Some(feet_now)
                     } else {
                         [10.0f32, 16.0, 24.0, 32.0].into_iter().flat_map(|d| (0..8).map(move |k| (d, k))).find_map(|(d, k)| {
@@ -3606,17 +3623,26 @@ fn autopilot_loot(
                             let probe = spot + side * d + Vec3::Y * 6.0;
                             let floor = spatial.cast_ray(probe, Dir3::NEG_Y, 80.0, true, &filter)?;
                             let feet = probe - Vec3::Y * floor.distance;
-                            sees(feet + Vec3::Y * player.eye).then_some(feet)
+                            (fresh(feet) && sees(feet + Vec3::Y * player.eye)).then_some(feet)
                         })
                     };
                     info!("story autopilot: photo stand {:?}", stand.map(to_dunia));
-                    *photo_stand = stand.map(|feet| (id, feet, 0));
+                    photo_stand.at = stand.map(|feet| (id, feet, 0, 0.0));
                 }
-                if let Some((_, feet, tries)) = photo_stand.as_mut() {
+                let PhotoStand { at: stand, tried } = &mut *photo_stand;
+                if let Some((_, feet, tries, held)) = stand.as_mut() {
                     if feet_now.distance(*feet) > 2.0 && *tries < 2 {
                         *tries += 1;
                         teleport(&mut at, &mut player, to_dunia(*feet), 0.0);
                         host.quiet = 0.0;
+                        return;
+                    }
+                    // (No photo from there after a while: another stand.)
+                    *held += time.delta_secs();
+                    if *held > PHOTO_PATIENCE {
+                        info!("story autopilot: no photo from {:?}; another stand", to_dunia(*feet));
+                        tried.push(*feet);
+                        *stand = None;
                         return;
                     }
                     let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);

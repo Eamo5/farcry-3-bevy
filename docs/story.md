@@ -4102,3 +4102,11 @@ start, its crew seated, then driven along its way), and being seen fails it.
   script waits for loot, never went on to the getaway vehicle. A mission's
   item the player holds is no longer looked for (`CraftCatalog::
   still_wanted`), and JAS_200 completes; JAS_210 starts.
+
+* **Another stand.** From a stand on the bridge beside the meeting the
+  camera saw the guard rail when the stand was chosen and then not (its
+  people came between, or the camera's eye sits higher than the one the
+  stand was chosen for). A stand that gives no photo within 6 s
+  (`PHOTO_PATIENCE`) is now left for the next one. With
+  `FC3_CAMERA_DEBUG`, the camera logs each awaited thing's distance,
+  angle off the view and what a ray to it hits first.

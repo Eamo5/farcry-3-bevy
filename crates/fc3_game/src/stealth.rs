@@ -402,6 +402,19 @@ fn binoculars(
             .min_by(|a, b| a.2.length().total_cmp(&b.2.length()))
             .map(|(id, dead, to)| (id, dead, to.length(), to.normalize_or_zero().dot(cam.forward().as_vec3()).clamp(-1.0, 1.0).acos().to_degrees()));
         info!("camera up; nearest story character (id, dead, m, degrees off): {near:?}");
+        // The things awaited where the story placed them: how far, how far
+        // off the view, and what a ray to them hits first, how far short.
+        let filter = SpatialQueryFilter::from_excluded_entities([pe]);
+        for &(id, spot) in &targets.spots {
+            let to = spot - cam.translation();
+            let off = to.normalize_or_zero().dot(cam.forward().as_vec3()).clamp(-1.0, 1.0).acos().to_degrees();
+            let hit = Dir3::new(to).ok().and_then(|dir| spatial.cast_ray(cam.translation(), dir, to.length(), true, &filter));
+            info!(
+                "camera up; awaited thing {id}: {:.1} m, {off:.1} degrees off, ray hits {:?}",
+                to.length(),
+                hit.map(|h| (h.entity, to.length() - h.distance))
+            );
+        }
     }
     let Ok(cam) = camera.single() else { return };
     let eye = cam.translation();
