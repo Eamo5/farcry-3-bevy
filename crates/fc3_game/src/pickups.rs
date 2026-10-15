@@ -81,6 +81,10 @@ impl OwnLoot {
     }
 }
 
+/// A body the player has searched (the story hears it: `OnLooting`).
+#[derive(Component)]
+pub struct Searched;
+
 /// Searching a body: cash, ammo for the guns carried, and sometimes what the
 /// enemy fought with.
 #[allow(clippy::too_many_arguments)]
@@ -147,7 +151,7 @@ pub(crate) fn loot_bodies(
         }
         hud.notify(note);
         sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 0.6 });
-        commands.entity(e).remove::<LootableBody>();
+        commands.entity(e).remove::<LootableBody>().insert(Searched);
         return;
     }
     let mut found = Vec::new();
@@ -180,7 +184,7 @@ pub(crate) fn loot_bodies(
     found.extend(extra.map(str::to_string));
     hud.notify(if found.is_empty() { "Nothing useful".to_string() } else { format!("Found {}", found.join(", ")) });
     sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 0.6 });
-    commands.entity(e).remove::<LootableBody>();
+    commands.entity(e).remove::<LootableBody>().insert(Searched);
 }
 
 /// Takes what was rolled: the cash (doubled by `SP_LootDoubleCash`), loot items

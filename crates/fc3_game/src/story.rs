@@ -44,7 +44,7 @@ impl Plugin for StoryPlugin {
             .add_systems(Update, draw_markers.after(StorySet))
             .add_systems(Update, (player_landings, autopilot_drop).after(StorySet).run_if(in_state(GameState::Playing)))
             .add_systems(Update, story_blasts.after(StorySet).before(crate::breakables::BreakablesSet))
-            .add_systems(Update, story_damage.after(StorySet))
+            .add_systems(Update, (story_damage, story_searches).after(StorySet))
             .add_systems(PreUpdate, story_boxes.after(crate::controls::update_actions))
             .add_systems(PreUpdate, story_interactions.after(story_boxes))
             .add_systems(PreUpdate, autopilot_loot.after(story_interactions).before(crate::controls::apply_action_maps).run_if(in_state(GameState::Playing)))
@@ -2475,6 +2475,16 @@ const FATAL_WITHIN: f32 = 2.0;
 /// Harm a script deals that kills whoever takes it.
 const KILLING_BLOW: f32 = 1000.0;
 
+/// A story character's body searched: scripts waiting for it hear
+/// `OnLooting` (HOY_020's VIPs, searched for evidence).
+fn story_searches(host: Option<NonSendMut<StoryHost>>, searched: Query<&crate::story_actors::StoryActor, Added<crate::pickups::Searched>>) {
+    let Some(mut host) = host else { return };
+    for a in &searched {
+        debug!("story: {} searched", a.id);
+        host.story.entity_event(a.id, "OnLooting", vec![]);
+    }
+}
+
 /// Harm scripts deal lands on the player or the story's character it names.
 fn story_damage(
     host: Option<NonSendMut<StoryHost>>,
@@ -3076,9 +3086,10 @@ fn autopilot_loot(
     let engaged = last.is_some_and(|l| l.1 == "take down" || l.1 == "search");
     let quest_of = |own: Option<&crate::pickups::OwnLoot>| own.is_some_and(|o| carries_quest(o));
     let near = |t: &Transform| t.translation.distance(at.translation);
+    // (Or one a script waits to see searched: HOY_020's VIPs.)
     let quest = npcs
         .iter()
-        .filter(|(_, h, body, own, _, _, _)| quest_of(*own) && (!h.dead || body.is_some()))
+        .filter(|(_, h, body, own, actor, _, _)| (quest_of(*own) || host.story.awaits_event(actor.id, "OnLooting")) && (!h.dead || body.is_some()))
         .min_by(|a, b| b.1.dead.cmp(&a.1.dead).then(near(a.0).total_cmp(&near(b.0))));
     // Then the story's hostile characters out after the player, or in a
     // group a block counts down (the reinforcements and guards it waits on

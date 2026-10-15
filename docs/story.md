@@ -3977,3 +3977,13 @@ way out.
   rifle on its back. It now draws the gun that harms the foe most from
   where it stands (damage over the interval between shots), of those that
   reach him.
+
+## HOY_020: the VIPs
+
+HOY_020's first block has three VIPs killed and their bodies searched
+for evidence, each searched body heard as `OnLooting` on its character
+(`LootEntityListener`). Searching a body never told the story, and the
+autopilot searched only bodies carrying a mission's item. A searched body
+is now marked (`pickups::Searched`) and the story hears `OnLooting` on its
+character (`story_searches`); the autopilot takes down, then searches,
+the characters a script waits to see searched.
