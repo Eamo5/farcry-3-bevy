@@ -451,10 +451,18 @@ fn fighter_of(e: &fc3_story::data::Entry) -> Option<Fighter> {
     if !agent.child("ArmyHostileMask").and_then(|m| m.bool("bGrey")).unwrap_or(false) {
         return None;
     }
-    let mut beheader = false;
-    agent.walk(&mut |o, _| beheader |= o.str("tmplPersonalityType").is_some_and(|p| p.to_ascii_lowercase().contains("personality.beheader")));
+    let mut personality = String::new();
+    agent.walk(&mut |o, _| {
+        if personality.is_empty() {
+            personality = o.str("tmplPersonalityType").map(|p| p.to_ascii_lowercase()).unwrap_or_default();
+        }
+    });
+    let beheader = personality.contains("personality.beheader");
     let primary = agent.child("ShootingPrefsSingle").and_then(|w| w.str("tmplPrimaryWeapon")).unwrap_or_default();
-    let role = crate::npc::role_from_weapon(&primary).or(beheader.then_some(crate::npc::Role::Charger))?;
+    // (A sniper's own weapon preference is "Unused": his personality says
+    // what he is. HOY_010's last pirate, a sniper, was nobody's foe.)
+    let by_personality = || (!personality.is_empty() && !beheader).then(|| crate::npc::role_from_weapon(&personality)).flatten();
+    let role = crate::npc::role_from_weapon(&primary).or_else(by_personality).or(beheader.then_some(crate::npc::Role::Charger))?;
     let name = e.name.to_ascii_lowercase();
     let faction = if name.contains("privateer") || name.contains("mercenar") { crate::npc::Faction::Privateer } else { crate::npc::Faction::Pirate };
     Some(Fighter { faction, role, scripted: agent.bool("bStartOnScriptControl").unwrap_or(false) })

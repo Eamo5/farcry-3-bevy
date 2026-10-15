@@ -4026,3 +4026,9 @@ of Sam's, 28 m near and 32 m far, that warns on the screen).
   groups blocks count down with their members still alive, whether in
   the world and where (`Story::counted_report`): the block's last foe,
   in the world but out of the fight, showed there.
+
+* **Snipers.** That last foe was a sniper, whose own weapon preference
+  reads "Unused" (the multi-weapon one carries the rifle), so he wasn't
+  taken for a fighter: no AI, and the autopilot kept clear of him as of
+  someone to keep safe. A character with no usable preference is now
+  taken for what its personality says (`Personality.Sniper`: a sniper).
