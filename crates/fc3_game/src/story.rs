@@ -2914,6 +2914,11 @@ const STRATEGIC_REACH: f32 = 15.0;
 /// the player is.
 const KEEP_CLEAR: f32 = 10.0;
 
+/// Tests: how far the autopilot lets a companion leading the way get in a
+/// fight (m), coming back to `KEEP_CLEAR` and a little more behind it: the
+/// scripts want the player close (HOY_010's Sam).
+const ESCORT_IN_FIGHT: f32 = 20.0;
+
 /// A sniping set-piece (`CSnipingChallenge_...`): the player shoots its
 /// targets from where they stand.
 fn sniping_challenge(gameplay: &str) -> bool {
@@ -3048,21 +3053,31 @@ fn autopilot_loot(
     }
     // A companion leading the way: kept up with (back to a few metres
     // behind it when it gets away), so it doesn't stop to wait; fights on
-    // the way are still the takedown step's.
+    // the way are still the takedown step's. In a fight, kept within
+    // `ESCORT_IN_FIGHT`, back to clear of it and not turned to it (the
+    // player put beside it, facing it, as a shotgun went off killed Sam in
+    // HOY_010).
     let leading = host.story.companions().into_iter().find(|c| matches!(c.1, fc3_story::Companion::Lead { .. }));
     if let Some((id, fc3_story::Companion::Lead { distance, .. })) = leading {
         if let Some((t, _, _)) = story_actors.iter().find(|(_, a, _)| a.id == id && !a.dead) {
             let flat = (at.translation - t.translation).with_y(0.0);
-            if flat.length() > distance.min(12.0) {
+            let fight = npcs.iter().any(|q| {
+                !q.1.dead && q.5.faction.hostile_to_player() && q.5.state != crate::npc::NpcState::Idle && q.0.translation.distance(at.translation) < 80.0
+            });
+            let keep = if fight { ESCORT_IN_FIGHT.min(distance) } else { distance.min(12.0) };
+            if flat.length() > keep {
                 if *last != Some((id, "escort")) {
                     info!("story autopilot: keep up with {}", host.story.data().name_of(id).unwrap_or("?"));
                     *last = Some((id, "escort"));
                 }
-                let mut feet = t.translation + flat.normalize_or(Vec3::Z) * 4.0;
+                let back = (if fight { KEEP_CLEAR + 2.0 } else { 4.0 }).min(keep * 0.6);
+                let mut feet = t.translation + flat.normalize_or(Vec3::Z) * back;
                 feet.y = heights.height_at(feet).unwrap_or(t.translation.y - crate::player::HALF_HEIGHT);
                 teleport(&mut at, &mut player, to_dunia(feet), 0.0);
-                let aim = t.translation - at.translation;
-                player.yaw = (-aim.x).atan2(-aim.z);
+                if !fight {
+                    let aim = t.translation - at.translation;
+                    player.yaw = (-aim.x).atan2(-aim.z);
+                }
                 return;
             }
         }
@@ -3293,7 +3308,9 @@ fn autopilot_loot(
             return;
         }
         *blocked = None;
-        if now >= *next_press {
+        // (Not straight after being moved: the aim was taken from where the
+        // player stood.)
+        if now >= *next_press && !player.spawning && now - player.spawned_at >= 0.5 {
             *next_press = now + 0.25;
             use crate::controls::Action;
             // The gun that harms him most from here, of those that reach him

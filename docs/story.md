@@ -3987,3 +3987,17 @@ autopilot searched only bodies carrying a mission's item. A searched body
 is now marked (`pickups::Searched`) and the story hears `OnLooting` on its
 character (`story_searches`); the autopilot takes down, then searches,
 the characters a script waits to see searched.
+
+## HOY_010: Sam and the bombs
+
+HOY_010 has Sam lead the player from bomb to bomb, defusing each while
+pirates come, and fails if he dies or the player strays (a distance check
+of Sam's, 28 m near and 32 m far, that warns on the screen).
+
+* **Not into Sam.** The autopilot keeps up with a companion leading the
+  way, back to a few metres behind it and turned to it; mid-fight that put
+  the player beside Sam, facing him, as a shotgun shot it had asked for
+  went off, and Sam died. In a fight it now lets the companion get 20 m
+  ahead (`ESCORT_IN_FIGHT`), comes back to clear of it, and doesn't turn to
+  it; and it doesn't fire within half a second of being moved (the aim was
+  taken from where the player stood).
