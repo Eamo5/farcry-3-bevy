@@ -280,6 +280,9 @@ fn main() -> Result<()> {
             let bytes = vfs.read_hash(parse_target(&vfs, target)?)?;
             let m = fc3_formats::mesh::decode(&bytes, 8)?;
             println!("bbox {:?} .. {:?}  bones {}", m.bbox_min, m.bbox_max, m.bones.len());
+            for (i, b) in m.bones.iter().enumerate() {
+                println!("bone {i} {} ({:08X}) parent {} at {:?}", b.name, b.name_hash, b.parent, b.translation);
+            }
             for (i, (d, l)) in m.lods.iter().enumerate() {
                 println!("lod {i} dist {d}: {} verts {} tris {} submeshes", l.positions.len(), l.indices.len() / 3, l.submeshes.len());
             }
