@@ -3951,3 +3951,12 @@ way out.
   dock it waited for ever: nobody came, and the boat they were to take
   never left. An order called in relaxed, with no way in to bring it, now
   puts its mercs at the point itself, whatever is under it (`at_post`).
+
+* **Seats by their place.** A script's `SeatIndex` counts all the
+  vehicle's seats in their order (the Zodiac's: the wheel, four benches,
+  the gun; its crew ask for 0 and 5 naming no kind, and gunners elsewhere
+  for 2 with the gunner's kind). We counted among the seats of the kind
+  asked, so one of the crew sat at the wheel and the other found no seat
+  5. The seat at that place is now taken first (`SeatSlot::slot`), then,
+  when a kind is named, the kind's own numbering, then any free seat the
+  script allows.

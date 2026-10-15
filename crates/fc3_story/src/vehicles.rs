@@ -161,7 +161,11 @@ mod tests {
 pub struct Seat {
     pub bone: u32,
     pub kind: i32,
+    /// Among the seats of its kind.
     pub index: i32,
+    /// Among all the vehicle's seats, as scripts' `SeatIndex` counts them
+    /// (the Zodiac's gun, after the wheel and four benches: 5).
+    pub slot: i32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -177,11 +181,11 @@ impl Layout {
         let mut layout = Self { animation_type: vehicle.u32("iAnimVehicleType").unwrap_or(0) as i32,
             vehicle_type: vehicle.u32("selVehicleType").unwrap_or(0) as i32, ..Self::default() };
         let mut indices = HashMap::<i32, i32>::new();
-        for seat in vehicle.child("SeatsInfo").into_iter().flat_map(|c| &c.children).filter(|c| c.is("SeatInfo")) {
+        for (slot, seat) in vehicle.child("SeatsInfo").into_iter().flat_map(|c| &c.children).filter(|c| c.is("SeatInfo")).enumerate() {
             let (Some(bone), Some(kind)) = (seat.u32("disSeatBoneInfo"), seat.u32("disSeatTypeInfo")) else { continue };
             if !(1..=3).contains(&kind) { continue; }
             let index = indices.entry(kind as i32).or_default();
-            layout.seats.push(Seat { bone, kind: kind as i32, index: *index });
+            layout.seats.push(Seat { bone, kind: kind as i32, index: *index, slot: slot as i32 });
             *index += 1;
         }
         Some(layout)

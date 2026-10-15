@@ -856,7 +856,9 @@ pub struct Vehicle {
 #[derive(Clone)]
 struct SeatSlot {
     kind: i32,
+    /// Among the seats of its kind, and among all the vehicle's seats.
     index: i32,
+    slot: i32,
     /// Authored sit-point transform in model space (feet, not camera).
     pose: Transform,
     pawn: Option<u64>,
@@ -986,6 +988,7 @@ pub struct Driving {
 #[derive(Resource, Default)]
 pub(crate) struct StorySeatRequests(Vec<SeatRequest>);
 
+#[derive(Clone)]
 struct SeatRequest {
     vehicle: u64,
     pawn: u64,
@@ -1041,10 +1044,21 @@ impl StorySeatRequests {
     }
 }
 
+/// The seat a script asks for: by its place among all the vehicle's seats
+/// (`SeatIndex`, as the game counts it: JAS_190's Zodiac crew ask for 0, the
+/// wheel, and 5, the gun, naming no kind), of the kind asked if any; else,
+/// with a kind, by its place among that kind's (the seats our own layouts
+/// number so); else any free one, when the script allows another.
 fn requested_seat(v: &Vehicle, request: &SeatRequest) -> Option<usize> {
-    let matches = |s: &SeatSlot| (request.kinds.is_empty() || request.kinds.contains(&s.kind)) && (request.index < 0 || request.index == s.index);
-    v.seats.iter().position(|s| s.pawn.is_none_or(|p| p == request.pawn) && matches(s))
-        .or_else(|| request.alternate.then(|| v.seats.iter().position(|s| s.pawn.is_none())).flatten())
+    let free = |s: &SeatSlot| s.pawn.is_none_or(|p| p == request.pawn);
+    let kind = |s: &SeatSlot| request.kinds.is_empty() || request.kinds.contains(&s.kind);
+    let by_slot = (request.index >= 0).then(|| v.seats.iter().position(|s| s.slot == request.index && kind(s) && free(s))).flatten();
+    let by_kind = || {
+        (request.index < 0 || !request.kinds.is_empty())
+            .then(|| v.seats.iter().position(|s| free(s) && kind(s) && (request.index < 0 || request.index == s.index)))
+            .flatten()
+    };
+    by_slot.or_else(by_kind).or_else(|| request.alternate.then(|| v.seats.iter().position(|s| s.pawn.is_none())).flatten())
 }
 
 /// Script requests wait for both physical entities. NPC driver requests may
@@ -1556,7 +1570,7 @@ fn build_vehicle_inner(commands: &mut Commands, def: usize, model: &Fc3Model, at
             occupied: false,
             parked: true,
             body,
-            seats: vec![SeatSlot { kind: 1, index: 0, pose: Transform::IDENTITY, pawn: None }],
+            seats: vec![SeatSlot { kind: 1, index: 0, slot: 0, pose: Transform::IDENTITY, pawn: None }],
             vehicle_type: match d.kind {
                 Kind::Car => 0,
                 Kind::Boat => 1,
@@ -1671,7 +1685,7 @@ fn author_seats(commands: &mut Commands, root: Entity, model: &Fc3Model, layout:
         .iter()
         .filter_map(|s| {
             let pose = seat_bone_pose(&model.bones, s.bone)?;
-            Some(SeatSlot { kind: s.kind, index: s.index, pose, pawn: None })
+            Some(SeatSlot { kind: s.kind, index: s.index, slot: s.slot, pose, pawn: None })
         })
         .collect();
     if seats.is_empty() && layout.seats.is_empty() {
@@ -1883,8 +1897,8 @@ mod story_vehicle_tests {
             revs: 0.0,
             glide: Glide::default(),
             seats: vec![
-                SeatSlot { kind: 1, index: 0, pose: Transform::from_xyz(-0.6, 0.8, 0.0), pawn: None },
-                SeatSlot { kind: 3, index: 0, pose: Transform::from_xyz(0.6, 0.8, 0.0), pawn: None },
+                SeatSlot { kind: 1, index: 0, slot: 0, pose: Transform::from_xyz(-0.6, 0.8, 0.0), pawn: None },
+                SeatSlot { kind: 3, index: 0, slot: 1, pose: Transform::from_xyz(0.6, 0.8, 0.0), pawn: None },
             ],
         }
     }
@@ -1925,8 +1939,13 @@ mod story_vehicle_tests {
         assert_eq!(requested_seat(&v, &request), Some(0)); // script can put Dennis in player-locked seat
         v.seats[0].pawn = Some(999);
         assert_eq!(requested_seat(&v, &request), None);
-        let alternate = SeatRequest { alternate: true, ..request };
+        let alternate = SeatRequest { alternate: true, ..request.clone() };
         assert_eq!(requested_seat(&v, &alternate), Some(1));
+        // No kind named: the index counts all the seats (the passenger's, 1).
+        let second = SeatRequest { kinds: Vec::new(), index: 1, ..request.clone() };
+        assert_eq!(requested_seat(&v, &second), Some(1));
+        let missing = SeatRequest { kinds: Vec::new(), index: 5, ..request };
+        assert_eq!(requested_seat(&v, &missing), None);
         v.seats[1].pawn = Some(fc3_story::PLAYER);
         assert_eq!(v.available_seat(&rules), None);
         v.seats[1].pawn = None;
@@ -3275,7 +3294,8 @@ fn drive_test(
             // passenger (armed, in the seat's own view).
             let seat = if std::env::var("FC3_DRIVE_SEAT").as_deref() == Ok("passenger") {
                 let pose = Transform::from_translation(v.seat() + Vec3::X * 0.8);
-                v.seats.push(SeatSlot { kind: 3, index: 0, pose, pawn: None });
+                let slot = v.seats.len() as i32;
+                v.seats.push(SeatSlot { kind: 3, index: 0, slot, pose, pawn: None });
                 v.seats.len() - 1
             } else {
                 0
