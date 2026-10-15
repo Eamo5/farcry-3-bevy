@@ -1597,7 +1597,10 @@ fn run_story(
             .filter(|(a, _, _)| !a.dead && companions.iter().any(|c| c.0 == a.id && matches!(c.1, fc3_story::Companion::Follow)))
             .map(|(_, t, _)| t.translation)
             .collect();
-        let near_companion = |p: [f32; 3]| kept.is_empty() || kept.iter().any(|c| c.distance(to_bevy(p)) < COMPANION_REACH);
+        // (Unless the story has long been quiet: the companion follows the
+        // player, who waits by him for nothing. JAS_220's Riley, to be
+        // brought to the chopper, stood with the player 40 m off it.)
+        let near_companion = |p: [f32; 3]| kept.is_empty() || host.quiet > NEAR_DESPITE_FIGHT || kept.iter().any(|c| c.distance(to_bevy(p)) < COMPANION_REACH);
         // A door a script waits to see opened goes first: the triggers past
         // it (BAM_060's inside Buck's hut, which lock the door behind him)
         // are for walking through it into.

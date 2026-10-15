@@ -4205,3 +4205,9 @@ the airport where Riley is held, within twelve minutes.
   reach in a building, kept it from going near places with a fight on; it
   now goes after a minute's quiet regardless (`NEAR_DESPITE_FIGHT`), and B05
   completes.
+* **A companion left behind.** The autopilot steps only into triggers
+  near a companion who follows the player, lest it leave the companion
+  behind; Riley, to be brought to the chopper, follows the player, who
+  stood by him 40 m from it, and neither moved. After a minute's quiet
+  (`NEAR_DESPITE_FIGHT`) the trigger is taken regardless, Riley follows,
+  and the chopper scenes play: JAS_220 completes, and JAS_230 starts.
