@@ -3936,3 +3936,10 @@ way out.
   autopilot now spends its points as they come (`autopilot_skills`): the
   Takedown first, then the cheapest that can be learned, in the tree's
   order.
+
+* **A checkpoint's progress.** The game's half of a checkpoint (the
+  inventory, the progress) is taken at the end of the frame, after the
+  script's further commands: the save the cenote's acknowledgement makes
+  kept the takedowns already taken away, and a reload had none to take.
+  The progress is now the one at the story's save
+  (`StoryHost::checkpoint_progress`).

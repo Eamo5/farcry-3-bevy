@@ -516,6 +516,11 @@ pub struct StoryHost {
     pub(crate) checkpoint_game_paths: Vec<std::path::PathBuf>,
     pub(crate) checkpoint_game: Option<crate::save::SaveGame>,
     pub(crate) checkpoint_game_pending: bool,
+    /// The player's progress when the story saved: the game's half of the
+    /// checkpoint is taken later in the frame, after the script's further
+    /// commands (JAS_190 takes the takedowns away right after the save its
+    /// acknowledgement makes, and a reload then found them gone).
+    pub(crate) checkpoint_progress: Option<crate::progression::Progress>,
     /// The shop's weapons as scripts know them: model path -> (archetype,
     /// shop name id).
     shop_items: HashMap<String, (String, u32)>,
@@ -644,6 +649,7 @@ impl StoryHost {
             checkpoint_game_paths: Vec::new(),
             checkpoint_game: None,
             checkpoint_game_pending: false,
+            checkpoint_progress: None,
             shop_items: HashMap::new(),
             last_ordered: None,
             hidden_synced: false,
@@ -1820,6 +1826,7 @@ fn run_story(
                 }
                 host.checkpoint = Some(save);
                 host.checkpoint_game_pending = true;
+                host.checkpoint_progress = Some(progress.clone());
             }
             Command::MissionState { name, state, block } => {
                 info!("story: {name} {state}");

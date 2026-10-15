@@ -320,10 +320,15 @@ impl SaveSources<'_, '_> {
 fn keep_story_checkpoint(world: &mut World) {
     if world.get_non_send::<crate::story::StoryHost>().is_none_or(|h| !h.checkpoint_game_pending && h.checkpoint_game_paths.is_empty()) { return; }
     let mut sources = bevy::ecs::system::SystemState::<SaveSources>::new(world);
-    let Some(save) = sources.get(world).ok().and_then(|s| s.snapshot()) else { return; };
+    let Some(mut save) = sources.get(world).ok().and_then(|s| s.snapshot()) else {
+        return;
+    };
     let paths = std::mem::take(&mut world.non_send_mut::<crate::story::StoryHost>().checkpoint_game_paths);
     {
         let mut host = world.non_send_mut::<crate::story::StoryHost>();
+        if let Some(progress) = host.checkpoint_progress.take() {
+            save.progress = progress;
+        }
         host.checkpoint_game = Some(save.clone());
         host.checkpoint_game_pending = false;
     }
