@@ -1015,6 +1015,10 @@ impl Story {
                     let (x, y) = points.iter().fold((0.0, 0.0), |a, p| (a.0 + p[0] / n, a.1 + p[1] / n));
                     [x, y, if z_min > f32::MIN { z_min + 1.0 } else { entry.pos[2] }]
                 }
+                // (One with no trigger shape of its own that moves, a
+                // vehicle to use: where it is now. SAM_015's 4x4, driven
+                // across the depot, waits for its turret to be manned.)
+                None => c.view.spawned.get(t).map_or(entry.pos, |l| l.pos),
                 _ => entry.pos,
             };
             out.push((*t, e.clone(), point, c.trigger_on(*t)));

@@ -4146,3 +4146,9 @@ its four key areas, its alarms to be switched off first.
   into, the autopilot sat at the wheel. At the wheel with nothing to drive
   into, it now drives to the nearest objective marker between 15 and
   400 m off (`MARKER_DRIVE_NEAR`, `MARKER_DRIVE_FAR`).
+
+* **Where the jeep is.** "Man the turret" waits for the jeep to be used;
+  the list of things to step into or use gave the jeep where the data
+  places it, across the depot from where it was driven, so it was never
+  near enough to get out for. One with no trigger shape of its own (a
+  vehicle) is now listed where it is, and B30 completes.
