@@ -252,7 +252,14 @@ impl Core {
         if self.ca.current.get(&pawn).is_some_and(|c| c.action == action) {
             self.ca.current.remove(&pawn);
             self.emit(Command::Action { pawn, action: None });
-            self.action_event(action, if interrupted { "CA_Interrupt" } else { "CA_End" }, pawn);
+            if interrupted {
+                self.action_event(action, "CA_Interrupt", pawn);
+            } else {
+                // (Its end comes once the character is up, as the AI ends
+                // it: scripts turn to listen right after asking, as JAS_200's
+                // visitor's arrival does.)
+                self.leaving.push((LEAVE_SECS, action, pawn));
+            }
         }
     }
 }

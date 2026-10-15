@@ -4064,3 +4064,9 @@ start, its crew seated, then driven along its way), and being seen fails it.
   ones to go after unprovoked); a carrier is gone after only while a
   script waits for his item to be looted; and one waiting to be
   photographed is left alone.
+
+* **An action ended on request.** The arrival asks a guard to end his
+  action (`CallForceNormalEnd`: the `DominoCAStopped` fact) and only then
+  turns to listen for its end. We raised `CA_End` the moment it was asked,
+  heard by nobody, and the meeting never began. It now comes a second
+  later (`LEAVE_SECS`), as when a point is switched off.
