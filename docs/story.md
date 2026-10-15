@@ -4122,3 +4122,14 @@ start, its crew seated, then driven along its way), and being seen fails it.
   (`Vehicle::release`), and a driverless car rolls to a stop instead of
   driving on along its way. The autopilot goes after a seated foe a
   block counts.
+
+## SAM_015: the fuel depot
+
+SAM_015 has the player drive into a fuel depot with Sam and plant bombs in
+its four key areas, its alarms to be switched off first.
+
+* **Not from a seat.** The autopilot's alarm step put the player beside a
+  box while still at the wheel; the seat took him back the next frame,
+  and the tries, every 6 s for good, kept the story from going quiet
+  long enough for anything else. It now leaves the boxes be from a seat,
+  and one never reached after 8 tries (`ALARM_TRIES`).

@@ -184,6 +184,8 @@ fn disable_alarms(
 
 /// How near a box must be for the autopilot to go and switch it off.
 const ALARM_REACH: f32 = 150.0;
+/// How often it is put beside a box before it leaves that one be.
+const ALARM_TRIES: u32 = 8;
 
 /// Whether a player standing at `feet` can reach a box at `at` (its base).
 fn within_reach(feet: Vec3, at: Vec3) -> bool {
@@ -216,8 +218,19 @@ fn autopilot_alarms(
         return;
     }
     let Ok((mut t, mut p)) = players.single_mut() else { return };
+    // (Not from a seat: put beside the box, he's back in it the next frame,
+    // and the tries kept the story from ever going quiet for him to get
+    // out: SAM_015, driven into the fuel depot.)
+    if p.driving {
+        return;
+    }
     let feet = t.translation - Vec3::Y * crate::player::HALF_HEIGHT;
-    let Some((id, at)) = present(&alarms, &host).find(|(id, at)| alarms.idle(*id) && at.distance(feet) < ALARM_REACH) else { return };
+    // (A box he never gets to after a few tries is left be.)
+    let Some((id, at)) =
+        present(&alarms, &host).find(|(id, at)| alarms.idle(*id) && at.distance(feet) < ALARM_REACH && tries.get(id).is_none_or(|n| *n < ALARM_TRIES))
+    else {
+        return;
+    };
     if !within_reach(feet, at) {
         info!("story autopilot: disable alarm {id}");
         // Each try from another side (the first one's may be behind its
