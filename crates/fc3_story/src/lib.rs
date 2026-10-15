@@ -935,6 +935,31 @@ impl Story {
     /// effects or optional missions. Nested library boxes retain their graph
     /// ancestry, so their triggers remain eligible for the owning mission.
     pub fn watched_triggers_in_graph(&self, graph: Option<&str>) -> Vec<(u64, String, [f32; 3], bool)> {
+        self.watched_triggers_where(graph, |_, _| true)
+    }
+
+    /// The main missions running that hold the player (exclusive: the
+    /// story's own, not a side quest's), by their names' stem (`CIT_020`).
+    pub fn exclusive_running(&self) -> Vec<String> {
+        let c = self.core.borrow();
+        let mut out: Vec<String> = c
+            .missions
+            .by_id
+            .values()
+            .filter(|m| m.exclusive && m.block.is_none() && m.state == missions::State::Running)
+            .map(|m| m.name.trim_end_matches("_MAIN").to_string())
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// The triggers of these missions' graphs (by their names' stem) that
+    /// scripts wait on, as `watched_triggers_in_graph` lists them.
+    pub fn watched_triggers_of(&self, graph: Option<&str>, missions: &[String]) -> Vec<(u64, String, [f32; 3], bool)> {
+        self.watched_triggers_where(graph, |c, target| mission_of(c, target).is_some_and(|(name, _)| missions.iter().any(|m| name.starts_with(m.as_str()))))
+    }
+
+    fn watched_triggers_where(&self, graph: Option<&str>, keep: impl Fn(&Core, &Table) -> bool) -> Vec<(u64, String, [f32; 3], bool)> {
         let c = self.core.borrow();
         let graph = graph.map(str::to_ascii_lowercase);
         let mut out = Vec::new();
@@ -945,7 +970,7 @@ impl Story {
             }
             // A spot a script spawned to be used (a bomb's): where it stands.
             if e == "Use" && c.spawned.contains_key(t) && !c.data.entities.contains_key(t) {
-                if graph.as_deref().is_some_and(|needle| !in_graph(&l.callback.target, needle)) {
+                if graph.as_deref().is_some_and(|needle| !in_graph(&l.callback.target, needle)) || !keep(&c, &l.callback.target) {
                     continue;
                 }
                 if let Some(at) = c.position(*t) {
@@ -954,6 +979,9 @@ impl Story {
                 continue;
             }
             if graph.as_deref().is_some_and(|needle| !in_graph(&l.callback.target, needle) || of_finished_mission(&c, &l.callback.target)) {
+                continue;
+            }
+            if !keep(&c, &l.callback.target) {
                 continue;
             }
             // One whose box counts only other characters (a companion's
@@ -1505,13 +1533,19 @@ fn in_sectors(e: &data::Entry, sectors: Option<&HashSet<u32>>) -> bool {
 /// graph stays after its mission ends, and its sub-graphs' listeners with
 /// it, left over.
 fn of_finished_mission(c: &Core, target: &Table) -> bool {
+    mission_of(c, target).is_some_and(|(_, state)| matches!(state, missions::State::Completed | missions::State::Failed))
+}
+
+/// The mission a box's graph belongs to, and its state: the first graph up
+/// from it whose file names a mission (`CIT_020_B20.Sub.lua`).
+fn mission_of(c: &Core, target: &Table) -> Option<(String, missions::State)> {
     let mut table = target.clone();
     for _ in 0..16 {
         if let Ok(path) = table.get::<Table>("_type").and_then(|ty| ty.get::<String>("_path")) {
             let file = path.rsplit(['/', '\\']).next().unwrap_or(&path);
             let name = file.split('.').next().unwrap_or(file).to_ascii_uppercase();
             if let Some(m) = c.missions.by_id.values().find(|m| m.name == name) {
-                return matches!(m.state, missions::State::Completed | missions::State::Failed);
+                return Some((m.name.clone(), m.state));
             }
         }
         let Ok(parent) = table.get::<Table>("_graph") else { break };
@@ -1520,7 +1554,7 @@ fn of_finished_mission(c: &Core, target: &Table) -> bool {
         }
         table = parent;
     }
-    false
+    None
 }
 
 /// Whether a box belongs to a graph whose script path contains `needle`

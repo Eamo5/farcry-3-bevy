@@ -3804,3 +3804,17 @@ plays the player, and only goes for a box within `ALARM_REACH` (150 m).
   the world near the player. One a script waits for, not in the world after
   20 s of quiet, is now gone to first so that it streams in, once, and not
   while a block still counts foes down (the fight comes first).
+* **Photographing things.** WIL_010 asks for package barcodes to be
+  photographed (`Entity_Discovered` on each package, through the camera);
+  the camera took in only the story's characters. It now also takes in a
+  placed thing the scripts wait to see (the story keeps the list,
+  `stealth::CameraTargets`), at its middle, and the autopilot's photo step
+  goes to such a thing (by its entity's place) as to a body, skipping what
+  the camera has already taken in (one listener goes on waiting for all
+  the packages).
+* **The story's own mission first.** With two of the story's missions
+  running (an old checkpoint's WIL_010, picked up late, beside CIT_020),
+  the autopilot went back and forth between them. Its trigger step now
+  takes the running exclusive missions' triggers first
+  (`Story::exclusive_running`, `watched_triggers_of`), the others when
+  those have none.

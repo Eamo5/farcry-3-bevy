@@ -290,13 +290,28 @@ fn forward_pickups(host: Option<NonSendMut<StoryHost>>, mut picked: MessageReade
     }
 }
 
-/// The camera took in one of the story's characters (a VIP's body): the
-/// scripts watching for it hear it discovered, and tagged if alive.
-fn forward_camera(host: Option<NonSendMut<StoryHost>>, mut saw: MessageReader<crate::stealth::CameraSaw>) {
+/// The camera took in one of the story's characters (a VIP's body), or a
+/// thing the scripts wait to see: the scripts watching for it hear it
+/// discovered, and tagged if alive. (What they wait to see, for the camera.)
+fn forward_camera(
+    host: Option<NonSendMut<StoryHost>>,
+    mut saw: MessageReader<crate::stealth::CameraSaw>,
+    mut targets: ResMut<crate::stealth::CameraTargets>,
+    time: Res<Time>,
+    mut next: Local<f32>,
+) {
     let Some(mut host) = host else {
         saw.clear();
         return;
     };
+    *next -= time.delta_secs();
+    if *next <= 0.0 {
+        *next = 0.5;
+        let awaited = host.story.awaited_discoveries();
+        if targets.awaited != awaited {
+            targets.awaited = awaited;
+        }
+    }
     for s in saw.read() {
         debug!("story: camera took in {}", s.id);
         host.story.entity_event(s.id, "Entity_Discovered", vec![Arg::id(s.id)]);
@@ -1418,6 +1433,11 @@ fn run_story(
         && host.quiet > autopilot_delay && host.story.watched_loot_filters().is_empty() {
         let graph = std::env::var("FC3_STORY_AUTOPILOT_GRAPH").ok();
         let watched = host.story.watched_triggers_in_graph(graph.as_deref());
+        // The story's own mission running goes first (CIT_020 holds the
+        // player on its water tower while side quests' starts wait): its
+        // triggers before the others'.
+        let focus = host.story.exclusive_running();
+        let focused = if focus.is_empty() { Vec::new() } else { host.story.watched_triggers_of(graph.as_deref(), &focus) };
         let awaiting_rock = host.story.watched_signals().iter().any(|s| s == "throw_rock");
         // Stuck: triggers stepped into before they were armed go again.
         if host.quiet > 25.0 {
@@ -1458,7 +1478,7 @@ fn run_story(
             teleport(&mut t, &mut p, at, 0.0);
             breaks.break_now(id);
             host.quiet = 0.0;
-        } else if let Some((id, event, point, _)) = watched.iter().find(|w| {
+        } else if let Some((id, event, point, _)) = focused.iter().chain(watched.iter()).find(|w| {
             !awaiting_rock
                 && !leading
                 && near_companion(w.2)
@@ -2707,7 +2727,7 @@ fn autopilot_loot(
     plants: Query<(&crate::pickups::Pickup, &GlobalTransform)>,
     mut actions: ResMut<crate::controls::ActionState>,
     mut last: Local<Option<(u64, &'static str)>>,
-    (npcs, crafting, mut next_press, mut shooting, mut skipped, story_actors, action_maps, mut came_near, mut blocked, mut kept_clear, mut far_pickups): (
+    (npcs, crafting, mut next_press, mut shooting, mut skipped, story_actors, action_maps, mut came_near, mut blocked, mut kept_clear, mut far_pickups, taken): (
         Query<
             (
                 &Transform,
@@ -2738,6 +2758,8 @@ fn autopilot_loot(
         Local<f32>,
         // Awaited pickups gone to from afar, so that they stream in.
         Local<std::collections::HashSet<u64>>,
+        // What the camera has taken in.
+        Res<crate::stealth::CameraTargets>,
     ),
 ) {
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() { return }
@@ -3172,7 +3194,7 @@ fn autopilot_loot(
     }
     // A character or body a script waits to see through the camera (a VIP's
     // corpse to photograph): a few steps off, the camera raised at it.
-    let photos = host.story.awaited_discoveries();
+    let photos: Vec<u64> = host.story.awaited_discoveries().into_iter().filter(|id| !taken.taken.contains(id)).collect();
     if !photos.is_empty() && host.quiet > 20.0 && host.quiet - time.delta_secs() <= 20.0 {
         let found: Vec<u64> = npcs.iter().filter(|q| photos.contains(&q.4.id)).map(|q| q.4.id).collect();
         info!("story autopilot: to photograph {photos:?} (in the world {found:?}, camera {})", scripted.has_camera());
@@ -3182,12 +3204,19 @@ fn autopilot_loot(
     // switch off comes first, as for takedowns: its own autopilot goes there.)
     let photographing = last.is_some_and(|l| l.1 == "photograph");
     if !photos.is_empty() && !alarm_first && (host.quiet > 6.0 || photographing) && scripted.has_camera() {
+        let by_distance = |a: &(u64, f32, Vec3), b: &(u64, f32, Vec3)| a.2.distance(at.translation).total_cmp(&b.2.distance(at.translation));
+        // (Where to aim: a body's chest, a dead one's lower; a thing's
+        // middle, WIL_010's packages' barcodes.)
         let near = npcs
             .iter()
             .filter(|(_, _, _, _, a, _, _)| photos.contains(&a.id))
-            .map(|(t, _, _, _, a, _, _)| (a.id, a.dead, t.translation))
-            .min_by(|a, b| a.2.distance(at.translation).total_cmp(&b.2.distance(at.translation)));
-        if let Some((id, dead, spot)) = near {
+            .map(|(t, _, _, _, a, _, _)| (a.id, if a.dead { -0.6 } else { 0.3 }, t.translation))
+            .min_by(by_distance)
+            .or_else(|| {
+                let data = host.story.data();
+                photos.iter().filter_map(|id| data.entities.get(id).map(|e| (*id, 0.1, to_bevy(e.pos)))).min_by(by_distance)
+            });
+        if let Some((id, rise, spot)) = near {
             if *last != Some((id, "photograph")) {
                 info!("story autopilot: photograph {}", host.story.data().name_of(id).unwrap_or("?"));
                 *last = Some((id, "photograph"));
@@ -3206,7 +3235,7 @@ fn autopilot_loot(
                 return;
             }
             let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
-            let aim = spot + Vec3::Y * if dead { -0.6 } else { 0.3 } - eye;
+            let aim = spot + Vec3::Y * rise - eye;
             player.yaw = (-aim.x).atan2(-aim.z);
             player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
             actions.hold(crate::controls::Action::Tag);

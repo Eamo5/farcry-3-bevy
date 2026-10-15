@@ -27,6 +27,7 @@ pub struct StealthPlugin;
 impl Plugin for StealthPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Binoculars>()
+            .init_resource::<CameraTargets>()
             .add_message::<CameraSaw>()
             .init_resource::<RockAimTest>()
             .init_resource::<Takedown>()
@@ -61,11 +62,21 @@ pub struct Binoculars {
 
 /// The camera rested on one of the story's characters (alive or dead) long
 /// enough to take it in: scripts hear it discovered (and a live one, foe or
-/// not, tagged: a mission may want a captive picked out).
+/// not, tagged: a mission may want a captive picked out). Or on a thing the
+/// scripts wait to see through it (WIL_010's packages' barcodes).
 #[derive(Message, Clone, Copy)]
 pub struct CameraSaw {
     pub id: u64,
     pub tagged: bool,
+}
+
+/// The things (not characters) scripts wait to see through the camera
+/// (`Entity_Discovered`), by entity id (the story keeps it), and what the
+/// camera has taken in (one script may go on listening for all of them).
+#[derive(Resource, Default)]
+pub struct CameraTargets {
+    pub awaited: Vec<u64>,
+    pub taken: std::collections::HashSet<u64>,
 }
 
 /// The camera's raise (its draw clip) before the view goes through it.
@@ -332,11 +343,13 @@ fn binoculars(
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     perks: Res<crate::progression::Perks>,
     (mut scripted, hud): (ResMut<crate::story::ScriptedPlayer>, Res<crate::map::HudParams>),
-    (actors, mut saw, mut reported, mut story_dwell): (
+    (actors, mut saw, mut reported, mut story_dwell, placed, mut targets): (
         Query<(Entity, &GlobalTransform, &crate::story_actors::StoryActor)>,
         MessageWriter<CameraSaw>,
         Local<std::collections::HashSet<u64>>,
         Local<HashMap<Entity, f32>>,
+        Query<(Entity, &GlobalTransform, &crate::objects::PlacedId)>,
+        ResMut<CameraTargets>,
     ),
 ) {
     let dt = time.delta_secs();
@@ -425,6 +438,23 @@ fn binoculars(
             story_seen.push((e, actor.id, !actor.dead));
         }
     }
+    // Things the scripts wait to see (not characters): their middle.
+    if !targets.awaited.is_empty() {
+        for (e, gt, id) in &placed {
+            if !targets.awaited.contains(&id.0) || reported.contains(&id.0) {
+                continue;
+            }
+            let to = gt.translation() - eye;
+            let dist = to.length();
+            if dist > range * perks.tag_range || to.normalize_or_zero().dot(fwd) < 4f32.to_radians().cos() {
+                continue;
+            }
+            let Ok(dir) = Dir3::new(to) else { continue };
+            if spatial.cast_ray(eye, dir, dist, true, &filter).is_none_or(|hit| hit.entity == e || hit.distance > dist - 0.8) {
+                story_seen.push((e, id.0, false));
+            }
+        }
+    }
     if !story_seen.is_empty() {
         trace!("camera: {} of the story's characters in view", story_seen.len());
     }
@@ -435,6 +465,7 @@ fn binoculars(
         *t += dt;
         if *t >= 0.35 && reported.insert(id) {
             saw.write(CameraSaw { id, tagged: hostile });
+            targets.taken.insert(id);
         }
     }
     bino.dwell.retain(|e, _| seen.contains(e));
