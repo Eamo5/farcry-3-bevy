@@ -1608,7 +1608,9 @@ fn run_story(
                     }
                 }
             }
-        } else if let Some((id, name)) = host.story.gameplays().into_iter().find(|g| g.1 != "QTEGSF" && !sniping_challenge(&g.1)) {
+        } else if let Some((id, name)) =
+            host.story.gameplays().into_iter().find(|g| g.1 != "QTEGSF" && !host.story.is_qte_gameplay(g.0) && !sniping_challenge(&g.1))
+        {
             // A minigame or QTE the game doesn't play yet: done. (A sniping
             // challenge is played: its targets shot, see `autopilot_loot`.)
             info!("story autopilot: end gameplay {name}");
@@ -1882,10 +1884,14 @@ fn run_story(
                         screen: a(1).parse::<u64>().ok().filter(|&id| id != fc3_story::PLAYER).map(|id| (id, a(2))),
                     }),
                     // Specific gameplays own their playback and completion.
-                    "CreateSpecificGameplay" if a(1) == "QTEGSF" => qtes.pending.push(crate::qte::QteStart {
-                        id: a(0).parse().unwrap_or(0),
-                        params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
-                    }),
+                    // (A gameplay of its own name playing a QTE move is one
+                    // too: JAS_150's escape from the ropes.)
+                    "CreateSpecificGameplay" if a(1) == "QTEGSF" || args.iter().skip(2).any(|p| p.starts_with("QTE_move_file=")) => {
+                        qtes.pending.push(crate::qte::QteStart {
+                            id: a(0).parse().unwrap_or(0),
+                            params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                        })
+                    }
                     // Opt-in until anchor/stand-up alignment and visual phases
                     // have been validated against the authored transition.
                     "CreateSpecificGameplay" if a(1) == "CVineClimbingGameplay" && std::env::var_os("FC3_VINE_GAMEPLAY_TEST").is_some() => vines.pending.push(crate::vine::Start {

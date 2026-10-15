@@ -242,6 +242,9 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         let mut args = vec![id.to_string(), name.0.clone()];
         if let Value::Table(t) = params {
             for (k, v) in t.pairs::<String, Text>().flatten() {
+                if k == "QTE_move_file" {
+                    c.qte_gameplays.insert(id);
+                }
                 args.push(format!("{k}={}", v.0));
             }
         }
@@ -257,7 +260,7 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.f("SendGSFGenericEventToEntity", |c, args: mlua::Variadic<Text>| {
         let args: Vec<String> = args.into_iter().map(|t| t.0).collect();
         if args.get(2).is_some_and(|p| p == "QteSetResult") {
-            if let Some((&latest, _)) = c.gameplays.iter().next_back().filter(|(_, name)| *name != "QTEGSF") {
+            if let Some((&latest, _)) = c.gameplays.iter().next_back().filter(|(id, name)| *name != "QTEGSF" && !c.qte_gameplays.contains(id)) {
                 c.end_gameplay(latest);
             }
         }

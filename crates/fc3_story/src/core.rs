@@ -196,6 +196,10 @@ pub struct Core {
     /// Specific gameplays running (minigames, QTEs, boss fights): id ->
     /// name.
     pub gameplays: BTreeMap<u64, String>,
+    /// Those of them that play a QTE move (`QTE_move_file`), whatever their
+    /// name (JAS_150's escape from the ropes): the host's QTE runner ends
+    /// them.
+    pub qte_gameplays: std::collections::BTreeSet<u64>,
     /// RealTree growths the host is running (`SetRealTreeGrowthSpeed`): id
     /// -> what to call when the tree reaches its size.
     pub growths: BTreeMap<u64, Option<Callback>>,
@@ -273,6 +277,7 @@ impl Core {
             pawn_ready_at: None,
             last_player: None,
             gameplays: BTreeMap::new(),
+            qte_gameplays: Default::default(),
             growths: BTreeMap::new(),
             dialogs: Default::default(),
             control_answers: Vec::new(),
@@ -632,6 +637,7 @@ impl Core {
 
     /// A specific gameplay ended: its box hears `OnDestroyed` with its id.
     pub fn end_gameplay(&mut self, id: u64) {
+        self.qte_gameplays.remove(&id);
         if let Some(name) = self.gameplays.remove(&id) {
             self.emit(Command::Native { name: "DestroySpecificGameplay".into(), args: vec![id.to_string(), name] });
             self.raise(&Listen::Generic("OnDestroyed".into()), vec![Arg::Str(id.to_string())]);

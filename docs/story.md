@@ -307,7 +307,13 @@ is the story's own:
   crawls at once). A state with an anchor (`cnAA`) plays from the scene's
   anchor; others go on from where the last clip left the player (the escape
   crawl moves him along). The scripts hear `QTE<id>_InProgress`, then
-  `QTE<id>_Success` or `QTE<id>_Fail`, and `ExoticQteGSFEnded` as it ends.
+  `QTE<id>_Success` or `QTE<id>_Fail`, and as it ends `QTE_Success` (or
+  `QTE_Failure`, a QTE left failed or the move having killed the player)
+  and `ExoticQteGSFEnded`. A gameplay of another name with a
+  `QTE_move_file` is one too (JAS_150's escape from the ropes,
+  `JAS_160_EscapeRopes`, waits on `QTE_Success`): the autopilot no longer
+  ends it as a gameplay the game doesn't play, nor a sequence's
+  `QteSetResult` as one the host doesn't run.
   BAM_055's tomb ends this way: the crawl (QTE 0 and 1, the triggers in
   turn) runs while the rock rolls; the script hears the zombie QTE 2 start,
   waits for the player to crawl near the way out, and decides it (the

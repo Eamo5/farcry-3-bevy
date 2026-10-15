@@ -184,6 +184,8 @@ struct Qte {
     plays: u32,
     age: f32,
     ended: bool,
+    /// The move killed the player (its `PlayerDeath` event).
+    died: bool,
 }
 
 impl Qte {
@@ -291,6 +293,7 @@ fn run_qtes(
             plays: 0,
             age: 0.0,
             ended: false,
+            died: false,
         });
     }
     for id in std::mem::take(&mut qtes.cancelled) {
@@ -372,7 +375,10 @@ fn run_qtes(
                     }
                 }
                 Kind::EndSequence => qt.ended = true,
-                Kind::PlayerDeath => host.story.message("PlayerDie"),
+                Kind::PlayerDeath => {
+                    qt.died = true;
+                    host.story.message("PlayerDie");
+                }
                 Kind::Message if !e.text.is_empty() => host.story.message(&e.text),
                 _ => {}
             }
@@ -435,8 +441,13 @@ fn run_qtes(
             cinema.stop_built(&old);
         }
         let id = qt.id;
-        info!("qte: {} ended", qt.player);
+        // The gameplay's outcome, as the scripts hear it besides each QTE's
+        // (JAS_150's escape waits on it): failed if a QTE ended failed or
+        // the move killed the player.
+        let won = !qt.died && !qt.results.contains(&q::FAILED);
+        info!("qte: {} ended, {}", qt.player, if won { "won" } else { "lost" });
         qtes.active = None;
+        host.story.message(if won { "QTE_Success" } else { "QTE_Failure" });
         host.story.message("ExoticQteGSFEnded");
         host.story.gameplay_ended(id);
         return;

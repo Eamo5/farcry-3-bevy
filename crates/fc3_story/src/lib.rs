@@ -810,6 +810,11 @@ impl Story {
     }
 
     /// A specific gameplay the host ran has ended.
+    /// A specific gameplay plays a QTE move (the host's QTE runner's).
+    pub fn is_qte_gameplay(&self, id: u64) -> bool {
+        self.core.borrow().qte_gameplays.contains(&id)
+    }
+
     pub fn gameplay_ended(&mut self, id: u64) {
         self.core.borrow_mut().end_gameplay(id);
         self.pump();
