@@ -89,6 +89,9 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         loaded.is_some()
     })?;
     r.f("IsEntityValid", |c, id: Text| id.id().is_some_and(|i| c.is_valid(i)))?;
+    // (Simple animations, an outpost's flag raised, aren't played: none
+    // takes any time.)
+    r.f("CAPI_Entity.GetSimpleAnimDuration", |_, _id: Text| 0.0)?;
     r.f("CAPI_Entity.GetName", |c, id: Text| match id.id() {
         Some(PLAYER) => "Player".to_string(),
         Some(i) => c.data.name_of(i).map(str::to_string).or_else(|| c.spawned.get(&i).cloned()).unwrap_or_default(),
