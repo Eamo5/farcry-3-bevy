@@ -4032,3 +4032,8 @@ of Sam's, 28 m near and 32 m far, that warns on the screen).
   taken for a fighter: no AI, and the autopilot kept clear of him as of
   someone to keep safe. A character with no usable preference is now
   taken for what its personality says (`Personality.Sniper`: a sniper).
+
+* **A companion left waiting.** The autopilot steps only into triggers
+  near a companion about (going on ahead leaves one behind); Sam, told to
+  wait by the last bomb as HOY_010 ended, kept it from JAS_200's start
+  across the island. Only a companion following the player counts now.

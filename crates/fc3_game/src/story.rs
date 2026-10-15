@@ -1573,11 +1573,17 @@ fn run_story(
         }
         let tails: Vec<u64> = host.story.tail_targets().into_iter().map(|t| t.0).collect();
         // (Not while a companion leads: going on ahead leaves it behind.)
-        // (While a companion leads, none; while one is about, only those
-        // near it: going on ahead leaves it behind.)
+        // (While a companion leads, none; while one follows, only those
+        // near it: going on ahead leaves it behind. One told to wait stays
+        // where it is: HOY_010's Sam, waiting by the last bomb, kept the
+        // player from JAS_200's start across the island.)
         let companions = host.story.companions();
         let leading = companions.iter().any(|c| matches!(c.1, fc3_story::Companion::Lead { .. }));
-        let kept: Vec<Vec3> = actors.iter().filter(|(a, _, _)| !a.dead && companions.iter().any(|c| c.0 == a.id)).map(|(_, t, _)| t.translation).collect();
+        let kept: Vec<Vec3> = actors
+            .iter()
+            .filter(|(a, _, _)| !a.dead && companions.iter().any(|c| c.0 == a.id && matches!(c.1, fc3_story::Companion::Follow)))
+            .map(|(_, t, _)| t.translation)
+            .collect();
         let near_companion = |p: [f32; 3]| kept.is_empty() || kept.iter().any(|c| c.distance(to_bevy(p)) < COMPANION_REACH);
         // A door a script waits to see opened goes first: the triggers past
         // it (BAM_060's inside Buck's hut, which lock the door behind him)
