@@ -1077,7 +1077,22 @@ fn run_story(
         ResMut<crate::tattoo::TattooShown>,
         MessageWriter<crate::shake::Shake>,
     ),
-    (mut xp_gain, mut progress, mut music, mut rock_test, mut videos, mut qtes, mut vines, mut postfx, mut pawn_anims, mut action_maps, mut breaks, mut trees, mut doors): (
+    (
+        mut xp_gain,
+        mut progress,
+        mut music,
+        mut rock_test,
+        mut videos,
+        mut qtes,
+        mut vines,
+        mut postfx,
+        mut pawn_anims,
+        mut action_maps,
+        mut breaks,
+        mut trees,
+        mut doors,
+        mut stims,
+    ): (
         MessageWriter<crate::progression::XpGain>,
         ResMut<crate::progression::Progress>,
         ResMut<crate::music::Music>,
@@ -1091,6 +1106,7 @@ fn run_story(
         ResMut<crate::breakables::Breaks>,
         ResMut<crate::tree_growth::TreeGrowth>,
         ResMut<crate::doors::Doors>,
+        ResMut<crate::stims::Stims>,
     ),
 ) {
     // (Not a run condition: those may run off the main thread.)
@@ -1167,6 +1183,7 @@ fn run_story(
             music.reset();
             videos.reset();
             qtes.reset();
+            stims.reset();
             pawn_anims.reset();
             action_maps.reset();
             trees.reset();
@@ -1662,6 +1679,10 @@ fn run_story(
             }
             Command::EntityEvent { entity, event } if event == "CDoor_Enable" => {
                 doors.locked.remove(&entity);
+            }
+            // A script's `StimsEmitter` box switches a stims emitter.
+            Command::EntityEvent { entity, event } if event == "CStimsEmitterComponent_Enable" || event == "CStimsEmitterComponent_Disable" => {
+                stims.switched.push((entity, event.ends_with("_Enable")));
             }
             // Removed by a script: gone from the world (the story
             // remembers it in its saves).
@@ -2686,7 +2707,7 @@ fn autopilot_loot(
     plants: Query<(&crate::pickups::Pickup, &GlobalTransform)>,
     mut actions: ResMut<crate::controls::ActionState>,
     mut last: Local<Option<(u64, &'static str)>>,
-    (npcs, crafting, mut next_press, mut shooting, mut skipped, story_actors, action_maps, mut came_near, mut blocked, mut kept_clear): (
+    (npcs, crafting, mut next_press, mut shooting, mut skipped, story_actors, action_maps, mut came_near, mut blocked, mut kept_clear, mut far_pickups): (
         Query<
             (
                 &Transform,
@@ -2715,6 +2736,8 @@ fn autopilot_loot(
         Local<Option<f32>>,
         // When the player last stepped away from someone to keep safe.
         Local<f32>,
+        // Awaited pickups gone to from afar, so that they stream in.
+        Local<std::collections::HashSet<u64>>,
     ),
 ) {
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() { return }
@@ -3132,6 +3155,19 @@ fn autopilot_loot(
         }
         if host.quiet - time.delta_secs() <= 20.0 && host.quiet > 20.0 {
             info!("story autopilot: awaited pickups {awaited:?} aren't in the world");
+            // One across the island (WIL_010's tracking device, at Willis's
+            // hut): beside it, so that it streams in.
+            // (Not while a block still counts foes down: the fight first.)
+            let fighting = npcs.iter().any(|(_, h, _, _, actor, npc, _)| !h.dead && counted.contains(&actor.id) && npc.faction.hostile_to_player());
+            let data = host.story.data();
+            let far = awaited.iter().find(|id| !far_pickups.contains(*id)).and_then(|id| data.entities.get(id).map(|e| (*id, e.pos)));
+            if let Some((id, pos)) = far.filter(|_| !fighting) {
+                info!("story autopilot: go to pickup {}", data.name_of(id).unwrap_or("?"));
+                far_pickups.insert(id);
+                teleport(&mut at, &mut player, to_dunia(to_bevy(pos) + Vec3::Z * 1.5), 0.0);
+                host.quiet = 0.0;
+                return;
+            }
         }
     }
     // A character or body a script waits to see through the camera (a VIP's

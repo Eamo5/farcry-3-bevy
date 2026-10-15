@@ -60,6 +60,7 @@ mod breakables;
 mod shake;
 mod aim_assist;
 mod qte;
+mod stims;
 mod vine;
 mod screen_blur;
 mod script_postfx;
@@ -436,6 +437,7 @@ fn main() {
         .add_plugins(lens_drops::LensDropsPlugin)
         .add_plugins(unlit_effects::UnlitEffectsPlugin)
         .add_plugins(doors::DoorsPlugin)
+        .add_plugins(stims::StimsPlugin)
         .add_plugins(story_alarms::StoryAlarmsPlugin)
         .add_plugins(story_props::StoryPropsPlugin)
         .add_plugins(story_rides::StoryRidesPlugin)

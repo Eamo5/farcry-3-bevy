@@ -251,6 +251,9 @@ pub enum PickupKind {
     MemoryCard,
     /// Body armour.
     Armour,
+    /// A mission's own item, a weapon pickup we don't know as a weapon
+    /// (WIL_010's tracking device): taken for the scripts, nothing kept.
+    Mission,
 }
 
 /// How many of each collectible the island holds.
@@ -267,6 +270,7 @@ impl PickupKind {
             PickupKind::Grenade => "grenade".into(),
             PickupKind::Weapon(w) => w.to_string(),
             PickupKind::Loot => "loot".into(),
+            PickupKind::Mission => "item".into(),
             PickupKind::Plant(p) => p.name().to_ascii_lowercase(),
             PickupKind::Molotov => "molotov".into(),
             PickupKind::Relic => "relic".into(),
@@ -591,6 +595,8 @@ fn apply_reward(
     match kind {
         // (Worn in `interact`, at the converted armour value.)
         PickupKind::Armour => String::new(),
+        // (The scripts hear it was picked up; they give what they give.)
+        PickupKind::Mission => String::new(),
         PickupKind::Ammo => format!("+{} rounds", give_ammo(inv, 1.0)),
         PickupKind::Explosives => {
             inv.grenades = (inv.grenades + 1).min(grenade_cap);

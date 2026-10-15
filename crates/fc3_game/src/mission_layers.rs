@@ -142,8 +142,14 @@ fn layer_pickup(entity: &fc3_formats::cache::CachedEntity, removed: &HashSet<u64
     if removed.contains(&entity.id) { return None }
     // Some plants have a colocated _02 minimap marker. Only the original
     // collectible gets a transaction, not its marker or a similarly named prop.
-    if data.is_some_and(|d| !d.entities.get(&entity.id).is_some_and(|e|
-        e.component("CPickupCollectible").is_some() || e.component("CPickupAmmo").is_some())) { return None }
+    if data.is_some_and(|d| {
+        !d.entities
+            .get(&entity.id)
+            .is_some_and(|e| e.component("CPickupCollectible").is_some() || e.component("CPickupAmmo").is_some() || e.component("CPickupWeapon").is_some())
+    }) {
+        return None;
+    }
+    let weapon = data.is_some_and(|d| d.entities.get(&entity.id).is_some_and(|e| e.component("CPickupWeapon").is_some()));
     match crate::pickups::classify(&entity.name) {
         Some(crate::pickups::Classified::Pickup(kind)) => Some(kind),
         Some(crate::pickups::Classified::Explosive) => None,
@@ -154,6 +160,8 @@ fn layer_pickup(entity: &fc3_formats::cache::CachedEntity, removed: &HashSet<u64
         {
             Some(crate::pickups::PickupKind::Loot)
         }
+        // A weapon pickup we don't know as a weapon: the mission's own item.
+        None if weapon => Some(crate::pickups::PickupKind::Mission),
         None => None,
     }
 }

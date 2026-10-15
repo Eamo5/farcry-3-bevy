@@ -3776,3 +3776,31 @@ plays the player, and only goes for a box within `ALARM_REACH` (150 m).
   in. He comes at a door from the side standing in fewer of the triggers
   the scripts watch (set down on its front, he stood inside the hut, in the
   trigger that locks it), else from the side he is on.
+
+## BNG_030 to CIT_020: the cave, the convoy's fire, Willis's tracker
+
+* **Out of the cave.** BNG_030 ends in a cave west of the island, and
+  CIT_015's brief waits for the player to leave it (it polls where he
+  is); the way out is a base script's teleport trigger
+  (`base_c0_cave_main`), so autopilot test runs take `cave_main` in their
+  graph filter (`FC3_STORY_AUTOPILOT_GRAPH`).
+* **Stims emitters** (`stims`). CIT_020's ambush sets the privateers'
+  fuel truck alight: the script switches stims emitters on
+  (`CStimsEmitterComponent_Enable`), each a burn of level 500 within 3 m,
+  once a second, and they burn the truck's crew (seated in it, out of the
+  autopilot's reach). Emitters weren't handled, the crew lived, and the
+  block, counting privateers down, never ended. An emitter now hurts
+  whatever stands within each of its stims' radius at its rate (fire for a
+  burn, else an explosion), until switched off or, a single emission, once.
+* **A mission's own item.** WIL_010's brief waits for its tracking device
+  to be picked up, a weapon pickup (`CPickupWeapon`) we don't know as a
+  weapon; mission layers only put collectibles and ammunition in the world,
+  so it never appeared and the brief never ended (its scene played on every
+  load since). Weapon pickups on mission layers now come into the world too:
+  one we know by name is that weapon, any other the mission's own item
+  (`PickupKind::Mission`), taken for the scripts (`PickupPicked`) with
+  nothing kept.
+* **A pickup across the island.** The autopilot only picked up what was in
+  the world near the player. One a script waits for, not in the world after
+  20 s of quiet, is now gone to first so that it streams in, once, and not
+  while a block still counts foes down (the fight comes first).
