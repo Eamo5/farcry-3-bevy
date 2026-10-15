@@ -3960,3 +3960,14 @@ way out.
   5. The seat at that place is now taken first (`SeatSlot::slot`), then,
   when a kind is named, the kind's own numbering, then any free seat the
   script allows.
+
+* **Harm scripts deal.** The cenote's depths kill whoever falls in (a
+  `HealthModifier` box: `CAPI_Pawn.DamagePawn`, 100000 to the player);
+  we left the native undone, so the fall did nothing, and the autopilot,
+  stepping into the zone's trigger, came out unharmed every time. A
+  script's damage now lands on the player or the story's character it
+  names (`story_damage`), and a killing blow right after the autopilot
+  stepped into a trigger marks that trigger fatal, as a mission's failure
+  does. A vehicle that burns out and blows up is logged
+  (`vehicle: ... wrecked`), to tell its blast (heard 200 m off) from
+  others.

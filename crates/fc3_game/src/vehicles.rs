@@ -3550,6 +3550,7 @@ fn vehicle_damage(
         }
         // It goes up: the blast, then a burnt-out shell.
         let centre = t.transform_point((v.min + v.max) * 0.5);
+        info!("vehicle: {} ({}) wrecked at {centre:.0?}", DEFS[v.def].name, v.spawn_id);
         explosions.write(crate::weapons::Explosion { at: centre, radius: 9.0, damage: 220.0, instigator: None });
         sfx.write(crate::sound::PlaySfx { event: snd::EXPLOSION, at: Some(centre), volume: 1.0 });
         w.wrecked = true;

@@ -44,6 +44,7 @@ impl Plugin for StoryPlugin {
             .add_systems(Update, draw_markers.after(StorySet))
             .add_systems(Update, (player_landings, autopilot_drop).after(StorySet).run_if(in_state(GameState::Playing)))
             .add_systems(Update, story_blasts.after(StorySet).before(crate::breakables::BreakablesSet))
+            .add_systems(Update, story_damage.after(StorySet))
             .add_systems(PreUpdate, story_boxes.after(crate::controls::update_actions))
             .add_systems(PreUpdate, story_interactions.after(story_boxes))
             .add_systems(PreUpdate, autopilot_loot.after(story_interactions).before(crate::controls::apply_action_maps).run_if(in_state(GameState::Playing)))
@@ -536,6 +537,9 @@ pub struct StoryHost {
     /// Explosives scripts set off (`CAPI_Entity.SendDetonateEvent`), not
     /// yet gone off.
     pub detonations: Vec<u64>,
+    /// Harm scripts deal (`HealthModifier`'s `DamagePawn`: JAS_190's
+    /// fall into the cenote's depths kills), by pawn.
+    pub damages: Vec<(u64, f32)>,
     /// Props scripts spawned, not yet drawn.
     pub spawned_props: Vec<crate::story_props::SpawnedProp>,
 }
@@ -656,6 +660,7 @@ impl StoryHost {
             reinforcements: Vec::new(),
             ai_events: Vec::new(),
             detonations: Vec::new(),
+            damages: Vec::new(),
             spawned_props: Vec::new(),
         }
     }
@@ -1947,6 +1952,21 @@ fn run_story(
                     }
                     "LogEventInAIDiary" => host.ai_events.extend(a(0).parse::<u64>().ok()),
                     "CAPI_Entity.SendDetonateEvent" => host.detonations.extend(a(0).parse::<u64>().ok()),
+                    // `pawn, origin, amount`
+                    "CAPI_Pawn.DamagePawn" => {
+                        if let (Ok(pawn), Ok(amount)) = (a(0).parse::<u64>(), a(2).parse::<f32>()) {
+                            // A killing blow right after the autopilot
+                            // stepped into a trigger (a fall-death zone):
+                            // that trigger is left alone from now.
+                            if pawn == fc3_story::PLAYER && amount >= KILLING_BLOW {
+                                if let Some((id, event, _)) = host.last_step.take().filter(|s| now - s.2 < FATAL_WITHIN) {
+                                    info!("story autopilot: {event} {} killed the player; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
+                                    host.fatal.insert((id, event));
+                                }
+                            }
+                            host.damages.push((pawn, amount));
+                        }
+                    }
                     // `id, archetype, x, y, z, angles`
                     "SpawnEntityFromArchetype" => {
                         let f = |i: usize| a(i).parse::<f32>().unwrap_or(0.0);
@@ -2452,6 +2472,32 @@ const DESTROY_REACH: f32 = 80.0;
 /// A mission failing this soon after the autopilot stepped into a trigger
 /// failed for it.
 const FATAL_WITHIN: f32 = 2.0;
+/// Harm a script deals that kills whoever takes it.
+const KILLING_BLOW: f32 = 1000.0;
+
+/// Harm scripts deal lands on the player or the story's character it names.
+fn story_damage(
+    host: Option<NonSendMut<StoryHost>>,
+    players: Query<Entity, With<Player>>,
+    actors: Query<(Entity, &crate::story_actors::StoryActor)>,
+    mut damage: MessageWriter<crate::combat::DamageEvent>,
+) {
+    let Some(mut host) = host else { return };
+    for (pawn, amount) in std::mem::take(&mut host.damages) {
+        let target = if pawn == fc3_story::PLAYER { players.single().ok() } else { actors.iter().find(|(_, a)| a.id == pawn).map(|(e, _)| e) };
+        let Some(target) = target else { continue };
+        debug!("story: a script deals {amount} to {pawn}");
+        damage.write(crate::combat::DamageEvent {
+            target,
+            amount,
+            kind: crate::combat::DamageKind::Fall,
+            source: None,
+            instigator: None,
+            headshot: false,
+            hit: crate::combat::Hit::Whole,
+        });
+    }
+}
 
 /// How far back from a spot to be seen the autopilot stops the vehicle it
 /// drives, facing it.
