@@ -50,10 +50,16 @@ const KINDS: &[Kind] = &[
     Kind { prefix: "fc3/turret_ground360_dshk", mount: 0, gun: "DShK", arc_deg: 180.0 },
     Kind { prefix: "fc3/turret_ground180_dshk", mount: 1, gun: "DShK", arc_deg: 45.0 },
     Kind { prefix: "fc3/turret_ground360_m249", mount: 0, gun: "M249", arc_deg: 180.0 },
-    // On an armed technical (not placed on its own).
+    // On an armed technical (not placed on its own), and on the barge's tripod.
     Kind { prefix: "", mount: 0, gun: "DShK", arc_deg: 180.0 },
+    Kind { prefix: "", mount: 0, gun: "M249", arc_deg: 180.0 },
 ];
 const VEHICLE_KIND: usize = 3;
+
+/// The kind of gun a vehicle carries, by its weapon.
+fn vehicle_kind(gun: &str) -> usize {
+    (VEHICLE_KIND..KINDS.len()).find(|k| KINDS[*k].gun == gun).unwrap_or(VEHICLE_KIND)
+}
 
 /// How far down and up every mount lets the gun point (degrees).
 const PITCH: (f32, f32) = (-40.0, 23.0);
@@ -120,6 +126,11 @@ impl Turret {
     /// The gun's weapon (by name).
     pub fn gun(&self) -> &'static str {
         KINDS[self.kind].gun
+    }
+
+    /// The vehicle it rides on, if any.
+    pub fn on_vehicle(&self) -> Option<Entity> {
+        self.vehicle.map(|v| v.0)
     }
 
     /// The muzzle's direction.
@@ -224,12 +235,20 @@ pub(crate) fn man_turrets(
     mut shown_hint: Local<f32>,
     mut players: Query<(Entity, &mut Player, &mut Transform, &mut Inventory, &Health), Without<Turret>>,
     mut turrets: Query<(Entity, &mut Turret)>,
+    (host, vehicles): (Option<NonSend<crate::story::StoryHost>>, Query<&crate::vehicles::Vehicle>),
 ) {
     let Ok((pe, mut p, mut pt, mut inv, h)) = players.single_mut() else { return };
     let label = actions.label(Action::Interact, &settings);
     if let Some(arcs) = p.mounted {
         let on = turrets.get_mut(arcs.turret).ok();
-        let leave = h.dead || on.is_none() || p.driving || actions.just_pressed(Action::Interact);
+        // (Held on a vehicle's gun a script won't let the player out of:
+        // HUR_040's barge.)
+        let held = on
+            .as_ref()
+            .and_then(|(_, t)| t.on_vehicle())
+            .and_then(|ve| vehicles.get(ve).ok())
+            .is_some_and(|v| host.as_ref().is_some_and(|h| h.story.vehicle_rules(v.story_id()).exit_disabled));
+        let leave = h.dead || on.is_none() || p.driving || (actions.just_pressed(Action::Interact) && !held);
         if leave {
             actions.consume(Action::Interact);
             p.mounted = None;
@@ -268,7 +287,7 @@ pub(crate) fn man_turrets(
         return;
     }
     if h.dead || p.driving || p.swimming || p.noclip || hud.prompt.is_some() {
-        if std::env::var("FC3_TURRET_TEST").is_ok() && actions.just_pressed(Action::Interact) {
+        if (std::env::var("FC3_TURRET_TEST").is_ok() || std::env::var("FC3_STORY_AUTOPILOT").is_ok()) && actions.just_pressed(Action::Interact) {
             debug!("turret: not now (dead {} driving {} swimming {} noclip {} prompt {:?})", h.dead, p.driving, p.swimming, p.noclip, hud.prompt);
         }
         return;
@@ -763,16 +782,17 @@ fn arm_vehicles(
     mut commands: Commands,
 ) {
     let Ok(inv) = players.single() else { return };
-    let Some(def) = inv.defs.iter().position(|d| d.name == KINDS[VEHICLE_KIND].gun) else { return };
-    let Some(gun) = models.get(&inv.models[def]) else { return };
     for (ve, armed, v, vt) in &vehicles {
+        let kind = vehicle_kind(armed.gun);
+        let Some(def) = inv.defs.iter().position(|d| d.name == KINDS[kind].gun) else { continue };
+        let Some(gun) = models.get(&inv.models[def]) else { continue };
         commands.entity(ve).insert(Gunned);
         let pivot = vt.transform_point(armed.pivot);
         let fwd = vt.rotation * Vec3::NEG_Z;
         let base_yaw = (-fwd.x).atan2(-fwd.z);
         let back = armed.gunner - armed.pivot;
         let turret = Turret {
-            kind: VEHICLE_KIND,
+            kind,
             spawn_id: 0,
             base_yaw,
             pivot,
@@ -785,7 +805,7 @@ fn arm_vehicles(
             vehicle: Some((ve, v.body(), armed.pivot, 0.0)),
         };
         let root = commands.spawn((turret, Transform::from_translation(pivot), Visibility::Visible)).id();
-        let holder = commands.spawn((Transform::from_translation(gun_offset(KINDS[VEHICLE_KIND].gun)), Visibility::Inherited, ChildOf(root))).id();
+        let holder = commands.spawn((Transform::from_translation(gun_offset(KINDS[kind].gun)), Visibility::Inherited, ChildOf(root))).id();
         for part in gun.lods.first().map(|l| l.parts.as_slice()).unwrap_or(&[]).iter().filter(|p| p.shown(true)) {
             commands.spawn((Mesh3d(part.mesh.clone()), MeshMaterial3d(part.material.clone()), ChildOf(holder)));
         }

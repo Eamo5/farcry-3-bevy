@@ -60,7 +60,14 @@ impl Plugin for VehiclesPlugin {
             .add_message::<PlaceVehicle>()
             .add_systems(Update, place_vehicles.run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(Update, scene_unseats_player.after(crate::cinema::CinemaSet).run_if(in_state(crate::menu::GameState::Playing)))
-            .add_systems(Update, (turn_wheels, wreck_rocket, stray_hits, vehicle_damage, wreck_test).chain().after(crate::cinema::CinemaSet).run_if(in_state(crate::menu::GameState::Playing)))
+            .add_systems(
+                Update,
+                (turn_wheels, wreck_rocket, stray_hits, spare_indestructible, vehicle_damage, wreck_test)
+                    .chain()
+                    .after(crate::cinema::CinemaSet)
+                    .run_if(in_state(crate::menu::GameState::Playing)),
+            )
+            .add_systems(Update, arm_tripod_vehicles.run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(PostUpdate, (sync_vehicle_motion, seat_player, seat_story_actors).chain().before(TransformSystems::Propagate));
     }
 }
@@ -84,6 +91,18 @@ struct Def {
     /// Driving force (N) and top speed (m/s).
     engine: f32,
     top_speed: f32,
+}
+
+impl Def {
+    /// Its model's path: under the common vehicles' folder, unless given
+    /// whole (the barge's, one of the single-player ones).
+    fn model_path(&self) -> String {
+        if self.model.starts_with(r"graphics\") {
+            self.model.to_string()
+        } else {
+            format!("{VEHICLES}{}", self.model)
+        }
+    }
 }
 
 const VEHICLES: &str = r"graphics\__fc3_graphics\_common\vehicles\";
@@ -675,7 +694,28 @@ const DEFS: &[Def] = &[
         engine: 0.0,
         top_speed: 18.0,
     },
+    // HUR_040's barge, made by its mission (no world entity is named so):
+    // its health its own data's (`armour` 0: see `build_placed_vehicle`),
+    // its gun on a tripod (`arm_with_tripod`).
+    Def {
+        prefix: "vehicle/sea/barge",
+        name: "Barge",
+        model: r"graphics\__fc3_graphics\singleplayer\vehicles\sea\barge_02.xbg",
+        kind: Kind::Boat,
+        mass: 30000.0,
+        armour: 0.0,
+        engine: 60000.0,
+        top_speed: 6.0,
+    },
 ];
+
+/// A definition whose gun stands on a tripod (the barge).
+fn has_tripod(def: usize) -> bool {
+    DEFS[def].model.ends_with(r"\barge_02.xbg")
+}
+
+/// Health for a vehicle whose own data gives it none (`armour` 0).
+const FALLBACK_ARMOUR: f32 = 5000.0;
 
 fn def_for(name: &str) -> Option<usize> {
     let n = name.to_ascii_lowercase();
@@ -684,7 +724,7 @@ fn def_for(name: &str) -> Option<usize> {
 
 /// The vehicle definition drawn with this model (a graphic's `.xbg` path).
 pub(crate) fn definition_for_model(path: &str) -> Option<usize> {
-    DEFS.iter().position(|d| format!("{VEHICLES}{}", d.model).eq_ignore_ascii_case(path))
+    DEFS.iter().position(|d| d.model_path().eq_ignore_ascii_case(path))
 }
 
 /// Physics layers (bits): everything is in the first; a vehicle's body is
@@ -715,9 +755,11 @@ pub fn def_named(name: &str) -> Option<usize> {
 #[derive(Resource)]
 pub struct VehicleAssets {
     pub models: Vec<Handle<Fc3Model>>,
-    /// The mounted gun's base on an armed technical, and the ring on a boat.
+    /// The mounted gun's base on an armed technical, the ring on a boat, and
+    /// the barge's tripod.
     pub turret_base: Handle<Fc3Model>,
     pub boat_ring: Handle<Fc3Model>,
+    pub tripod: Handle<Fc3Model>,
 }
 
 /// Model-space eyes from the actual seated first-person pose, read once at
@@ -755,10 +797,11 @@ fn clip_eye(skel: &fc3_formats::anim::Skeleton, clip: &fc3_formats::anim::Clip) 
 }
 
 fn load_vehicles(mut commands: Commands, server: Res<AssetServer>, info: Res<crate::data::CacheInfo>) {
-    let models = DEFS.iter().map(|d| server.load(cache_path(&cache::model_rel(&format!("{VEHICLES}{}", d.model))))).collect();
+    let models = DEFS.iter().map(|d| server.load(cache_path(&cache::model_rel(&d.model_path())))).collect();
     let turret_base = server.load(cache_path(&cache::model_rel(&format!("{VEHICLES}{TURRET_BASE}"))));
     let boat_ring = server.load(cache_path(&cache::model_rel(&format!("{VEHICLES}{BOAT_RING}"))));
-    commands.insert_resource(VehicleAssets { models, turret_base, boat_ring });
+    let tripod = server.load(cache_path(&cache::model_rel(BARGE_TRIPOD)));
+    commands.insert_resource(VehicleAssets { models, turret_base, boat_ring, tripod });
     let mut cameras = SeatCameras::default();
     let skeleton = std::fs::read(info.root.join(cache::skeleton_rel(r"graphics\actors_\_skeleton_master\hips_ref.skeleton")))
         .ok().and_then(|b| fc3_formats::anim::parse_skeleton(&b).ok());
@@ -782,13 +825,17 @@ const BOAT_RING: &str = r"sea\speedboat_01\zodiac_mountedring_01.xbg";
 /// the gunner's feet (any mount).
 const GUN_ON_BASE: Vec3 = Vec3::new(0.0, 0.85, -0.02);
 const GUN_ABOVE_GUNNER: f32 = 1.37;
+/// The barge's gun (`weapons:FC3/Turret_Vehicle_M249.Barge`): a tripod
+/// (its gunner at `GunnerPh`, the gun at `GunMount`) and an M249.
+const BARGE_TRIPOD: &str = r"graphics\__fc3_graphics\_common\weapons\turret\tripod_barge_01.xbg";
 
 /// A vehicle with a mounted gun: the gun's pivot and its gunner's feet (in
-/// the vehicle's model space).
+/// the vehicle's model space), and the gun (a weapon by name).
 #[derive(Component)]
 pub struct ArmedVehicle {
     pub pivot: Vec3,
     pub gunner: Vec3,
+    pub gun: &'static str,
 }
 
 /// Puts a gun on a vehicle with a mount for one (the technical): its base on
@@ -819,8 +866,64 @@ pub fn arm_vehicle(commands: &mut Commands, root: Entity, model: &Fc3Model, asse
             ));
         }
     }
-    commands.entity(root).insert(ArmedVehicle { pivot, gunner });
+    commands.entity(root).insert(ArmedVehicle { pivot, gunner, gun: "DShK" });
     true
+}
+
+/// Puts the barge's gun on it: its tripod set where its gunner stands at
+/// the vehicle's gunner position, the gun on the tripod's mount.
+fn arm_with_tripod(commands: &mut Commands, root: Entity, model: &Fc3Model, tripod: &Fc3Model) -> bool {
+    let node = |m: &Fc3Model, n: &str| crate::weapons::node_pose(m, n).map(|t| t.translation);
+    let (Some(gunner), Some(mount), Some(stand)) = (node(model, "GUNNER_POSITION"), node(tripod, "GunMount"), node(tripod, "GunnerPh")) else {
+        return false;
+    };
+    let base = gunner - stand;
+    for part in tripod.lods.first().map(|l| l.parts.as_slice()).unwrap_or(&[]) {
+        commands.spawn((
+            Mesh3d(part.mesh.clone()),
+            MeshMaterial3d(part.material.clone()),
+            crate::original_shaders::PropPart,
+            Transform::from_translation(base),
+            ChildOf(root),
+        ));
+    }
+    commands.entity(root).insert(ArmedVehicle { pivot: base + mount, gunner, gun: "M249" });
+    true
+}
+
+/// Vehicles whose gun stands on a tripod (the barge) get it once its model
+/// is in.
+fn arm_tripod_vehicles(
+    assets: Option<Res<VehicleAssets>>,
+    models: Res<Assets<Fc3Model>>,
+    vehicles: Query<(Entity, &Vehicle), Without<ArmedVehicle>>,
+    mut tried: Local<HashSet<Entity>>,
+    mut commands: Commands,
+) {
+    let Some(assets) = assets else { return };
+    let Some(tripod) = models.get(&assets.tripod) else { return };
+    for (e, v) in &vehicles {
+        if !has_tripod(v.def) || tried.contains(&e) {
+            continue;
+        }
+        let Some(model) = models.get(&assets.models[v.def]) else { continue };
+        tried.insert(e);
+        if !arm_with_tripod(&mut commands, e, model, tripod) {
+            warn!("vehicle: no place for {}'s gun", DEFS[v.def].name);
+        }
+    }
+}
+
+/// A vehicle a script has made indestructible (HUR_040's barge until its
+/// defence) takes no lasting harm.
+fn spare_indestructible(host: Option<NonSend<crate::story::StoryHost>>, mut vehicles: Query<(&Vehicle, &mut Health, &Wear)>) {
+    let Some(host) = host else { return };
+    for (v, mut h, w) in &mut vehicles {
+        if !w.wrecked && (h.current < h.max || h.dead) && host.story.vehicle_rules(v.spawn_id).indestructible {
+            h.current = h.max;
+            h.dead = false;
+        }
+    }
 }
 
 #[derive(Component)]
@@ -942,6 +1045,13 @@ impl Vehicle {
 
     pub fn npc_occupants(&self) -> impl Iterator<Item = (u64, fc3_story::vehicles::Occupant)> + '_ {
         self.seats.iter().enumerate().filter_map(|(i, s)| s.pawn.filter(|p| *p != fc3_story::PLAYER).map(|p| (p, self.occupant(i).unwrap())))
+    }
+
+    /// Whoever mans its mounted gun, as the story sees them: in its gunner
+    /// seat.
+    pub fn gunner_occupant(&self) -> Option<fc3_story::vehicles::Occupant> {
+        let s = self.seats.iter().find(|s| s.kind == 2)?;
+        Some(fc3_story::vehicles::Occupant { vehicle: self.spawn_id, kind: s.kind, index: s.index, vehicle_type: self.vehicle_type })
     }
 
     fn available_seat(&self, rules: &fc3_story::vehicles::Rules) -> Option<usize> {
@@ -1241,7 +1351,8 @@ fn autopilot_board(
     host: Option<NonSend<crate::story::StoryHost>>,
     cinema: Res<crate::cinema::Cinema>,
     time: Res<Time>,
-    vehicles: Query<(&Transform, &Vehicle), Without<Player>>,
+    vehicles: Query<(Entity, &Transform, &Vehicle), Without<Player>>,
+    guns: Query<&crate::turrets::Turret>,
     mut players: Query<(&mut Transform, &mut Player), Without<Vehicle>>,
     mut actions: ResMut<ActionState>,
     mut last: Local<f32>,
@@ -1251,7 +1362,14 @@ fn autopilot_board(
     }
     let Some(host) = host else { return };
     let Ok((mut pt, mut p)) = players.single_mut() else { return };
-    if p.driving || p.spawning || cinema.cutscene() || cinema.plays_player() || host.quiet() < 3.0 || !host.story.awaits_vehicle_entry(fc3_story::PLAYER) {
+    if p.driving
+        || p.mounted.is_some()
+        || p.spawning
+        || cinema.cutscene()
+        || cinema.plays_player()
+        || host.quiet() < 3.0
+        || !host.story.awaits_vehicle_entry(fc3_story::PLAYER)
+    {
         return;
     }
     // (A press a second at most: the interaction sees it the next frame.)
@@ -1261,17 +1379,39 @@ fn autopilot_board(
     }
     let here = pt.translation;
     let named = host.story.awaited_vehicles(fc3_story::PLAYER);
-    let Some((vt, v)) = vehicles
+    // (One whose gun stands on a tripod is boarded at its gun, free:
+    // HUR_040's barge, its gun manned.)
+    let gun = |e: Entity| guns.iter().find(|g| g.on_vehicle() == Some(e) && g.user.is_none());
+    let Some((ve, vt, v)) = vehicles
         .iter()
-        .filter(|(_, v)| {
+        .filter(|(e, _, v)| {
             (if named.is_empty() { host.story.watches_entity(v.spawn_id) } else { named.contains(&v.spawn_id) })
-                && v.available_seat(&host.story.vehicle_rules(v.spawn_id)).is_some()
+                && if has_tripod(v.def) { gun(*e).is_some() } else { v.available_seat(&host.story.vehicle_rules(v.spawn_id)).is_some() }
         })
-        .min_by(|a, b| a.0.translation.distance(here).total_cmp(&b.0.translation.distance(here)))
+        .min_by(|a, b| a.1.translation.distance(here).total_cmp(&b.1.translation.distance(here)))
     else {
         return;
     };
     *last = now;
+    // At the gun, a press gets on it; else to the gun first (the press a
+    // second later, once there: a press away from it would take a seat).
+    if let Some(g) = gun(ve).filter(|_| has_tripod(v.def)) {
+        let (spot, feet) = (g.gunner(), pt.translation - Vec3::Y * HALF_HEIGHT);
+        let name = host.story.data().name_of(v.spawn_id).unwrap_or("?").to_string();
+        if Vec2::new(feet.x - spot.x, feet.z - spot.z).length() < 1.0 && (feet.y - spot.y).abs() < 1.2 {
+            info!("story autopilot: onto the gun of {name}");
+            actions.press(Action::Interact);
+        } else {
+            info!(
+                "story autopilot: to the gun of {name} at {spot:.1?} (the player at {feet:.1?}, the gun's pivot {:.1?}, the vehicle {:.1?})",
+                g.pivot, vt.translation
+            );
+            pt.translation = spot + Vec3::Y * (HALF_HEIGHT + 0.05);
+            p.yaw = g.yaw;
+            p.velocity = Vec3::ZERO;
+        }
+        return;
+    }
     info!("story autopilot: into vehicle {}", host.story.data().name_of(v.spawn_id).unwrap_or("?"));
     pt.translation = vt.transform_point(Vec3::new(v.max.x + 0.8, 0.8, 0.0));
     p.yaw = vt.rotation.to_euler(EulerRot::YXZ).0 + std::f32::consts::FRAC_PI_2;
@@ -1380,11 +1520,13 @@ fn scene_unseats_player(
 /// Tests: the story autopilot gets out of a vehicle the story is done with
 /// (a mission over in it, the next elsewhere) once the story has been quiet
 /// a while: no script listens to it, it isn't on its way along a path, and
-/// getting out is allowed.
+/// getting out is allowed. Off a vehicle's gun likewise, listened to or not,
+/// once there is no fight near (HUR_040's barge, Hurk to be talked to).
 fn autopilot_exit(
     host: Option<NonSend<crate::story::StoryHost>>,
     cinema: Res<crate::cinema::Cinema>,
     driving: Res<Driving>,
+    (players, guns): (Query<&Player>, Query<&crate::turrets::Turret>),
     paths: Res<crate::vehicle_paths::StoryVehiclePaths>,
     vehicles: Query<(&Vehicle, &Transform)>,
     foes: Query<(&Transform, &crate::story_actors::StoryActor, &crate::npc::Npc, &Health)>,
@@ -1396,14 +1538,18 @@ fn autopilot_exit(
         return;
     }
     let Some(host) = host else { return };
-    let Some((v, vt)) = driving.vehicle.and_then(|e| vehicles.get(e).ok()) else { return };
+    let gun_vehicle = players.single().ok().and_then(|p| p.mounted).and_then(|m| guns.get(m.turret).ok()).and_then(|g| g.on_vehicle());
+    let on_gun = driving.vehicle.is_none() && gun_vehicle.is_some();
+    let Some((v, vt)) = driving.vehicle.or(gun_vehicle).and_then(|e| vehicles.get(e).ok()) else { return };
     let id = v.spawn_id;
     // Foes a block counts down near (CIT_020 B30's privateers where the
     // convoy stopped): out to fight them, the vehicle still listened to.
     let counted = host.story.counted_members();
-    let fight = foes.iter().any(|(t, a, npc, h)| {
-        !h.dead && counted.contains(&a.id) && npc.faction.hostile_to_player() && t.translation.distance(vt.translation) < FIGHT_FROM_VEHICLE
-    });
+    // (On a gun, those it could reach.)
+    let reach = if on_gun { FIGHT_FROM_GUN } else { FIGHT_FROM_VEHICLE };
+    let fight = foes
+        .iter()
+        .any(|(t, a, npc, h)| !h.dead && counted.contains(&a.id) && npc.faction.hostile_to_player() && t.translation.distance(vt.translation) < reach);
     if host.quiet() < if fight { 3.0 } else { 20.0 } || time.elapsed_secs() - *last < 5.0 {
         return;
     }
@@ -1420,11 +1566,16 @@ fn autopilot_exit(
             .watched_triggers_in_graph(graph.as_deref())
             .iter()
             .any(|w| w.3 && w.1 == "Use" && crate::data::to_bevy(w.2).distance(vt.translation) < ON_FOOT_REACH);
-    if following || locked || (!fight && !to_use && (watched || entry)) {
+    // (Off a gun with foes about once a while has shown it isn't reaching
+    // them.)
+    let gunning = on_gun && fight && host.quiet() < GUN_PATIENCE;
+    if following || locked || gunning || (!on_gun && !fight && !to_use && (watched || entry)) {
         debug!("story autopilot: staying in vehicle {id} (listened to {watched}, on a path {following}, exit disabled {locked}, entry awaited {entry})");
         return;
     }
-    if fight {
+    if on_gun {
+        info!("story autopilot: off the gun of vehicle {id} (foes about {fight})");
+    } else if fight {
         info!("story autopilot: out of vehicle {id} to fight");
     } else if to_use {
         info!("story autopilot: out of vehicle {id}, something to use near");
@@ -1439,6 +1590,10 @@ fn autopilot_exit(
 const FIGHT_FROM_VEHICLE: f32 = 150.0;
 /// How near something to use must be for it to get out to use it.
 const ON_FOOT_REACH: f32 = 150.0;
+/// How near foes must be for the autopilot to stay on a vehicle's gun, and
+/// how long the story is quiet (s) before it leaves it with foes about.
+const FIGHT_FROM_GUN: f32 = 400.0;
+const GUN_PATIENCE: f32 = 60.0;
 
 fn seat_story_actors(
     mut vehicles: Query<(&Transform, &mut Vehicle), Without<crate::story_actors::StoryActor>>,
@@ -1732,15 +1887,26 @@ struct WreckParts(Vec<(Handle<Mesh>, Handle<StandardMaterial>)>);
 /// A mission placement keeps its actual model/material kit. Names such as
 /// JAS_060_080_100_Car are not enough to identify the vehicle archetype.
 pub(crate) fn placed_definition(path: &str) -> Option<usize> {
-    DEFS.iter().position(|d| cache::model_rel(&format!("{VEHICLES}{}", d.model)) == path)
+    DEFS.iter().position(|d| cache::model_rel(&d.model_path()) == path)
 }
 
-pub(crate) fn build_placed_vehicle(commands: &mut Commands, sector: &Fc3Sector, placement: &cache::Placement,
-    model: &Fc3Model, id: u64, layout: &fc3_story::vehicles::Layout) -> Option<Entity> {
+pub(crate) fn build_placed_vehicle(
+    commands: &mut Commands,
+    sector: &Fc3Sector,
+    placement: &cache::Placement,
+    model: &Fc3Model,
+    id: u64,
+    layout: &fc3_story::vehicles::Layout,
+    health: Option<f32>,
+) -> Option<Entity> {
     let def = placed_definition(sector.model_paths.get(placement.model as usize)?)?;
     let (scale, rotation, at) = (Vec3::splat(placement.scale), Quat::from_array(placement.rotation), Vec3::from_array(placement.translation));
     let root = build_vehicle_inner(commands, def, model, at, rotation, id, Some((sector, placement)));
     commands.entity(root).insert(Transform::from_translation(at).with_rotation(rotation).with_scale(scale));
+    // (One with no figure of ours has its own data's.)
+    if DEFS[def].armour == 0.0 {
+        commands.entity(root).insert(Health::new(health.unwrap_or(FALLBACK_ARMOUR)));
+    }
     author_seats(commands, root, model, layout);
     Some(root)
 }
@@ -2347,9 +2513,9 @@ mod story_vehicle_tests {
         assert_eq!(layout.vehicle_type, 0);
         assert_eq!(layout.seats.len(), 7);
         assert_eq!(layout.seats.iter().map(|s| (s.kind, s.index)).collect::<Vec<_>>(), vec![(1, 0), (3, 0), (2, 0), (3, 1), (3, 2), (3, 3), (3, 4)]);
-        let def = &DEFS[placed_definition(&cache::model_rel(&format!("{VEHICLES}{}", DEFS[1].model))).unwrap()];
+        let def = &DEFS[placed_definition(&cache::model_rel(&DEFS[1].model_path())).unwrap()];
         assert_eq!(def.name, "Technical");
-        let model = cache::CachedModel::from_bytes(&std::fs::read(root.join(cache::model_rel(&format!("{VEHICLES}{}", def.model)))).unwrap()).unwrap();
+        let model = cache::CachedModel::from_bytes(&std::fs::read(root.join(cache::model_rel(&def.model_path()))).unwrap()).unwrap();
         for s in &layout.seats { assert!(seat_bone_pose(&model.bones, s.bone).is_some(), "missing seat bone {:#x}", s.bone); }
     }
 

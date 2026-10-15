@@ -87,18 +87,20 @@ mod tests {
             SendRegisteredEventToEntity("100", "CVehicle_SetExitDisabled", {})
             SendRegisteredEventToEntity("100", "CVehicle_SetAsAnimated", {})
             SendRegisteredEventToEntity("100", "CVehicle_SetAsUnusable", {})
+            SendRegisteredEventToEntity("100", "CVehicle_SetAsIndestructable", {})
         "#).exec().unwrap();
         let rules = story.vehicle_rules(100);
-        assert!(rules.exit_disabled && rules.animated && rules.unusable);
+        assert!(rules.exit_disabled && rules.animated && rules.unusable && rules.indestructible);
         assert_eq!(rules.locked, HashSet::from([(1, 0), (3, 2)]));
         story.domino().lua().load(r#"
             CAPI_Vehicle.SetIsSeatLocked("100", 1, 0, false)
             SendRegisteredEventToEntity("100", "CVehicle_SetExitEnabled", {})
             SendRegisteredEventToEntity("100", "CVehicle_SetAsNotAnimated", {})
             SendRegisteredEventToEntity("100", "CVehicle_SetAsUsable", {})
+            SendRegisteredEventToEntity("100", "CVehicle_SetAsDestructable", {})
         "#).exec().unwrap();
         let rules = story.vehicle_rules(100);
-        assert!(!rules.exit_disabled && !rules.animated && !rules.unusable);
+        assert!(!rules.exit_disabled && !rules.animated && !rules.unusable && !rules.indestructible);
         assert_eq!(rules.locked, HashSet::from([(3, 2)]));
     }
 
@@ -192,11 +194,24 @@ impl Layout {
     }
 }
 
+/// The health a vehicle's own data gives it (its physics' part's:
+/// HUR_040's barge), where it has one.
+pub fn max_health(entry: &Entry) -> Option<f32> {
+    ["CVehicleFloatingPhysComponent", "CVehicleWheeledPhysComponent"]
+        .iter()
+        .find_map(|c| entry.component(c))
+        .and_then(|p| p.child("Parts")?.children.first()?.f32("fMaxHealth"))
+        .filter(|h| *h > 0.0)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Rules {
     pub unusable: bool,
     pub exit_disabled: bool,
     pub animated: bool,
+    /// Nothing destroys it (`CVehicle_SetAsIndestructable`: HUR_040's barge
+    /// until its defence begins).
+    pub indestructible: bool,
     pub locked: HashSet<(i32, i32)>,
 }
 

@@ -4240,3 +4240,45 @@ goes on (it quits to the main menu only if a `QuitToMainMenu` came first).
 * **Asked twice.** `GAME_CREDITS_B10`, not part of the campaign's flow,
   asks for them too and waits for their end before it offers to go on
   playing or quit; asked again while they roll, they roll on.
+
+## HUR_040: Hurk's barge
+
+Hurk's barge is held downriver: the player frees it (B10), mans its gun
+while Hurk mends it under attack (B20, B30), and sees it to the beach
+(B40) before talking to Hurk (B50).
+
+* **The barge.** `HUR_040_Barge` (`sea\barge_02`, among the
+  single-player vehicles, not the common ones) had no definition: it
+  stood as scenery, and B20's wait for the player to sit in it never
+  ended. It is now a boat (a definition's model path may be given whole),
+  made where its mission places it, with its own data's health (its
+  physics' part's `fMaxHealth`, `fc3_story::vehicles::max_health`) and
+  seats (a gunner's and a driver's).
+* **Its gun.** Its mounted weapon is `Turret_Vehicle_M249.Barge`: the
+  `tripod_barge_01` mount and an M249. The tripod stands so its gunner's
+  place (`GunnerPh`) is the barge's `GUNNER_POSITION`, the gun on its
+  `GunMount` (`vehicles::arm_with_tripod`), manned as any vehicle's gun is
+  (`turrets`).
+* **On its gun is in it.** A player manning a vehicle's gun is, for the
+  story, in its gunner seat (`Vehicle::gunner_occupant`): B20's
+  `VehicleListener` hears him sit and disables the exit, which holds him
+  on the gun (the interact key doesn't leave it) until B40 enables it.
+* **Indestructible.** `CVehicle_SetAsIndestructable` and
+  `SetAsDestructable` (B10, B20) are kept as a vehicle rule; a vehicle so
+  marked takes no lasting harm (`vehicles::spare_indestructible`).
+* **Downriver.** B30 and B40 carry the barge in their sequences
+  (`sam010_02`, `sam010_03`) with the player at the gun; B40 also sends a
+  reinforcement boat along a path to the beach.
+* **The autopilot.** A vehicle it waits to be boarded that has a free gun
+  is boarded at the gun: the autopilot stands at the gunner's place and
+  presses a second later, once there (a press beside the barge took the
+  driver's seat). On the gun it shoots from where it is (as a passenger,
+  gun in hand; the weapon never cycled away), and leaves it once the exit
+  is enabled and no foe a block counts is within 400 m, or after a
+  minute's quiet with them about. Foes a block counts beyond 150 m are
+  gone after once the story has been quiet 30 s (B40's last boat crew, off
+  the beach), and a foe being gone after is kept unless another is 4 m
+  nearer (two about as near were swapped every frame).
+* **Not done.** The Blackhawk reinforcement B40 also waits for along its
+  path (`HUR_040_Reinforce_B30_BlackHawk_02`) isn't flown; B40 completes
+  without it. The tripod's turning parts stand still; the gun turns.

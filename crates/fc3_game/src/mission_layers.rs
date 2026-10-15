@@ -124,9 +124,15 @@ fn stream_layers(
                 if model.lods.is_empty() {
                     continue;
                 }
-                let obj = if let Some((e, layout)) = entity.and_then(|e| data.as_ref()?.entities.get(&e.id)
-                    .and_then(fc3_story::vehicles::Layout::from_entry).map(|layout| (e, layout))) {
-                    if let Some(vehicle) = crate::vehicles::build_placed_vehicle(&mut commands, sector, p, model, e.id, &layout) {
+                let obj = if let Some((e, layout)) = entity.and_then(|e| {
+                    data.as_ref()?
+                        .entities
+                        .get(&e.id)
+                        .and_then(|entry| Some((fc3_story::vehicles::Layout::from_entry(entry)?, fc3_story::vehicles::max_health(entry))))
+                        .map(|layout| (e, layout))
+                }) {
+                    let (layout, health) = layout;
+                    if let Some(vehicle) = crate::vehicles::build_placed_vehicle(&mut commands, sector, p, model, e.id, &layout, health) {
                         live_vehicles.insert(e.id);
                         commands.entity(vehicle).insert(crate::vehicles::MissionVehicle(*layer));
                         vehicle

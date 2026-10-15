@@ -1186,7 +1186,7 @@ fn run_story(
         ResMut<EntityPlacements>,
         Res<crate::hud::OriginalHud>,
     ),
-    (actions, mut markers, heights, mut voices, driving, vehicle_views, mut seat_requests, mut vehicle_paths, mut drive): (
+    (actions, mut markers, heights, mut voices, driving, vehicle_views, mut seat_requests, mut vehicle_paths, mut drive, guns): (
         Res<crate::controls::ActionState>,
         ResMut<ObjectiveMarkers>,
         Res<crate::terrain::Heightfield>,
@@ -1196,6 +1196,7 @@ fn run_story(
         ResMut<crate::vehicles::StorySeatRequests>,
         ResMut<crate::vehicle_paths::StoryVehiclePaths>,
         ResMut<crate::vehicles::AutopilotDrive>,
+        Query<&crate::turrets::Turret>,
     ),
     (info, slot, fov, mut bought, mut towers, ways, mut looted, loot_catalog, mut crafted, mut crafting): (
         Res<CacheInfo>,
@@ -1378,13 +1379,21 @@ fn run_story(
         view.spawned.insert(vehicle.story_id(), fc3_story::Live { pos: to_dunia(at.translation), alive: health.is_none_or(|h| !h.dead),
             health: health.map_or(1.0, |h| h.current), ai_state: 0 });
         view.pawn_vehicles.extend(vehicle.npc_occupants());
-        if p.driving && driving.vehicle == Some(entity) {
-            if let Some(occupant) = vehicle.occupant(driving.seat) {
-                view.player_state.vehicle = Some(occupant.vehicle);
-                view.player_state.seat = occupant.kind;
-                view.player_state.seat_index = occupant.index;
-                view.player_state.vehicle_type = occupant.vehicle_type;
-            }
+        // (On its mounted gun, in its gunner seat: HUR_040's barge.)
+        let gunning = p.mounted.and_then(|m| guns.get(m.turret).ok()).and_then(|g| g.on_vehicle()) == Some(entity);
+        let occupant = if p.driving && driving.vehicle == Some(entity) {
+            vehicle.occupant(driving.seat)
+        } else if gunning {
+            vehicle.gunner_occupant()
+        } else {
+            None
+        };
+        if let Some(occupant) = occupant {
+            view.player_in_vehicle = true;
+            view.player_state.vehicle = Some(occupant.vehicle);
+            view.player_state.seat = occupant.kind;
+            view.player_state.seat_index = occupant.index;
+            view.player_state.vehicle_type = occupant.vehicle_type;
         }
     }
     if let Ok(inv) = inventory.single() {
@@ -3055,6 +3064,16 @@ const TAKEDOWN_PATIENCE: f32 = 6.0;
 /// come nearer (m).
 const SHOOT_FROM: f32 = 15.0;
 
+/// Tests: how much nearer (m) another foe must be for the autopilot to turn
+/// from the one it goes after (two about as near were swapped every frame).
+const TARGET_STICK: f32 = 4.0;
+
+/// Tests: how near (m) a foe must be for the autopilot to go after him,
+/// and how long the story is quiet (s) before one a block counts down is
+/// gone after wherever he is (HUR_040 B40's last boat crew, off the beach).
+const FIGHT_REACH: f32 = 150.0;
+const FAR_FOE_AFTER: f32 = 30.0;
+
 /// How far (m) from a battlefield's middle its strategic point may be.
 const STRATEGIC_REACH: f32 = 15.0;
 
@@ -3197,6 +3216,9 @@ fn autopilot_loot(
         return;
     }
     let Ok((me, mut at, mut player, health, inventory)) = players.single_mut() else { return };
+    // Shooting from where he is, not going after anyone: a passenger, gun in
+    // hand, or on a mounted gun (HUR_040's barge).
+    let fixed = player.armed_passenger || player.mounted.is_some();
     // (Held up where a high trigger was stepped into, the player may still
     // go after a character: getting there sets him down.)
     if health.dead || player.spawning || (player.driving && !player.armed_passenger) || landing_awaited(&host, &player) {
@@ -3348,9 +3370,12 @@ fn autopilot_loot(
                     && !skipped.contains_key(&actor.id)
                     && npc.faction.hostile_to_player()
                     && (to_kill.contains(&actor.id) || npc.state != crate::npc::NpcState::Idle || sniping)
-                    && near(t) < 150.0
+                    && (near(t) < FIGHT_REACH || (to_kill.contains(&actor.id) && host.quiet > FAR_FOE_AFTER))
             })
-            .min_by(|a, b| (!counted.contains(&a.4.id)).cmp(&!counted.contains(&b.4.id)).then(near(a.0).total_cmp(&near(b.0))))
+            .min_by(|a, b| {
+                let held = |id: u64| if last.is_some_and(|l| l.0 == id) { TARGET_STICK } else { 0.0 };
+                (!counted.contains(&a.4.id)).cmp(&!counted.contains(&b.4.id)).then((near(a.0) - held(a.4.id)).total_cmp(&(near(b.0) - held(b.4.id))))
+            })
     });
     // (Held in the camera by a script, the player watches: a scene plays out
     // before him that needs its characters.)
@@ -3369,7 +3394,7 @@ fn autopilot_loot(
     // Riding as a passenger: the foe nearest is shot from the seat, gun in
     // hand (the knife put away); in a sniping challenge, from where he
     // stands.
-    if player.armed_passenger || stubborn || sniping {
+    if fixed || stubborn || sniping {
         let Some((nt, nh, _, _, actor, _, head)) = quest.filter(|q| (stubborn || sniping || host.quiet > 3.0) && !q.1.dead) else { return };
         if *last != Some((actor.id, "shoot")) {
             info!("story autopilot: shoot {} ({})", host.story.data().name_of(actor.id).unwrap_or("?"), actor.id);
@@ -3384,7 +3409,7 @@ fn autopilot_loot(
                 } else if now - since > 8.0 {
                     // On foot, the first time: right up to him (a cliff or
                     // the water's edge between), on the ground beside him.
-                    if !player.armed_passenger && came_near.insert(actor.id) {
+                    if !fixed && came_near.insert(actor.id) {
                         info!("story autopilot: {} out of reach; going up to him", actor.id);
                         let flat = (at.translation - nt.translation).with_y(0.0).normalize_or(Vec3::Z);
                         let mut feet = nt.translation + flat * 3.0;
@@ -3405,7 +3430,7 @@ fn autopilot_loot(
         // In the water no gun fires: out onto dry ground near him, the
         // nearest that sees him over the terrain (a foe at the waterline
         // under a cliff isn't seen from its top), else the highest.
-        if player.swimming && !player.armed_passenger {
+        if player.swimming && !fixed {
             let chest = nt.translation + Vec3::Y * 0.4;
             let sees = |feet: Vec3| {
                 let eye = feet + Vec3::Y * 1.6;
@@ -3444,7 +3469,7 @@ fn autopilot_loot(
             .map(|d| d.range)
             .fold(0.0, f32::max);
         let flat = (nt.translation - at.translation).with_y(0.0);
-        if !player.armed_passenger && flat.length() > (reach * 0.6).max(SHOOT_FROM * 1.5) {
+        if !fixed && flat.length() > (reach * 0.6).max(SHOOT_FROM * 1.5) {
             let mut feet = nt.translation - flat.normalize_or(Vec3::Z) * SHOOT_FROM;
             feet.y = heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT);
             teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
@@ -3477,7 +3502,7 @@ fn autopilot_loot(
             .filter(|(_, a, creature)| !a.dead && !creature && a.id != actor.id && !hostile.contains(&a.id))
             .map(|(t, a, _)| (t.translation, a.id))
             .find(|(p, _)| p.with_y(0.0).distance(at.translation.with_y(0.0)) < KEEP_CLEAR);
-        if let Some((by, who)) = beside.filter(|_| !player.armed_passenger && now - *kept_clear > 15.0) {
+        if let Some((by, who)) = beside.filter(|_| !fixed && now - *kept_clear > 15.0) {
             *kept_clear = now;
             let away = (at.translation - by).with_y(0.0).normalize_or(Vec3::X);
             let mut feet = by + away * (KEEP_CLEAR + 4.0);
@@ -3499,7 +3524,7 @@ fn autopilot_loot(
         });
         if let Some(bystander) = in_line {
             let since = *blocked.get_or_insert(now);
-            if now - since > 3.0 && !player.armed_passenger {
+            if now - since > 3.0 && !fixed {
                 let away = (target - bystander).with_y(0.0).normalize_or(Vec3::X);
                 let mut feet = nt.translation + away * 6.0;
                 feet.y = heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT);
@@ -3532,7 +3557,8 @@ fn autopilot_loot(
                 }
             };
             let best = (0..inventory.slots.len()).max_by(|a, b| score(*a).partial_cmp(&score(*b)).unwrap_or(std::cmp::Ordering::Equal));
-            if best.is_some_and(|b| b != inventory.current && score(b) > score(inventory.current)) {
+            // (On a mounted gun, that gun.)
+            if player.mounted.is_none() && best.is_some_and(|b| b != inventory.current && score(b) > score(inventory.current)) {
                 actions.cycle = 1;
             } else {
                 actions.press(Action::Fire);

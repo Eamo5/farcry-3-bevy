@@ -423,6 +423,8 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
             "CVehicle_SetExitEnabled" => c.vehicle_rules.entry(e).or_default().exit_disabled = false,
             "CVehicle_SetAsAnimated" => c.vehicle_rules.entry(e).or_default().animated = true,
             "CVehicle_SetAsNotAnimated" => c.vehicle_rules.entry(e).or_default().animated = false,
+            "CVehicle_SetAsIndestructable" => c.vehicle_rules.entry(e).or_default().indestructible = true,
+            "CVehicle_SetAsDestructable" => c.vehicle_rules.entry(e).or_default().indestructible = false,
             _ => {}
         }
         c.emit(Command::EntityEvent { entity: e, event: event.0 });
