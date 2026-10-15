@@ -1558,7 +1558,9 @@ fn run_story(
         && !cinema.plays_player()
         && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
         && !landing_awaited(&host, &p)
-        && host.quiet > autopilot_delay && host.story.watched_loot_filters().is_empty() {
+        && host.quiet > autopilot_delay
+        && crafting.still_wanted(host.story.watched_loot_filters(), &progress.loot).is_empty()
+    {
         let graph = std::env::var("FC3_STORY_AUTOPILOT_GRAPH").ok();
         // The missions running go first (CIT_020 holds the player on its
         // water tower while quests' starts wait): their triggers before the
@@ -3168,7 +3170,8 @@ fn autopilot_loot(
     // (An item a script waits to see looted: JAS_200's visitor carries one
     // from the start, looted only at the end, and taking him down while the
     // meeting was to be watched unseen gave the player away.)
-    let looted_wanted = host.story.watched_loot_filters();
+    let looted_wanted =
+        crafting.as_ref().map_or_else(|| host.story.watched_loot_filters(), |c| c.still_wanted(host.story.watched_loot_filters(), &progress.loot));
     let carries_quest = |own: &crate::pickups::OwnLoot| {
         crafting.as_ref().is_some_and(|c| {
             let quest_name = |id| c.item(id).filter(|i| i.key.starts_with(fc3_formats::progression::QUEST_ITEMS)).map(|i| i.name_id);
@@ -3647,8 +3650,11 @@ fn autopilot_loot(
     if player.noclip {
         return;
     }
-    let wanted = host.story.watched_loot_filters();
-    if wanted.is_empty() { *last = None; return }
+    if looted_wanted.is_empty() {
+        *last = None;
+        return;
+    }
+    let wanted = looted_wanted.clone();
     let regions = host.story.watched_exit_regions();
     let inside = |at: Vec3| regions.iter().all(|r| r.contains(to_dunia(at)));
     // A persistent listener need not disable after its checklist is satisfied.

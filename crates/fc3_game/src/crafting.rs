@@ -50,6 +50,17 @@ impl CraftCatalog {
         self.items.iter().find(|i| i.id == id)
     }
 
+    /// Of the items scripts wait to see looted (by name id), the ones still
+    /// to find: a mission's item the player holds is looked for no longer
+    /// (JAS_200's script goes on listening for its role sheet once it is
+    /// looted, and the autopilot waited for it to come again).
+    pub fn still_wanted(&self, mut wanted: Vec<u32>, held: &std::collections::BTreeMap<u32, u32>) -> Vec<u32> {
+        wanted.retain(|&name| {
+            !self.items.iter().any(|i| i.name_id == name && i.key.starts_with(fc3_formats::progression::QUEST_ITEMS) && held.get(&i.id).is_some_and(|&n| n > 0))
+        });
+        wanted
+    }
+
     /// Rolls what a body dressed from a graphic kit carries: each of its loot
     /// groups by its chance, then the group's cash, items and supplies each
     /// by theirs. `None` when the game gives the kit no loot.
@@ -378,6 +389,21 @@ mod tests {
     use super::*;
     use crate::progression::{Animal, loot_tests::metadata};
     use crate::syringes::Plant;
+
+    /// A mission's item the player holds isn't looked for again; an
+    /// ingredient is, however many are held.
+    #[test]
+    fn a_held_mission_item_is_no_longer_wanted() {
+        let item = |id, name_id, key: &str| fc3_formats::progression::Item { id, name_id, key: key.into(), ..Default::default() };
+        let catalog = CraftCatalog { items: vec![item(997, 104540, "Quest items/Traitor list"), item(5, 20, "Animal parts/Parts - boar hide")], ..default() };
+        let mut held = std::collections::BTreeMap::new();
+        assert_eq!(catalog.still_wanted(vec![20, 104540], &held), vec![20, 104540]);
+        held.insert(997, 1);
+        held.insert(5, 3);
+        assert_eq!(catalog.still_wanted(vec![20, 104540], &held), vec![20]);
+        held.insert(997, 0);
+        assert_eq!(catalog.still_wanted(vec![104540], &held), vec![104540]);
+    }
 
     fn stats() -> PlayerStats {
         PlayerStats { medkits: 0, kills: 0, deaths: 0, respawn_timer: 0.0, spawn_point: Vec3::ZERO,

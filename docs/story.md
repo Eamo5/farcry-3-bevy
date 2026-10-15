@@ -4096,3 +4096,9 @@ start, its crew seated, then driven along its way), and being seen fails it.
   mission's carriers. It now goes by an item's name id (`OwnLoot::gives`).
   A body carrying an item a script waits to see looted no longer sinks
   away with the others (after 75 s) before it is searched (`KeptBody`).
+
+* **Looted once.** The block goes on listening for the role sheet after it
+  is looted, and the autopilot, which leaves the triggers be while a
+  script waits for loot, never went on to the getaway vehicle. A mission's
+  item the player holds is no longer looked for (`CraftCatalog::
+  still_wanted`), and JAS_200 completes; JAS_210 starts.
