@@ -4054,3 +4054,13 @@ start, its crew seated, then driven along its way), and being seen fails it.
   last try had driven them (the jeep at the meeting, its crew asked to
   board at its start), or gone for good. Back to a checkpoint, what the
   layers put in the world is now put there afresh (`MissionLayers::reset`).
+
+* **Unseen.** The autopilot gave the watch away three ways: it went after
+  the visitor as a foe because a health listener on him counts
+  (`CCounterEvent`), and as an item's carrier because he carries one
+  looted only at the mission's end; and nothing kept it off a character
+  waiting to be photographed. A character only a health listener watches
+  is now fought once he fights (`Story::size_counted_members` for the
+  ones to go after unprovoked); a carrier is gone after only while a
+  script waits for his item to be looted; and one waiting to be
+  photographed is left alone.

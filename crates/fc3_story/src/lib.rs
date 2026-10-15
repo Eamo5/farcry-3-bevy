@@ -1182,6 +1182,23 @@ impl Story {
     /// The living members of the groups scripts count (`CGroupSizeEvent`
     /// listeners: "kill them all"; or `CCounterEvent` on each one, CIT_020
     /// B30's two privateers at the convoy), for tools that drive the story.
+    /// The members of the groups blocks count down by their size (a wave,
+    /// the guards to kill), not those a health listener only watches
+    /// (`CCounterEvent` on one character: JAS_200's visitor, to be
+    /// photographed, not killed).
+    pub fn size_counted_members(&self) -> std::collections::HashSet<u64> {
+        let c = self.core.borrow();
+        let groups: std::collections::BTreeSet<_> = c
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Group(g, event) if event == "CGroupSizeEvent" => Some(g.clone()),
+                _ => None,
+            })
+            .collect();
+        groups.into_iter().flat_map(|g| c.groups(&values::Text(g))).filter(|&id| c.is_loaded(id) && !c.dead.contains(&id)).collect()
+    }
+
     pub fn counted_members(&self) -> std::collections::HashSet<u64> {
         let c = self.core.borrow();
         let groups: std::collections::BTreeSet<_> = c

@@ -3112,13 +3112,19 @@ fn autopilot_loot(
     // scripted line (a mission's opening call), as a player would still be
     // sneaking up: a line the search sets off would cut the call, whose next
     // line cuts that one in turn.
+    // (An item a script waits to see looted: JAS_200's visitor carries one
+    // from the start, looted only at the end, and taking him down while the
+    // meeting was to be watched unseen gave the player away.)
+    let looted_wanted = host.story.watched_loot_filters();
     let carries_quest = |own: &crate::pickups::OwnLoot| {
         crafting.as_ref().is_some_and(|c| {
             own.0.iter().any(|&(group, chance)| {
                 chance > 0.0
                     && c.groups.iter().any(|g| {
                         g.id == group
-                            && g.items.iter().any(|&(id, _)| c.item(id).is_some_and(|i| i.key.starts_with(fc3_formats::progression::QUEST_ITEMS)))
+                            && g.items.iter().any(|&(id, _)| {
+                                looted_wanted.contains(&id) && c.item(id).is_some_and(|i| i.key.starts_with(fc3_formats::progression::QUEST_ITEMS))
+                            })
                     })
             })
         })
@@ -3126,15 +3132,23 @@ fn autopilot_loot(
     let engaged = last.is_some_and(|l| l.1 == "take down" || l.1 == "search");
     let quest_of = |own: Option<&crate::pickups::OwnLoot>| own.is_some_and(|o| carries_quest(o));
     let near = |t: &Transform| t.translation.distance(at.translation);
-    // (Or one a script waits to see searched: HOY_020's VIPs.)
+    // (Or one a script waits to see searched: HOY_020's VIPs. Not one it
+    // waits to see photographed first: JAS_200's meeting, watched unseen.)
+    let to_photograph = host.story.awaited_discoveries();
     let quest = npcs
         .iter()
-        .filter(|(_, h, body, own, actor, _, _)| (quest_of(*own) || host.story.awaits_event(actor.id, "OnLooting")) && (!h.dead || body.is_some()))
+        .filter(|(_, h, body, own, actor, _, _)| {
+            (quest_of(*own) || host.story.awaits_event(actor.id, "OnLooting")) && (!h.dead || body.is_some()) && !to_photograph.contains(&actor.id)
+        })
         .min_by(|a, b| b.1.dead.cmp(&a.1.dead).then(near(a.0).total_cmp(&near(b.0))));
     // Then the story's hostile characters out after the player, or in a
     // group a block counts down (the reinforcements and guards it waits on
     // to die), taken down the same way.
     let counted = host.story.counted_members();
+    // (Gone after unprovoked only when a block counts its group down: one
+    // a health listener watches is fought once he fights, JAS_200's
+    // visitor not before the meeting is photographed.)
+    let to_kill = host.story.size_counted_members();
     // (Not while a script waits for an alarm to be switched off: that comes
     // first, before a guard runs for it.)
     let alarm_first = !host.story.alarms_to_disable().is_empty();
@@ -3169,7 +3183,7 @@ fn autopilot_loot(
                     && !actor.seated
                     && !skipped.contains_key(&actor.id)
                     && npc.faction.hostile_to_player()
-                    && (counted.contains(&actor.id) || npc.state != crate::npc::NpcState::Idle || sniping)
+                    && (to_kill.contains(&actor.id) || npc.state != crate::npc::NpcState::Idle || sniping)
                     && near(t) < 150.0
             })
             .min_by(|a, b| (!counted.contains(&a.4.id)).cmp(&!counted.contains(&b.4.id)).then(near(a.0).total_cmp(&near(b.0))))
