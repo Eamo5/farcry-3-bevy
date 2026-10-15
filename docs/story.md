@@ -3720,3 +3720,9 @@ walked into triggers, so it went back and forth between two far-off
 waterfall triggers. It now goes up to something a script waits to see
 destroyed, within `DESTROY_REACH` (80 m), and breaks it, before it tries
 triggers.
+
+BAM_030's closing scene (B95C) plays the player for 72 s, and meanwhile
+the autopilot's alarm step (a script somewhere waits for `Alarm_Disabled`)
+carried him to an outpost's alarm box across the island, every 6 s. That
+step now waits, as the trigger step does, while a scene holds the view or
+plays the player, and only goes for a box within `ALARM_REACH` (150 m).

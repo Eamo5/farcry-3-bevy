@@ -182,18 +182,24 @@ fn disable_alarms(
     }
 }
 
+/// How near a box must be for the autopilot to go and switch it off.
+const ALARM_REACH: f32 = 150.0;
+
 /// Whether a player standing at `feet` can reach a box at `at` (its base).
 fn within_reach(feet: Vec3, at: Vec3) -> bool {
     Vec2::new(feet.x - at.x, feet.z - at.z).length() < REACH && (feet.y - at.y).abs() < 2.5
 }
 
 /// Tests (`FC3_STORY_AUTOPILOT`): once the story has gone quiet waiting for
-/// an alarm to be switched off, the player goes up to a working box and
-/// presses to disable it (before `disable_alarms`, which sees the press the
-/// same frame).
+/// an alarm to be switched off, the player goes up to a working box near
+/// (`ALARM_REACH`) and presses to disable it (before `disable_alarms`, which
+/// sees the press the same frame). Not while a scene holds the view or plays
+/// the player: BAM_030's closing scene had him carried off to an outpost's
+/// box across the island.
 fn autopilot_alarms(
     host: Option<NonSendMut<StoryHost>>,
     alarms: Res<StoryAlarms>,
+    cinema: Res<crate::cinema::Cinema>,
     mut players: Query<(&mut Transform, &mut Player)>,
     mut actions: ResMut<crate::controls::ActionState>,
     mut tries: Local<std::collections::HashMap<u64, u32>>,
@@ -206,9 +212,12 @@ fn autopilot_alarms(
     if host.quiet() < 6.0 || !host.story.awaits_group_event("Alarm_Disabled") || !host.story.tail_targets().is_empty() {
         return;
     }
+    if cinema.view.is_some() || cinema.plays_player() {
+        return;
+    }
     let Ok((mut t, mut p)) = players.single_mut() else { return };
-    let Some((id, at)) = present(&alarms, &host).find(|(id, _)| alarms.idle(*id)) else { return };
     let feet = t.translation - Vec3::Y * crate::player::HALF_HEIGHT;
+    let Some((id, at)) = present(&alarms, &host).find(|(id, at)| alarms.idle(*id) && at.distance(feet) < ALARM_REACH) else { return };
     if !within_reach(feet, at) {
         info!("story autopilot: disable alarm {id}");
         // Each try from another side (the first one's may be behind its
