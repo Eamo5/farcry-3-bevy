@@ -1063,6 +1063,10 @@ fn requested_seat(v: &Vehicle, request: &SeatRequest) -> Option<usize> {
 
 /// Script requests wait for both physical entities. NPC driver requests may
 /// use a player-locked driver seat, but never overwrite another occupant.
+/// How long a seat request waits for its vehicle or character to be in
+/// the world (s).
+const SEAT_LOAD_WAIT: f32 = 30.0;
+
 #[allow(clippy::too_many_arguments)]
 fn story_seats(
     host: Option<NonSend<crate::story::StoryHost>>,
@@ -1072,8 +1076,10 @@ fn story_seats(
     mut actors: Query<(Entity, &mut Transform, &mut crate::story_actors::StoryActor), (Without<Player>, Without<Vehicle>)>,
     mut players: Query<(Entity, &mut Transform, &mut Player), (Without<Vehicle>, Without<crate::story_actors::StoryActor>)>,
     mut commands: Commands,
+    (time, mut unloaded_since): (Res<Time>, Local<std::collections::HashMap<(u64, u64), f32>>),
 ) {
     let Some(host) = host else { return };
+    let now = time.elapsed_secs();
     for (_, _, mut v) in &mut vehicles {
         let mut lost_driver = false;
         for s in &mut v.seats {
@@ -1087,7 +1093,14 @@ fn story_seats(
     }
     let mut boarded = Vec::new();
     requests.0.retain(|request| {
-        if !host.story.is_loaded(request.vehicle) || !host.story.is_loaded(request.pawn) { return false; }
+        // (Kept a while for either to come: after a reload the mission's
+        // characters are back a moment after the scripts seat them, as
+        // JAS_200's visitor in his jeep.)
+        if !host.story.is_loaded(request.vehicle) || !host.story.is_loaded(request.pawn) {
+            let since = *unloaded_since.entry((request.pawn, request.vehicle)).or_insert(now);
+            return now - since < SEAT_LOAD_WAIT;
+        }
+        unloaded_since.remove(&(request.pawn, request.vehicle));
         let Some((ve, vt, mut v)) = vehicles.iter_mut().find(|(_, _, v)| v.spawn_id == request.vehicle) else { return true };
         let pawn = if request.pawn == fc3_story::PLAYER { players.single().ok().map(|p| p.0) }
             else { actors.iter().find(|(_, _, a)| a.id == request.pawn && !a.dead).map(|a| a.0) };

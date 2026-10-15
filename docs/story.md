@@ -4037,3 +4037,15 @@ of Sam's, 28 m near and 32 m far, that warns on the screen).
   near a companion about (going on ahead leaves one behind); Sam, told to
   wait by the last bomb as HOY_010 ended, kept it from JAS_200's start
   across the island. Only a companion following the player counts now.
+
+## JAS_200: the meeting at the mining camp
+
+JAS_200 has the player creep into a mining camp and photograph a meeting
+unseen: a visitor arrives in a jeep (`VehicleArrival`: the jeep set at its
+start, its crew seated, then driven along its way), and being seen fails it.
+
+* **Seats waited for.** After a checkpoint reload the scripts seat the
+  jeep's crew at once, a moment before the reset characters are back in
+  the world; a request for a character or vehicle not in the world was
+  dropped, and nobody boarded. A request now waits for both, 30 s at most
+  (`SEAT_LOAD_WAIT`).
