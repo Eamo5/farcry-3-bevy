@@ -210,6 +210,19 @@ impl Story {
         self.core.borrow().listeners.values().any(|l| matches!(&l.on, Listen::Entity(p, event) if *p == pawn && event == "IsInVehicle"))
     }
 
+    /// The vehicles scripts wait for this pawn to get into, named by their
+    /// listeners (a `VehicleListener`'s `vehicle`: JAS_170's pirate truck,
+    /// nothing else of which a script listens to).
+    pub fn awaited_vehicles(&self, pawn: u64) -> Vec<u64> {
+        self.core
+            .borrow()
+            .listeners
+            .values()
+            .filter(|l| matches!(&l.on, Listen::Entity(p, event) if *p == pawn && event == "IsInVehicle"))
+            .filter_map(|l| l.callback.target.get::<crate::values::Text>("vehicle").ok()?.id())
+            .collect()
+    }
+
     /// A script listens for this event of this entity's (the player's
     /// landing, `DominoEvent_PlayerLanded`).
     pub fn awaits_event(&self, id: u64, event: &str) -> bool {

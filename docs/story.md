@@ -3905,5 +3905,10 @@ off, fails it.
   is in the air, the autopilot's other steps wait too (`landing_awaited`):
   its fight step set the player down by a pirate mid-fall, and the drop
   zone never heard a landing.
+* **The truck.** B05 ends with the pirates' truck taken. Its listener
+  (`VehicleListener`) names the truck only in its own box (`vehicle`),
+  and nothing else of the truck is listened to, so the autopilot, boarding
+  what scripts watch, never went for it. It now takes a vehicle a listener
+  names first (`Story::awaited_vehicles`).
 * A script's teleport of the player is logged (`a script moves the
   player`), to tell it from the autopilot's moves.

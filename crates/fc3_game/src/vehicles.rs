@@ -1189,9 +1189,13 @@ fn autopilot_board(
         return;
     }
     let here = pt.translation;
+    let named = host.story.awaited_vehicles(fc3_story::PLAYER);
     let Some((vt, v)) = vehicles
         .iter()
-        .filter(|(_, v)| host.story.watches_entity(v.spawn_id) && v.available_seat(&host.story.vehicle_rules(v.spawn_id)).is_some())
+        .filter(|(_, v)| {
+            (if named.is_empty() { host.story.watches_entity(v.spawn_id) } else { named.contains(&v.spawn_id) })
+                && v.available_seat(&host.story.vehicle_rules(v.spawn_id)).is_some()
+        })
         .min_by(|a, b| a.0.translation.distance(here).total_cmp(&b.0.translation.distance(here)))
     else {
         return;
