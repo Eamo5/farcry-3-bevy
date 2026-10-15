@@ -3874,3 +3874,36 @@ plays the player, and only goes for a box within `ALARM_REACH` (150 m).
     `CGroupSizeEvent` ones (B30's two privateers, each counted on its own);
   * leaves alone a box that failed the mission as it stepped in (within
     2 s), over reloads: B30's on-foot box fails it whenever entered.
+
+## JAS_170: the drop onto the beach
+
+JAS_170's B05 starts with the plane's crash scene, the player left some
+390 m over the sea, to fly the wingsuit to a drop zone on the south
+island's beach and land there; landing in the town or the sea, or too far
+off, fails it.
+
+* **Not swimming in the air.** The scene's start failed at once for a
+  landing in the sea: the stance scripts see (`StanceListener`) came from
+  the movement's last swimming flag, the sea the reload had taken the
+  player from. A teleport now clears it, and while the player is held
+  after a move or played by a scene the stance isn't swimming.
+* **Left in the air.** A spawn settle set the player down on the seabed
+  under a spawn point 300 m up. A spawn more than 40 m above the ground (or
+  the sea) now leaves him there, falling (`AIRBORNE_SPAWN`).
+* **The landing** (`player_landings`). Touching ground after 1.5 s or more
+  in the air raises `DominoEvent_PlayerLanded` on the player, which the
+  `LandingListener` boxes wait for.
+* **The autopilot's drop** (`autopilot_drop`). Falling from more than
+  100 m up, the autopilot goes down to 60 m over the objective marker
+  nearest and lands there, as a player steers the wingsuit to the drop
+  zone. Not before a script listens for the landing: the drop zone's
+  listeners (the near radius that disarms "too far", then the landing that
+  succeeds) are armed some 7 s after the jump, after a line of dialogue,
+  and a landing before them went unheard. Meanwhile the autopilot glides,
+  held where it is, 30 s at most.
+* **Landing first.** While a script waits for the landing and the player
+  is in the air, the autopilot's other steps wait too (`landing_awaited`):
+  its fight step set the player down by a pirate mid-fall, and the drop
+  zone never heard a landing.
+* A script's teleport of the player is logged (`a script moves the
+  player`), to tell it from the autopilot's moves.

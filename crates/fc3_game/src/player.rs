@@ -178,6 +178,9 @@ mod stance_tests {
 /// The slide: eye height, the sprint speed it needs, the push it gives,
 /// how fast it slows (per second) and its longest run.
 const SLIDE_EYE_HEIGHT: f32 = 0.75;
+/// How far above the ground (or the sea) a place a teleport keeps the height
+/// of must be to leave the player in the air there.
+const AIRBORNE_SPAWN: f32 = 40.0;
 const SLIDE_MIN_SPEED: f32 = 5.5;
 const SLIDE_BOOST: f32 = 2.0;
 const SLIDE_FRICTION: f32 = 1.1;
@@ -861,6 +864,16 @@ fn place_on_ground(
             return;
         }
         p.keep_height = false;
+        // High in the air with nothing under it (JAS_170's drop, 300 m over
+        // the sea): left there to fall, as the original leaves him to open
+        // the wingsuit, not set down on the seabed.
+        if t.translation.y - HALF_HEIGHT > ground.max(SEA_LEVEL) + AIRBORNE_SPAWN {
+            p.velocity = Vec3::ZERO;
+            p.spawning = false;
+            p.spawned_at = time.elapsed_secs();
+            info!("player left in the air at {:?}", t.translation);
+            return;
+        }
     }
     // Land on the highest surface below a point well above the terrain (roofs, rocks...).
     let top = Vec3::new(t.translation.x, ground.max(SEA_LEVEL) + 60.0, t.translation.z);

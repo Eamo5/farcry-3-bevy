@@ -42,6 +42,7 @@ impl Plugin for StoryPlugin {
             .add_systems(Update, apply_entity_poses.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, apply_entity_physics.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, draw_markers.after(StorySet))
+            .add_systems(Update, (player_landings, autopilot_drop).after(StorySet).run_if(in_state(GameState::Playing)))
             .add_systems(Update, story_blasts.after(StorySet).before(crate::breakables::BreakablesSet))
             .add_systems(PreUpdate, story_boxes.after(crate::controls::update_actions))
             .add_systems(PreUpdate, story_interactions.after(story_boxes))
@@ -289,6 +290,94 @@ fn forward_pickups(host: Option<NonSendMut<StoryHost>>, mut picked: MessageReade
         host.story.pickup_picked(p.0);
     }
 }
+
+/// The player touching ground after a fall or a flight (a wingsuit drop, a
+/// parachute): scripts waiting for it hear `DominoEvent_PlayerLanded`
+/// (JAS_170's drop onto the beach).
+fn player_landings(host: Option<NonSendMut<StoryHost>>, players: Query<&Player>, time: Res<Time>, mut air: Local<f32>) {
+    let (Some(mut host), Ok(p)) = (host, players.single()) else { return };
+    if p.grounded || p.swimming || p.driving || p.spawning {
+        if p.grounded && *air >= LANDING_AFTER {
+            info!("story: the player landed after {:.1} s in the air", *air);
+            host.story.entity_event(fc3_story::PLAYER, "DominoEvent_PlayerLanded", vec![]);
+        }
+        *air = 0.0;
+        return;
+    }
+    *air += time.delta_secs();
+}
+
+/// How long in the air makes touching ground a landing.
+const LANDING_AFTER: f32 = 1.5;
+
+/// The player in the air where a script waits for him to land: the
+/// autopilot's other steps wait for the landing (one setting him down by a
+/// foe left JAS_170's drop zone waiting for a landing it never heard).
+fn landing_awaited(host: &StoryHost, p: &Player) -> bool {
+    !p.grounded && !p.swimming && !p.driving && host.story.awaits_event(fc3_story::PLAYER, "DominoEvent_PlayerLanded")
+}
+
+/// The story autopilot, falling from high up (JAS_170's wingsuit drop, from
+/// 300 m over the sea): down to 60 m over the objective marker nearest, to
+/// land there, as a player would steer the wingsuit to the drop zone. Not
+/// before the scripts listen for the landing, as long as a flight lasts:
+/// JAS_170 arms its drop zone some 7 s after the jump, and a landing before
+/// that goes unheard (held in the air meanwhile, gliding).
+fn autopilot_drop(
+    host: Option<NonSend<StoryHost>>,
+    cinema: Res<crate::cinema::Cinema>,
+    heights: Res<crate::terrain::Heightfield>,
+    time: Res<Time>,
+    mut players: Query<(&mut Transform, &mut Player)>,
+    mut dropped: Local<bool>,
+    mut held: Local<f32>,
+) {
+    if std::env::var_os("FC3_STORY_AUTOPILOT").is_none() {
+        return;
+    }
+    let (Some(host), Ok((mut t, mut p))) = (host, players.single_mut()) else { return };
+    if p.grounded || p.swimming {
+        *dropped = false;
+        *held = 0.0;
+        return;
+    }
+    let surface = heights.height_at(t.translation).unwrap_or(0.0).max(crate::sky::SEA_LEVEL);
+    let high = t.translation.y - crate::player::HALF_HEIGHT - surface > DROP_FROM && p.velocity.y < 0.0;
+    if *dropped || p.spawning || p.driving || cinema.plays_player() {
+        return;
+    }
+    if !host.story.awaits_event(fc3_story::PLAYER, "DominoEvent_PlayerLanded") {
+        if !high && *held == 0.0 {
+            return;
+        }
+        if *held < GLIDE_FOR {
+            if *held == 0.0 {
+                info!("story autopilot: gliding till a script waits for the landing");
+            }
+            *held += time.delta_secs().max(1e-3);
+            p.velocity = Vec3::ZERO;
+            return;
+        }
+    }
+    let here = to_dunia(t.translation);
+    let Some((id, at)) = host.story.objective_markers().into_iter().min_by(|a, b| {
+        let d = |m: &[f32; 3]| (m[0] - here[0]).hypot(m[1] - here[1]);
+        d(&a.1).total_cmp(&d(&b.1))
+    }) else {
+        return;
+    };
+    *dropped = true;
+    let ground = heights.height_at(to_bevy(at)).unwrap_or(at[2]).max(crate::sky::SEA_LEVEL);
+    info!("story autopilot: down to land at {}", host.story.data().name_of(id).unwrap_or("?"));
+    teleport(&mut t, &mut p, [at[0], at[1], ground + DROP_HEIGHT], 0.0);
+}
+
+/// How high over the drop zone the autopilot puts the player to land there,
+/// and how high over the ground a fall must be for the autopilot to steer it.
+const DROP_HEIGHT: f32 = 60.0;
+const DROP_FROM: f32 = 100.0;
+/// How long the autopilot glides, at most, for the scripts to listen.
+const GLIDE_FOR: f32 = 30.0;
 
 /// The camera took in one of the story's characters (a VIP's body), or a
 /// thing the scripts wait to see: the scripts watching for it hear it
@@ -1313,7 +1402,10 @@ fn run_story(
         view.spawned
             .insert(a.id, fc3_story::Live { pos: to_dunia(at.translation - Vec3::Y * crate::player::HALF_HEIGHT), alive: !a.dead, health: 1.0, ai_state });
     }
-    view.player_state.stance = if p.swimming {
+    // (Not swimming while held after a move or played by a scene: the flag
+    // is the last the movement saw, the sea a reload took him from;
+    // JAS_170's plane-crash scene failed at once for "landing" in it.)
+    view.player_state.stance = if p.swimming && !p.spawning && !cinema.plays_player() {
         2
     } else if p.crouching {
         1
@@ -1440,6 +1532,7 @@ fn run_story(
         && cinema.view.is_none()
         && !cinema.plays_player()
         && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
+        && !landing_awaited(&host, &p)
         && host.quiet > autopilot_delay && host.story.watched_loot_filters().is_empty() {
         let graph = std::env::var("FC3_STORY_AUTOPILOT_GRAPH").ok();
         // The missions running go first (CIT_020 holds the player on its
@@ -1755,6 +1848,7 @@ fn run_story(
             }
             Command::Teleport { entity, pose } => {
                 if entity == fc3_story::PLAYER {
+                    info!("story: a script moves the player to {:?}", pose.position);
                     teleport(&mut t, &mut p, pose.position, pose.angles[2]);
                 } else {
                     placements.set(entity, pose);
@@ -2514,6 +2608,7 @@ fn tower_taken(story: &mut Story, at: Vec3) {
 
 pub(crate) fn teleport(t: &mut Transform, p: &mut Player, pos: [f32; 3], yaw_deg: f32) {
     t.translation = to_bevy(pos) + Vec3::Y * 1.0;
+    p.swimming = false;
     p.yaw = -yaw_deg.to_radians();
     p.pitch = 0.0;
     p.velocity = Vec3::ZERO;
@@ -2843,7 +2938,7 @@ fn autopilot_loot(
     let Ok((mut at, mut player, health, inventory)) = players.single_mut() else { return };
     // (Held up where a high trigger was stepped into, the player may still
     // go after a character: getting there sets him down.)
-    if health.dead || player.spawning || (player.driving && !player.armed_passenger) {
+    if health.dead || player.spawning || (player.driving && !player.armed_passenger) || landing_awaited(&host, &player) {
         return;
     }
     if host.reload_at.is_some() {
