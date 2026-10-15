@@ -22,6 +22,11 @@ impl Plugin for MissionLayersPlugin {
 #[derive(Resource, Default)]
 pub struct MissionLayers {
     pub present: HashSet<u64>,
+    /// Back to a checkpoint: what the layers put in the world is put there
+    /// afresh, their vehicles where they stand at the start (JAS_200's
+    /// visitor's jeep had driven off along its way, and its crew, asked to
+    /// board again, waited at its start for nothing).
+    pub reset: bool,
 }
 
 /// A loaded sector's spawned layer contents (layer -> root).
@@ -35,7 +40,7 @@ pub struct LayerObjects {
 }
 
 fn stream_layers(
-    layers: Res<MissionLayers>,
+    mut layers: ResMut<MissionLayers>,
     mut cache: Local<HashMap<String, Handle<Fc3Model>>>,
     server: Res<AssetServer>,
     sectors: Res<Assets<Fc3Sector>>,
@@ -45,10 +50,25 @@ fn stream_layers(
     dressed: Res<crate::story_actors::DressedEntities>,
     world: Res<crate::pickups::WorldState>,
     host: Option<NonSend<crate::story::StoryHost>>,
-    vehicles: Query<&crate::vehicles::Vehicle>,
+    vehicles: Query<(Entity, &crate::vehicles::Vehicle, Has<crate::vehicles::MissionVehicle>)>,
 ) {
     let data = host.as_ref().map(|h| h.story.data());
-    let mut live_vehicles: HashSet<u64> = vehicles.iter().map(|v| v.story_id()).collect();
+    let reset = std::mem::take(&mut layers.reset);
+    if reset {
+        for (_, _, spawned) in &mut roots {
+            if let Some(mut spawned) = spawned {
+                for (_, e) in spawned.0.drain() {
+                    crate::retire::retire(&mut commands, e);
+                }
+            }
+        }
+        for (e, _, mission) in &vehicles {
+            if mission {
+                commands.entity(e).despawn();
+            }
+        }
+    }
+    let mut live_vehicles: HashSet<u64> = vehicles.iter().filter(|(_, _, mission)| !(reset && *mission)).map(|(_, v, _)| v.story_id()).collect();
     let mut budget = 2;
     for (root, so, spawned) in &mut roots {
         let Some(sector) = sectors.get(&so.sector) else { continue };

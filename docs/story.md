@@ -4049,3 +4049,8 @@ start, its crew seated, then driven along its way), and being seen fails it.
   the world; a request for a character or vehicle not in the world was
   dropped, and nobody boarded. A request now waits for both, 30 s at most
   (`SEAT_LOAD_WAIT`).
+
+* **Layers afresh.** A reload left the mission layers' vehicles where the
+  last try had driven them (the jeep at the meeting, its crew asked to
+  board at its start), or gone for good. Back to a checkpoint, what the
+  layers put in the world is now put there afresh (`MissionLayers::reset`).

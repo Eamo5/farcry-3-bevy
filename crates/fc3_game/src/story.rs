@@ -1289,6 +1289,7 @@ fn run_story(
             host.hidden_synced = false;
             host.due.clear();
             layers.present.clear();
+            layers.reset = true;
             orders.0.clear();
             cinema.reset();
             *scripted = ScriptedPlayer::default();
@@ -3116,7 +3117,8 @@ fn autopilot_loot(
             own.0.iter().any(|&(group, chance)| {
                 chance > 0.0
                     && c.groups.iter().any(|g| {
-                        g.id == group && g.items.iter().any(|&(id, _)| c.item(id).is_some_and(|i| i.key.starts_with(fc3_formats::progression::QUEST_ITEMS)))
+                        g.id == group
+                            && g.items.iter().any(|&(id, _)| c.item(id).is_some_and(|i| i.key.starts_with(fc3_formats::progression::QUEST_ITEMS)))
                     })
             })
         })
