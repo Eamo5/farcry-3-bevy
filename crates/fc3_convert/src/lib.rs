@@ -1323,6 +1323,18 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
+    // ---- QTE moves: their state trees and their clips' QTE events
+    let qte_current = std::fs::read_to_string(job.root().join(fc3_formats::qte::QTE_REL)).is_ok_and(|t| fc3_formats::qte::QteTable::is_current(&t));
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::qte::QTE_REL) || !qte_current) {
+        let result = (|| -> Result<()> {
+            let table = fc3_formats::qte::QteTable::build(&job.vfs.read(fc3_formats::moves::MOVE_DB)?, |c| job.vfs.read(c).ok());
+            write_atomic(job.root(), fc3_formats::qte::QTE_REL, table.to_text().as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("QTE moves: {e:#}"));
+        }
+    }
+
     // ---- specific-gameplay defaults, separate from Domino's instance bindings
     if opts.only_sectors.is_none() && job.should_write(fc3_formats::gsf::CACHE_REL) {
         let result = (|| -> Result<()> {

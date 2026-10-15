@@ -41,6 +41,7 @@ pub mod patrols;
 pub mod particle_effects;
 pub mod postfx;
 pub mod progression;
+pub mod qte;
 pub mod traversal;
 pub mod mesh;
 pub mod moves;

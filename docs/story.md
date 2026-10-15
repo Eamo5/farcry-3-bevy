@@ -33,6 +33,10 @@ converter packs the scripts and the world data they need into the cache.
   read by `fc3_formats::moves::parse_move_db`), each with its states and
   the clip each plays: a QTE move's `Intro`, `Struggle`, `Exit`, `Fail`; a
   contextual action's `STP_..._Wait`.
+* `story/qte_moves.txt`: the QTE moves (`fc3_formats::qte`): each move's
+  tree of states with the QTE results they play under and their clips, and
+  each clip's QTE events (`fc3tool qte-moves [write | <move>...]` prints a
+  move or writes the table).
 * `story/ca_moves.txt`: the moves the story's contextual actions name, with
   their clips (from the move database; the few it lacks matched by name).
 * `story/shop_items.txt`: the shop's weapons as scripts know them (model,
@@ -128,7 +132,8 @@ is the story's own:
   boundary; the player leaving it still delivers `Leave`.
 * **Specific gameplays** (`CreateSpecificGameplay`: QTEs, minigames, boss
   fights): the host plays them; they end (`OnDestroyed`) when destroyed, when
-  the host says, or when a sequence sets a scripted QTE's result.
+  the host says, or (one the host doesn't run) when a sequence sets a QTE's
+  result (`QteSetResult`); a QTE gameplay hears the result instead.
 * **Reinforcements**: a point's mercs (by archetype) come in under ids of
   their own and join its groups; the box hears who came (`OnSpawned`).
 * **Saves**: blocks a save left running play again as their missions
@@ -285,12 +290,28 @@ is the story's own:
 * **Contextual actions**: a character walks to the spot along the navmesh,
   plays the action's start clip, then its loop in place of the idle; a
   patrol-path action walks the path its parameters name and ends at its end.
-* **Quick-time events** (`qte`, the `QTEGSF` gameplay): the moves' states
-  play as sequences in the cinematic player from the scene's anchor (the
-  view from the player clip's camera, the opponent on its character); in the
-  struggle the player fills a meter with the interact key before time runs
-  out; the scripts hear `QTE0_InProgress`, then `QTE0_Success` or
-  `QTE0_Fail` (and `PlayerDie`), then the gameplay ends.
+* **Quick-time events** (`qte`, the `QTEGSF` gameplay) run as the game's
+  move data says (`fc3_formats::qte`). A QTE move is a tree of states, each
+  playing under QTE results (`QTEn_Result`, n the QTE's id plus one: 3 none,
+  0 in progress, 1 failed, 2 succeeded); the first in order whose conditions
+  (and its groups') hold plays, a group with no child to play its own clip.
+  The QTEs are events in the clips (`QuickTimeEvent*`): a press, a hold or a
+  mash asks for an input (`selInputs`, the engine's own names: `Button_1`,
+  `RT`, `LT`, `LeftStickLeft`...; the controls answer them, e.g. the triggers
+  are fire and aim), with the prompt (the game's word for the answer) and a
+  meter for a mash or a hold; a "zombie" QTE waits for a script's
+  `QteSetResult`;
+  others end or reset a QTE, end the sequence, or message the scripts
+  (`PlayerDie`). A state's clip plays to its end before the next is chosen,
+  unless a QTE is decided and the state no longer holds (an answered press
+  crawls at once). A state with an anchor (`cnAA`) plays from the scene's
+  anchor; others go on from where the last clip left the player (the escape
+  crawl moves him along). The scripts hear `QTE<id>_InProgress`, then
+  `QTE<id>_Success` or `QTE<id>_Fail`, and `ExoticQteGSFEnded` as it ends.
+  BAM_055's tomb ends this way: the crawl (QTE 0 and 1, the triggers in
+  turn) runs while the rock rolls; the script hears the zombie QTE 2 start,
+  waits for the player to crawl near the way out, and decides it (the
+  `Exit` clip) before the rock's "DeathHeight" point, or fails it (`Dead`).
 * **Shops**: liberated outposts and the world's shopkeepers keep one; a
   weapon bought raises `CPawnBuyItemEvent` (archetype, `Name`, the shop name's
   string id) on the player. The converter joins the shopping database to the
@@ -928,7 +949,8 @@ is the story's own:
   waits to see broken off, accepts boxes, buys the tutorial shop's selected
   weapon using the actual priced inventory transaction, hunts with finite
   ammunition through ordinary shooting/damage, skins real carcasses and gathers
-  real plant pickups for active ingredient listeners, wins QTEs, ends other
+  real plant pickups for active ingredient listeners, answers QTEs (after
+  0.3 s; a zombie QTE is still the scripts'), ends other
   specific gameplays, and is
   unseen by enemies. When nothing happens for 20 s it logs what the scripts
   wait on and why the watched triggers don't see the player; after 25 s it

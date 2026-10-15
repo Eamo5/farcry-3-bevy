@@ -234,8 +234,9 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         id as f64
     })?;
     // Specific gameplays (minigames, scripted QTEs, boss fights): the host
-    // runs them; they end when destroyed, when the host says, or (scripted
-    // QTEs) when a sequence sets their result.
+    // runs them; they end when destroyed, when the host says, or (one the
+    // host doesn't run) when a sequence sets a QTE's result. A QTE gameplay
+    // (`QTEGSF`) hears the result and ends as its move does.
     r.f("CreateSpecificGameplay", |c, (name, params): (Text, Value)| {
         let id = c.next_id();
         let mut args = vec![id.to_string(), name.0.clone()];
@@ -256,7 +257,7 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.f("SendGSFGenericEventToEntity", |c, args: mlua::Variadic<Text>| {
         let args: Vec<String> = args.into_iter().map(|t| t.0).collect();
         if args.get(2).is_some_and(|p| p == "QteSetResult") {
-            if let Some(&latest) = c.gameplays.keys().next_back() {
+            if let Some((&latest, _)) = c.gameplays.iter().next_back().filter(|(_, name)| *name != "QTEGSF") {
                 c.end_gameplay(latest);
             }
         }

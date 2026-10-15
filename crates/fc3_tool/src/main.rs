@@ -114,6 +114,45 @@ fn main() -> Result<()> {
             }
             println!("extracted {n} files");
         }
+        "clip-events" => {
+            // A clip's embedded event objects (nbCF): each with the time and
+            // size before it, dumped as an FCB.
+            let target = args.get(1).context("usage: clip-events <path|hash>")?;
+            let d = vfs.read_hash(parse_target(&vfs, target)?)?;
+            let mut names = fc3_formats::fcb::NameDb::default();
+            for n in KNOWN_NAMES {
+                names.add(n);
+            }
+            // Field names from the installed game's own binary (local only).
+            if let Some(dll) = fc3_formats::find_install().and_then(|d| d.parent().map(|p| p.join("bin").join("FC3.dll"))) {
+                if let Ok(b) = std::fs::read(dll) {
+                    names.add_identifiers_from(&b);
+                }
+            }
+            let mut q = 0;
+            while let Some(at) = d[q..].windows(4).position(|w| w == b"nbCF") {
+                let o = q + at;
+                q = o + 4;
+                if o < 12 {
+                    continue;
+                }
+                let time = f32::from_le_bytes(d[o - 12..o - 8].try_into()?);
+                // (Some events have no size before them: those read on.)
+                let size = u16::from_le_bytes([d[o - 2], d[o - 1]]) as usize;
+                let end = if size < 16 { d.len() } else { (o + size).min(d.len()) };
+                let obj = match fc3_formats::fcb::parse(&d[o..end]) {
+                    Ok(obj) => obj,
+                    Err(e) => {
+                        println!("@{o:#x} t={time:.3} size {size}: {e:#}");
+                        continue;
+                    }
+                };
+                let mut s = String::new();
+                fc3_formats::fcb::dump(&obj, &names, 16, &mut s);
+                println!("@{o:#x} t={time:.3} size {size}\n{s}");
+                q = o + size.max(4);
+            }
+        }
         "hex" => {
             let target = args.get(1).context("usage: hex <path|hash> [len] [offset]")?;
             let h = parse_target(&vfs, target)?;
@@ -2665,6 +2704,44 @@ fn main() -> Result<()> {
             if args.get(1).map(String::as_str) == Some("show") {
                 for n in names.iter().filter(|n| !table.contains_key(*n)) {
                     println!("  no clip: {n}");
+                }
+            }
+        }
+        "qte-moves" => {
+            // The QTE moves (state trees) and their clips' QTE events:
+            // qte-moves [write | <move>...]; write puts the table in the cache.
+            use fc3_formats::qte;
+            let t = qte::QteTable::build(&vfs.read(fc3_formats::moves::MOVE_DB)?, |c| vfs.read(c).ok());
+            println!("{} QTE moves, {} clips", t.moves.len(), t.clips.len());
+            if args.get(1).map(String::as_str) == Some("write") {
+                let root = fc3_formats::cache::default_cache_root();
+                std::fs::write(root.join(qte::QTE_REL), t.to_text())?;
+                println!("written to {}", root.join(qte::QTE_REL).display());
+                return Ok(());
+            }
+            for name in &args[1..] {
+                let Some(states) = t.moves.get(&name.to_ascii_lowercase()) else {
+                    println!("{name}: not a QTE move");
+                    continue;
+                };
+                println!("{name}");
+                for s in states {
+                    let conds: Vec<String> = s.conds.iter().map(|(i, v)| format!("QTE{i}={v}")).collect();
+                    let clip = s.clip.as_deref().map(|c| c.rsplit('\\').next().unwrap_or(c)).unwrap_or("-");
+                    println!("{}{} [{}] {clip}{}", "  ".repeat(s.depth as usize), s.name, conds.join(" "), if s.anchored { " (anchored)" } else { "" });
+                    for e in s.clip.as_ref().and_then(|c| t.clips.get(c)).into_iter().flatten() {
+                        println!(
+                            "{}    {:.3} {:?} QTE{} {} prompt {:?} {:?} {}",
+                            "  ".repeat(s.depth as usize),
+                            e.time,
+                            e.kind,
+                            e.id,
+                            qte::input_name(e.input),
+                            e.prompt,
+                            e.values,
+                            e.text
+                        );
+                    }
                 }
             }
         }

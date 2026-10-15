@@ -1792,6 +1792,10 @@ fn run_story(
                         id: a(0).parse().unwrap_or(0),
                         params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                     }),
+                    // A script decides a QTE: `QteSetResult <id> success|failure`.
+                    "SendGSFGenericEventToEntity" if a(2) == "QteSetResult" => {
+                        qtes.decided.push((a(3).parse().unwrap_or(0), a(4).eq_ignore_ascii_case("success")));
+                    }
                     "DestroySpecificGameplay" => {
                         let id = a(0).parse().unwrap_or(0);
                         qtes.cancelled.push(id);
