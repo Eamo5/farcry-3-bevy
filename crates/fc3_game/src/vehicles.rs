@@ -1005,6 +1005,11 @@ impl StorySeatRequests {
         self.0.iter().find(|r| r.pawn == pawn && !r.exit).map(|r| r.vehicle)
     }
 
+    /// Whether someone still waits to board this vehicle.
+    pub(crate) fn awaited(&self, vehicle: u64) -> bool {
+        self.0.iter().any(|r| r.vehicle == vehicle && !r.exit)
+    }
+
     /// A called-in crew member takes a seat: the wheel, or a passenger's
     /// (any free one if those are taken).
     pub(crate) fn board(&mut self, vehicle: u64, pawn: u64, driver: bool) {

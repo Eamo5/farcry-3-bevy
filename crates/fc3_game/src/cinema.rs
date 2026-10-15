@@ -42,6 +42,9 @@ impl Plugin for CinemaPlugin {
 const MASTER_SKELETON: &str = r"graphics\actors_\_skeleton_master\hips_ref.skeleton";
 const NARRATIVE_SKELETON: &str = r"graphics\actors_\_skeleton_master\narrative_hips_ref.skeleton";
 
+/// The longest a scene waits for the vehicles it drives, and their crews.
+const SEATED_WAIT: f32 = 30.0;
+
 /// A sequence request from the story: `play`, `play_from_start`,
 /// `play_at_sync_point`, `stop`, `skip` or `pause`.
 pub struct Request {
@@ -514,7 +517,11 @@ fn play_scenes(
     mut ui: ResMut<crate::story::StoryUi>,
     keys: Res<ButtonInput<KeyCode>>,
     mut hold: ResMut<crate::fp::Cinematic>,
-    (mut faces, mut library): (Query<&mut crate::faces::Face>, Option<ResMut<crate::faces::FaceLibrary>>),
+    (mut faces, mut library, seats): (
+        Query<&mut crate::faces::Face>,
+        Option<ResMut<crate::faces::FaceLibrary>>,
+        Option<Res<crate::vehicles::StorySeatRequests>>,
+    ),
     mut props: Query<(&crate::objects::PlacedId, &mut Transform, Option<&mut crate::vehicles::Vehicle>), Without<StoryActor>>,
 ) {
     let Some(mut host) = host else { return };
@@ -540,9 +547,20 @@ fn play_scenes(
     let cinema = &mut *cinema;
     let mut finished = Vec::new();
     for (i, p) in cinema.playing.iter_mut().enumerate() {
-        // Hold the start until the clips are in (briefly).
+        // Hold the start until the clips are in (briefly), and the vehicles
+        // it drives that the story has in the world are in ours, with whoever
+        // a script seated in them (CIT_020's convoy, streaming in after a
+        // load as its scene starts: the original seats them at once, and its
+        // driver crossing a trigger on the way sets off the ambush).
         let loading = p.clips.values().any(|h| !crate::cache_assets::settled(&server, h.id()));
-        if loading && p.waited < 3.0 {
+        let absent = p.t == 0.0
+            && p.seq
+                .groups
+                .iter()
+                .filter(|g| g.clips.iter().any(|c| matches!(c.kind, ClipKind::VehicleMovement { .. })))
+                .filter_map(|g| p.bindings.get(&g.uid))
+                .any(|&id| host.story.is_loaded(id) && (!props.iter().any(|(pid, _, _)| pid.0 == id) || seats.as_ref().is_some_and(|s| s.awaited(id))));
+        if (loading && p.waited < 3.0) || (absent && p.waited < SEATED_WAIT) {
             p.waited += dt;
             continue;
         }

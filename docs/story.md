@@ -3830,3 +3830,13 @@ plays the player, and only goes for a box within `ALARM_REACH` (150 m).
   exclusive flag: the quests are registered exclusive (HUR_020, by
   `Lib_Mission.QuestGiver`), the story's own not (CIT_020, by
   `Lib_Mission.MissionGiver`).
+* **The convoy's scene waits for the convoy.** B20 seats the convoy's crews
+  (`VehicleUseTakeSeat`) and at once plays the scene that drives the trucks
+  past the water tower; its front driver crossing `ConvoyApproaching` and
+  then `StopConvoy` sets off the fuel truck. After a load the scene started
+  before the mission layer's trucks and their crews had streamed in, so
+  the trucks stood still and the crews boarded at the end, and the ambush
+  never came. A scene now holds its start (`SEATED_WAIT`, 30 s at most)
+  while a vehicle it drives is in the story's world but not yet in ours, or
+  someone still waits to board it (`StorySeatRequests::awaited`), as the
+  original seats them at once.

@@ -2629,6 +2629,11 @@ fn main() -> Result<()> {
                 for l in &block.layers {
                     println!("  {:?}", data.layers.get(l));
                 }
+                // The blocks that bring it with them (a mission's shared
+                // characters and props).
+                for user in data.blocks.values().filter(|b| b.refs.contains(&block.id)) {
+                    println!("used by block {} {}", user.id, user.name);
+                }
             }
         }
         "story-entities" => {
