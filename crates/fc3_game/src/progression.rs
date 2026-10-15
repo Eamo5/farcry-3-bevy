@@ -429,6 +429,10 @@ pub struct Progress {
     /// Bonus plans the scripts grant for a while (`AddBonusPlan`, lower
     /// case): the abilities with them count as learned.
     pub bonus_plans: std::collections::BTreeSet<String>,
+    /// Bonus plans the scripts take away for a while (`RemoveBonusPlan`,
+    /// lower case: JAS_190's takedowns, until the cenote's end): the
+    /// abilities with them count as not learned.
+    pub removed_plans: std::collections::BTreeSet<String>,
 }
 
 impl Default for Progress {
@@ -460,6 +464,7 @@ impl Default for Progress {
             met: Default::default(),
             whole_tattoo: false,
             bonus_plans: Default::default(),
+            removed_plans: Default::default(),
         }
     }
 }
@@ -568,6 +573,9 @@ impl Progress {
         for plan in &self.bonus_plans {
             s += &format!("bonusplan {plan}\n");
         }
+        for plan in &self.removed_plans {
+            s += &format!("removedplan {plan}\n");
+        }
         s
     }
 
@@ -635,6 +643,9 @@ impl Progress {
             "wholetattoo" => self.whole_tattoo = true,
             "bonusplan" => {
                 self.bonus_plans.insert(rest.trim().to_ascii_lowercase());
+            }
+            "removedplan" => {
+                self.removed_plans.insert(rest.trim().to_ascii_lowercase());
             }
             "loot" => {
                 if let (Some(id), Some(n)) = (it.next().and_then(|v| v.parse().ok()), it.next().and_then(|v| v.parse().ok())) {
@@ -745,6 +756,9 @@ pub struct Perks {
     pub explosive_cap: u32,
     pub arrow_cap: u32,
     pub ammo_scale: f32,
+    /// The bonus plans in force (lower case), as scripts ask about them
+    /// (`HasBonus`: `standardtakedown`, the Takedown's).
+    pub plans: std::collections::BTreeSet<String>,
 }
 
 impl Default for Perks {
@@ -793,14 +807,18 @@ impl Perks {
     }
 
     fn skills_only(p: &Progress, skills: &Skills) -> Perks {
-        // Learned, or granted for now by its bonus plan.
-        let has = |a: &fc3_formats::progression::Ability| p.has(&a.id) || a.bonuses.iter().any(|b| p.bonus_plans.contains(&b.plan.to_ascii_lowercase()));
+        // Learned and not taken away for now, or granted for now, by its
+        // bonus plan.
+        let plan_in = |a: &fc3_formats::progression::Ability, set: &std::collections::BTreeSet<String>| {
+            a.bonuses.iter().any(|b| set.contains(&b.plan.to_ascii_lowercase()))
+        };
+        let has = |a: &fc3_formats::progression::Ability| (p.has(&a.id) && !plan_in(a, &p.removed_plans)) || plan_in(a, &p.bonus_plans);
         // The learned abilities' bonuses on an engine attribute, summed.
         let sum = |attribute: u32| -> f32 {
             skills.0.abilities.iter().filter(|a| has(a)).flat_map(|a| &a.bonuses).filter(|b| b.attribute == attribute).map(|b| b.value).sum()
         };
         // Learned, with each of its bonuses' values (the first, by default).
-        let learned = |id: &str| p.has(id) || skills.ability(id).is_some_and(has);
+        let learned = |id: &str| skills.ability(id).map_or(p.has(id), has);
         let value = |id: &str| -> f32 { skills.ability(id).and_then(|a| a.bonuses.first()).map_or(0.0, |b| b.value) };
         // The percentage an ability's description states.
         let percent = |id: &str| -> f32 { if learned(id) { skills.ability(id).map_or(0, |a| a.value) as f32 / 100.0 } else { 0.0 } };
@@ -862,6 +880,15 @@ impl Perks {
             arrow_cap: crate::weapons::ARROW_CAP,
             weapon_slots: 3 + p.upgrade("holster") as usize,
             ammo_scale: [1.0, 1.25, 1.5, 2.0][p.upgrade("ammo_pouch").min(3) as usize],
+            plans: skills
+                .0
+                .abilities
+                .iter()
+                .filter(|a| has(a))
+                .flat_map(|a| &a.bonuses)
+                .map(|b| b.plan.to_ascii_lowercase())
+                .chain(p.bonus_plans.iter().cloned())
+                .collect(),
         }
     }
 }
@@ -3121,6 +3148,27 @@ mod skill_tests {
         p.bonus_plans.insert("standardtakedown".into());
         assert!(Perks::from_progress(&p, &skills).takedown);
         assert!(!p.has("SP_Takedown"));
+    }
+
+    #[test]
+    fn a_removed_bonus_plan_takes_its_ability_away_for_a_while() {
+        let mut takedown = ability("SP_Takedown", &[], "");
+        takedown.bonuses = vec![Bonus { plan: "StandardTakedown".into(), attribute: 102, value: 1.0, additive: true }];
+        let skills = Skills(SkillTree { abilities: vec![takedown], ..Default::default() });
+        let mut p = Progress::default();
+        p.skills.insert("SP_Takedown".into());
+        let perks = Perks::from_progress(&p, &skills);
+        assert!(perks.takedown && perks.plans.contains("standardtakedown"));
+        p.removed_plans.insert("standardtakedown".into());
+        let perks = Perks::from_progress(&p, &skills);
+        assert!(!perks.takedown && !perks.plans.contains("standardtakedown"));
+        // Kept over a save.
+        let mut back = Progress::default();
+        for line in p.to_lines().lines() {
+            let (key, rest) = line.split_once(' ').unwrap_or((line, ""));
+            back.read_line(key, rest);
+        }
+        assert!(back.removed_plans.contains("standardtakedown"));
     }
 
     #[test]

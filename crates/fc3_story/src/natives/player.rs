@@ -131,6 +131,19 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         let id: Option<u32> = bonus.0.parse().ok();
         c.view.player_state.skills.iter().any(|s| *s == wanted || id == Some(fc3_formats::hash::crc32(s.as_bytes())))
     })?;
+    // A bonus plan lent or taken away: `HasBonus` sees it at once
+    // (`BonusPlanModifier` asks again right after adding one).
+    for (name, add) in [("CAPI_Player.AddBonusPlan", true), ("CAPI_Player.RemoveBonusPlan", false)] {
+        r.f(name, move |c, (pawn, plan): (Text, Text)| {
+            let wanted = plan.0.to_ascii_lowercase();
+            if add {
+                c.view.player_state.skills.insert(wanted);
+            } else {
+                c.view.player_state.skills.remove(&wanted);
+            }
+            c.emit(Command::Native { name: name.into(), args: vec![pawn.0, plan.0] });
+        })?;
+    }
     r.f("CAPI_Player.GetMovementSensitivity", |_, _p: Text| 1.0)?;
     r.lua("CAPI_Player.GetPlayerLookAngles", |lua, c, _p: Text| vec3(lua, c.view.player_state.look_angles))?;
 

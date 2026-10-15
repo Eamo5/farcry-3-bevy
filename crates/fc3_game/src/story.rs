@@ -1342,7 +1342,9 @@ fn run_story(
     view.player_state.loot = loot_catalog.quantities(&progress);
     view.player_state.medpacks = stats.single().map_or(0, |s| s.medkits);
     view.player_state.weapon_slots = perks.weapon_slots as u32;
-    view.player_state.skills = progress.skills.iter().map(|s| s.to_ascii_lowercase()).collect();
+    // (Skills by name, and the bonus plans in force: scripts ask after
+    // either, `HasBonus`.)
+    view.player_state.skills = progress.skills.iter().map(|s| s.to_ascii_lowercase()).chain(perks.plans.iter().cloned()).collect();
     view.player_state.on_zipline = matches!(*mount, crate::traversal::Mount::Zip { .. });
     view.player_state.look_angles = [p.pitch.to_degrees(), 0.0, -p.yaw.to_degrees()];
     for (entity, vehicle, at, health) in &vehicle_views {
@@ -2126,10 +2128,12 @@ fn run_story(
                     "CAPI_Player.EnableWholeTattoo" if a(0) == fc3_story::PLAYER.to_string() => progress.whole_tattoo = true,
                     // Abilities lent for a while, by their bonus plan.
                     "CAPI_Player.AddBonusPlan" if a(0) == fc3_story::PLAYER.to_string() => {
+                        progress.removed_plans.remove(&a(1).to_ascii_lowercase());
                         progress.bonus_plans.insert(a(1).to_ascii_lowercase());
                     }
                     "CAPI_Player.RemoveBonusPlan" if a(0) == fc3_story::PLAYER.to_string() => {
                         progress.bonus_plans.remove(&a(1).to_ascii_lowercase());
+                        progress.removed_plans.insert(a(1).to_ascii_lowercase());
                     }
                     "CAPI_Player.RemoveLootItem" if a(0) == fc3_story::PLAYER.to_string() => {
                         if let (Ok(id), Ok(n)) = (a(1).parse::<f64>(), a(2).parse::<f64>()) {

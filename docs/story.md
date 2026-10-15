@@ -3912,3 +3912,20 @@ off, fails it.
   names first (`Story::awaited_vehicles`).
 * A script's teleport of the player is logged (`a script moves the
   player`), to tell it from the autopilot's moves.
+
+## JAS_190: the cenote
+
+JAS_190's cenote is to be crept through: on the way in the scripts take
+the player's takedowns away (a `BonusPlanModifier` per takedown's bonus
+plan, each remembered in a persistent global) and give them back on the
+way out.
+
+* **Bonus plans.** Scripts ask after a bonus plan by name (`HasBonus`:
+  `standardtakedown`, the Takedown's), and we answered from the learned
+  abilities' names only, so the cenote's first removal found the Takedown
+  "already removed", printed its complaint, and the block never went on.
+  The scripts now see the bonus plans in force (`Perks::plans`: the
+  learned abilities' plans and those lent), at once after a script adds or
+  removes one (`BonusPlanModifier` asks again straight after adding). A
+  plan a script removes takes its ability away until it is added back
+  (`Progress::removed_plans`, kept in saves).
