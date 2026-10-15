@@ -3929,3 +3929,10 @@ way out.
   removes one (`BonusPlanModifier` asks again straight after adding). A
   plan a script removes takes its ability away until it is added back
   (`Progress::removed_plans`, kept in saves).
+
+* **The autopilot's skills.** The test runs reached JAS_190 at level 19
+  with 19 skill points and nothing learned; the scripts count on the
+  Takedown (open from JAS_060 on) being there, as for any player. The
+  autopilot now spends its points as they come (`autopilot_skills`): the
+  Takedown first, then the cheapest that can be learned, in the tree's
+  order.

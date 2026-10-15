@@ -29,7 +29,7 @@ impl Plugin for ProgressionPlugin {
             .init_resource::<HandbookData>()
             .init_resource::<HandbookView>()
             .add_systems(Update, (build_handbook, handbook_encounters))
-            .add_systems(Update, (count_stats, build_skill_page, build_gear_list, build_potion_list, test_skills))
+            .add_systems(Update, (count_stats, build_skill_page, build_gear_list, build_potion_list, test_skills, autopilot_skills))
             .init_resource::<ShopTab>()
             .init_resource::<Popups>()
             .add_message::<XpGain>()
@@ -2265,6 +2265,24 @@ fn test_skills(args: Res<crate::Args>, mut progress: ResMut<Progress>, mut done:
     }
 }
 
+/// The story autopilot spends its skill points as a player would, on what
+/// can be learned now: the Takedown first (JAS_190 takes it away for a
+/// while and counts on its being there), then the cheapest, in the tree's
+/// order.
+fn autopilot_skills(skills: Res<Skills>, mut progress: ResMut<Progress>) {
+    if progress.skill_points == 0 || std::env::var_os("FC3_STORY_AUTOPILOT").is_none() {
+        return;
+    }
+    let Some(a) = autopilot_pick(&progress, &skills) else { return };
+    info!("story autopilot: learned {}", a.id);
+    progress.skill_points -= a.cost;
+    progress.skills.insert(a.id.clone());
+}
+
+fn autopilot_pick<'a>(progress: &Progress, skills: &'a Skills) -> Option<&'a fc3_formats::progression::Ability> {
+    skills.0.abilities.iter().filter(|a| skill_state(progress, a) == SkillState::Ready).min_by_key(|a| (a.id != "SP_Takedown", a.cost))
+}
+
 /// Statistics counted up as they happen.
 fn count_stats(mut gains: MessageReader<StatGain>, mut crafted: MessageReader<crate::crafting::ItemCrafted>, mut progress: ResMut<Progress>) {
     for g in gains.read() {
@@ -3148,6 +3166,16 @@ mod skill_tests {
         p.bonus_plans.insert("standardtakedown".into());
         assert!(Perks::from_progress(&p, &skills).takedown);
         assert!(!p.has("SP_Takedown"));
+    }
+
+    #[test]
+    fn the_autopilot_learns_the_takedown_first() {
+        let skills = Skills(SkillTree { abilities: vec![ability("SP_A", &[], ""), ability("SP_Takedown", &[], "")], ..Default::default() });
+        let p = Progress { skill_points: 2, ..Progress::default() };
+        assert_eq!(autopilot_pick(&p, &skills).map(|a| a.id.as_str()), Some("SP_Takedown"));
+        let mut p = p;
+        p.skills.insert("SP_Takedown".into());
+        assert_eq!(autopilot_pick(&p, &skills).map(|a| a.id.as_str()), Some("SP_A"));
     }
 
     #[test]
