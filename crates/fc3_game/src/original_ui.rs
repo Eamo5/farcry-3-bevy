@@ -58,6 +58,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_radar,
                     drive_potions,
                     drive_camera,
+                    drive_credits,
                     drive_pause,
                     run_interface,
                 )
@@ -1719,6 +1720,72 @@ fn drive_camera(
     }
     // (Until its clips answer, the movie is still loading: all again.)
     *shown = Some(if ok { now } else { old });
+}
+
+/// The end credits (`EndCredits`, over all but the pause menu): loaded as
+/// the story asks for them (`crate::credits`), the HUD hidden under it, and
+/// once it says it's loaded (`OnCreditsLoaded`) sent the credits' entries,
+/// a few hundred a frame (`AddCreditItem`: an id, the kind's number and the
+/// text; it rolls from the first). It says when they've scrolled by
+/// (`OnEndCreditsDone`), as it does when a skip cuts them short (its own
+/// `quitBeforeEnd`: they fade out).
+const CREDITS_MOVIE: &str = r"UI\Singleplayer\Menu\Credits\EndCredits.feu";
+const CREDITS_LEVEL: u32 = 9;
+const CREDITS_PER_FRAME: usize = 250;
+
+/// The credits being rolled: their entries, how many were sent (once the
+/// movie has asked), and whether it was told to cut them short.
+struct Roll {
+    entries: Vec<fc3_formats::credits::Entry>,
+    sent: Option<usize>,
+    skipped: bool,
+}
+
+fn drive_credits(
+    state: NonSend<Interface>,
+    mut credits: ResMut<crate::credits::EndCredits>,
+    calls: Res<UiCalls>,
+    info: Res<crate::data::CacheInfo>,
+    mut roll: Local<Option<Roll>>,
+) {
+    let Interface::Running(host) = &*state else { return };
+    if !credits.on() {
+        if roll.take().is_some() {
+            host.unload(CREDITS_LEVEL);
+            host.level_visible(HUD_LEVEL, true);
+        }
+        return;
+    }
+    if roll.is_none() {
+        let entries = std::fs::read_to_string(info.root.join(fc3_formats::credits::CACHE_REL)).map(|t| fc3_formats::credits::from_text(&t)).unwrap_or_default();
+        // (With none, nothing would end them: the story goes on without.)
+        if entries.is_empty() {
+            warn!("original UI: no credits in the cache ({})", fc3_formats::credits::CACHE_REL);
+        } else {
+            host.load(CREDITS_MOVIE, CREDITS_LEVEL);
+            host.level_visible(HUD_LEVEL, false);
+            credits.rolling = true;
+        }
+        *roll = Some(Roll { entries, sent: None, skipped: false });
+    }
+    let Some(roll) = roll.as_mut() else { return };
+    for call in calls.0.iter().filter(|c| c.command == "Send") {
+        match call.args.first().map(String::as_str) {
+            Some("OnCreditsLoaded") if roll.sent.is_none() => roll.sent = Some(0),
+            Some("OnEndCreditsDone") => credits.over = true,
+            _ => {}
+        }
+    }
+    if let Some(sent) = roll.sent.as_mut() {
+        for (i, e) in roll.entries.iter().enumerate().skip(*sent).take(CREDITS_PER_FRAME) {
+            host.event("AddCreditItem", &[&i.to_string(), &e.kind.code().to_string(), &e.text]);
+        }
+        *sent = (*sent + CREDITS_PER_FRAME).min(roll.entries.len());
+    }
+    if credits.skipped.is_some() && !roll.skipped {
+        roll.skipped = true;
+        host.call_function(&format!("_level{CREDITS_LEVEL}.ec.m_credits.quitBeforeEnd"), Vec::new());
+    }
 }
 
 /// The tutorial box (`H_TutorialBox`, top left, its own movie at level 3):

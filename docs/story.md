@@ -4211,3 +4211,32 @@ the airport where Riley is held, within twelve minutes.
   stood by him 40 m from it, and neither moved. After a minute's quiet
   (`NEAR_DESPITE_FIGHT`) the trigger is taken regardless, Riley follows,
   and the chopper scenes play: JAS_220 completes, and JAS_230 starts.
+
+## JAS_240: the end credits
+
+JAS_240's last scene, at its `RollCreditsOnFrame` frame, asks for the end
+credits (`EndGame.lua`'s `PopUpEndOfGame`) and waits for the engine to say
+they're over (`CreditsFinished`) before it fades to black, puts the player
+back on the island and completes. Chapter 10 then completes, and the game
+goes on (it quits to the main menu only if a `QuitToMainMenu` came first).
+
+* **The table.** The credits are a string table at the archive's root
+  (`credits.xml`, entries `Credit_<Kind>_<n>` in order). The converter
+  keeps them as `ui/credits.txt`, a line an entry: the kind's number and
+  the text (`fc3_formats::credits`).
+* **The movie.** `UI\Singleplayer\Menu\Credits\EndCredits.feu` loads
+  `M_Credits.feu` and says when it has (`OnCreditsLoaded`). It is then
+  sent the entries on `AddCreditItem` (an id, the kind: 0 name, 1 title,
+  2 job title, 3 image, a symbol in its library, 4 subtitle; and the
+  text). It rolls from the first, makes an item's clip only as it comes
+  into view, and says when the last has scrolled by (`OnEndCreditsDone`).
+  Its `quitBeforeEnd` fades them out early and ends them the same way.
+  The original UI runs it at level 9 with the HUD hidden
+  (`original_ui::drive_credits`).
+* **Skipping.** Space, Enter, Esc, or the pad's A or Start skip them (not
+  in their first second), and Esc doesn't open the pause menu while they
+  roll. Tests' autopilot watches 20 s of them, then skips. With nothing to
+  roll them (no original UI), the story goes on after 3 s (`crate::credits`).
+* **Asked twice.** `GAME_CREDITS_B10`, not part of the campaign's flow,
+  asks for them too and waits for their end before it offers to go on
+  playing or quit; asked again while they roll, they roll on.

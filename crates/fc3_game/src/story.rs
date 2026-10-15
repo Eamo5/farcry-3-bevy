@@ -546,6 +546,9 @@ pub struct StoryHost {
     /// first parameter: `StartPokerJAS220`, `CinemaSequenceFinished`), for
     /// the minigames to read.
     pub gsf_events: Vec<String>,
+    /// The game is over: the end credits are due (`PopUpEndOfGame`; the
+    /// story waits for `CreditsFinished`).
+    pub end_of_game: bool,
     /// Harm scripts deal (`HealthModifier`'s `DamagePawn`: JAS_190's
     /// fall into the cenote's depths kills), by pawn.
     pub damages: Vec<(u64, f32)>,
@@ -671,6 +674,7 @@ impl StoryHost {
             ai_events: Vec::new(),
             detonations: Vec::new(),
             gsf_events: Vec::new(),
+            end_of_game: false,
             damages: Vec::new(),
             spawned_props: Vec::new(),
         }
@@ -2116,6 +2120,7 @@ fn run_story(
                         qtes.decided.push((a(3).parse().unwrap_or(0), a(4).eq_ignore_ascii_case("success")));
                     }
                     "SendGSFGenericEventToEntity" => host.gsf_events.push(a(2).to_string()),
+                    "PopUpEndOfGame" => host.end_of_game = true,
                     "DestroySpecificGameplay" => {
                         let id = a(0).parse().unwrap_or(0);
                         qtes.cancelled.push(id);
