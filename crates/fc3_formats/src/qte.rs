@@ -16,16 +16,25 @@
 //! FCB objects among a clip's events, [`clip_events`]): a press, a hold or
 //! a mash starts a QTE on an input and the player's answer decides it; a
 //! "zombie" QTE is in progress until a script decides it (`QteSetResult`);
-//! others end or reset a QTE, end the whole sequence, or message the
-//! scripts. The converter keeps the moves and their clips' events in the
-//! cache ([`QTE_REL`], [`QteTable`]).
+//! others end, reset or set a QTE (its progress and result), end the whole
+//! sequence, or message the scripts. The converter keeps the moves and
+//! their clips' events in the cache ([`QTE_REL`], [`QteTable`]).
+//!
+//! Each QTE also has a progress, 0 to 1 (a mash's intensity, a hold's time
+//! held, or what an event sets: `QuickTimeEventSetPMSValues`), which the
+//! moves read as `Interactive_Float<n>` (n the QTE's id plus one). A state
+//! may play only while one is within a range (`ranges`): JAS_160's mass
+//! grave climbs `Reach1` to `Reach5` as each reach's clip sets QTE 2's
+//! progress (0.25, 0.35...); a push's pose follows its mash.
 //!
 //! In the move database (`fc3_formats::moves::MOVE_DB`), values are tagged
 //! (`VALUE`, then a type); a move opens with `TSvM`, a state with `rGvM`
 //! (after a tagged null string when it is its list's first, a tagged `1`
-//! when it follows a sibling), a condition with `EECM`, a clip with `aPnA`
-//! and an anchor (a state played from the scene's anchor, not from where
-//! the player is) with `cnAA`. A tagged `1` then three `-2` references
+//! when it follows a sibling), a condition with `EECM` (a result) or `FIcM`
+//! (a progress range: the range, then the variable's name), a clip with
+//! `aPnA` (or `pMCT`: a clip posed from a time, the time first), and an
+//! anchor (a state played from the scene's anchor, not from where the
+//! player is) with `cnAA`. A tagged `1` then three `-2` references
 //! closes a list of states; a clip after a sibling's tagged `1`, where a
 //! state would be, is the group's own and closes its list too.
 
@@ -35,7 +44,7 @@ use std::collections::BTreeMap;
 pub const QTE_REL: &str = "story/qte_moves.txt";
 
 /// The cached table's first line: which version wrote it.
-const QTE_MAGIC: &str = "# fc3-qte-moves 1";
+const QTE_MAGIC: &str = "# fc3-qte-moves 2";
 
 /// What tags a value in the move database.
 const VALUE: [u8; 4] = [0xb1, 0x68, 0xde, 0x3a];
@@ -57,8 +66,12 @@ pub struct QteState {
     pub conds: Vec<(u8, u8)>,
     /// Its clip (archive path), if it has one.
     pub clip: Option<String>,
+    /// Where in the clip it plays from (a posed clip's time).
+    pub start: f32,
     /// It plays from the scene's anchor (else from where the player is).
     pub anchored: bool,
+    /// The progress ranges it plays within: (QTE id, low, high).
+    pub ranges: Vec<(u8, f32, f32)>,
 }
 
 impl QteState {
@@ -67,19 +80,24 @@ impl QteState {
         let result = |id: u8| results.get(id as usize).copied().unwrap_or(NONE);
         self.conds.iter().all(|&(id, _)| self.conds.iter().any(|&(i, v)| i == id && v == result(id)))
     }
+
+    /// The QTEs' progress is within its ranges.
+    pub fn in_range(&self, progress: &[f32]) -> bool {
+        self.ranges.iter().all(|&(id, lo, hi)| (lo..=hi).contains(&progress.get(id as usize).copied().unwrap_or(0.0)))
+    }
 }
 
-/// The state that plays for these results: the first, in order, whose
-/// conditions hold (a group's under its own; a group with no child to play
-/// plays its own clip, if it has one).
-pub fn select(states: &[QteState], results: &[u8]) -> Option<usize> {
-    fn pick(states: &[QteState], results: &[u8], start: usize, depth: u8) -> Option<usize> {
+/// The state that plays for these results and progress: the first, in
+/// order, whose conditions hold (a group's under its own; a group with no
+/// child to play plays its own clip, if it has one).
+pub fn select(states: &[QteState], results: &[u8], progress: &[f32]) -> Option<usize> {
+    fn pick(states: &[QteState], results: &[u8], progress: &[f32], start: usize, depth: u8) -> Option<usize> {
         let mut i = start;
         while i < states.len() && states[i].depth >= depth {
             let s = &states[i];
-            if s.depth == depth && s.holds(results) {
+            if s.depth == depth && s.holds(results) && s.in_range(progress) {
                 let group = states.get(i + 1).is_some_and(|c| c.depth > depth);
-                if let Some(found) = group.then(|| pick(states, results, i + 1, depth + 1)).flatten() {
+                if let Some(found) = group.then(|| pick(states, results, progress, i + 1, depth + 1)).flatten() {
                     return Some(found);
                 }
                 if s.clip.is_some() {
@@ -90,10 +108,12 @@ pub fn select(states: &[QteState], results: &[u8]) -> Option<usize> {
         }
         None
     }
-    pick(states, results, 0, states.first()?.depth)
+    pick(states, results, progress, 0, states.first()?.depth)
 }
 
-/// Whether a state's conditions, and every group's it is in, still hold.
+/// Whether a state's result conditions, and every group's it is in, still
+/// hold (its progress ranges are for choosing it: a reach's clip moves the
+/// climb's progress on as it plays).
 pub fn holds_within(states: &[QteState], index: usize, results: &[u8]) -> bool {
     let Some(s) = states.get(index) else { return false };
     let mut depth = s.depth;
@@ -171,7 +191,7 @@ fn parse_states(seg: &[u8]) -> Vec<QteState> {
             depth += first as u8;
             let tag = if first { i + 12 } else { i + 13 };
             let name = if tagged(tag + 4, 3) { string_at(seg, tag + 12).unwrap_or_default() } else { String::new() };
-            states.push(QteState { depth, name, conds: Vec::new(), clip: None, anchored: false });
+            states.push(QteState { depth, name, conds: Vec::new(), clip: None, start: 0.0, anchored: false, ranges: Vec::new() });
             owner = Some(states.len() - 1);
             in_transition = false;
             i = tag + 4;
@@ -192,6 +212,32 @@ fn parse_states(seg: &[u8]) -> Vec<QteState> {
                 states[o].conds.push((id - 1, value));
             }
             i += 16;
+            continue;
+        }
+        // A progress range: its kind (2), low and high, then the variable
+        // (`Interactive_Float<n>`, QTE n - 1's).
+        if &seg[i..i + 4] == b"FIcM" && seg.get(i + 4..i + 8) == Some(&VALUE[..]) && u32_at(seg, i + 8) == Some(2) && !in_transition {
+            let f = |at: usize| u32_at(seg, at).map(f32::from_bits).unwrap_or(0.0);
+            let var = (i + 20..(i + 96).min(seg.len().saturating_sub(4))).find_map(|k| string_at(seg, k).filter(|s| s.starts_with("Interactive_Float")));
+            let id = var.and_then(|v| v["Interactive_Float".len()..].parse::<u8>().ok()).filter(|&n| n > 0);
+            if let (Some(o), Some(n)) = (owner, id) {
+                states[o].ranges.push((n - 1, f(i + 12), f(i + 16)));
+            }
+            i += 20;
+            continue;
+        }
+        // A posed clip: its time, then its path.
+        if &seg[i..i + 4] == b"pMCT" && tagged(i + 4, 3) && !in_transition {
+            let start = u32_at(seg, i + 20).map(f32::from_bits).filter(|t| t.is_finite() && *t >= 0.0).unwrap_or(0.0);
+            let path = (i + 32..(i + 160).min(seg.len().saturating_sub(4)))
+                .find_map(|k| string_at(seg, k).filter(|s| s.to_ascii_lowercase().starts_with("graphics\\")));
+            if let (Some(o), Some(p)) = (owner, path) {
+                if states[o].clip.is_none() {
+                    states[o].clip = Some(format!("{}.mab", p.to_ascii_lowercase()));
+                    states[o].start = start;
+                }
+            }
+            i += 20;
             continue;
         }
         if &seg[i..i + 4] == b"sALT" && tagged(i + 4, 4) {
@@ -253,6 +299,9 @@ pub enum Kind {
     End,
     /// A QTE's progress and result are set (`values`: progress, result).
     Reset,
+    /// A QTE's progress (set, or added to) and result are set (`values`:
+    /// progress, result, 1 to add).
+    Set,
     /// The whole sequence ends: the gameplay is over.
     EndSequence,
     /// The player dies.
@@ -262,13 +311,14 @@ pub enum Kind {
 }
 
 impl Kind {
-    const NAMES: [(&'static str, Kind); 9] = [
+    const NAMES: [(&'static str, Kind); 10] = [
         ("QuickTimeEventPress", Kind::Press),
         ("QuickTimeEventHold", Kind::Hold),
         ("QuickTimeEventMash", Kind::Mash),
         ("QuickTimeEventZombie", Kind::Zombie),
         ("QuickTimeEventEndQTE", Kind::End),
         ("QuickTimeEventResetPMS", Kind::Reset),
+        ("QuickTimeEventSetPMSValues", Kind::Set),
         ("QuickTimeEventEndSequence", Kind::EndSequence),
         ("QuickTimeEventPlayerDeath", Kind::PlayerDeath),
         ("QuickTimeEventMessageDomino", Kind::Message),
@@ -368,6 +418,12 @@ pub fn clip_events(d: &[u8]) -> Vec<Event> {
             Kind::Hold => [f("fDuration"), obj.f32("fReactionTime").unwrap_or(-1.0), f("fdecreaseSpeed"), obj.u32("selHoldType").unwrap_or(0) as f32],
             Kind::Press => [f("fDuration"), obj.f32("fReactionTime").unwrap_or(-1.0), 0.0, 0.0],
             Kind::Reset => [f("fQTE_ProgressValue"), obj.u32("selQTE_ResultValue").unwrap_or(NONE as u32) as f32, 0.0, 0.0],
+            Kind::Set => [
+                f("fQTE_ProgressValue"),
+                obj.u32("selQTE_ResultValue").unwrap_or(NONE as u32) as f32,
+                obj.bool("bAddProgress").unwrap_or(false) as u8 as f32,
+                0.0,
+            ],
             _ => [0.0; 4],
         };
         out.push(Event {
@@ -412,7 +468,8 @@ impl QteTable {
         text.lines().next().map(str::trim) == Some(QTE_MAGIC)
     }
 
-    /// `M move`, its states (`S depth name anchored conds clip`), then
+    /// `M move`, its states (`S depth name anchored conds clip ranges
+    /// start`, ranges as `id:low:high` joined by commas), then
     /// `C clip` and its events (`E time kind id input prompt values text`),
     /// tab-separated.
     pub fn to_text(&self) -> String {
@@ -421,7 +478,17 @@ impl QteTable {
             s += &format!("M\t{name}\n");
             for st in states {
                 let conds: Vec<String> = st.conds.iter().map(|(i, v)| format!("{i}={v}")).collect();
-                s += &format!("S\t{}\t{}\t{}\t{}\t{}\n", st.depth, st.name, st.anchored as u8, conds.join(","), st.clip.as_deref().unwrap_or(""));
+                let ranges: Vec<String> = st.ranges.iter().map(|(i, lo, hi)| format!("{i}:{lo}:{hi}")).collect();
+                s += &format!(
+                    "S\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    st.depth,
+                    st.name,
+                    st.anchored as u8,
+                    conds.join(","),
+                    st.clip.as_deref().unwrap_or(""),
+                    ranges.join(","),
+                    st.start
+                );
             }
         }
         for (clip, events) in &self.clips {
@@ -441,15 +508,24 @@ impl QteTable {
             let f: Vec<&str> = line.split('\t').collect();
             match f.as_slice() {
                 ["M", name] => mv = Some(name.to_string()),
-                ["S", depth, name, anchored, conds, path] => {
+                ["S", depth, name, anchored, conds, path, ranges, start] => {
                     let Some(m) = &mv else { continue };
                     let conds = conds.split(',').filter_map(|c| c.split_once('=')).filter_map(|(i, v)| Some((i.parse().ok()?, v.parse().ok()?))).collect();
+                    let ranges = ranges
+                        .split(',')
+                        .filter_map(|r| {
+                            let mut p = r.split(':');
+                            Some((p.next()?.parse().ok()?, p.next()?.parse().ok()?, p.next()?.parse().ok()?))
+                        })
+                        .collect();
                     t.moves.entry(m.clone()).or_default().push(QteState {
                         depth: depth.parse().unwrap_or(1),
                         name: name.to_string(),
                         conds,
                         clip: (!path.is_empty()).then(|| path.to_string()),
+                        start: start.parse().unwrap_or(0.0),
                         anchored: *anchored == "1",
+                        ranges,
                     });
                 }
                 ["C", path] => {
@@ -481,7 +557,7 @@ mod tests {
     use super::*;
 
     fn state(depth: u8, name: &str, conds: &[(u8, u8)], clip: bool) -> QteState {
-        QteState { depth, name: name.into(), conds: conds.to_vec(), clip: clip.then(|| format!("{name}.mab")), anchored: false }
+        QteState { depth, name: name.into(), conds: conds.to_vec(), clip: clip.then(|| format!("{name}.mab")), start: 0.0, anchored: false, ranges: Vec::new() }
     }
 
     /// The escape's crawl, as the move database has it.
@@ -500,7 +576,7 @@ mod tests {
     #[test]
     fn a_crawl_plays_its_intro_then_crawls_on_each_press_until_the_script_decides() {
         let s = crawl();
-        let name = |r: [u8; 3]| select(&s, &r).map(|i| s[i].name.as_str());
+        let name = |r: [u8; 3]| select(&s, &r, &[]).map(|i| s[i].name.as_str());
         assert_eq!(name([NONE, NONE, NONE]), Some("Intro"));
         assert_eq!(name([IN_PROGRESS, NONE, IN_PROGRESS]), Some("Idle"));
         assert_eq!(name([SUCCEEDED, NONE, IN_PROGRESS]), Some("CrawlRight"));
@@ -521,10 +597,38 @@ mod tests {
             state(1, "Fight", &[], false),
             state(2, "SecA", &[(0, NONE), (0, IN_PROGRESS)], true),
         ];
-        assert_eq!(select(&s, &[NONE, NONE, SUCCEEDED, NONE]), Some(0));
-        assert_eq!(select(&s, &[NONE, NONE, SUCCEEDED, IN_PROGRESS]), Some(1));
-        assert_eq!(select(&s, &[NONE; 4]), Some(4));
-        assert_eq!(select(&s, &[SUCCEEDED, NONE, NONE, NONE]), None);
+        assert_eq!(select(&s, &[NONE, NONE, SUCCEEDED, NONE], &[]), Some(0));
+        assert_eq!(select(&s, &[NONE, NONE, SUCCEEDED, IN_PROGRESS], &[]), Some(1));
+        assert_eq!(select(&s, &[NONE; 4], &[]), Some(4));
+        assert_eq!(select(&s, &[SUCCEEDED, NONE, NONE, NONE], &[]), None);
+    }
+
+    #[test]
+    fn a_climb_reaches_on_as_its_progress_moves() {
+        // JAS_160's mass grave: the reaches by QTE 2's progress (each
+        // reach's clip sets it on), each played once QTE 0's hold succeeds;
+        // the way out by a mash once the progress is near its end.
+        let banded = |depth, name, conds: &[(u8, u8)], clip, lo, hi| QteState { ranges: vec![(2, lo, hi)], ..state(depth, name, conds, clip) };
+        let s = vec![
+            banded(1, "MashExit", &[], false, 0.9, 1.0),
+            state(2, "SuccessExit", &[(1, SUCCEEDED)], true),
+            state(2, "Mashing", &[], true),
+            state(1, "Climbing", &[(2, IN_PROGRESS)], false),
+            banded(2, "Reach2", &[], false, 0.2, 0.3),
+            state(3, "Reach2Success", &[(0, SUCCEEDED)], true),
+            state(3, "Reach2Pose", &[], true),
+            banded(2, "Reach1", &[], false, 0.0, 0.2),
+            state(3, "Reach1Success", &[(0, SUCCEEDED)], true),
+            state(3, "Reach1Pose", &[], true),
+            banded(1, "Intro", &[(0, NONE)], true, 0.0, 0.01),
+        ];
+        let name = |r: [u8; 3], p: [f32; 3]| select(&s, &r, &p).map(|i| s[i].name.as_str());
+        assert_eq!(name([NONE, NONE, NONE], [0.0; 3]), Some("Intro"));
+        assert_eq!(name([SUCCEEDED, NONE, IN_PROGRESS], [1.0, 0.0, 0.0]), Some("Reach1Success"));
+        assert_eq!(name([IN_PROGRESS, NONE, IN_PROGRESS], [0.0, 0.0, 0.25]), Some("Reach2Pose"));
+        assert_eq!(name([SUCCEEDED, NONE, IN_PROGRESS], [1.0, 0.0, 0.25]), Some("Reach2Success"));
+        assert_eq!(name([SUCCEEDED, IN_PROGRESS, IN_PROGRESS], [1.0, 0.4, 0.95]), Some("Mashing"));
+        assert_eq!(name([SUCCEEDED, SUCCEEDED, IN_PROGRESS], [1.0, 1.0, 0.95]), Some("SuccessExit"));
     }
 
     /// A move's bytes as the database lays them out (enough of it).
@@ -600,6 +704,8 @@ mod tests {
         let mut t = QteTable::default();
         t.moves.insert("ex_test".into(), crawl());
         t.moves.get_mut("ex_test").unwrap()[0].anchored = true;
+        t.moves.get_mut("ex_test").unwrap()[2].ranges = vec![(2, 0.2, 0.3), (1, 0.0, 0.5)];
+        t.moves.get_mut("ex_test").unwrap()[3].start = 17.828;
         t.clips.insert(
             "Intro.mab".into(),
             vec![
@@ -627,5 +733,17 @@ mod tests {
         let fight = &t.moves["ex_bambifightqte_jason"];
         let top: Vec<&str> = fight.iter().filter(|s| s.depth == 1).map(|s| s.name.as_str()).collect();
         assert_eq!(top, ["Struggle", "Insert", "KnifeFight"]);
+        // The mass grave's reaches, by QTE 2's progress; their poses are
+        // times in one long clip; a reach's clip sets the progress on.
+        let grave = &t.moves["ex_massgraveqte_jason"];
+        let band = |name: &str| grave.iter().find(|s| s.name == name).map(|s| s.ranges.clone()).unwrap();
+        assert_eq!(band("Reach2"), [(2, 0.2, 0.3)]);
+        assert_eq!(band("Intro"), [(2, 0.0, 0.01)]);
+        let reach1 = grave.iter().position(|s| s.name == "Reach1").unwrap();
+        let pose = &grave[reach1 + 2];
+        assert_eq!(pose.name, "Reach");
+        assert!(pose.clip.as_deref().is_some_and(|c| c.ends_with("ex_jas_170_massgrave_jason.mab")) && (pose.start - 12.5).abs() < 0.01);
+        let success = &t.clips[grave[reach1 + 1].clip.as_ref().unwrap()];
+        assert!(success.iter().any(|e| e.kind == Kind::Set && e.id == 2 && (e.values[0] - 0.25).abs() < 1e-6));
     }
 }

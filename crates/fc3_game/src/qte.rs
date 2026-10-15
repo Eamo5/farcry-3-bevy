@@ -100,6 +100,10 @@ const SLOTS: usize = 8;
 /// How long the story autopilot takes to answer a QTE.
 const AUTOPILOT_ANSWER: f32 = 0.3;
 
+/// How long a posed clip (a state played from a time in a longer clip, the
+/// mass grave's reaches) plays before the state is chosen again.
+const POSED_FOR: f32 = 2.0;
+
 /// The longest a QTE plays before it is ended (a guard against one nothing
 /// decides).
 const MAX_AGE: f32 = 300.0;
@@ -169,6 +173,9 @@ struct Qte {
     opponent: Option<u64>,
     anchor: Transform,
     results: [u8; SLOTS],
+    /// Each QTE's progress, 0 to 1 (a mash's intensity, a hold's time held,
+    /// what an event set): the moves' `Interactive_Float`s.
+    progress: [f32; SLOTS],
     asked: [Option<Asked>; SLOTS],
     handles: HashMap<String, Handle<Fc3Clip>>,
     loading: f32,
@@ -281,6 +288,7 @@ fn run_qtes(
             opponent,
             anchor,
             results: [q::NONE; SLOTS],
+            progress: [0.0; SLOTS],
             asked: std::array::from_fn(|_| None),
             handles,
             loading: 0.0,
@@ -337,7 +345,17 @@ fn run_qtes(
         let acts = answers(a.input);
         let pressed = acts.iter().any(|&x| actions.just_pressed(x));
         let held = acts.iter().any(|&x| actions.pressed(x));
-        if let Some(won) = a.answer(dt, pressed, held, autopilot, &mut qt.results[id]) {
+        let outcome = a.answer(dt, pressed, held, autopilot, &mut qt.results[id]);
+        qt.progress[id] = match a.kind {
+            Kind::Mash => a.progress / a.values[0].max(1.0),
+            Kind::Hold => a.progress / a.values[0].max(0.01),
+            _ => qt.progress[id],
+        }
+        .clamp(0.0, 1.0);
+        if let Some(won) = outcome {
+            if a.kind == Kind::Press && won {
+                qt.progress[id] = 1.0;
+            }
             // A hold stays asked: let go, it is in progress again.
             if !(a.kind == Kind::Hold && won) {
                 qt.asked[id] = None;
@@ -351,7 +369,9 @@ fn run_qtes(
     if let Some(s) = qt.state {
         qt.t += dt;
         let events = states[s].clip.as_ref().and_then(|c| moves.clips.get(c)).map(Vec::as_slice).unwrap_or_default();
-        for e in events.iter().filter(|e| e.time > qt.fired && e.time <= qt.t) {
+        // (A posed clip plays from its time: its events from there.)
+        let start = states[s].start;
+        for e in events.iter().filter(|e| e.time - start > qt.fired && e.time - start <= qt.t) {
             let id = e.id as usize;
             match e.kind {
                 Kind::Press | Kind::Hold | Kind::Mash | Kind::Zombie if id < SLOTS => {
@@ -368,10 +388,14 @@ fn run_qtes(
                     host.story.message(&format!("QTE{id}_InProgress"));
                 }
                 Kind::End if id < SLOTS => qt.asked[id] = None,
-                Kind::Reset if id < SLOTS => {
+                Kind::Reset | Kind::Set if id < SLOTS => {
+                    let add = e.kind == Kind::Set && e.values[2] > 0.5;
+                    let progress = (if add { qt.progress[id] + e.values[0] } else { e.values[0] }).clamp(0.0, 1.0);
+                    qt.progress[id] = progress;
                     qt.results[id] = (e.values[1] as u8).min(q::NONE);
+                    // (An asked QTE's own count, in its units.)
                     if let Some(a) = qt.asked[id].as_mut() {
-                        a.progress = e.values[0];
+                        a.progress = progress * a.values[0].max(if a.kind == Kind::Mash { 1.0 } else { 0.01 });
                     }
                 }
                 Kind::EndSequence => qt.ended = true,
@@ -388,32 +412,40 @@ fn run_qtes(
     let leaves = qt.state.is_some_and(|s| decisive && !q::holds_within(states, s, &qt.results));
     if !qt.ended && (qt.state.is_none() || leaves || qt.t >= qt.length) {
         // (Nothing to play: the state plays again.)
-        if let Some(n) = q::select(states, &qt.results).or(qt.state) {
+        if let Some(n) = q::select(states, &qt.results, &qt.progress).or(qt.state) {
             let next = &states[n];
             let origin = match qt.state {
                 Some(s) if !next.anchored => {
                     // On from where the last clip has left the player.
-                    let now = clip_of(&qt.handles, &clips, &states[s].clip).map_or(qt.origin, |c| qt.origin * clip_root(&c.0, qt.t.min(c.0.duration)));
-                    let from = clip_of(&qt.handles, &clips, &next.clip).map_or(Transform::IDENTITY, |c| clip_root(&c.0, 0.0));
+                    let at = states[s].start + qt.t;
+                    let now = clip_of(&qt.handles, &clips, &states[s].clip).map_or(qt.origin, |c| qt.origin * clip_root(&c.0, at.min(c.0.duration)));
+                    let from = clip_of(&qt.handles, &clips, &next.clip).map_or(Transform::IDENTITY, |c| clip_root(&c.0, next.start.min(c.0.duration)));
                     now * Transform::from_matrix(from.to_matrix().inverse())
                 }
                 _ => qt.anchor,
             };
-            let npc_clip = qt.npc.as_ref().and_then(|m| q::select(&moves.moves[m], &qt.results).and_then(|i| moves.moves[m][i].clip.clone()));
-            let length = |path: &Option<String>| clip_of(&qt.handles, &clips, path).map_or(2.0, |c| c.0.duration).max(0.1);
-            let d = length(&next.clip);
-            let anim = |source: String, d: f32| Clip {
+            let npc_state = qt.npc.as_ref().and_then(|m| q::select(&moves.moves[m], &qt.results, &qt.progress).map(|i| &moves.moves[m][i]));
+            let npc_clip = npc_state.and_then(|s| s.clip.clone());
+            // A posed clip plays from its time, a moment of it (it is
+            // chosen again as the progress moves on).
+            let length = |path: &Option<String>, start: f32| {
+                let rest = clip_of(&qt.handles, &clips, path).map_or(2.0, |c| c.0.duration - start);
+                (if start > 0.0 { rest.min(POSED_FOR) } else { rest }).max(0.1)
+            };
+            let d = length(&next.clip, next.start);
+            let anim = |source: String, start: f32, d: f32| Clip {
                 start: 0.0,
                 duration: d,
-                kind: ClipKind::Animation { source, from: 0, to: (d * 30.0) as u32, blend: 0.15, anchored: false },
+                kind: ClipKind::Animation { source, from: (start * 30.0) as u32, to: ((start + d) * 30.0) as u32, blend: 0.15, anchored: false },
             };
             let mut groups = Vec::new();
             if let Some(mine) = next.clip.clone() {
-                groups.push(Group { uid: 1, kind: GroupKind::Player, name: "player".into(), archetype: 0, clips: vec![anim(mine, d)] });
+                groups.push(Group { uid: 1, kind: GroupKind::Player, name: "player".into(), archetype: 0, clips: vec![anim(mine, next.start, d)] });
             }
             let mut bindings = HashMap::new();
-            if let (Some(theirs), Some(npc)) = (npc_clip.clone(), qt.opponent) {
-                groups.push(Group { uid: 2, kind: GroupKind::Character, name: "opponent".into(), archetype: 0, clips: vec![anim(theirs, length(&npc_clip))] });
+            if let (Some(theirs), Some(npc), Some(st)) = (npc_clip.clone(), qt.opponent, npc_state) {
+                let clip = anim(theirs, st.start, length(&npc_clip, st.start));
+                groups.push(Group { uid: 2, kind: GroupKind::Character, name: "opponent".into(), archetype: 0, clips: vec![clip] });
                 bindings.insert(2, npc);
             }
             if let Some(old) = qt.playing.take() {

@@ -314,6 +314,15 @@ is the story's own:
   `JAS_160_EscapeRopes`, waits on `QTE_Success`): the autopilot no longer
   ends it as a gameplay the game doesn't play, nor a sequence's
   `QteSetResult` as one the host doesn't run.
+  Each QTE also has a progress, 0 to 1 (a mash's intensity, a hold's time
+  held, or what a clip's `QuickTimeEventSetPMSValues` sets), which the
+  moves read as `Interactive_Float<n>` (n the QTE's id plus one): a state
+  may play only within a progress range (`FIcM`), 40 of the 122 QTE moves.
+  A push's pose follows its mash; JAS_160's mass grave climbs `Reach1` to
+  `Reach5` as each reach's clip sets QTE 2's progress on, then the way out
+  by a mash. A posed state (`pMCT`) plays a moment of a longer clip from a
+  time (the climb's poses are times in one clip), chosen again as the
+  progress moves on.
   BAM_055's tomb ends this way: the crawl (QTE 0 and 1, the triggers in
   turn) runs while the rock rolls; the script hears the zombie QTE 2 start,
   waits for the player to crawl near the way out, and decides it (the
