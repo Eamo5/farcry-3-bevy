@@ -1293,6 +1293,20 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
+    // ---- the end credits
+    if opts.only_sectors.is_none() && job.should_write(fc3_formats::credits::CACHE_REL) {
+        let result = (|| -> Result<()> {
+            let entries = fc3_formats::credits::parse(&job.vfs.read(fc3_formats::credits::SOURCE)?)?;
+            if entries.is_empty() {
+                bail!("no credits");
+            }
+            write_atomic(job.root(), fc3_formats::credits::CACHE_REL, fc3_formats::credits::to_text(&entries).as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("credits: {e:#}"));
+        }
+    }
+
     // ---- the skill tree and XP levels, with the tattoo's parts (written again
     // when an older table lacks them), and the tattoo's design and mask
     if opts.only_sectors.is_none() {

@@ -14,6 +14,7 @@ pub mod cache;
 pub mod cinema;
 pub mod conversations;
 pub mod counters;
+pub mod credits;
 pub mod d3d9;
 pub mod d3d9_interp;
 pub mod d3d9_wgsl;
