@@ -4014,3 +4014,10 @@ of Sam's, 28 m near and 32 m far, that warns on the screen).
   to one every few seconds with nothing to burn it with, drawing the
   player off Sam. It now burns only with a flamethrower or molotovs, and
   leaves a field that didn't catch for two minutes (`BURN_AGAIN`).
+
+* **Sam's own way.** On his way to the last bomb Sam stopped to wait for
+  the player, and a contextual action point of the next block's, switched
+  on and free, was offered to the nearest of its group within its reach:
+  Sam, who walked off to it and never reached his path's end
+  (`Domino_CompanionLead`). A companion leading or following the player
+  is no longer offered points (`Core::offer_action`).

@@ -120,11 +120,14 @@ impl Core {
         };
         let near = |p: [f32; 3]| (p[0] - at[0]).hypot(p[1] - at[1]);
         // (Only one in the world: a placed character whose layer is off
-        // isn't there to take it.)
+        // isn't there to take it; nor a companion leading or following the
+        // player: HOY_010's Sam, waiting on his way for the player, was taken
+        // off it by the next block's spot and never led on.)
+        let busy = |p: &u64| matches!(self.companions.get(p), Some(crate::Companion::Lead { .. } | crate::Companion::Follow));
         let taker = self
             .groups(&Text(format!("#{group:08X}")))
             .into_iter()
-            .filter(|p| !self.ca.current.contains_key(p) && self.is_loaded(*p) && fits(self, *p))
+            .filter(|p| !self.ca.current.contains_key(p) && !busy(p) && self.is_loaded(*p) && fits(self, *p))
             .filter_map(|p| Some((p, near(self.position(p)?))))
             .filter(|&(_, d)| d <= radius)
             .min_by(|a, b| a.1.total_cmp(&b.1));
