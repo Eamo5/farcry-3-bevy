@@ -455,8 +455,10 @@ made); `CraftingRecipeSelected <id>` gets `DataRequirements` (each
 ingredient's `sName`, `iNeeded`, `iPossessed`, `sImage`). The page sends
 `CraftingRecipeCrafted` with no id, so the game makes the recipe last
 selected (`CraftCatalog::craft`) and sends the groups, recipes and
-ingredients again. Using and assigning syringes (`CraftingRecipeUsed`,
-`CraftingRecipeAssigned`, `AssignedSlots`) aren't there yet, and the 3D
+ingredients again; `CraftingRecipeUsed` injects the selected syringe
+(`syringes::inject`) and answers `CraftingUseResult` 1 or 0. Assigning
+syringes to the quick slots (`CraftingRecipeAssigned`, `AssignedSlots`)
+and crafting arrows aren't there yet, and the 3D
 item views (`3D_Crafting_MC` and the like, which the engine draws) are
 hidden: their stand-ins are plain white and blue sheets. Blank data fields
 go to the movie as null, which the shim makes blank again (a blank string

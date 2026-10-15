@@ -240,10 +240,11 @@ fn drive_pause(
     mut windows: Query<(&Window, &mut bevy::window::CursorOptions), With<PrimaryWindow>>,
     mut exit: MessageWriter<AppExit>,
     (mut open, mut mouse, mut paged, mut pressed): (Local<bool>, Local<Vec2>, Local<bool>, Local<(Option<std::time::Instant>, usize)>),
-    (mut players, mut crafted, mut page): (
+    (mut players, mut crafted, mut page, mut boosts): (
         Query<&mut crate::combat::PlayerStats, With<crate::player::Player>>,
         MessageWriter<crate::crafting::ItemCrafted>,
         Local<CraftPage>,
+        Option<ResMut<crate::syringes::Boosts>>,
     ),
 ) {
     use crate::menu::GameState;
@@ -322,7 +323,12 @@ fn drive_pause(
             }
             // Crafting: its tabs, a tab's groups, a group's recipes, a
             // recipe's ingredients, and making the one last selected.
-            "CraftingPageLoaded" | "CraftingRecipeTypeChanged" | "CraftingRecipeSubTypeChanged" | "CraftingRecipeSelected" | "CraftingRecipeCrafted" => {
+            "CraftingPageLoaded"
+            | "CraftingRecipeTypeChanged"
+            | "CraftingRecipeSubTypeChanged"
+            | "CraftingRecipeSelected"
+            | "CraftingRecipeCrafted"
+            | "CraftingRecipeUsed" => {
                 let (Some(catalog), Some(loot)) = (crafting.as_deref(), loot.as_deref()) else { continue };
                 let mut stats = players.single_mut().ok();
                 match call.args[0].as_str() {
@@ -348,6 +354,17 @@ fn drive_pause(
                     "CraftingRecipeSelected" => {
                         page.recipe = arg(1).parse().ok().filter(|&i: &usize| i < catalog.recipes.len());
                         send_craft_ingredients(host, catalog, loot, &progress, &page);
+                    }
+                    // The selected syringe injected (`CraftingUseResult` 1, or 0).
+                    "CraftingRecipeUsed" => {
+                        let recipe = page.recipe.and_then(|i| catalog.recipes.get(i));
+                        let used = match (recipe, boosts.as_deref_mut()) {
+                            (Some(r), Some(b)) => crate::syringes::inject(&mut progress, b, r),
+                            _ => false,
+                        };
+                        host.event("CraftingUseResult", &[if used { "1" } else { "0" }]);
+                        send_craft_groups(host, catalog, loot, &progress, stats.as_deref(), perks.medkit_cap, page.category);
+                        send_craft_recipes(host, catalog, loot, &progress, stats.as_deref(), perks.medkit_cap, &page);
                     }
                     _ => {
                         let Some(recipe) = page.recipe.and_then(|i| catalog.recipes.get(i)) else { continue };
