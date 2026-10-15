@@ -2679,6 +2679,13 @@ fn main() -> Result<()> {
                             }
                         }
                     }
+                    // A spawn point (a respawn, a teleport's destination) by its id.
+                    if let Ok(id) = t.parse::<u64>() {
+                        let data = fc3_story::data::StoryData::load(&root)?;
+                        if let Some(sp) = data.spawn_points.get(&id) {
+                            println!("{id} spawn point {} layer {:#x} at {:?} angles {:?}", sp.name, sp.layer, sp.pos, sp.angles);
+                        }
+                    }
                 }
             }
         }
