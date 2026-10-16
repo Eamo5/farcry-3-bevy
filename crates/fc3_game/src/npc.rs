@@ -1359,6 +1359,40 @@ fn spawn_requested(
     }
 }
 
+/// What a fight needs to raise enemies there and then, hunting the player
+/// (the Ink Monster's minions).
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct NpcSpawner<'w> {
+    director: ResMut<'w, NpcDirector>,
+    assets: Option<Res<'w, NpcAssets>>,
+    chars: Option<Res<'w, CharacterAssets>>,
+    models: Res<'w, Assets<Fc3Model>>,
+    server: Res<'w, AssetServer>,
+    rng: ResMut<'w, Rng>,
+}
+
+impl NpcSpawner<'_> {
+    /// An enemy of this faction and role standing at `feet`, on its way to
+    /// `hunting`; none until the enemies' assets are in.
+    pub fn spawn_hunting(&mut self, commands: &mut Commands, faction: Faction, role: Role, feet: Vec3, hunting: Vec3) -> Option<Entity> {
+        let assets = self.assets.as_ref()?;
+        let chars = self.chars.as_deref().filter(|c| c.ready(&self.server));
+        self.director.next_free_id += 1;
+        let id = FREE_ID_BASE + self.director.next_free_id;
+        let e = spawn_npc(commands, assets, chars, &self.models, faction, role, feet, yaw_to(hunting - feet), id, &mut self.rng, None);
+        commands.entity(e).entry::<Npc>().and_modify(move |mut n| {
+            n.state = NpcState::Search;
+            n.awareness = 0.8;
+            n.last_known = Some(hunting);
+        });
+        Some(e)
+    }
+
+    pub fn rng(&mut self) -> &mut Rng {
+        &mut self.rng
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_npc(
     commands: &mut Commands,

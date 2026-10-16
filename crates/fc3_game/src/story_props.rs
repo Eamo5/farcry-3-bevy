@@ -22,7 +22,7 @@ impl Plugin for StoryPropsPlugin {
 pub type SpawnedProp = (u64, String, [f32; 3], [f32; 3]);
 
 /// The model an archetype draws (its graphic component's), if any.
-fn archetype_model(archetype: &fc3_story::data::Entry) -> Option<String> {
+pub(crate) fn archetype_model(archetype: &fc3_story::data::Entry) -> Option<String> {
     let mut model = None;
     archetype.component("CGraphicComponent")?.walk(&mut |o, _| {
         if model.is_none() {

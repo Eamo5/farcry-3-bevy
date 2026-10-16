@@ -3943,9 +3943,17 @@ the game now plays (`boss_fight`) instead of ending it at once.
   `ThrowRock`, `StartFirebreath`/`StopFirebreath`, camera shakes. The
   turned builds name none; theirs are the forward build's.
 * **The fight**: idling, then sweeps and rocks in turn, the fire breath from
-  the second phase. A sweep harms the player if its nearer hand is within
-  its reach as it comes down; a rock flies at where he was and can be shot
-  down; the breath follows him slowly from the jaw. The mask is a sphere
+  the second phase, summoning from the third. A sweep harms the player if
+  its nearer hand is within its reach as it comes down; a rock flies at
+  where he was and can be shot down; the breath follows him slowly from the
+  jaw. Each new phase it is hurt first (`hurt_idle`: its mask breaks at
+  `ChangeMaskNow`, and it breathes fire), and as the third begins it
+  summons: its start's clip up to the pound (`StartGroundPoundDamage`,
+  harming within its reach of the hands), the cycle bent over the arena
+  while minions come up around the player inside the arena's boundaries
+  (beheaders, a few at a time, no more than the fight's count at once), and
+  the start's clip from the pound on as its end (the move table gives the
+  end that same clip). The mask is a sphere
   on the head bone: hits on it come off the giant's health (six times a
   man's: the fight's own scale isn't in the data, and the bow's explosive
   arrows carry no damage of their own, so this puts the knockout some
@@ -3959,12 +3967,18 @@ the game now plays (`boss_fight`) instead of ending it at once.
   stocked (`weapons::UnlimitedAmmo`), until a reload.
 * **Binds.** `CAPI_Entity.Bind` (the mask on the giant's `Head`) makes the
   bound thing ride on the other's bone (`binds`); `UnBind` lets go.
+* **Goodies.** Every few seconds (`m_goodiesSpawnCooldown`) each of the
+  three spots (`m_goodiesSpawnSpot1..3`) with nothing lying there gets one
+  of the library's goodies (ammunition, explosives, a rocket launcher,
+  arrows, a rifle, a bow, a medkit) within its range, drawn as its
+  archetype; at the fight's end what is left goes, as do the minions.
 * **The autopilot** leaves the player to the fight while it is on: the
-  fight's own autopilot holds the bow's sights on the mask and fires.
-* Not yet: the summoned minions and their pounding, the goodies laid out
-  at the three spawn spots, the mask's breaking (`ChangeMaskNow`), the
-  fight's particles (the ink, the eyes, the breath's flames, the arrows'
-  blasts) and the rock's own model.
+  fight's own autopilot holds the bow's sights on the mask, or on a minion
+  close by, and fires. `FC3_BOSS_HP=<health>` starts the giant with that
+  much (its phase for it).
+* Not yet: the broken mask's own model, the minions' ink look, the fight's
+  particles (the ink, the eyes, the breath's flames, the arrows' blasts)
+  and the rock's own model.
 
 ## JAS_170: the drop onto the beach
 

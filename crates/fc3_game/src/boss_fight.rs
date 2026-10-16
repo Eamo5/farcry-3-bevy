@@ -5,9 +5,12 @@
 //! own clips: each attack is a move played facing the player (`+000fw`,
 //! `+045rt`, `-045lt`), and its clip's events say when a sweep's hand comes
 //! down (`SweepHit`), a rock leaves the hand (`ThrowRock`) or the fire
-//! breath starts and stops. When it is knocked out the fight tells the
-//! script (`citrabossfight_EnableInvisibleBridge`) and ends, and B10E goes
-//! on to B15E's finishing blow.
+//! breath starts and stops. Each new phase it is hurt (its mask breaking)
+//! and breathes fire; from the third it also pounds the ground and summons
+//! minions; goodies are laid out at the arena's spots meanwhile. When it is
+//! knocked out the fight tells the script
+//! (`citrabossfight_EnableInvisibleBridge`) and ends, and B10E goes on to
+//! B15E's finishing blow.
 
 use std::collections::HashMap;
 
@@ -17,6 +20,7 @@ use bevy::prelude::*;
 use crate::cache_assets::{cache_path, Fc3Clip, Fc3Skeleton};
 use crate::characters::{CharacterRig, ClipOverride};
 use crate::combat::{DamageEvent, DamageKind, Health, Hit};
+use crate::pickups::{Pickup, PickupKind};
 use crate::player::Player;
 use crate::story_actors::StoryActor;
 
@@ -27,7 +31,7 @@ impl Plugin for BossFightPlugin {
         app.init_resource::<BossFight>()
             .add_systems(
                 Update,
-                (start_and_end, mask_hits, fight, rocks)
+                (start_and_end, mask_hits, fight, rocks, extras)
                     .chain()
                     .after(crate::story::StorySet)
                     .after(crate::cinema::CinemaSet)
@@ -78,6 +82,10 @@ enum Act {
     Throw(u8),
     ThrowExit(u8),
     Breath,
+    /// A new phase: hurt, the mask breaking, then fire.
+    Hurt,
+    /// Summoning: pounding the ground (0), raising minions (1), done (2).
+    Summon(u8),
     Knockout,
     KnockedOut,
 }
@@ -93,6 +101,10 @@ impl Act {
             Act::Throw(n) => format!("throw{n}"),
             Act::ThrowExit(n) => format!("throw{n}_exit"),
             Act::Breath => "breath".into(),
+            Act::Hurt => "hurt_idle".into(),
+            Act::Summon(0) => "summon_start".into(),
+            Act::Summon(1) => "summon_cycle".into(),
+            Act::Summon(_) => "summon_end".into(),
             Act::Knockout => "knockout".into(),
             Act::KnockedOut => "knockout_idle".into(),
         }
@@ -100,7 +112,7 @@ impl Act {
 
     /// Played over and over until something else starts.
     fn looping(self) -> bool {
-        matches!(self, Act::Idle | Act::KnockedOut)
+        matches!(self, Act::Idle | Act::KnockedOut | Act::Summon(1))
     }
 }
 
@@ -122,7 +134,7 @@ struct Fight {
     t: f32,
     /// Events of the clip already raised.
     fired: usize,
-    /// Seconds left of idling before the next attack.
+    /// Seconds left of idling before the next attack, or of raising minions.
     idle_for: f32,
     /// Attacks made (the next one in turn).
     attacks: usize,
@@ -148,9 +160,36 @@ struct Fight {
     /// The arena's edges (`m_boundaryNearLeft`, `NearRight`, as the giant
     /// sees them): where the player is across it picks the moves' turn.
     near_edge: Option<(Vec3, Vec3)>,
+    /// The arena's corners (its four boundaries): minions come up in it.
+    arena: Option<(Vec3, Vec3)>,
+    /// Its mask has broken (`ChangeMaskNow`).
+    mask_broken: bool,
+    /// Where goodies are laid (`m_goodiesSpawnSpot1..3`), each with the
+    /// goodie lying there, and the seconds to the next round.
+    goodie_spots: Vec<(Vec3, Option<Entity>)>,
+    goodie_timer: f32,
+    goodies_laid: u32,
+    /// It has summoned (its first attack of the third phase).
+    summoned: bool,
+    /// This summon's pound has come.
+    pounded: bool,
+    /// Minions still to raise, and the seconds to the next.
+    minions_due: u32,
+    minion_timer: f32,
     /// Debug screenshots taken.
     shots: u32,
 }
+
+/// A goodie the fight laid out.
+#[derive(Component)]
+struct BossGoodie;
+
+/// A minion the giant summoned.
+#[derive(Component)]
+struct BossMinion;
+
+/// Goodies' pickup ids (the story knows none of them).
+const GOODIE_IDS: u64 = 0x4B00_0000_0000_0000;
 
 /// The mask's sphere (its own health, never run down: hits come off the
 /// giant's).
@@ -168,8 +207,8 @@ struct Rock {
 
 /// How much more a hit on the mask counts against the giant's health than
 /// against a man's. The fight's own scale isn't in its data (the engine
-/// keeps it); this puts the knockout some twenty bow hits away, as the
-/// game's fight runs.
+/// keeps it, and the bow's explosive arrows carry no damage of their own);
+/// this puts the knockout some twenty-seven arrows away.
 const WEAK_SPOT: f32 = 6.0;
 /// The mask's reach about the head bone (m): the mask model is some 11 by
 /// 9 m.
@@ -192,7 +231,7 @@ fn start_and_end(
     info: Option<Res<crate::data::CacheInfo>>,
     server: Res<AssetServer>,
     mut commands: Commands,
-    rocks: Query<Entity, With<Rock>>,
+    rocks: Query<Entity, Or<(With<Rock>, With<BossGoodie>, With<BossMinion>)>>,
 ) {
     let cancelled = std::mem::take(&mut fight.cancelled);
     for start in std::mem::take(&mut fight.pending) {
@@ -226,19 +265,26 @@ fn start_and_end(
             host.as_ref()?.story.data().entities.get(&id).map(|e| crate::data::to_bevy(e.pos))
         };
         let near_edge = place("m_boundaryNearLeft").zip(place("m_boundaryNearRight"));
+        let corners: Vec<Vec3> =
+            ["m_boundaryNearLeft", "m_boundaryNearRight", "m_boundaryFarLeft", "m_boundaryFarRight"].iter().filter_map(|k| place(k)).collect();
+        let arena = (corners.len() == 4).then(|| (corners.iter().copied().reduce(Vec3::min).unwrap(), corners.iter().copied().reduce(Vec3::max).unwrap()));
+        let goodie_spots = (1..=3).filter_map(|i| place(&format!("m_goodiesSpawnSpot{i}"))).map(|p| (p, None)).collect();
         info!("boss fight {}: the giant {boss}, {} health, phases at {:?}", start.id, s.hp, s.phases);
         // Kept out of sight since it was placed (CIT_030's main graph): the
         // fight brings it on, rising for its arrival.
         if hidden.0.contains(&boss) {
             hidden.0.remove(&boss);
         }
+        // FC3_BOSS_HP=<health> (tests): the giant starts with that much, in
+        // its phase for it.
+        let hp = std::env::var("FC3_BOSS_HP").ok().and_then(|v| v.parse::<f32>().ok()).map_or(s.hp, |h| h.clamp(1.0, s.hp));
         fight.active = Some(Fight {
             id: start.id,
-            hp: s.hp,
+            hp,
+            phase: s.phase_at(hp),
             s,
             boss,
             skeleton,
-            phase: 0,
             act: Act::Arrival,
             clip: None,
             moments: None,
@@ -255,6 +301,15 @@ fn start_and_end(
             origin: None,
             reference: None,
             near_edge,
+            arena,
+            mask_broken: false,
+            goodie_spots,
+            goodie_timer: 0.0,
+            goodies_laid: 0,
+            summoned: false,
+            pounded: false,
+            minions_due: 0,
+            minion_timer: 0.0,
             shots: 0,
         });
     }
@@ -372,6 +427,8 @@ fn fight(
         sound(&mut sfx, &f.s, line, None);
         if phase >= 3 && !matches!(f.act, Act::Knockout | Act::KnockedOut) {
             begin(f, Act::Knockout);
+        } else if phase >= 1 && !matches!(f.act, Act::Knockout | Act::KnockedOut | Act::Arrival) {
+            begin(f, Act::Hurt);
         }
     }
     // The move playing: its clip by where the player is.
@@ -390,7 +447,8 @@ fn fight(
             return;
         };
         let Some(path) = clip_for(&table, &name, facing) else {
-            warn!("boss fight: no clip for {name}");
+            // (The summon's end has none.)
+            debug!("boss fight: no clip for {name}");
             next(f, across);
             return;
         };
@@ -419,14 +477,22 @@ fn fight(
         let shot = std::path::Path::new(&dir).join(format!("boss_{:02}_{:?}.png", f.shots, f.act).replace([' ', '{', '}', ':'], ""));
         commands.spawn(Screenshot::primary_window()).observe(save_to_disk(shot));
     }
-    f.t += dt;
-    // Its moments, as the clip passes them.
+    // Its moments.
     let moments = match f.moments.as_ref().map(|h| clips.get(h)) {
         // (Waiting for the forward build to load.)
         Some(None) => return,
         Some(Some(fw)) if clip.events.is_empty() => fw.0.events.clone(),
         _ => clip.events.clone(),
     };
+    // A summon's end is the rest of its start's clip, from the pound on.
+    if f.act == Act::Summon(2) && f.t == 0.0 {
+        if let Some(&(at, _)) = moments.iter().find(|(_, e)| e == POUND) {
+            f.t = at;
+            f.fired = moments.iter().filter(|(t, _)| *t <= at).count();
+        }
+    }
+    f.t += dt;
+    // As the clip passes them.
     while let Some((at, event)) = moments.get(f.fired).cloned() {
         if at > f.t {
             break;
@@ -477,6 +543,21 @@ fn fight(
                 sound(&mut sfx, &f.s, "BossGruntAttack", head.map(|h| h.translation()));
             }
             "StopFirebreath" => f.breath = None,
+            // A summon's pound: hands on the ground, harming within reach.
+            POUND => {
+                f.pounded = true;
+                shakes.write(crate::shake::Shake::new("explosionrumble", 1.0));
+                let near =
+                    ["LeftHand", "RightHand"].into_iter().filter_map(|b| bone(b)).map(|h| h.translation()).find(|h| h.distance(player_at) < f.s.pound_radius);
+                if near.is_some() {
+                    info!("boss fight: pounded the player ({} harm)", f.s.pound_damage);
+                    harm(&mut damage, pe, f.s.pound_damage, DamageKind::Explosion, near);
+                }
+            }
+            "ChangeMaskNow" => {
+                f.mask_broken = true;
+                debug!("boss fight: the mask breaks");
+            }
             "DoCameraShakeAndPadRumble" => {
                 shakes.write(crate::shake::Shake::new("explosionrumble", 0.6));
             }
@@ -516,6 +597,12 @@ fn fight(
             f.idle_for <= 0.0
         }
         Act::KnockedOut => false,
+        // (Its start is over at the pound, the cycle holding it there.)
+        Act::Summon(0) => f.pounded || f.t >= clip.duration,
+        Act::Summon(1) => {
+            f.idle_for -= dt;
+            f.idle_for <= 0.0
+        }
         _ => f.t >= clip.duration,
     };
     if over {
@@ -577,23 +664,38 @@ fn begin(f: &mut Fight, act: Act) {
     f.t = 0.0;
     f.fired = 0;
     f.swept = false;
+    f.pounded = false;
     f.breath = None;
     if act == Act::Idle {
         f.idle_for = f.s.attack_cooldown.max(0.5) + f.s.idle_between_attacks;
     }
+    // (Minions come up while it summons.)
+    if act == Act::Summon(1) {
+        f.idle_for = f.s.minion_timer.max(1.0);
+        f.minions_due += f.s.minions_harder.max(1.0) as u32;
+    }
 }
 
 /// What comes after the move that ended: from an attack, idling; from
-/// idling, the next attack of those the phase has (sweeps, then rocks, then
-/// fire from the second phase), turning on.
+/// idling, the next attack of those the phase has (sweeps, then rocks, fire
+/// from the second phase, summoning from the third), turning on.
 fn next(f: &mut Fight, across: f32) {
     let after = match f.act {
         Act::Knockout | Act::KnockedOut => Act::KnockedOut,
         Act::Throw(n) => Act::ThrowExit(n),
+        Act::Summon(n) if n < 2 => Act::Summon(n + 1),
+        // (Summoning first as the third phase begins.)
+        Act::Idle if f.phase >= 2 && !f.summoned => {
+            f.summoned = true;
+            Act::Summon(0)
+        }
         Act::Idle => {
             let mut kinds = vec![0u8, 1];
             if f.phase >= 1 {
                 kinds.push(2);
+            }
+            if f.phase >= 2 {
+                kinds.push(3);
             }
             let kind = kinds[f.attacks % kinds.len()];
             f.attacks += 1;
@@ -601,7 +703,8 @@ fn next(f: &mut Fight, across: f32) {
                 // (The hand on the player's side.)
                 0 => Act::Sweep { left: across < 0.5 },
                 1 => Act::Throw((f.rocks_thrown % 3 + 1) as u8),
-                _ => Act::Breath,
+                2 => Act::Breath,
+                _ => Act::Summon(0),
             }
         }
         _ => Act::Idle,
@@ -616,6 +719,111 @@ fn harm(damage: &mut MessageWriter<DamageEvent>, player: Entity, amount: f32, ki
 fn sound(sfx: &mut MessageWriter<crate::sound::PlaySfx>, s: &fc3_formats::gsf::BossFightSettings, name: &str, at: Option<Vec3>) {
     if let Some(&event) = s.sounds.get(name) {
         sfx.write(crate::sound::PlaySfx { event, at, volume: 1.0 });
+    }
+}
+
+/// What the fight lays out and raises: a goodie at each spot with none, a
+/// round every few seconds (`m_goodiesSpawnCooldown`, within its range of
+/// the spot), and the minions a summon calls up around the player, inside
+/// the arena, no more than the fight's count at once.
+#[allow(clippy::too_many_arguments)]
+fn extras(
+    mut fight: ResMut<BossFight>,
+    time: Res<Time>,
+    host: Option<NonSend<crate::story::StoryHost>>,
+    server: Res<AssetServer>,
+    models: Res<Assets<crate::cache_assets::Fc3Model>>,
+    pickups: Query<(), With<Pickup>>,
+    minions: Query<&Health, With<BossMinion>>,
+    players: Query<&Transform, With<Player>>,
+    heights: Res<crate::terrain::Heightfield>,
+    mut spawner: crate::npc::NpcSpawner,
+    mut visuals: Local<Vec<(Entity, Handle<crate::cache_assets::Fc3Model>)>>,
+    mut commands: Commands,
+) {
+    let Some(f) = fight.active.as_mut() else {
+        visuals.clear();
+        return;
+    };
+    let Ok(pt) = players.single() else { return };
+    let dt = time.delta_secs();
+    let ground = |at: Vec3| heights.height_at(at).unwrap_or(pt.translation.y - crate::player::HALF_HEIGHT);
+    let fighting = !matches!(f.act, Act::Arrival | Act::Knockout | Act::KnockedOut);
+    // Goodies.
+    f.goodie_timer -= dt;
+    if fighting && f.goodie_timer <= 0.0 && !f.s.goodies.is_empty() {
+        f.goodie_timer = f.s.goodies_cooldown.max(1.0);
+        for i in 0..f.goodie_spots.len() {
+            let (spot, lying) = f.goodie_spots[i];
+            if lying.is_some_and(|e| pickups.get(e).is_ok()) {
+                continue;
+            }
+            let rng = spawner.rng();
+            let archetype = f.s.goodies[(rng.f32() * f.s.goodies.len() as f32) as usize % f.s.goodies.len()].clone();
+            let (angle, r) = (rng.f32() * std::f32::consts::TAU, rng.f32() * f.s.goodies_range.max(0.0));
+            let mut at = spot + Vec3::new(angle.cos(), 0.0, angle.sin()) * r;
+            at.y = ground(at);
+            let kind = goodie_kind(&archetype);
+            f.goodies_laid += 1;
+            let e = commands
+                .spawn((
+                    Name::new("ink monster's goodie"),
+                    BossGoodie,
+                    Transform::from_translation(at),
+                    Visibility::Visible,
+                    Pickup { kind, id: GOODIE_IDS + f.goodies_laid as u64, visual: None },
+                ))
+                .id();
+            f.goodie_spots[i].1 = Some(e);
+            debug!("boss fight: {archetype} laid at {at:.1}");
+            // Drawn as its archetype (a weapon's shows the weapon: `pickups`).
+            if !matches!(kind, PickupKind::Weapon(_) | PickupKind::Grenade) {
+                let path = host.as_ref().and_then(|h| h.story.data().archetype_named(&archetype).and_then(crate::story_props::archetype_model));
+                if let Some(path) = path {
+                    visuals.push((e, crate::weapons::model_handle(&server, &path)));
+                }
+            }
+        }
+    }
+    visuals.retain(|(e, handle)| {
+        let Some(model) = models.get(handle) else { return true };
+        if pickups.get(*e).is_ok() {
+            let v = crate::objects::spawn_model_wearing(&mut commands, handle, model, Transform::IDENTITY, &[]);
+            commands.entity(v).insert(ChildOf(*e));
+        }
+        false
+    });
+    // Minions.
+    f.minion_timer -= dt;
+    let alive = minions.iter().filter(|h| !h.dead).count() as u32;
+    if f.minions_due > 0 && f.minion_timer <= 0.0 && alive < f.s.minions.max(1.0) as u32 {
+        f.minion_timer = MINION_EVERY;
+        f.minions_due -= 1;
+        let angle = spawner.rng().f32() * std::f32::consts::TAU;
+        let mut at = pt.translation + Vec3::new(angle.cos(), 0.0, angle.sin()) * f.s.minion_radius.max(3.0);
+        if let Some((lo, hi)) = f.arena {
+            at = at.clamp(lo, hi);
+        }
+        let feet = at.with_y(ground(at));
+        if let Some(e) = spawner.spawn_hunting(&mut commands, crate::npc::Faction::Pirate, crate::npc::Role::Charger, feet, pt.translation) {
+            commands.entity(e).insert((BossMinion, Name::new("ink monster's minion")));
+            debug!("boss fight: a minion comes up at {feet:.1}");
+        }
+    }
+}
+
+/// Seconds between minions coming up.
+const MINION_EVERY: f32 = 0.6;
+/// A summon's pound: where its start ends and its end begins.
+const POUND: &str = "StartGroundPoundDamage";
+
+/// What a goodie gives, by its archetype (`Pickups/Ammo/...`); an arrow
+/// bundle is ammunition (the bow's).
+fn goodie_kind(archetype: &str) -> PickupKind {
+    let name = archetype.rsplit(':').next().unwrap_or(archetype);
+    match crate::pickups::classify(name) {
+        Some(crate::pickups::Classified::Pickup(kind)) => kind,
+        _ => PickupKind::Ammo,
     }
 }
 
@@ -666,12 +874,16 @@ fn rocks(
     }
 }
 
+/// A minion this near is the autopilot's first (m).
+const MINION_FIRST: f32 = 12.0;
+
 /// The story's autopilot (tests) in the fight: the bow in hand, shooting
-/// the mask through the sights.
+/// the mask through the sights (a minion close by first).
 fn autopilot(
     fight: Res<BossFight>,
     time: Res<Time>,
     spots: Query<&GlobalTransform, With<WeakSpot>>,
+    minions: Query<(&GlobalTransform, &Health), With<BossMinion>>,
     mut players: Query<(&Transform, &mut Player, &crate::weapons::Inventory)>,
     mut actions: ResMut<crate::controls::ActionState>,
     mut next_shot: Local<f32>,
@@ -686,7 +898,13 @@ fn autopilot(
     let Some(spot) = f.mask.and_then(|m| spots.get(m).ok()) else { return };
     let Ok((t, mut p, inv)) = players.single_mut() else { return };
     let eye = t.translation + Vec3::Y * (p.eye - crate::player::HALF_HEIGHT);
-    let aim = spot.translation() - eye;
+    // (A minion close by first.)
+    let minion = minions
+        .iter()
+        .filter(|(m, h)| !h.dead && m.translation().distance(t.translation) < MINION_FIRST)
+        .map(|(m, _)| m.translation())
+        .min_by(|a, b| a.distance(t.translation).total_cmp(&b.distance(t.translation)));
+    let aim = minion.unwrap_or(spot.translation()) - eye;
     p.yaw = (-aim.x).atan2(-aim.z);
     p.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
     use crate::controls::Action;
