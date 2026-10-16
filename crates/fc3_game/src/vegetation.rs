@@ -340,6 +340,17 @@ impl VegStreamer {
     pub fn pending_count(&self) -> usize {
         self.slots.values().filter(|s| !s.cursor.is_empty() || s.wanted.iter().any(|l| !s.roots.contains_key(l))).count()
     }
+
+    /// A sector's solid clutter (rocks, trunks: colliders through the
+    /// world-object path): `Err` while it is still being placed, else the
+    /// root it hangs under, if the sector has any.
+    pub fn solid_root(&self, c: SectorCoord) -> Result<Option<Entity>, ()> {
+        let Some(s) = self.slots.get(&c).filter(|s| s.wanted.contains(&Layer::Far)) else { return Ok(None) };
+        match s.roots.get(&Layer::Far) {
+            Some(&root) if !s.cursor.contains_key(&Layer::Far) => Ok(Some(root)),
+            _ => Err(()),
+        }
+    }
 }
 
 fn request_vegetation(

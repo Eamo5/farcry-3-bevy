@@ -808,6 +808,7 @@ fn place_on_ground(
     mut collision_ready: Local<bool>,
     server: Res<AssetServer>,
     args: Res<Args>,
+    vegetation: Res<crate::vegetation::VegStreamer>,
 ) {
     let Ok((entity, mut p, mut t)) = player.single_mut() else { return };
     if !p.spawning {
@@ -838,9 +839,14 @@ fn place_on_ground(
     if p.keep_height {
         // Terrain commonly arrives before the building containing the save.
         // Grounding at that point puts the player underneath a late floor.
+        // (So does the vegetation's rock it stands on: WIL_050's rifle is on
+        // one above the ground.)
+        let rocks = vegetation.solid_root(here);
         let ready = streamer.centre() == Some((here, true))
-            && objects.iter().all(|(_, parent, ready)| ready
-                || object_roots.get(parent.parent()).map_or(true, |root| root.coord != here));
+            && rocks.is_ok()
+            && objects.iter().all(|(_, parent, ready)| {
+                ready || (object_roots.get(parent.parent()).map_or(true, |root| root.coord != here) && rocks != Ok(Some(parent.parent())))
+            });
         if !ready {
             *collision_ready = false;
             return;
