@@ -4682,6 +4682,19 @@ table's own movie (`ACTI_Poker.feu`, `docs/ui.md`).
   player placed in the bar): the table's gameplay started, the player sat
   in the fourth seat, paid $100 and played six hands (blinds, calls,
   raises, folds, showdowns) to leave with $180.
-* **Not yet.** The cards and chips on the table, the players seated and
-  playing their moves, their voices, the help screen's odds, the
-  scripted decks of Hoyt's table.
+* **On the table.** The game's own props lie on it as the hand goes
+  (`poker::table_props`): each seat's two cards before it (the computer
+  players' face down until shown, folded ones taken in), its chips beside
+  them in columns of red, green and blue (a chip a twentieth of the
+  stake), its bet this round nearer the middle, the board across the
+  middle facing the player, the pot in piles beyond it and the deck by the
+  button. The cards' materials are drawn on the standard shaders in their
+  own colours: the converter pairs all four with a one-layer shader that
+  draws the face's worn white (a second, masked layer) as the atlas's
+  court figures, colours the pips from elsewhere in the atlas and draws
+  the backs only from some sides. `FC3_POKER_SHOTS` also captures each
+  street's board (`board3`...), `FC3_POKER_AIM=<yaw>,<pitch>` turns the
+  seated view, and `fc3tool model <xbg> uvs` lists a model's submeshes
+  with their reach in positions, normals, UVs and colours.
+* **Not yet.** The players seated and playing their moves, their voices,
+  the help screen's odds, the scripted decks of Hoyt's table.

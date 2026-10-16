@@ -21,9 +21,13 @@
 //! buy-in (1000 in practice and at the story's tables), the blinds a
 //! fortieth and a twentieth of it, doubling every ten hands.
 
+use std::collections::HashMap;
+
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use fc3_formats::gsf::PokerSettings;
 
+use crate::cache_assets::Fc3Model;
 use crate::controls::{Action, ActionState};
 use crate::holdem::{self, Action as Bet, Card, Category, Dealer, Street, Style, Table};
 use crate::player::{Player, ViewArc, ViewLimits, HALF_HEIGHT};
@@ -36,7 +40,8 @@ impl Plugin for PokerPlugin {
         app.init_resource::<PokerTable>()
             .add_systems(PreUpdate, hold_controls.after(crate::controls::apply_action_maps))
             .add_systems(Update, play_poker.after(crate::story::StorySet).before(crate::cinema::CinemaSet).run_if(in_state(crate::menu::GameState::Playing)))
-            .add_systems(Update, hold_seat.after(crate::player::player_move));
+            .add_systems(Update, hold_seat.after(crate::player::player_move))
+            .add_systems(Update, set_table.after(play_poker));
     }
 }
 
@@ -232,6 +237,8 @@ struct Game {
     dealer: Dealer,
     row: usize,
     buy_in: u32,
+    /// The chips each player started with.
+    stake: u32,
     hands: u32,
     /// The bet the player has set (to this much in front of them).
     bet: u32,
@@ -454,6 +461,7 @@ fn play_poker(
             dealer,
             row: 1,
             buy_in: 0,
+            stake: 0,
             hands: 0,
             bet: 0,
             think: 0.0,
@@ -510,6 +518,14 @@ fn play_poker(
                 p.pitch = SEAT_PITCH.to_radians();
                 p.velocity = Vec3::ZERO;
                 limits.0 = Some(ViewArc { yaw, pitch: p.pitch, yaw_range: [-1.1, 1.1], pitch_range: [-0.9, 0.35] });
+                // FC3_POKER_AIM=<yaw>,<pitch> (tests, degrees): the view
+                // turned from the table's middle and pitched.
+                let aim = std::env::var("FC3_POKER_AIM").ok();
+                if let Some((dy, dp)) = aim.as_deref().and_then(|s| s.split_once(',')).and_then(|(a, b)| Some((a.parse::<f32>().ok()?, b.parse::<f32>().ok()?)))
+                {
+                    p.yaw += dy.to_radians();
+                    p.pitch = dp.to_radians();
+                }
             }
             if game.story() {
                 start_game(game, PRACTICE_CHIPS, 0);
@@ -638,7 +654,11 @@ fn play_poker(
         if let Ok(dir) = std::env::var("FC3_POKER_SHOTS") {
             let label = match (&panel, game.table.as_ref().and_then(|t| t.to_act)) {
                 (Panel::Table, Some(s)) if s == game.player_seat => "turn".to_string(),
-                (Panel::Table, _) => "table".to_string(),
+                // (And each street's board.)
+                (Panel::Table, _) => match game.table.as_ref().map_or(0, |t| t.board.len()) {
+                    0 => "table".to_string(),
+                    n => format!("board{n}"),
+                },
                 (p, _) => format!("{p:?}").split([' ', '(', '{']).next().unwrap_or("box").to_ascii_lowercase(),
             };
             if game.shot.0 != label {
@@ -685,6 +705,7 @@ fn start_game(game: &mut Game, stake: u32, buy_in: u32) {
     table.button = game.player_seat;
     game.table = Some(table);
     game.buy_in = buy_in;
+    game.stake = chips;
     game.hands = 0;
     game.stage = Stage::Playing;
     game.think = 0.0;
@@ -768,6 +789,7 @@ fn play(
         game.think = THINK[1];
         game.bet = 0;
         info!("poker: hand {} (blinds {}/{})", game.hands, table.small_blind, table.big_blind);
+        debug!("poker: cards {:?}", table.seats.iter().map(|s| s.hole.map(|h| h.map(card_text))).collect::<Vec<_>>());
         return;
     }
     let Some(to_act) = table.to_act else { return };
@@ -1021,9 +1043,246 @@ fn hold_seat(poker: Res<PokerTable>, mut players: Query<(&mut Transform, &mut Pl
     p.velocity = Vec3::ZERO;
 }
 
+/// Where the table's props come from.
+const MISC: &str = r"graphics\__fc3_graphics\singleplayer\props\misc\";
+/// The cards' materials, drawn in their own colours (`DiffuseColor1`) on
+/// the standard shaders: the shader the converter pairs them all with draws
+/// the face (`PokerCardsWhite01`, whose worn white is a second, masked
+/// layer the pair leaves out) with the atlas's court figures, colours the
+/// pips and letters (`PokerCardsBlack01`, `PokerCards01`) from elsewhere in
+/// the atlas, and the back (`PokerCards01_NoBlend`) only from some sides.
+/// Each: its colour, whether it takes the atlas, and whether the atlas's
+/// alpha cuts it out.
+const CARD_MATERIALS: [(&str, [f32; 3], bool, bool); 4] = [
+    (r"graphics\_materials\GJOLIAT-M-2011091433050575.material.bin", [0.85, 0.84, 0.82], false, false),
+    (r"graphics\_materials\GJOLIAT-M-2011070439831268.material.bin", [0.204, 0.204, 0.204], true, true),
+    (r"graphics\_materials\GJOLIAT-M-2011062958935948.material.bin", [0.557, 0.176, 0.176], true, true),
+    (r"graphics\_materials\GJOLIAT-M-2011062962324879.material.bin", [0.51, 0.459, 0.388], true, false),
+];
+/// A chip's thickness, and the most of them in a column (m, count).
+const CHIP: f32 = 0.0031;
+const COLUMN: usize = 8;
+
+/// A prop on the table: a card, a chip of a seat's stack or of what it has
+/// bet this round, a pile of the pot, or the deck.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum PropKey {
+    Card(u8),
+    Stack(usize, usize),
+    Bet(usize, usize),
+    Pot(usize),
+    Deck,
+}
+
+#[derive(Component)]
+struct TableProp(PropKey);
+
+/// A card's model (`pokercard` + suit + rank).
+fn card_model(c: Card) -> String {
+    let text = card_text(c).to_ascii_lowercase();
+    let (rank, suit) = text.split_at(1);
+    format!("{MISC}pokercard{suit}{rank}.xbg")
+}
+
+/// What lies on the table: each prop, its model and where (Bevy space). The
+/// board's cards face the player across the middle; each seat has its
+/// cards before it (the computer players' face down until shown), its
+/// chips beside them in columns of three colours (a chip a twentieth of the
+/// stake), its bet this round nearer the middle; the pot lies in piles
+/// beyond the board, the deck by the button.
+fn table_props(place: &Place, table: &Table, player: usize, stake: u32) -> Vec<(PropKey, String, Transform)> {
+    let top = place.centre.y + 0.001;
+    let centre = place.centre.with_y(top);
+    let toward = |s: usize| {
+        let d = (place.chairs[s] - place.centre).with_y(0.0);
+        if d.length() > 0.2 {
+            d.normalize()
+        } else {
+            Quat::from_rotation_y(s as f32 * std::f32::consts::FRAC_PI_2) * Vec3::Z
+        }
+    };
+    let reach = |s: usize| (place.chairs[s] - place.centre).with_y(0.0).length().clamp(0.5, 1.2);
+    // (Facing a seat: a card's long side, `+Z`, toward it.)
+    let facing = |d: Vec3| Quat::from_rotation_y(d.x.atan2(d.z));
+    let face_down = Quat::from_rotation_z(std::f32::consts::PI);
+    let unit = (stake / 20).max(1);
+    let mut out = Vec::new();
+    let me = toward(player);
+    let my_side = Vec3::Y.cross(me);
+    for (i, &c) in table.board.iter().enumerate() {
+        let at = centre + my_side * (i as f32 - 2.0) * 0.09;
+        out.push((PropKey::Card(c.0), card_model(c), Transform::from_translation(at).with_rotation(facing(me))));
+    }
+    let shown = |s: usize| table.outcome.as_ref().is_some_and(|o| o.shown.get(s).copied().flatten().is_some());
+    for (s, seat) in table.seats.iter().enumerate() {
+        let d = toward(s);
+        let side = Vec3::Y.cross(d);
+        let near = (reach(s) * 0.55).min(0.42);
+        if let Some(hole) = seat.hole.filter(|_| !seat.folded) {
+            let up = s == player || shown(s);
+            for (k, c) in hole.into_iter().enumerate() {
+                let sign = if k == 0 { -1.0 } else { 1.0 };
+                let at = centre + d * near + side * sign * 0.045 + Vec3::Y * k as f32 * 0.002;
+                let turn = facing(d) * Quat::from_rotation_y(-sign * 0.08);
+                out.push((PropKey::Card(c.0), card_model(c), Transform::from_translation(at).with_rotation(if up { turn } else { turn * face_down })));
+            }
+        }
+        if seat.out && seat.chips == 0 {
+            continue;
+        }
+        let colours = ["pokerchipred01", "pokerchipgreen01", "pokerchipblue01"];
+        let chips = (seat.chips.div_ceil(unit) as usize).min(COLUMN * 6);
+        for i in 0..chips {
+            let (col, up) = (i / COLUMN, i % COLUMN);
+            let at = centre + d * (near + 0.03 + (col / 3) as f32 * 0.045) + side * (0.14 + (col % 3) as f32 * 0.045) + Vec3::Y * CHIP * (up + 1) as f32;
+            out.push((
+                PropKey::Stack(s, i),
+                format!("{MISC}{}.xbg", colours[col % 3]),
+                Transform::from_translation(at).with_rotation(Quat::from_rotation_y(i as f32 * 1.3)),
+            ));
+        }
+        let bet = (seat.bet.div_ceil(unit) as usize).min(COLUMN);
+        for i in 0..bet {
+            let at = centre + d * (near - 0.15) + side * 0.07 + Vec3::Y * CHIP * (i + 1) as f32;
+            out.push((
+                PropKey::Bet(s, i),
+                format!("{MISC}{}.xbg", colours[i % 3]),
+                Transform::from_translation(at).with_rotation(Quat::from_rotation_y(i as f32 * 1.3)),
+            ));
+        }
+    }
+    let bets: u32 = table.seats.iter().map(|s| s.bet).sum();
+    let piles = (table.pot().saturating_sub(bets).div_ceil(unit * 4) as usize).min(7);
+    for i in 0..piles {
+        let ring = if i == 0 { Vec3::ZERO } else { Quat::from_rotation_y(i as f32 * std::f32::consts::TAU / 6.0) * Vec3::X * 0.045 };
+        let at = centre - me * 0.17 + ring;
+        out.push((
+            PropKey::Pot(i),
+            format!("{MISC}pokerchippiles_01.xbg"),
+            Transform::from_translation(at).with_rotation(Quat::from_rotation_y(i as f32 * 0.9)),
+        ));
+    }
+    let d = toward(table.button);
+    let at = centre + d * (reach(table.button) * 0.55).min(0.42) * 0.55 - Vec3::Y.cross(d) * 0.16;
+    out.push((PropKey::Deck, format!("{MISC}pokercarddecksmall01.xbg"), Transform::from_translation(at).with_rotation(facing(d))));
+    out
+}
+
+/// The cards and chips on the table while the player sits at it, set out
+/// as its game goes (each prop once, moved where it goes next).
+fn set_table(
+    poker: Res<PokerTable>,
+    server: Res<AssetServer>,
+    models: Res<Assets<Fc3Model>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut handles: Local<HashMap<String, Handle<Fc3Model>>>,
+    mut fixed: Local<HashMap<&'static str, Handle<StandardMaterial>>>,
+    mut props: Query<(Entity, &TableProp, &mut Transform)>,
+    mut commands: Commands,
+) {
+    let want = poker
+        .game
+        .as_ref()
+        .filter(|g| g.seated)
+        .and_then(|g| Some(table_props(g.place.as_ref()?, g.table.as_ref()?, g.player_seat, g.stake)))
+        .unwrap_or_default();
+    if want.is_empty() && props.is_empty() {
+        return;
+    }
+    let wanted: HashMap<PropKey, &Transform> = want.iter().map(|(k, _, t)| (*k, t)).collect();
+    let mut have = std::collections::HashSet::new();
+    for (e, prop, mut t) in &mut props {
+        match wanted.get(&prop.0) {
+            Some(to) => {
+                if *t != **to {
+                    *t = **to;
+                }
+                have.insert(prop.0);
+            }
+            None => commands.entity(e).despawn(),
+        }
+    }
+    for (key, model, at) in &want {
+        if have.contains(key) {
+            continue;
+        }
+        let handle = handles.entry(model.clone()).or_insert_with(|| server.load(crate::cache_assets::cache_path(&fc3_formats::cache::model_rel(model))));
+        if !crate::cache_assets::done(&server, handle.id()) {
+            continue;
+        }
+        let Some(lod) = models.get(&*handle).and_then(|m| m.lods.first()) else { continue };
+        // Each part's material, the cards' own in their colours (once the
+        // atlas the textured ones take is known); all on the standard
+        // shaders.
+        let mut parts = Vec::new();
+        for part in &lod.parts {
+            let path = server.get_path(&part.material);
+            let fix = CARD_MATERIALS.iter().find(|(m, ..)| path.as_ref().is_some_and(|p| p.path().ends_with(fc3_formats::cache::material_rel(m))));
+            let Some(&(name, [r, g, b], textured, cut)) = fix else {
+                parts.push((part.mesh.clone(), part.material.clone()));
+                continue;
+            };
+            if !fixed.contains_key(name) {
+                let texture = match materials.get(&part.material) {
+                    Some(m) if textured => m.base_color_texture.clone(),
+                    None if textured => break,
+                    _ => None,
+                };
+                let material = StandardMaterial {
+                    base_color: Color::srgb(r, g, b),
+                    base_color_texture: texture,
+                    alpha_mode: if cut { AlphaMode::Mask(0.5) } else { AlphaMode::Opaque },
+                    perceptual_roughness: 0.7,
+                    // (The face is two-sided: the border round the back.)
+                    double_sided: !textured,
+                    cull_mode: if textured { Some(bevy::render::render_resource::Face::Back) } else { None },
+                    ..default()
+                };
+                fixed.insert(name, materials.add(material));
+            }
+            parts.push((part.mesh.clone(), fixed[name].clone()));
+        }
+        if parts.len() < lod.parts.len() {
+            continue;
+        }
+        let root = commands.spawn((*at, Visibility::Visible, TableProp(*key))).id();
+        for (mesh, material) in parts {
+            commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), NotShadowCaster, crate::tattoo::NoOriginal, ChildOf(root)));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cards' models by suit and rank; after the deal the player's cards
+    /// lie face up, the others' face down, the blinds' bets out, each prop
+    /// once and all on the table.
+    #[test]
+    fn table_props_lay_out_the_deal() {
+        assert_eq!(card_model(Card::new(10, 0)), format!("{MISC}pokercardct.xbg"));
+        assert_eq!(card_model(Card::new(14, 3)), format!("{MISC}pokercardsa.xbg"));
+        let chair = |x: f32, z: f32| Vec3::new(x, 0.45, z);
+        let place = Place { centre: Vec3::new(0.0, 0.75, 0.0), chairs: [chair(0.0, 0.8), chair(0.8, 0.0), chair(0.0, -0.8), chair(-0.8, 0.0)] };
+        let mut table = Table::new(&[1000; 4], 25, 50);
+        table.deal(&mut Dealer::new(7));
+        let props = table_props(&place, &table, 0, 1000);
+        let keys: std::collections::HashSet<PropKey> = props.iter().map(|p| p.0).collect();
+        assert_eq!(keys.len(), props.len());
+        let mine = table.seats[0].hole.unwrap().map(|c| PropKey::Card(c.0));
+        let cards: Vec<_> = props.iter().filter(|p| matches!(p.0, PropKey::Card(_))).collect();
+        assert_eq!(cards.len(), 8);
+        for (key, _, t) in cards {
+            assert_eq!((t.rotation * Vec3::Y).y > 0.0, mine.contains(key), "{key:?}");
+            // (The player's before them.)
+            if mine.contains(key) {
+                assert!(t.translation.z > 0.2);
+            }
+        }
+        assert_eq!(props.iter().filter(|p| matches!(p.0, PropKey::Bet(..))).map(|p| p.0).collect::<std::collections::HashSet<_>>().len(), 2);
+        assert!(props.iter().all(|p| p.2.translation.y >= 0.75 && p.2.translation.y < 0.8));
+    }
 
     /// A table's scenes come in turn, each once; then the game's own end,
     /// only the messages a script listens to, winning before leaving.

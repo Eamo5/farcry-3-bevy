@@ -285,6 +285,31 @@ fn main() -> Result<()> {
             }
             for (i, (d, l)) in m.lods.iter().enumerate() {
                 println!("lod {i} dist {d}: {} verts {} tris {} submeshes", l.positions.len(), l.indices.len() / 3, l.submeshes.len());
+                // With `uvs`: each submesh's material, and the reach of its
+                // positions, normals and UVs (the first LOD's).
+                if i == 0 && args.get(2).is_some_and(|a| a == "uvs") {
+                    for s in &l.submeshes {
+                        let verts: Vec<usize> = l.indices[s.index_start..s.index_start + s.index_count].iter().map(|&v| v as usize).collect();
+                        let reach = |of: &dyn Fn(usize) -> Vec<f32>| {
+                            let n = of(verts[0]).len();
+                            let lo: Vec<f32> = (0..n).map(|k| verts.iter().map(|&v| of(v)[k]).fold(f32::MAX, f32::min)).collect();
+                            let hi: Vec<f32> = (0..n).map(|k| verts.iter().map(|&v| of(v)[k]).fold(f32::MIN, f32::max)).collect();
+                            format!("{lo:.4?}..{hi:.4?}")
+                        };
+                        let name = m.materials.get(s.material).map_or("?", |r| r.name.as_str());
+                        println!("  submesh {name}: {} tris", s.index_count / 3);
+                        println!("    pos {}", reach(&|v| l.positions[v].to_vec()));
+                        if !l.normals.is_empty() {
+                            println!("    normal {}", reach(&|v| l.normals[v].to_vec()));
+                        }
+                        if !l.uvs.is_empty() {
+                            println!("    uv {}", reach(&|v| l.uvs[v].to_vec()));
+                        }
+                        if !l.colors.is_empty() {
+                            println!("    colour {}", reach(&|v| l.colors[v].to_vec()));
+                        }
+                    }
+                }
             }
             for mr in &m.materials {
                 println!("material {} -> {}", mr.name, mr.path);
