@@ -257,7 +257,7 @@ fn start_and_end(
         // The giant's own skeleton (its pawn's), which its moves' clips drive.
         let skeleton = host
             .as_ref()
-            .and_then(|h| h.story.data().entities.get(&boss).and_then(|e| skeleton_of(e)))
+            .and_then(|h| h.story.data().entities.get(&boss).and_then(crate::story_actors::pawn_skeleton))
             .map(|p| server.load(cache_path(&fc3_formats::cache::skeleton_rel(&p))))
             .unwrap_or_default();
         let place = |key: &str| {
@@ -323,17 +323,6 @@ fn start_and_end(
             commands.entity(r).despawn();
         }
     }
-}
-
-/// The skeleton a pawn's graphic component names (`fileSkeleton`'s path).
-fn skeleton_of(e: &fc3_story::data::Entry) -> Option<String> {
-    let mut path = None;
-    e.components.walk(&mut |o, _| {
-        if path.is_none() {
-            path = o.str_h(0xF9F2_D5F4).filter(|p| p.to_ascii_lowercase().ends_with(".skeleton"));
-        }
-    });
-    path
 }
 
 /// The clip of a move facing the player: its `+045rt`, `-045lt` or `+000fw`

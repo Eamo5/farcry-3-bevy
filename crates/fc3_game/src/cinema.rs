@@ -529,11 +529,12 @@ fn play_scenes(
     mut ui: ResMut<crate::story::StoryUi>,
     keys: Res<ButtonInput<KeyCode>>,
     mut hold: ResMut<crate::fp::Cinematic>,
-    (mut faces, mut library, seats, mut placements): (
+    (mut faces, mut library, seats, mut placements, mut own_skeletons): (
         Query<&mut crate::faces::Face>,
         Option<ResMut<crate::faces::FaceLibrary>>,
         Option<Res<crate::vehicles::StorySeatRequests>>,
         Option<ResMut<crate::story::EntityPlacements>>,
+        Local<HashMap<u64, Option<Handle<Fc3Skeleton>>>>,
     ),
     mut props: Query<(&crate::objects::PlacedId, &mut Transform, Option<&mut crate::vehicles::Vehicle>), Without<StoryActor>>,
 ) {
@@ -698,7 +699,23 @@ fn play_scenes(
             let world = origin * root;
             *at = Transform { translation: world.translation + world.rotation * Vec3::Y * HALF_HEIGHT, rotation: world.rotation, scale: Vec3::ONE };
             if let Some(rig) = actor.rig {
-                let skeleton = if source.contains("narrative") { narrative.clone() } else { master.clone() };
+                // (A clip made for another skeleton, the Ink Monster's,
+                // drives the character's own.)
+                let own = clips.get(handle).is_some_and(|c| c.0.skeleton_id != 0 && c.0.skeleton_id != fc3_formats::anim::SKELETON_HUMAN);
+                let own = own
+                    .then(|| {
+                        own_skeletons
+                            .entry(id)
+                            .or_insert_with(|| {
+                                data.entities
+                                    .get(&id)
+                                    .and_then(crate::story_actors::pawn_skeleton)
+                                    .map(|p| server.load(cache_path(&fc3_formats::cache::skeleton_rel(&p))))
+                            })
+                            .clone()
+                    })
+                    .flatten();
+                let skeleton = own.unwrap_or_else(|| if source.contains("narrative") { narrative.clone() } else { master.clone() });
                 commands.entity(rig).insert(ClipOverride { clip: handle.clone(), skeleton, time: ct });
                 // Its face on the scene's facial track.
                 if let (Ok(mut face), Some(library)) = (faces.get_mut(rig), library.as_mut()) {

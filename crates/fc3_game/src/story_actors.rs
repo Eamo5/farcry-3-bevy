@@ -468,6 +468,18 @@ fn fighter_of(e: &fc3_story::data::Entry) -> Option<Fighter> {
     Some(Fighter { faction, role, scripted: agent.bool("bStartOnScriptControl").unwrap_or(false) })
 }
 
+/// The skeleton a pawn's animation component names (`fileSkeleton`'s
+/// path): the Ink Monster's own, where people share the master's.
+pub(crate) fn pawn_skeleton(e: &fc3_story::data::Entry) -> Option<String> {
+    let mut path = None;
+    e.components.walk(&mut |o, _| {
+        if path.is_none() {
+            path = o.str_h(0xF9F2_D5F4).filter(|p| p.to_ascii_lowercase().ends_with(".skeleton"));
+        }
+    });
+    path
+}
+
 /// A character's kit id, if it is one the story can dress (pawns, and the
 /// kit-dressed figures scenes animate).
 fn kit_of(e: &fc3_story::data::Entry) -> Option<u64> {
