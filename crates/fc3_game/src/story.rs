@@ -1260,7 +1260,7 @@ fn run_story(
         mut trees,
         mut doors,
         mut stims,
-        (mut sniping, mut boss_fight, mut binds, mut unlimited_ammo, mut intoxication, mut prompts, mut chopper),
+        (mut sniping, mut boss_fight, mut binds, mut unlimited_ammo, mut intoxication, mut prompts, mut chopper, mut car_chase),
     ): (
         MessageWriter<crate::progression::XpGain>,
         ResMut<crate::progression::Progress>,
@@ -1284,6 +1284,7 @@ fn run_story(
             ResMut<crate::intoxication::Intoxication>,
             ResMut<crate::input_prompts::InputPrompts>,
             ResMut<crate::chopper_fight::ChopperFight>,
+            ResMut<crate::car_chase::CarChase>,
         ),
     ),
 ) {
@@ -1374,6 +1375,7 @@ fn run_story(
             intoxication.reset();
             prompts.reset();
             chopper.reset();
+            car_chase.reset();
             postfx.reset();
             ui.subtitle = None;
             // Rebuild mission actors and discard transient wildlife together.
@@ -2234,6 +2236,10 @@ fn run_story(
                         params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                     }),
                     "CreateSpecificGameplay" if a(1) == CHOPPER_FIGHT => chopper.pending.push(a(0).parse().unwrap_or(0)),
+                    "CreateSpecificGameplay" if a(1) == CAR_CHASE => car_chase.pending.push(crate::car_chase::Start {
+                        id: a(0).parse().unwrap_or(0),
+                        params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                    }),
                     "CreateSpecificGameplay" if a(1) == INPUT_PROMPTS => {
                         let params = args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect();
                         prompts.start(a(0).parse().unwrap_or(0), &params);
@@ -2281,6 +2287,7 @@ fn run_story(
                         intoxication.cancelled.push(id);
                         prompts.end(id);
                         chopper.cancelled.push(id);
+                        car_chase.cancelled.push(id);
                     }
                     "StopBinkVideo" => videos.stops.push(false),
                     "StopFullscreenVideo" => videos.stops.push(true),
@@ -3281,12 +3288,16 @@ const INPUT_PROMPTS: &str = "CGSFInputManager";
 /// JAS_150's ride, shot from: played (`chopper_fight`) until its scene
 /// stops it.
 const CHOPPER_FIGHT: &str = "CChopperFightE3";
+/// JAS_130's climb from the 4x4's bed to its front seat: played
+/// (`car_chase`), ending once he's there.
+const CAR_CHASE: &str = "CExoticCarChase";
 /// Seconds a specific gameplay the game doesn't play runs before it ends.
 const UNPLAYED_GRACE: f32 = 1.0;
 
 /// The specific gameplays the game plays itself (QTEs, the sniping
-/// challenge, poker, the Ink Monster, being drunk, button prompts; the
-/// vines under their test).
+/// challenge, poker, the Ink Monster, being drunk, button prompts, the
+/// chopper ride, JAS_130's climb to the front seat; the vines under their
+/// test).
 fn played_gameplay(host: &StoryHost, id: u64, name: &str) -> bool {
     name == "QTEGSF"
         || host.story.is_qte_gameplay(id)
@@ -3296,6 +3307,7 @@ fn played_gameplay(host: &StoryHost, id: u64, name: &str) -> bool {
         || name == INTOXICATED
         || name == INPUT_PROMPTS
         || name == CHOPPER_FIGHT
+        || name == CAR_CHASE
         || (name == "CVineClimbingGameplay" && std::env::var_os("FC3_VINE_GAMEPLAY_TEST").is_some())
 }
 

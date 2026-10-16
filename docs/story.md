@@ -4020,11 +4020,12 @@ that interacts; 22, the takedown) and the text alone for the rest.
 Only the autopilot used to end a specific gameplay the game doesn't play
 yet; for a player one stayed on, and a script waiting for it to stop held
 the story for good (JAS_130 B60's car chase, `CExoticCarChase`, whose stop
-hands over the pistol and the driver's seat; JAS_150 B20's chopper fight,
-`CChopperFightE3`). Such a gameplay now ends a second after it starts
-(`UNPLAYED_GRACE`), for anyone. The ones played are QTEs, the sniping
-challenge, poker, the Ink Monster, being intoxicated, button prompts, the
-chopper ride, and the vines under their test switch (`played_gameplay`).
+hands over the pistol; JAS_150 B20's chopper fight, `CChopperFightE3`).
+Such a gameplay now ends a second after it starts (`UNPLAYED_GRACE`), for
+anyone. The ones played are QTEs, the sniping challenge, poker, the Ink
+Monster, being intoxicated, button prompts, the chopper ride, JAS_130's
+climb to the front seat, and the vines under their test switch
+(`played_gameplay`).
 
 **JAS_150's chopper ride** (`CChopperFightE3`, `chopper_fight`): B30C's
 scene carries the player through the ride and starts and stops the
@@ -4035,6 +4036,42 @@ aims from the scene's view: the cinema's `free_aim` lets the head turn
 from where the scene looks within the reticle's reach, keeps the weapon
 shown and lets it fire, and the original HUD stays up.
 `FC3_CHOPPER_SHOT=<png>` takes a screenshot three seconds in.
+
+**JAS_130's climb to the front seat** (`CExoticCarChase`, `car_chase`).
+B60 has the player ride in the 4x4's bed with the grenade launcher, then
+starts the gameplay on the truck. When it stops, the scripts take the
+launcher, wait for him to sit in the truck and give him the 1911. The
+gameplay is the climb over the cab into the front passenger seat. Its clip
+(`ex_4x4_climb_backseat2front`, 3.8 s) is made in the 4x4's own frame, like
+the seats' own clips: its camera starts at the bed seat's eye, looking back,
+and ends at the front seat's, looking ahead. The seated view follows it in
+the truck's frame as the truck drives on (`Driving::carried`, reached from
+the seat's view in 0.3 s). Then he's moved to the front seat and the
+gameplay ends. The clip's two shots through the windscreen
+(`EXO_FirstHitWindshield`, `EXO_SecondHitWindshield`; the gameplay's kick
+damages are for them) are heard only, as the windscreen isn't a part of
+ours to break. `FC3_CHASE_SHOTS=<dir>` takes a screenshot each second of
+the climb.
+
+* **The bed, not the front seat.** `ForceInVehicle`'s seat index counts
+  only the seats of the kind it names: passenger seat 1 of JAS_130's 4x4 is
+  the bed (`GUNNER_POSITION`), after the front seat. Our forced seating had
+  counted all the seats, which put the player in the front seat from the
+  start.
+* **A truck moved on a reload.** A reload from B60 has the scripts move the
+  truck and Liza onto the road beside the player. The truck's own sector,
+  550 m off, isn't in the world, so its layer couldn't make it there, and
+  the scripts waited for Liza to take the wheel for good. A mission
+  vehicle a script moves is now made from its story entry where it was
+  put when its sector is out of the world (`place_moved_vehicles`); it
+  still belongs to its layer.
+* **Liza isn't in the way.** The autopilot holds its fire while someone it
+  mustn't hit is near the line of fire, which counted a band 1.2 m either
+  side of it from the eye on. Liza at the wheel, an arm's length from the
+  player's seat, held every shot at the ambush ahead. Within 2 m of the eye
+  (`BESIDE`) only someone straight ahead now counts. With that, the
+  reload from B60 runs through: the climb, the ambush shot from the front
+  seat, the final stop, B70C, and DOC_030 starts.
 
 ## JAS_170: the drop onto the beach
 

@@ -1031,6 +1031,16 @@ impl Vehicle {
         self.occupied = self.seats.iter().any(|s| s.pawn.is_some());
     }
 
+    /// The player moves over to a seat of this kind and index (from the
+    /// 4x4's bed to its front seat, `car_chase`), if it's free: the seat.
+    pub(crate) fn move_player(&mut self, kind: i32, index: i32) -> Option<usize> {
+        let to = self.seats.iter().position(|s| s.kind == kind && s.index == index && s.pawn.is_none_or(|p| p == fc3_story::PLAYER))?;
+        self.release(fc3_story::PLAYER);
+        self.seats[to].pawn = Some(fc3_story::PLAYER);
+        self.occupied = true;
+        Some(to)
+    }
+
     /// Never play a driver pose for a passenger, gunner or unsupported seat.
     pub(crate) fn first_person_clip(&self, seat: usize) -> Option<&'static str> {
         let s = self.seats.get(seat)?;
@@ -1109,6 +1119,11 @@ pub struct Driving {
     last_yaw: f32,
     /// First-person seat instead of the chase camera (V toggles).
     pub first_person: bool,
+    /// A gameplay carries him about the vehicle (JAS_130's climb from the
+    /// bed to the front seat, `car_chase`): his eye and where he looks, in
+    /// the vehicle's frame, and how far the view has gone over to them
+    /// (0 to 1).
+    pub carried: Option<(Vec3, Vec3, f32)>,
 }
 
 #[derive(Resource, Default)]
@@ -2420,6 +2435,28 @@ mod story_vehicle_tests {
         }
     }
 
+    /// JAS_130's climb (`car_chase`) is made in the 4x4's own frame, as its
+    /// seats' clips are: it starts at the bed seat's eye and ends at the
+    /// front seat's.
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
+    fn installed_4x4_climb_runs_from_the_bed_seat_to_the_front_seat() {
+        let root = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let skel =
+            fc3_formats::anim::parse_skeleton(&std::fs::read(root.join(cache::skeleton_rel(r"graphics\actors_\_skeleton_master\hips_ref.skeleton"))).unwrap())
+                .unwrap();
+        let load = |p: &str| fc3_formats::anim::parse_clip(&std::fs::read(root.join(cache::anim_rel(p))).unwrap()).unwrap();
+        let seat = |kind, index| {
+            let path = seated_clip(def_named("4x4").unwrap(), kind, index).unwrap();
+            clip_eye(&skel, &load(&format!(r"graphics\characters\_common\animations\{path}"))).unwrap()
+        };
+        let climb = load(crate::car_chase::CLIP);
+        let eye =
+            |t| (crate::cinema::clip_root(&climb, t).to_matrix() * crate::cinema::bone_world(&skel, &climb, t, "Camera").unwrap()).transform_point3(Vec3::ZERO);
+        assert!(eye(0.0).distance(seat(3, 1)) < 0.1, "{} from the bed's {}", eye(0.0), seat(3, 1));
+        assert!(eye(climb.duration).distance(seat(3, 0)) < 0.1, "{} from the front's {}", eye(climb.duration), seat(3, 0));
+    }
+
     #[test]
     fn animated_vehicle_stops_physics_velocity_and_returns_to_dynamic_when_released() {
         let mut app = App::new();
@@ -2854,7 +2891,7 @@ fn seat_player(
     let driver = v.seats.get(driving.seat).is_some_and(|s| s.kind == 1);
     // A passenger (not at the wheel or a mounted gun) keeps his weapon, and
     // aims and fires from the seat in the seat's own view.
-    p.armed_passenger = driving.first_person && v.seats.get(driving.seat).is_some_and(|s| s.kind == 3);
+    p.armed_passenger = driving.first_person && driving.carried.is_none() && v.seats.get(driving.seat).is_some_and(|s| s.kind == 3);
     if let Some([pitch_lo, pitch_hi, yaw_lo, yaw_hi]) = handling_of(v.def).map(|h| h.look).filter(|_| driving.first_person && driver) {
         if pitch_hi > pitch_lo {
             p.pitch = p.pitch.clamp(-pitch_hi.to_radians(), -pitch_lo.to_radians());
@@ -2863,6 +2900,12 @@ fn seat_player(
             let ahead = (p.yaw - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
             p.yaw = yaw + ahead.clamp(-yaw_hi.to_radians(), -yaw_lo.to_radians());
         }
+    }
+    // (Carried, he looks where the gameplay has him look.)
+    if let Some((_, look, w)) = driving.carried {
+        let ahead = (yaw + (-look.x).atan2(-look.z) - p.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        p.yaw += ahead * w;
+        p.pitch += (look.y.clamp(-1.0, 1.0).asin() - p.pitch) * w;
     }
     let eye = if driving.first_person {
         vt.transform_point(if !v.authored_seats { v.seat() } else {
@@ -2882,6 +2925,10 @@ fn seat_player(
             Some(hit) => centre + to.normalize() * (hit.distance - 0.4).max(0.5),
             None => want,
         }
+    };
+    let eye = match driving.carried {
+        Some((at, _, w)) if driving.first_person => eye.lerp(vt.transform_point(at), w),
+        _ => eye,
     };
     pt.rotation = if driving.first_person { vt.rotation * Quat::from_rotation_y(p.yaw - yaw) } else { Quat::from_rotation_y(p.yaw) };
     pt.translation = eye - pt.rotation * Vec3::Y * (p.eye - HALF_HEIGHT);
