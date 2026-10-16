@@ -615,10 +615,22 @@ while the player is at a table: `original_ui::drive_poker`, the game in
 * The player's cards and the board: `UpdateCurrentHandInfo <cards>
   <folded> <hand's string id> True <board>` (cards as `Ah Kd ...`, hole
   cards first; the movie draws them) and `CurrentHandBox_MC` shown.
+* The help screen (H at the table; the game waits): `ShowHelpScreenBox
+  <cards>` opens it on the hand probabilities (it hides the table's own
+  panel; `HelpScreenLoaded` answers), `ShowSpecificHelpScreen <0-4>` turns
+  its pages (the probabilities, a hand's example, the basics and two of
+  terminology; the arrows, A and D, or the mouse over its page names) and
+  `HideHelpScreenBox` closes it (Escape or H). On the probabilities page
+  each kind of hand's chance by the river goes to `OddsBox<Kind>Text_MC`
+  (`holdem::odds` over 4000 deals; `<1%` for a chance under one in a
+  hundred), the hand held to `OddsCurrentHandInfoText_MC` (its own line
+  while no cards are dealt) and `OddsInfoText_MC` is emptied, except at a
+  bar's hardest difficulty, where the chances stay blank under its note.
 * The mouse over the boxes' buttons comes as `OnConfirmRollOver`,
-  `OnCancelRollOver` and `OnDifficultyRollOver <row>` (a click takes
-  them). While the player is at a table the main HUD and the radar are
-  down, as is the objective box.
+  `OnCancelRollOver`, `OnDifficultyRollOver <row>` and the help screen's
+  `OnPreviousHelpRollOver` and `OnNextHelpRollOver` (a click takes them).
+  While the player is at a table the main HUD and the radar are down, as
+  is the objective box.
 
 While the pause menu is up the HUD's level is hidden (`Host::level_visible`;
 the shim's `levelVisible`), as the game's was: subtitles showed through.

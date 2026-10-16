@@ -499,7 +499,6 @@ pub fn equity(hole: [Card; 2], board: &[Card], opponents: usize, trials: usize, 
 /// The chances of each kind of hand by the river (`Category`'s order) from
 /// `hole` and the board so far, from `trials` deals (all certain once the
 /// board is out): the table's help screen's odds.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn odds(hole: [Card; 2], board: &[Card], trials: usize, dealer: &mut Dealer) -> [f32; 10] {
     let known: Vec<Card> = [&hole[..], board].concat();
     let rest: Vec<Card> = (0..52).map(Card).filter(|c| !known.contains(c)).collect();

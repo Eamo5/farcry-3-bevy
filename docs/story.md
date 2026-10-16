@@ -4670,7 +4670,7 @@ table's own movie (`ACTI_Poker.feu`, `docs/ui.md`).
   doubling every ten hands.
 * **Keys.** Up and down set the bet by the big blind, Space or Enter
   checks, calls or raises to it, E folds, Q goes all in, Escape leaves,
-  1 shows the table's totals. The boxes take Enter and Escape, and the
+  1 shows the table's totals, H the help. The boxes take Enter and Escape, and the
   mouse over their buttons.
 * **The story's tables** (JAS_170's, Hoyt's) start on their script's
   event and play for nothing, a scene between hands as their scripts wait
@@ -4717,5 +4717,8 @@ table's own movie (`ACTI_Poker.feu`, `docs/ui.md`).
   bust out always), and the table says one at a time, from the speaker's
   chair (the player's own unplaced), each line's length apart; a bar's
   players call a player who comes near over every 25 s.
-* **Not yet.** The help screen's odds, the scripted decks of Hoyt's
-  table.
+* **Help.** H opens the table's help screen (`docs/ui.md`): the hand
+  probabilities from the player's cards and the board, and the movie's own
+  pages. `FC3_POKER_HELP` has a test open it once it holds cards on a flop
+  (captured as `help`).
+* **Not yet.** The scripted decks of Hoyt's table.

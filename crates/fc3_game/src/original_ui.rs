@@ -2274,6 +2274,31 @@ enum PokerBox {
     Busted,
     Cleaned,
     CleanedStory,
+    Help,
+}
+
+/// The help screen's hand probabilities' rows, best first, by their kind of
+/// hand (`holdem::Category`'s order).
+const POKER_ODDS: [(&str, usize); 10] = [
+    ("RoyalFlush", 9),
+    ("StraightFlush", 8),
+    ("FourOfAKind", 7),
+    ("FullHouse", 6),
+    ("Flush", 5),
+    ("Straight", 4),
+    ("ThreeOfAKind", 3),
+    ("TwoPair", 2),
+    ("Pair", 1),
+    ("HighCard", 0),
+];
+
+/// A chance as the help screen's rows show it.
+fn odds_text(p: f32) -> String {
+    match p * 100.0 {
+        x if x <= 0.0 => "0%".to_string(),
+        x if x < 1.0 => "<1%".to_string(),
+        x => format!("{:.0}%", x.min(100.0)),
+    }
 }
 
 #[derive(Default)]
@@ -2284,6 +2309,8 @@ struct PokerShown {
     /// The results box ready for its lines, and them sent.
     results_ready: bool,
     results_sent: bool,
+    /// The help screen's page shown.
+    help_page: u8,
     sent: Option<crate::poker::PokerHud>,
 }
 
@@ -2318,6 +2345,10 @@ fn drive_poker(state: NonSend<Interface>, calls: Res<UiCalls>, mut poker: ResMut
             "OnCancelRollOut" => poker.hover.1 = false,
             "OnDifficultyRollOver" => poker.hover.2 = arg(1).parse().ok(),
             "OnDifficultyRollOut" => poker.hover.2 = None,
+            "OnPreviousHelpRollOver" => poker.help_hover.0 = true,
+            "OnPreviousHelpRollOut" => poker.help_hover.0 = false,
+            "OnNextHelpRollOver" => poker.help_hover.1 = true,
+            "OnNextHelpRollOut" => poker.help_hover.1 = false,
             "ResetEndOfHandResultsComplete" => shown.results_ready = true,
             _ => {}
         }
@@ -2337,8 +2368,10 @@ fn drive_poker(state: NonSend<Interface>, calls: Res<UiCalls>, mut poker: ResMut
         Panel::Busted => PokerBox::Busted,
         Panel::Cleaned { .. } => PokerBox::Cleaned,
         Panel::CleanedStory => PokerBox::CleanedStory,
+        Panel::Help { .. } => PokerBox::Help,
     };
     if shown.shown != Some(want) {
+        debug!("poker ui: {:?} to {want:?}", shown.shown);
         match shown.shown {
             Some(PokerBox::Difficulty) => host.event("HideDifficultyBox", &[]),
             Some(PokerBox::Results) => host.event("HideEndOfHandResultsBox", &[]),
@@ -2346,6 +2379,10 @@ fn drive_poker(state: NonSend<Interface>, calls: Res<UiCalls>, mut poker: ResMut
             Some(PokerBox::Busted) => host.event("HideRestartBox", &[]),
             Some(PokerBox::Cleaned) => host.event("HideCleanedTableBox", &[]),
             Some(PokerBox::CleanedStory) => host.event("HideCleanedTableSQC100Box", &[]),
+            Some(PokerBox::Help) => {
+                host.event("HideHelpScreenBox", &[]);
+                poker.help_hover = (false, false);
+            }
             Some(PokerBox::Table) | None => {}
         }
         match &hud.panel {
@@ -2365,9 +2402,21 @@ fn drive_poker(state: NonSend<Interface>, calls: Res<UiCalls>, mut poker: ResMut
             Panel::Busted => host.event("ShowRestartBox", &[]),
             Panel::Cleaned { won } => host.event("ShowCleanedTableBox", &[&format!("${won}")]),
             Panel::CleanedStory => host.event("ShowCleanedTableSQC100Box", &[]),
+            // (It opens on the hand probabilities.)
+            Panel::Help { cards, .. } => {
+                host.event("ShowHelpScreenBox", &[cards]);
+                shown.help_page = 0;
+            }
         }
         shown.shown = Some(want);
         shown.sent = None;
+    }
+    if let Panel::Help { page, .. } = &hud.panel {
+        if *page != shown.help_page {
+            host.event("ShowSpecificHelpScreen", &[&page.to_string()]);
+            shown.help_page = *page;
+            shown.sent = None;
+        }
     }
     // A hand's results, once the box is sized for them.
     if let (Panel::Results(r), true, false) = (&hud.panel, shown.results_ready, shown.results_sent) {
@@ -2414,6 +2463,21 @@ fn drive_poker(state: NonSend<Interface>, calls: Res<UiCalls>, mut poker: ResMut
             ok &= host.dps_frame("DifficultyBoxSelectionArrows_MC", V::Number([1.0, 10.0, 20.0, 30.0][(*row).min(3)]));
             ok &= host.dps_frame("DifficultyBoxAcceptButton_MC", V::Number(if *short || !enabled[*row] { 10.0 } else { 1.0 }));
         }
+        // The hand probabilities: each kind's chance, and the hand held
+        // (the box's own lines while no cards are dealt; its note on the
+        // hardest difficulty, with no chances).
+        Panel::Help { page: 0, hand, odds, .. } => {
+            for (kind, i) in POKER_ODDS {
+                ok &= host.dps_text(&format!("OddsBox{kind}Text_MC"), &odds.map(|o| odds_text(o[i])).unwrap_or_default());
+            }
+            if let Some(h) = hand {
+                ok &= host.dps_text("OddsCurrentHandInfoText_MC", &host.text(*h));
+            }
+            if odds.is_some() {
+                ok &= host.dps_text("OddsInfoText_MC", "");
+            }
+        }
+        Panel::Help { .. } => {}
         _ => {
             for (i, (n, chips, frame)) in hud.seats.iter().enumerate() {
                 ok &= host.dps_text(&format!("P{}Name_MC", i + 1), &name(n));

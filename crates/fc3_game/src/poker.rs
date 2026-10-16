@@ -75,6 +75,8 @@ const PLAYER_SAYS: f32 = 0.35;
 const ENTICE_REACH: f32 = 6.0;
 const ENTICE_EVERY: f32 = 25.0;
 const LINE_GAP: f32 = 0.6;
+/// Deals tried for the help screen's odds.
+const HELP_TRIALS: usize = 4000;
 /// The player's seat: back from the chair's anchor, facing the table.
 const SEAT_BACK: f32 = 0.25;
 const SEAT_PITCH: f32 = -28.0;
@@ -168,6 +170,16 @@ pub enum Panel {
     },
     /// SQC_100's: the gambler's money won back.
     CleanedStory,
+    /// The help screen: its page (0 the hand probabilities), and for that
+    /// page the player's cards and the board (as the movie writes them),
+    /// the hand they make (a string id) and each kind of hand's chance by the
+    /// river (`Category`'s order; none at a bar's hardest difficulty).
+    Help {
+        page: u8,
+        cards: String,
+        hand: Option<u32>,
+        odds: Option<[f32; 10]>,
+    },
 }
 
 /// A hand's end, a line a player: their name, the five cards that made
@@ -195,6 +207,8 @@ pub struct PokerTable {
     /// What the mouse is over in the movie's boxes (confirm, cancel, a
     /// difficulty row).
     pub hover: (bool, bool, Option<usize>),
+    /// The mouse over the help screen's previous and next page.
+    pub help_hover: (bool, bool),
 }
 
 impl PokerTable {
@@ -358,6 +372,10 @@ struct Game {
     /// thinking.
     poses: [Pose; 4],
     waiting: f32,
+    /// The help screen's page while it's up, and the odds last worked out
+    /// (for the cards then known).
+    help: Option<u8>,
+    odds: Option<(Vec<Card>, [f32; 10])>,
     /// What's said: the table's lines, those asked for (a computer player's
     /// seat or the player, the event, its chance), until when the table is
     /// talking, and how long since a computer player called the player over.
@@ -586,6 +604,8 @@ fn play_poker(
             left: false,
             poses: Default::default(),
             waiting: 0.0,
+            help: None,
+            odds: None,
             voices,
             speech: Vec::new(),
             quiet_until: 0.0,
@@ -669,7 +689,28 @@ fn play_poker(
     let (confirm_hover, cancel_hover, row_hover) = poker.hover;
     let click = mouse.just_pressed(MouseButton::Left);
     let confirm = keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || (click && confirm_hover);
-    let cancel = keys.just_pressed(KeyCode::Escape) || (click && cancel_hover);
+    let mut cancel = keys.just_pressed(KeyCode::Escape) || (click && cancel_hover);
+    // The help screen (H, at the table): its pages turned with the arrows
+    // (or A and D, or the mouse), Escape or H back; the game waits while
+    // it's up. (FC3_POKER_HELP: a test opens it once there's a flop, until
+    // a moment after it's been captured.)
+    let at_table = matches!(game.stage, Stage::Playing | Stage::Results(_));
+    let (prev_hover, next_hover) = poker.help_hover;
+    let test_help = test.is_some()
+        && std::env::var_os("FC3_POKER_HELP").is_some()
+        && (!game.shot.2.iter().any(|s| s == "help") || (game.shot.0 == "help" && game.shot.1 < 2.0))
+        && game.table.as_ref().is_some_and(|t| t.board.len() >= 3 && t.seats[game.player_seat].hole.is_some());
+    match game.help {
+        None if at_table && (keys.just_pressed(KeyCode::KeyH) || test_help) => game.help = Some(0),
+        Some(_) if !at_table || cancel || keys.just_pressed(KeyCode::KeyH) || (test.is_some() && !test_help) => {
+            game.help = None;
+            cancel = false;
+        }
+        Some(page) if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) || (click && next_hover) => game.help = Some((page + 1) % 5),
+        Some(page) if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) || (click && prev_hover) => game.help = Some((page + 4) % 5),
+        _ => {}
+    }
+    let helping = game.help.is_some();
     // (Only those the scripts listen for.)
     let mut stand = false;
     let mut tell: Vec<&'static str> = Vec::new();
@@ -723,6 +764,7 @@ fn play_poker(
             finish(poker, stand, &tell, &mut host, &mut limits);
             return;
         }
+        Stage::Playing | Stage::Results(_) if helping => {}
         Stage::Playing => play(game, dt, test, auto, &keys, confirm, cancel, &mut host, &cinema),
         Stage::Results(shown) => {
             let shown = shown + dt;
@@ -770,6 +812,7 @@ fn play_poker(
     }
     if !stand {
         let panel = match game.stage {
+            _ if helping => help_panel(game),
             Stage::Results(_) => game.results.clone().map_or(Panel::Table, Panel::Results),
             Stage::Quit => Panel::Quit { buy_in: game.buy_in, chips: game.table.as_ref().map_or(0, |t| t.seats[game.player_seat].chips) },
             Stage::Busted => Panel::Busted,
@@ -801,6 +844,29 @@ fn play_poker(
         poker.hud = (cinema.view.is_none()).then(|| hud_of(game, panel, &keys));
     }
     finish(poker, stand, &tell, &mut host, &mut limits);
+}
+
+/// The help screen's page: for the hand probabilities, the player's cards
+/// and the board, their hand, and its chances by the river (worked out
+/// again as cards come; none at a bar's hardest difficulty, as the game
+/// had it).
+fn help_panel(game: &mut Game) -> Panel {
+    let page = game.help.unwrap_or(0);
+    let held = game.table.as_ref().and_then(|t| t.seats[game.player_seat].hole.filter(|_| !t.seats[game.player_seat].folded).map(|h| (h, t.board.clone())));
+    let Some((hole, board)) = held.filter(|_| page == 0) else {
+        return Panel::Help { page, cards: String::new(), hand: None, odds: None };
+    };
+    let known: Vec<Card> = [&hole[..], &board].concat();
+    if game.odds.as_ref().is_none_or(|(k, _)| *k != known) {
+        game.odds = Some((known.clone(), holdem::odds(hole, &board, HELP_TRIALS, &mut game.dealer)));
+    }
+    let hidden = game.row == 3 && !game.story();
+    Panel::Help {
+        page,
+        cards: known.iter().map(|c| card_text(*c)).collect::<Vec<_>>().join(" "),
+        hand: Some(hand_name(holdem::evaluate(&known).category)),
+        odds: game.odds.as_ref().map(|o| o.1).filter(|_| !hidden),
+    }
 }
 
 /// The player up from the table, the scripts told what they listen for.
