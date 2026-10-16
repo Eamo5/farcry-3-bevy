@@ -2639,6 +2639,22 @@ fn main() -> Result<()> {
                 }
             }
         }
+        "story-blocks" => {
+            // Mission blocks by name, with their layers and how many of the
+            // story's entities each holds: story-blocks <name filter>
+            let filter = args.get(1).map(|s| s.to_ascii_lowercase()).unwrap_or_default();
+            let data = fc3_story::data::StoryData::load(&fc3_formats::cache::default_cache_root())?;
+            let mut blocks: Vec<_> = data.blocks.values().filter(|b| b.name.to_ascii_lowercase().contains(&filter)).collect();
+            blocks.sort_by(|a, b| a.name.cmp(&b.name));
+            for block in blocks {
+                println!("block {} {} (zone {:?}, quest {})", block.id, block.name, block.zone, block.is_quest);
+                for l in &block.layers {
+                    let held = data.entities.values().filter(|e| e.layer == *l).count();
+                    let name = data.layers.get(l).map_or("?", |l| l.name.as_str());
+                    println!("  layer {l} {name}: {held} entities");
+                }
+            }
+        }
         "story-entities" => {
             // Searches the cache's story entity table by name, class, id,
             // layer or component: story-entities [text] (no text: a summary)
