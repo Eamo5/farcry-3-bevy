@@ -947,7 +947,12 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             let entities = fc3_formats::story::from_bytes(&std::fs::read(job.root().join(fc3_formats::story::ENTITIES_REL))?)?;
             let wanted = fc3_formats::story::spawned_archetypes(&entities);
             let pack = fc3_formats::scripts::ScriptPack::from_bytes(&std::fs::read(job.root().join(fc3_formats::scripts::DOMINO_PACK_REL))?)?;
-            let names = fc3_formats::story::archetype_names_in(pack.paths().filter_map(|p| pack.get(p)));
+            let mut names = fc3_formats::story::archetype_names_in(pack.paths().filter_map(|p| pack.get(p)));
+            // (And those the gameplays spawn: the Ink Monster's masks, rocks
+            // and goodies.)
+            if let Ok(gsf) = std::fs::read(job.root().join(fc3_formats::gsf::CACHE_REL)) {
+                names.extend(fc3_formats::gsf::archetype_names(&gsf)?);
+            }
             let library = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
             let at = library.windows(4).position(|w| w == b"nbCF").context("no entity library FCB header")?;
             let library = fc3_formats::fcb::parse(&library[at..])?;

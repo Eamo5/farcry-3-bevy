@@ -412,6 +412,11 @@ mod tests {
         assert_eq!(s.goodies.len(), 7);
         assert!(s.sounds.contains_key("Fight") && !s.sounds.contains_key("HolyShit"));
         assert!(s.minion_archetype.contains("BossMinion"));
+        // Its archetypes are among those the library names.
+        let names = archetype_names(&vfs.read(LIBRARY).unwrap()).unwrap();
+        for a in [&s.mask_archetype, &s.broken_mask_archetype, &s.rock_archetype, &s.goodies[0]] {
+            assert!(names.contains(&a.to_ascii_lowercase()), "{a}");
+        }
     }
 
     #[test]
