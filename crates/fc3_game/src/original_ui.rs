@@ -627,6 +627,53 @@ fn marker_icon(kind: u64, sub: u64) -> Option<f64> {
     })
 }
 
+/// The markers scripts show, as what they are (a quest's giver, a
+/// mission's, else an objective: `map_icon::MISSION`), where they are now.
+fn scripted_markers(host: &crate::story::StoryHost) -> Vec<(f64, Vec3)> {
+    let data = host.story.data();
+    host.story
+        .objective_markers()
+        .into_iter()
+        .map(|(id, at)| {
+            let kind = data.markers.get(&id).and_then(|m| marker_icon(m.kind, m.sub_kind));
+            (kind.unwrap_or(map_icon::MISSION), crate::data::to_bevy(at))
+        })
+        .collect()
+}
+
+/// The markers standing in the layers that are in, enabled, that no script
+/// shows: activities, shops, the challenge boards.
+fn standing_markers(host: &crate::story::StoryHost) -> Vec<(f64, Vec3)> {
+    let data = host.story.data();
+    let scripted: std::collections::HashSet<u64> = host.story.objective_markers().into_iter().map(|m| m.0).collect();
+    data.markers
+        .values()
+        .filter(|m| m.enabled && [MARKER_ACTIVITY, MARKER_SHOP, MARKER_CHALLENGES].contains(&m.kind))
+        .filter(|m| !scripted.contains(&m.id) && host.story.is_loaded(m.id))
+        .filter_map(|m| marker_icon(m.kind, m.sub_kind).map(|kind| (kind, crate::data::to_bevy(m.pos))))
+        .collect()
+}
+
+/// A map icon's marker on the radar (`LocMarker_<n>`'s frame label).
+fn radar_label(icon: f64) -> Option<&'static str> {
+    Some(match icon {
+        map_icon::MISSION_GIVER => "MissionGiver",
+        map_icon::QUEST_GIVER => "Quest",
+        map_icon::SIDE_QUEST => "SideQuest",
+        map_icon::HUNTING => "HuntingQuest",
+        map_icon::SUPPLY_DROP => "SpeedQuest",
+        map_icon::WANTED => "WantedQuest",
+        map_icon::ULC_QUEST => "ULCLostExpeditions",
+        map_icon::CHALLENGES => "ChallengeBoard",
+        map_icon::SHOP => "Shop",
+        map_icon::POKER => "Poker",
+        map_icon::KNIFE => "KnifeThrowing",
+        map_icon::SHOOTING => "ShootingChallenge",
+        map_icon::RACING => "RacingChallenge",
+        _ => return None,
+    })
+}
+
 /// The world map page, answered as the engine answered it: on `MapLoaded`
 /// the legend (`DataMap`), the fog lifted where the player has been
 /// (`SetFog 0 <row> <column>`), and the icons (`IconMap`: the player, the
@@ -727,20 +774,8 @@ fn drive_map_page(
                 // layers that are in (activities, shops, the challenge boards).
                 match story.as_ref() {
                     Some(h) => {
-                        let data = h.story.data();
-                        let shown: std::collections::HashMap<u64, [f32; 3]> = h.story.objective_markers().into_iter().collect();
-                        for (id, at) in &shown {
-                            let kind = data.markers.get(id).and_then(|m| marker_icon(m.kind, m.sub_kind));
-                            icon(kind.unwrap_or(map_icon::MISSION), crate::data::to_bevy(*at), "", 0.0, false);
-                        }
-                        for m in data.markers.values() {
-                            let standing = m.enabled && [MARKER_ACTIVITY, MARKER_SHOP, MARKER_CHALLENGES].contains(&m.kind);
-                            if !standing || shown.contains_key(&m.id) || !h.story.is_loaded(m.id) {
-                                continue;
-                            }
-                            if let Some(kind) = marker_icon(m.kind, m.sub_kind) {
-                                icon(kind, crate::data::to_bevy(m.pos), "", 0.0, false);
-                            }
+                        for (kind, at) in scripted_markers(h).into_iter().chain(standing_markers(h)) {
+                            icon(kind, at, "", 0.0, false);
                         }
                     }
                     None => {
@@ -2637,9 +2672,16 @@ fn drive_radar(
     (outposts, ways, progress): (Res<crate::outposts::Outposts>, Res<crate::traversal::Ways>, Res<crate::progression::Progress>),
     (hud, pickups): (Res<crate::map::HudParams>, Query<(&GlobalTransform, &crate::pickups::Pickup)>),
     mut last: Local<Option<Radar>>,
+    (story, time, mut standing): (Option<NonSend<crate::story::StoryHost>>, Res<Time<Real>>, Local<(f32, Vec<(f64, Vec3)>)>),
 ) {
     let Interface::Running(host) = &*state else { return };
     let Ok((at, player)) = players.single() else { return };
+    // The story's markers: the standing ones looked over once a second.
+    let now_secs = time.elapsed_secs();
+    if let Some(h) = story.as_ref().filter(|_| now_secs >= standing.0) {
+        *standing = (now_secs + 1.0, standing_markers(h));
+    }
+    let scripted = story.as_ref().map(|h| scripted_markers(h));
     // The map turns with the player (heading clockwise from north).
     let heading = -player.yaw;
     let turn = Rot2::radians(heading).inverse();
@@ -2708,6 +2750,14 @@ fn drive_radar(
             places.push((l.length(), marker(l, if progress.towers.contains(&(i as u32)) { "Tower" } else { "TowerLocked" })));
         }
     }
+    // Activities, shops, the challenge boards, and the quest and mission
+    // givers a script shows.
+    for (kind, place) in standing.1.iter().chain(scripted.iter().flatten()) {
+        let l = local(*place);
+        if let Some(label) = radar_label(*kind).filter(|_| on_disc(l)) {
+            places.push((l.length(), marker(l, label)));
+        }
+    }
     if hud.0.collectibles > 0.0 {
         for (t, pk) in &pickups {
             let label = match pk.kind {
@@ -2726,7 +2776,12 @@ fn drive_radar(
     fill(places, &mut now.places);
     // Objectives: held on the rim when further than the disc shows.
     let mut marks = Vec::new();
-    for &goal in &objectives.0 {
+    // (The plain objectives: givers are places.)
+    let goals: Vec<Vec3> = match &scripted {
+        Some(s) => s.iter().filter(|(k, _)| *k == map_icon::MISSION).map(|(_, p)| *p).collect(),
+        None => objectives.0.clone(),
+    };
+    for &goal in &goals {
         let l = local(goal);
         let rise = goal.y - at.translation.y;
         let (l, label) = if !on_disc(l) {

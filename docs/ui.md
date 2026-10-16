@@ -309,13 +309,18 @@ only what changed (and everything again until the movies have loaded):
   `LocMarker_<n>` (16) places: outposts (`OutpostLocked` while held,
   `FastTravel` once taken), their working alarm boxes (`Alarm`, `AlarmOn`
   while ringing), radio towers (`TowerLocked` until climbed, then `Tower`)
-  and collectibles within the game's radius (`Relic`, `Letter`, `Sdcard`);
-  `ObjMarker_<n>` (11) the objectives (`Inside` the disc, `Outside` held on
-  its rim, `Up` or `Down` when well above or below). `NorthMarkerMC` turns
-  about the centre to the north (`_rotation`). The labels the movie has and
-  the game doesn't use yet: `companion`; mission givers and quests, shops,
-  the games (poker, knife throwing, shooting, beer pong, racing),
-  safehouses, photo spots, ammo, encounters, plants (`plant_<colour>`).
+  collectibles within the game's radius (`Relic`, `Letter`, `Sdcard`),
+  and the story's markers the world map shows (`original_ui::radar_label`:
+  `Shop`, `Poker`, `KnifeThrowing`, `ShootingChallenge`,
+  `RacingChallenge`, `ChallengeBoard`, `MissionGiver`, `Quest`,
+  `SideQuest`, `HuntingQuest`, `SpeedQuest`, `WantedQuest`,
+  `ULCLostExpeditions`); `ObjMarker_<n>` (11) the objectives (`Inside` the
+  disc, `Outside` held on its rim, `Up` or `Down` when well above or
+  below). `NorthMarkerMC` turns about the centre to the north
+  (`_rotation`). The labels the movie has and the game doesn't use yet:
+  `companion`, `BeerPong`, safehouses, photo spots, ammo, encounters,
+  plants (`plant_<colour>`). `fc3tool swf-script <movie> labels [text]`
+  lists a movie's sprites' frame labels.
   The game's own minimap icons stand down meanwhile.
 
 * **Reticule**: `reticuleLeft`/`Right`/`Up`/`Down` sit out from the centre
