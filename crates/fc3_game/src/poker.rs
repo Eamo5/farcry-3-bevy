@@ -41,7 +41,8 @@ impl Plugin for PokerPlugin {
             .add_systems(PreUpdate, hold_controls.after(crate::controls::apply_action_maps))
             .add_systems(Update, play_poker.after(crate::story::StorySet).before(crate::cinema::CinemaSet).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(Update, hold_seat.after(crate::player::player_move))
-            .add_systems(Update, set_table.after(play_poker));
+            .add_systems(Update, set_table.after(play_poker))
+            .add_systems(Update, pose_players.after(play_poker).before(crate::cinema::CinemaSet));
     }
 }
 
@@ -64,6 +65,8 @@ const SIT_REACH: f32 = 1.8;
 /// hand's results show unless the player goes on.
 const THINK: [f32; 2] = [0.9, 2.2];
 const RESULTS: f32 = 6.0;
+/// How long the player thinks before a computer player gets impatient (s).
+const IMPATIENT: f32 = 14.0;
 /// The player's seat: back from the chair's anchor, facing the table.
 const SEAT_BACK: f32 = 0.25;
 const SEAT_PITCH: f32 = -28.0;
@@ -198,17 +201,83 @@ impl PokerTable {
     }
 }
 
-/// Where a table is (Bevy space): its centre, and its chairs' anchors.
+/// Where a table is (Bevy space): its centre, and its chairs' anchors and
+/// their facing (as scenes take an entity's angles).
 #[derive(Clone, Copy, Debug)]
 struct Place {
     centre: Vec3,
     chairs: [Vec3; 4],
+    facing: [Quat; 4],
 }
 
 #[derive(Clone, Debug)]
 struct Npc {
     name: Name,
     style: Style,
+    /// Its entry in the settings, its character, and its moves (`MOVES`).
+    index: usize,
+    entity: u64,
+    moves: usize,
+}
+
+/// The computer players' moves at the table, each way of playing's own:
+/// their folder, and the suffix their names end with.
+const MOVES: [(&str, &str); 4] = [("unskilled", "unsk"), ("skilled", "sk"), ("expert", "ex"), ("loosecanon", "lc")];
+
+/// A computer player's move: seated with cards or without (looping), and
+/// those it makes once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Move {
+    IdleCards,
+    IdleEmpty,
+    TakeCards,
+    Check,
+    Bet,
+    BigBet,
+    AllIn,
+    Fold,
+    Win,
+    Lose,
+    /// Waiting on the player: ahead of it, on its left or right.
+    Impatient(&'static str),
+}
+
+impl Move {
+    fn looping(self) -> bool {
+        matches!(self, Move::IdleCards | Move::IdleEmpty)
+    }
+}
+
+/// A move's clip for a way of playing (`MOVES`).
+fn move_clip(moves: usize, m: Move) -> String {
+    let (folder, suffix) = MOVES[moves.min(3)];
+    let expert = suffix == "ex";
+    let name = match m {
+        Move::IdleCards if expert => "fulbst_poker_sitidlwcards01".to_string(),
+        Move::IdleCards => "fullst_poker_sitidlecards".to_string(),
+        Move::IdleEmpty => "fulbst_poker_sitidlenocards01".to_string(),
+        Move::TakeCards => "fulbst_poker_takecards".to_string(),
+        Move::Check => "fulbst_poker_check".to_string(),
+        Move::Bet => "fulbst_poker_betcallraisesmall".to_string(),
+        Move::BigBet => "fulbst_poker_betcallraiselarge".to_string(),
+        Move::AllIn => "fulbst_poker_allin".to_string(),
+        Move::Fold => "fulbst_poker_fold".to_string(),
+        Move::Win => "fulbst_poker_winhand".to_string(),
+        Move::Lose if expert => "fulbst_poker_losehand01".to_string(),
+        Move::Lose => "fulbst_poker_loosehand".to_string(),
+        Move::Impatient(side) => format!("fulbst_poker_impatient{side}"),
+    };
+    let tail = if expert && m == Move::AllIn { "noweapontake02" } else { "noweapon" };
+    format!(r"graphics\characters\_common\animations\exoticgameplay\minigames\poker\{folder}\3rdge_{name}_{suffix}_+000fw_{tail}.mab")
+}
+
+/// A computer player's moves under way: the one-shot asked for, and the
+/// scene playing (its name and move; a count for fresh names).
+#[derive(Clone, Debug, Default)]
+struct Pose {
+    asked: Option<Move>,
+    playing: Option<(String, Move)>,
+    count: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -259,6 +328,10 @@ struct Game {
     shot: (String, f32, Vec<String>),
     /// The player has got up from the table (a test sits down once).
     left: bool,
+    /// The computer players' moves, by seat; how long the player has been
+    /// thinking.
+    poses: [Pose; 4],
+    waiting: f32,
 }
 
 impl Game {
@@ -292,18 +365,17 @@ pub fn poker_gameplay(name: &str) -> bool {
 }
 
 /// A computer player's way of playing (`PlayerType`; as the difficulty
-/// has it when it's the default).
-fn style(player_type: u32, row: usize, dealer: &mut Dealer) -> Style {
+/// has it when it's the default), and its moves (`MOVES`).
+fn style(player_type: u32, row: usize, dealer: &mut Dealer) -> (Style, usize) {
     let unskilled = Style { caution: 0.0, raise_at: 0.72, bluff: 0.02 };
     let expert = Style { caution: 0.08, raise_at: 0.58, bluff: 0.1 };
-    match player_type {
-        0 => unskilled,
-        1 => Style::STEADY,
-        2 => expert,
-        3 => Style::LOOSE,
-        4 => [unskilled, Style::STEADY, expert, Style::LOOSE][(dealer.unit() * 4.0) as usize % 4],
-        _ => [unskilled, unskilled, Style::STEADY, expert][row.min(3)],
-    }
+    let ways = [unskilled, Style::STEADY, expert, Style::LOOSE];
+    let way = match player_type {
+        0..=3 => player_type as usize,
+        4 => (dealer.unit() * 4.0) as usize % 4,
+        _ => [0, 0, 1, 2][row.min(3)],
+    };
+    (ways[way], way)
 }
 
 /// A card as the movie writes it.
@@ -340,14 +412,16 @@ fn find_place(data: &fc3_story::data::StoryData, npcs: &[u64], player: Vec3) -> 
     let nearest = |to: Vec3, reach: f32| centres.iter().copied().filter(|c| c.distance(to) < reach).min_by(|a, b| a.distance(to).total_cmp(&b.distance(to)));
     let centre = nearest(mid, 12.0).filter(|_| !at.is_empty()).or_else(|| nearest(player, 60.0))?;
     let mut chairs = [None; 4];
+    let mut facing = [Quat::IDENTITY; 4];
     for e in data.entities.values() {
         let Some(n) = e.name.strip_prefix("Exotic/PokerChairAnchor").and_then(|n| n.parse::<usize>().ok()) else { continue };
         let p = crate::data::to_bevy(e.pos);
         if (1..=4).contains(&n) && p.distance(centre) < 2.0 {
             chairs[n - 1] = Some(p);
+            facing[n - 1] = Quat::from_array(fc3_formats::world::angles_to_bevy_quat(e.angles));
         }
     }
-    Some(Place { centre, chairs: chairs.map(|c| c.unwrap_or(centre)) })
+    Some(Place { centre, chairs: chairs.map(|c| c.unwrap_or(centre)), facing })
 }
 
 /// The seats: each computer player the one it asks for when free, else the
@@ -438,7 +512,8 @@ fn play_poker(
                     5 => Name::Text(HOYT),
                     _ => Name::Seat(0),
                 };
-                Npc { name, style: style(n.player_type, 0, &mut dealer) }
+                let (style, moves) = style(n.player_type, 0, &mut dealer);
+                Npc { name, style, index: i, entity: n.entity, moves }
             })
         });
         info!(
@@ -448,6 +523,9 @@ fn play_poker(
             player_seat + 1,
             place.map(|p| p.centre)
         );
+        if let Some(p) = place {
+            debug!("poker: chairs {:?} facing {:?}", p.chairs.map(|c| c - p.centre), p.facing.map(|q| (q * Vec3::Z).xz()));
+        }
         poker.game = Some(Game {
             id,
             name,
@@ -475,6 +553,8 @@ fn play_poker(
             done: false,
             shot: Default::default(),
             left: false,
+            poses: Default::default(),
+            waiting: 0.0,
         });
     }
     let Some(game) = poker.game.as_mut() else { return };
@@ -574,9 +654,9 @@ fn play_poker(
                 if buy_in > 0 {
                     progress.spend(buy_in);
                 }
-                for (i, n) in game.npcs.iter_mut().enumerate() {
-                    if let (Some(n), Some(npc)) = (n.as_mut(), game.settings.npcs.get(i)) {
-                        n.style = style(npc.player_type, game.row, &mut game.dealer);
+                for n in game.npcs.iter_mut().flatten() {
+                    if let Some(npc) = game.settings.npcs.get(n.index) {
+                        (n.style, n.moves) = style(npc.player_type, game.row, &mut game.dealer);
                     }
                 }
                 start_game(game, buy_in, buy_in);
@@ -788,12 +868,34 @@ fn play(
         });
         game.think = THINK[1];
         game.bet = 0;
+        for (i, pose) in game.poses.iter_mut().enumerate() {
+            if game.npcs[i].is_some() && table.seats[i].hole.is_some() {
+                pose.asked = Some(Move::TakeCards);
+            }
+        }
         info!("poker: hand {} (blinds {}/{})", game.hands, table.small_blind, table.big_blind);
         debug!("poker: cards {:?}", table.seats.iter().map(|s| s.hole.map(|h| h.map(card_text))).collect::<Vec<_>>());
         return;
     }
     let Some(to_act) = table.to_act else { return };
     let before = (table.seats[to_act].bet, table.seats[to_act].put_in, table.current_bet);
+    // (A computer player gets impatient with a player who takes a while.)
+    if to_act == seat && !auto {
+        game.waiting += dt;
+        let npcs: Vec<usize> = (0..4).filter(|&i| game.npcs[i].is_some() && table.seats[i].hole.is_some() && !table.seats[i].folded).collect();
+        if game.waiting > IMPATIENT && !npcs.is_empty() {
+            game.waiting = 0.0;
+            let i = npcs[game.dealer.below(npcs.len())];
+            let side = match (seat + 4 - i) % 4 {
+                1 => "lt",
+                3 => "rt",
+                _ => "fw",
+            };
+            game.poses[i].asked = Some(Move::Impatient(side));
+        }
+    } else {
+        game.waiting = 0.0;
+    }
     let action = if to_act == seat && !auto {
         // The player: the bet up and down by the big blind, then check,
         // call or raise to it, fold, or all in.
@@ -857,6 +959,19 @@ fn play(
     if added > 0 {
         game.last_bet = added;
     }
+    if game.npcs[to_act].is_some() {
+        game.poses[to_act].asked = Some(if s.folded {
+            Move::Fold
+        } else if s.chips == 0 && added > 0 {
+            Move::AllIn
+        } else if added == 0 {
+            Move::Check
+        } else if added >= table.big_blind * 4 {
+            Move::BigBet
+        } else {
+            Move::Bet
+        });
+    }
     debug!("poker: seat {} {action:?}", to_act + 1);
     game.info = Some(line);
     if table.street == Street::Over {
@@ -891,6 +1006,11 @@ fn play(
             game.info = Some(Info { text: line::REVEALING, name: None, chips: None });
         }
         info!("poker: hand {} over: won {:?}", game.hands, outcome.won);
+        for &i in &in_it {
+            if game.npcs[i].is_some() {
+                game.poses[i].asked = Some(if matches!(how(i), Line::Won(_)) { Move::Win } else { Move::Lose });
+            }
+        }
         game.results = Some(Results { lines });
         game.stage = Stage::Results(0.0);
     }
@@ -1252,9 +1372,93 @@ fn set_table(
     }
 }
 
+/// The computer players seated at their chairs: a bar's while its table's
+/// game is on (waiting for the player without cards), a story's once the
+/// player sits with them. Each is in a scene of its own (`cinema`'s built
+/// ones) at its chair's anchor, facing as the anchor does, seated with its
+/// cards or without, and making its moves once as the game asks (then
+/// seated again). Not while a story's scene has them; their scenes end with
+/// the table's game.
+fn pose_players(
+    mut poker: ResMut<PokerTable>,
+    mut cinema: ResMut<crate::cinema::Cinema>,
+    server: Res<AssetServer>,
+    clips: Res<Assets<crate::cache_assets::Fc3Clip>>,
+    mut handles: Local<HashMap<String, Handle<crate::cache_assets::Fc3Clip>>>,
+    mut live: Local<Vec<String>>,
+) {
+    use fc3_formats::cinema::{Clip, ClipKind, Group, GroupKind, Sequence};
+    let game = poker.game.as_mut();
+    let posing = game.as_ref().is_some_and(|g| (g.seated || !g.story()) && !g.done && g.scene.is_none()) && cinema.view.is_none();
+    // (Scenes no seat holds any longer end.)
+    let held: Vec<String> = game.as_ref().map(|g| g.poses.iter().filter_map(|p| p.playing.as_ref().map(|(n, _)| n.clone())).collect()).unwrap_or_default();
+    for name in live.iter().filter(|n| !held.contains(n) || !posing) {
+        cinema.stop_built(name);
+    }
+    live.retain(|n| held.contains(n) && posing);
+    let Some(game) = game else { return };
+    for s in 0..4 {
+        let pose = &mut game.poses[s];
+        let (Some(npc), Some(place), true) = (game.npcs[s].as_ref(), game.place, posing) else {
+            pose.playing = None;
+            pose.asked = None;
+            continue;
+        };
+        let holding = game.table.as_ref().is_some_and(|t| t.seats[s].hole.is_some() && !t.seats[s].folded);
+        let idle = if holding { Move::IdleCards } else { Move::IdleEmpty };
+        let busy = pose.playing.as_ref().is_some_and(|(name, m)| !m.looping() && cinema.progress(name).is_some());
+        let want = match pose.asked {
+            Some(m) => m,
+            None if busy => continue,
+            None if pose.playing.as_ref().is_some_and(|(name, m)| *m == idle && cinema.progress(name).is_some()) => continue,
+            None => idle,
+        };
+        let path = move_clip(npc.moves, want);
+        let handle = handles.entry(path.clone()).or_insert_with(|| server.load(crate::cache_assets::cache_path(&fc3_formats::cache::anim_rel(&path))));
+        if !crate::cache_assets::done(&server, handle.id()) {
+            continue;
+        }
+        pose.asked = None;
+        let Some(length) = clips.get(&*handle).map(|c| c.0.duration).filter(|l| *l > 0.0) else {
+            warn!("poker: no clip {path}");
+            continue;
+        };
+        let name = format!("poker_seat{s}_{}", pose.count);
+        pose.count += 1;
+        let anim =
+            Clip { start: 0.0, duration: length, kind: ClipKind::Animation { source: path, from: 0, to: (length * 30.0) as u32, blend: 0.2, anchored: false } };
+        let groups = vec![Group { uid: 1, kind: GroupKind::Character, name: "pokerplayer".into(), archetype: 0, clips: vec![anim] }];
+        let origin = Transform::from_translation(place.chairs[s]).with_rotation(place.facing[s]);
+        cinema.play_built(crate::cinema::Built {
+            name: name.clone(),
+            seq: Sequence { name: name.clone(), duration: length, looping: want.looping(), groups, ..Default::default() },
+            origin,
+            bindings: HashMap::from([(1, npc.entity)]),
+        });
+        debug!("poker: seat {} {want:?}", s + 1);
+        live.push(name.clone());
+        if let Some((old, _)) = pose.playing.replace((name, want)) {
+            cinema.stop_built(&old);
+            live.retain(|n| *n != old);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The computer players' moves by way of playing, the expert's own
+    /// names where they differ.
+    #[test]
+    fn move_clips_by_way_of_playing() {
+        let dir = r"graphics\characters\_common\animations\exoticgameplay\minigames\poker\";
+        assert_eq!(move_clip(0, Move::IdleCards), format!(r"{dir}unskilled\3rdge_fullst_poker_sitidlecards_unsk_+000fw_noweapon.mab"));
+        assert_eq!(move_clip(2, Move::IdleCards), format!(r"{dir}expert\3rdge_fulbst_poker_sitidlwcards01_ex_+000fw_noweapon.mab"));
+        assert_eq!(move_clip(2, Move::AllIn), format!(r"{dir}expert\3rdge_fulbst_poker_allin_ex_+000fw_noweapontake02.mab"));
+        assert_eq!(move_clip(3, Move::Lose), format!(r"{dir}loosecanon\3rdge_fulbst_poker_loosehand_lc_+000fw_noweapon.mab"));
+        assert_eq!(move_clip(1, Move::Impatient("rt")), format!(r"{dir}skilled\3rdge_fulbst_poker_impatientrt_sk_+000fw_noweapon.mab"));
+    }
 
     /// The cards' models by suit and rank; after the deal the player's cards
     /// lie face up, the others' face down, the blinds' bets out, each prop
@@ -1264,7 +1468,11 @@ mod tests {
         assert_eq!(card_model(Card::new(10, 0)), format!("{MISC}pokercardct.xbg"));
         assert_eq!(card_model(Card::new(14, 3)), format!("{MISC}pokercardsa.xbg"));
         let chair = |x: f32, z: f32| Vec3::new(x, 0.45, z);
-        let place = Place { centre: Vec3::new(0.0, 0.75, 0.0), chairs: [chair(0.0, 0.8), chair(0.8, 0.0), chair(0.0, -0.8), chair(-0.8, 0.0)] };
+        let place = Place {
+            centre: Vec3::new(0.0, 0.75, 0.0),
+            chairs: [chair(0.0, 0.8), chair(0.8, 0.0), chair(0.0, -0.8), chair(-0.8, 0.0)],
+            facing: [Quat::IDENTITY; 4],
+        };
         let mut table = Table::new(&[1000; 4], 25, 50);
         table.deal(&mut Dealer::new(7));
         let props = table_props(&place, &table, 0, 1000);

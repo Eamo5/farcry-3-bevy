@@ -519,6 +519,7 @@ fn main() -> Result<()> {
             println!("model    {}", fc3_formats::cache::model_rel(p));
             println!("material {}", fc3_formats::cache::material_rel(p));
             println!("texture  {}", fc3_formats::cache::texture_rel(p));
+            println!("anim     {}", fc3_formats::cache::anim_rel(p));
         }
         "sdat-bits" => {
             // Sectors whose height samples set a given bit in a byte of the sample
