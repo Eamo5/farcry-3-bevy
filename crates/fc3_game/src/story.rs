@@ -753,6 +753,10 @@ pub struct ScriptedPlayer {
     backup: Option<InventoryBackup>,
     /// Non-weapon inventory entries missions give and take (rock, camera).
     pub gadgets: std::collections::HashSet<String>,
+    /// Weapons scripts gave by an archetype of their own (the Ink Monster
+    /// fight's `BOW.citraBossFightBow`), by weapon: the story knows them by
+    /// that name while they are carried.
+    pub granted: HashMap<usize, String>,
     /// A script drew the camera (`CAPI_Player.DrawGadget`): it stays up
     /// until a script holsters it or the player puts it away.
     pub camera_drawn: bool,
@@ -775,6 +779,7 @@ impl Default for ScriptedPlayer {
             ignored: Default::default(), movement: 1.0, god: false, hud_hidden: false,
             fade: (0.0, 0.0, 0.0), black_for: 0.0, backup: None,
             gadgets: ["gadgets:FC3/Rock".into(), "gadgets:Equipped/Tablet".into()].into_iter().collect(),
+            granted: HashMap::new(),
             animal_looting: true, plant_looting: true, camera_drawn: false, camera_up: false,
         }
     }
@@ -923,8 +928,12 @@ fn weapon_def(inv: &crate::weapons::Inventory, archetype: &str, data: &fc3_story
         return Some(def);
     }
     // By its family (`LPO-50` of `LPO-50.LPO-50_NPC`): the folder of the
-    // model the game's weapons of that family draw.
+    // model the game's weapons of that family draw (or the family's own
+    // folder: the Ink Monster fight's `BOW.citraBossFightBow`).
     let family = short.split('.').next().filter(|f| !f.is_empty())?;
+    if let Some(def) = in_folder(family) {
+        return Some(def);
+    }
     data.entities.values().filter(|e| e.has("CFCXWeapon") && e.name.to_ascii_lowercase().contains(family)).find_map(|e| {
         let mut folder = None;
         e.component("CGraphicComponent")?.walk(&mut |o, _| {
@@ -981,15 +990,18 @@ fn story_weapons(
     slots: &[crate::weapons::WeaponSlot],
     current: usize,
     shop: &HashMap<String, (String, u32)>,
+    granted: &HashMap<usize, String>,
 ) -> (Vec<fc3_story::Item>, Option<String>) {
     use crate::weapons::{WeaponClass as W, UNARMED};
     let mut items = Vec::new();
     let mut held = None;
     for (i, slot) in slots.iter().enumerate() {
         let Some(def) = defs.get(slot.def).filter(|d| d.name != UNARMED) else { continue };
-        let name = shop.get(&def.model_path()).map(|(a, _)| a.clone()).unwrap_or_else(|| {
-            format!("weapons:FC3/{}", def.model.split('\\').next().unwrap_or(def.name))
-        });
+        let name = granted
+            .get(&slot.def)
+            .or_else(|| shop.get(&def.model_path()).map(|(a, _)| a))
+            .cloned()
+            .unwrap_or_else(|| format!("weapons:FC3/{}", def.model.split('\\').next().unwrap_or(def.name)));
         let category = match def.class {
             W::Melee => "melee", W::Pistol => "handgun", W::Smg => "smg",
             W::Rifle => "assault", W::Shotgun => "shotgun", W::Sniper => "sniper",
@@ -1409,7 +1421,10 @@ fn run_story(
         }
     }
     if let Ok(inv) = inventory.single() {
-        (view.player_state.weapons, view.player_state.in_hands) = story_weapons(&inv.defs, &inv.slots, inv.current, &host.shop_items);
+        if !scripted.granted.is_empty() {
+            scripted.granted.retain(|def, _| inv.slots.iter().any(|s| s.def == *def));
+        }
+        (view.player_state.weapons, view.player_state.in_hands) = story_weapons(&inv.defs, &inv.slots, inv.current, &host.shop_items, &scripted.granted);
         for (name, count) in [("Grenade", inv.grenades), ("Molotov", inv.molotovs), ("C4", inv.c4), ("Mine", inv.mines)] {
             if count > 0 {
                 view.player_state.gadgets.push(fc3_story::Item { name: format!("gadgets:FC3/{name}"), count, ..Default::default() });
@@ -2382,6 +2397,11 @@ fn run_story(
                             if let Some(def) = weapon_def(&inv, &a(1), &data) {
                                 let wname = inv.defs[def].name;
                                 crate::weapons::grant_weapon(&mut inv, wname, 4);
+                                // (Known to the story by the script's name:
+                                // what waits for it to spawn hears it.)
+                                if a(1).contains('.') {
+                                    scripted.granted.insert(def, a(1));
+                                }
                             } else {
                                 // One the game carries as no weapon of its own
                                 // (the IED's remote: the charges it sets off):
@@ -4523,12 +4543,15 @@ mod tests {
             crate::weapons::WeaponSlot { def: index(crate::weapons::UNARMED), mag: 0, reserve: 0 },
         ];
         let shop = [(defs[index("1911")].model_path(), ("weapons:FC3/Kimber".to_string(), 123))].into_iter().collect();
-        let (items, held) = story_weapons(&defs, &slots, 1, &shop);
+        let (items, held) = story_weapons(&defs, &slots, 1, &shop, &HashMap::new());
         assert_eq!(items.len(), 2);
         assert_eq!(held.as_deref(), Some("weapons:FC3/Kimber"));
         assert_eq!(items[1].count, 1);
         assert_eq!(items[1].category, "handgun");
-        assert!(story_weapons(&defs, &slots, 2, &shop).1.is_none());
+        assert!(story_weapons(&defs, &slots, 2, &shop, &HashMap::new()).1.is_none());
+        // One a script gave by its own archetype goes by that name.
+        let granted = [(index("1911"), "weapons:FC3/Kimber.Special".to_string())].into_iter().collect();
+        assert_eq!(story_weapons(&defs, &slots, 1, &shop, &granted).1.as_deref(), Some("weapons:FC3/Kimber.Special"));
     }
 
     #[test]
