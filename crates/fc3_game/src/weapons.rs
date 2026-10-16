@@ -1498,7 +1498,7 @@ fn fire(
     parents: Query<&ChildOf>,
     writers: (MessageWriter<DamageEvent>, MessageWriter<HitMarker>, MessageWriter<crate::npc::Noise>),
     sounds: (MessageWriter<crate::sound::PlaySfx>, MessageWriter<crate::sound::LoopSfx>, crate::surfaces::SurfaceProbe),
-    (mut shot_fx, boosts, mount, driving, vehicles, riders): (
+    (mut shot_fx, boosts, mount, driving, vehicles, riders, cinema): (
         crate::particles::ShotFx,
         Option<Res<crate::syringes::Boosts>>,
         Res<crate::traversal::Mount>,
@@ -1509,6 +1509,7 @@ fn fire(
             (Entity, &GlobalTransform, Option<&crate::npc::Riding>, Option<&crate::story_actors::StoryActor>),
             Or<(With<crate::npc::Riding>, With<crate::story_actors::StoryActor>)>,
         >,
+        Res<crate::cinema::Cinema>,
     ),
 ) {
     use crate::controls::Action;
@@ -1549,7 +1550,9 @@ fn fire(
     let zip_ok = !matches!(*mount, crate::traversal::Mount::Zip { .. }) || (perks.zip_shoot && inv.def().class == WeaponClass::Pistol);
     let can_act = (captured.0 || scripted || story_input)
         && !health.dead
-        && !player.noclip
+        // (A scene's view holds the body, but a gameplay may let him fire
+        // from it: JAS_150's ride.)
+        && (!player.noclip || cinema.free_aim.is_some())
         && !player.swimming
         && (!player.driving || player.armed_passenger)
         && bino.blend < 0.3

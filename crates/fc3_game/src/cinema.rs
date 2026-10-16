@@ -72,6 +72,10 @@ pub struct Cinema {
     /// How far the player may turn his head within a first-person view (a
     /// player-camera clip's limits), if at all.
     pub head_look: Option<fc3_formats::cinema::HeadLook>,
+    /// A gameplay lets the player aim and fire from inside the scene's view
+    /// (JAS_150's ride, `chopper_fight`): how far he may turn from it (yaw,
+    /// pitch; radians), his weapon in hand.
+    pub free_aim: Option<Vec2>,
     /// Sequences the game makes itself (a QTE's phases), to start.
     built: Vec<Built>,
     /// Opt-in completion receipts for gameplay-owned scenes. Disappearance
@@ -921,8 +925,10 @@ pub(crate) fn scene_view(
             if let Projection::Perspective(pp) = &mut *proj {
                 pp.fov = fov.clamp(10.0, 120.0).to_radians();
             }
+            // (Aiming from it, the weapon stays in hand.)
+            let shown = if cinema.free_aim.is_some() { Visibility::Inherited } else { Visibility::Hidden };
             for mut v in &mut view_models {
-                *v = Visibility::Hidden;
+                v.set_if_neq(shown);
             }
         }
         None => {

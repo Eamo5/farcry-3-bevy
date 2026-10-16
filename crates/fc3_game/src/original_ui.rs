@@ -1261,7 +1261,8 @@ fn drive_hud(
     *armour_full = if progress.armour > 0.0 { armour_full.max(progress.armour) } else { 0.0 };
     hud.armour = (progress.armour > 0.0)
         .then(|| 1 + (progress.armour / *armour_full * (ARMOUR_FRAMES - 1) as f32).round().clamp(0.0, (ARMOUR_FRAMES - 1) as f32) as u32);
-    hud.shown = *game_state.get() == crate::menu::GameState::Playing && !scripted.hud_hidden && cinema.view.is_none() && !health.dead;
+    hud.shown =
+        *game_state.get() == crate::menu::GameState::Playing && !scripted.hud_hidden && (cinema.view.is_none() || cinema.free_aim.is_some()) && !health.dead;
     // Ammo: the strip of the weapon in hand.
     hud.strip = None;
     hud.strip_frames.clear();

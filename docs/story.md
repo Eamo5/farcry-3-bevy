@@ -4023,8 +4023,18 @@ the story for good (JAS_130 B60's car chase, `CExoticCarChase`, whose stop
 hands over the pistol and the driver's seat; JAS_150 B20's chopper fight,
 `CChopperFightE3`). Such a gameplay now ends a second after it starts
 (`UNPLAYED_GRACE`), for anyone. The ones played are QTEs, the sniping
-challenge, poker, the Ink Monster, being intoxicated, button prompts, and
-the vines under their test switch (`played_gameplay`).
+challenge, poker, the Ink Monster, being intoxicated, button prompts, the
+chopper ride, and the vines under their test switch (`played_gameplay`).
+
+**JAS_150's chopper ride** (`CChopperFightE3`, `chopper_fight`): B30C's
+scene carries the player through the ride and starts and stops the
+gameplay at its `GSF_Start` and `GSF_Stop` sync points. Meanwhile the
+player has the gameplay's pistol in hand (`m_weaponArchetype`, the 1911's,
+lent as the sniping challenge lends its rifle, its magazine kept full) and
+aims from the scene's view: the cinema's `free_aim` lets the head turn
+from where the scene looks within the reticle's reach, keeps the weapon
+shown and lets it fire, and the original HUD stays up.
+`FC3_CHOPPER_SHOT=<png>` takes a screenshot three seconds in.
 
 ## JAS_170: the drop onto the beach
 

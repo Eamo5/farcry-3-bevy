@@ -607,8 +607,16 @@ pub(crate) fn player_look(
 ) {
     // A first-person scene lets the head turn within its clip's limits,
     // turning back once left alone.
-    match cinema.head_look.filter(|_| cinema.view.is_some() && *state.get() == crate::menu::GameState::Playing) {
-        Some(h) => {
+    let in_view = cinema.view.is_some() && *state.get() == crate::menu::GameState::Playing;
+    match (cinema.free_aim.filter(|_| in_view), cinema.head_look.filter(|_| in_view)) {
+        // (Aiming from a scene's view, the head turns as far as the gameplay
+        // lets it, staying where it is put.)
+        (Some(reach), _) => {
+            let look = actions.look * aimed_look(player.single().ok().and_then(|(_, _, inv)| inv), actions.gamepad_active);
+            head.yaw = (head.yaw - look.x).clamp(-reach.x, reach.x);
+            head.pitch = (head.pitch + look.y).clamp(-reach.y, reach.y);
+        }
+        (None, Some(h)) => {
             let dt = time.delta_secs();
             let turn = actions.look * h.speed.max(0.1) * 0.5;
             if turn.length_squared() > 0.0 {
@@ -624,7 +632,7 @@ pub(crate) fn player_look(
                 }
             }
         }
-        None => *head = SceneHeadLook::default(),
+        (None, None) => *head = SceneHeadLook::default(),
     }
     let Ok((mut p, mut t, inv)) = player.single_mut() else { return };
     // (Where the view was left last frame, after anything else had its say.)

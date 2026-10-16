@@ -925,7 +925,7 @@ fn draw_markers(
 
 /// A weapon by a script's archetype name (`weapons:FC3/machete`): the
 /// game's weapon whose name or model folder it is.
-fn weapon_def(inv: &crate::weapons::Inventory, archetype: &str, data: &fc3_story::data::StoryData) -> Option<usize> {
+pub(crate) fn weapon_def(inv: &crate::weapons::Inventory, archetype: &str, data: &fc3_story::data::StoryData) -> Option<usize> {
     let short = archetype.rsplit(['/', ':']).next().unwrap_or(archetype).to_ascii_lowercase();
     let in_folder = |folder: &str| inv.defs.iter().position(|d| d.model.split('\\').next().is_some_and(|f| f.eq_ignore_ascii_case(folder)));
     if let Some(def) = inv.defs.iter().position(|d| d.name.to_ascii_lowercase() == short).or_else(|| in_folder(&short)) {
@@ -1255,7 +1255,7 @@ fn run_story(
         mut trees,
         mut doors,
         mut stims,
-        (mut sniping, mut boss_fight, mut binds, mut unlimited_ammo, mut intoxication, mut prompts),
+        (mut sniping, mut boss_fight, mut binds, mut unlimited_ammo, mut intoxication, mut prompts, mut chopper),
     ): (
         MessageWriter<crate::progression::XpGain>,
         ResMut<crate::progression::Progress>,
@@ -1278,6 +1278,7 @@ fn run_story(
             ResMut<crate::weapons::UnlimitedAmmo>,
             ResMut<crate::intoxication::Intoxication>,
             ResMut<crate::input_prompts::InputPrompts>,
+            ResMut<crate::chopper_fight::ChopperFight>,
         ),
     ),
 ) {
@@ -1367,6 +1368,7 @@ fn run_story(
             unlimited_ammo.0 = false;
             intoxication.reset();
             prompts.reset();
+            chopper.reset();
             postfx.reset();
             ui.subtitle = None;
             // Rebuild mission actors and discard transient wildlife together.
@@ -2226,6 +2228,7 @@ fn run_story(
                         id: a(0).parse().unwrap_or(0),
                         params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                     }),
+                    "CreateSpecificGameplay" if a(1) == CHOPPER_FIGHT => chopper.pending.push(a(0).parse().unwrap_or(0)),
                     "CreateSpecificGameplay" if a(1) == INPUT_PROMPTS => {
                         let params = args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect();
                         prompts.start(a(0).parse().unwrap_or(0), &params);
@@ -2272,6 +2275,7 @@ fn run_story(
                         boss_fight.cancelled.push(id);
                         intoxication.cancelled.push(id);
                         prompts.end(id);
+                        chopper.cancelled.push(id);
                     }
                     "StopBinkVideo" => videos.stops.push(false),
                     "StopFullscreenVideo" => videos.stops.push(true),
@@ -3266,6 +3270,9 @@ const BOSS_FIGHT: &str = "CCitraBossFight";
 const INTOXICATED: &str = "CIntoxicatedMiniGame";
 /// A script's button prompts: shown (`input_prompts`) until it ends them.
 const INPUT_PROMPTS: &str = "CGSFInputManager";
+/// JAS_150's ride, shot from: played (`chopper_fight`) until its scene
+/// stops it.
+const CHOPPER_FIGHT: &str = "CChopperFightE3";
 /// Seconds a specific gameplay the game doesn't play runs before it ends.
 const UNPLAYED_GRACE: f32 = 1.0;
 
@@ -3280,6 +3287,7 @@ fn played_gameplay(host: &StoryHost, id: u64, name: &str) -> bool {
         || name == BOSS_FIGHT
         || name == INTOXICATED
         || name == INPUT_PROMPTS
+        || name == CHOPPER_FIGHT
         || (name == "CVineClimbingGameplay" && std::env::var_os("FC3_VINE_GAMEPLAY_TEST").is_some())
 }
 
