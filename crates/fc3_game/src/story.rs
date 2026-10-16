@@ -561,6 +561,9 @@ pub struct StoryHost {
     pub damages: Vec<(u64, f32)>,
     /// Props scripts spawned, not yet drawn.
     pub spawned_props: Vec<crate::story_props::SpawnedProp>,
+    /// Specific gameplays the game doesn't play, and how long each has run
+    /// (they end a moment after they start).
+    unplayed: HashMap<u64, f32>,
 }
 
 impl StoryHost {
@@ -684,6 +687,7 @@ impl StoryHost {
             end_of_game: false,
             damages: Vec::new(),
             spawned_props: Vec::new(),
+            unplayed: HashMap::new(),
         }
     }
 }
@@ -1552,6 +1556,26 @@ fn run_story(
     if sectors != area.sectors {
         area.sectors = sectors;
     }
+    // A specific gameplay the game doesn't play yet ends a moment after it
+    // starts: a script waiting for it to stop would otherwise hold the story
+    // for good (JAS_130's car chase, JAS_150's chopper fight).
+    if gameplay {
+        let unplayed: Vec<(u64, String)> = host.story.gameplays().into_iter().filter(|(id, name)| !played_gameplay(&host, *id, name)).collect();
+        host.unplayed.retain(|id, _| unplayed.iter().any(|(u, _)| u == id));
+        let mut over = Vec::new();
+        for (id, name) in unplayed {
+            let ran = host.unplayed.entry(id).or_insert(0.0);
+            *ran += dt;
+            if *ran >= UNPLAYED_GRACE {
+                over.push((id, name));
+            }
+        }
+        for (id, name) in over {
+            info!("story: {name} ({id}) ends: not played");
+            host.unplayed.remove(&id);
+            host.story.gameplay_ended(id);
+        }
+    }
     // Tests: when nothing has happened for a while, step into a trigger a
     // script waits on.
     host.quiet += dt;
@@ -1896,15 +1920,7 @@ fn run_story(
                     }
                 }
             }
-        } else if let Some((id, name)) = host.story.gameplays().into_iter().find(|g| {
-            g.1 != "QTEGSF"
-                && !host.story.is_qte_gameplay(g.0)
-                && !sniping_challenge(&g.1)
-                && !g.1.starts_with("CPokerMiniGame")
-                && g.1 != BOSS_FIGHT
-                && g.1 != INTOXICATED
-                && g.1 != INPUT_PROMPTS
-        }) {
+        } else if let Some((id, name)) = host.story.gameplays().into_iter().find(|g| !played_gameplay(&host, g.0, &g.1)) {
             // A minigame or QTE the game doesn't play yet: done. (A sniping
             // challenge is played: its targets shot, see `autopilot_loot`.)
             info!("story autopilot: end gameplay {name}");
@@ -3247,6 +3263,22 @@ const BOSS_FIGHT: &str = "CCitraBossFight";
 const INTOXICATED: &str = "CIntoxicatedMiniGame";
 /// A script's button prompts: shown (`input_prompts`) until it ends them.
 const INPUT_PROMPTS: &str = "CGSFInputManager";
+/// Seconds a specific gameplay the game doesn't play runs before it ends.
+const UNPLAYED_GRACE: f32 = 1.0;
+
+/// The specific gameplays the game plays itself (QTEs, the sniping
+/// challenge, poker, the Ink Monster, being drunk, button prompts; the
+/// vines under their test).
+fn played_gameplay(host: &StoryHost, id: u64, name: &str) -> bool {
+    name == "QTEGSF"
+        || host.story.is_qte_gameplay(id)
+        || sniping_challenge(name)
+        || name.starts_with("CPokerMiniGame")
+        || name == BOSS_FIGHT
+        || name == INTOXICATED
+        || name == INPUT_PROMPTS
+        || (name == "CVineClimbingGameplay" && std::env::var_os("FC3_VINE_GAMEPLAY_TEST").is_some())
+}
 
 /// A sniping set-piece (`CSnipingChallenge_...`): the player shoots its
 /// targets from where they stand.

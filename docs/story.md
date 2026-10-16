@@ -4003,6 +4003,17 @@ never showed. They now show in the HUD's prompt while it runs
 (`input_prompts`), with the key for the types we know (1, the face button
 that interacts; 22, the takedown) and the text alone for the rest.
 
+## Specific gameplays the game doesn't play
+
+Only the autopilot used to end a specific gameplay the game doesn't play
+yet; for a player one stayed on, and a script waiting for it to stop held
+the story for good (JAS_130 B60's car chase, `CExoticCarChase`, whose stop
+hands over the pistol and the driver's seat; JAS_150 B20's chopper fight,
+`CChopperFightE3`). Such a gameplay now ends a second after it starts
+(`UNPLAYED_GRACE`), for anyone. The ones played are QTEs, the sniping
+challenge, poker, the Ink Monster, being intoxicated, button prompts, and
+the vines under their test switch (`played_gameplay`).
+
 ## JAS_170: the drop onto the beach
 
 JAS_170's B05 starts with the plane's crash scene, the player left some
