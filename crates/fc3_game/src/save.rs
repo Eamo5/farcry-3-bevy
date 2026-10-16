@@ -292,10 +292,14 @@ impl SaveSources<'_, '_> {
             // A mounted gun isn't carried: the weapon held before it is.
             current: inv.slots.get(inv.mounted_from.unwrap_or(inv.current)).and_then(|s| inv.defs.get(s.def))
                 .map(|d| d.name.to_string()).unwrap_or_default(),
+            // (Nor is a weapon lent while another is put by: a sniping
+            // challenge's rifle, the last slot.)
             weapons: inv
                 .slots
                 .iter()
-                .filter(|s| inv.defs[s.def].class != crate::weapons::WeaponClass::Mounted)
+                .enumerate()
+                .filter(|(i, s)| inv.defs[s.def].class != crate::weapons::WeaponClass::Mounted && !(inv.mounted_from.is_some() && *i + 1 == inv.slots.len()))
+                .map(|(_, s)| s)
                 .map(|s| (inv.defs[s.def].name.to_string(), s.mag, s.reserve))
                 .collect(),
             attachments: inv.attachments.iter().enumerate().filter(|(_, b)| **b != 0).map(|(d, b)| (inv.defs[d].name.to_string(), *b)).collect(),

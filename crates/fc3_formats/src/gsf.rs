@@ -29,16 +29,21 @@ pub struct VineSettings {
     pub dolly_duration: f32,
 }
 
+/// The library's entry for the gameplay `name` (`hidName`).
+pub fn entry(bytes: &[u8], name: &str) -> Result<Object> {
+    let root = crate::fcb::parse(bytes)?;
+    let mut entry = None;
+    root.walk(&mut |o, _| {
+        if entry.is_none() && o.str("hidName").as_deref() == Some(name) {
+            entry = Some(o.clone());
+        }
+    });
+    entry.with_context(|| format!("GSF library has no {name}"))
+}
+
 impl VineSettings {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
-        let root = crate::fcb::parse(bytes)?;
-        let mut entry = None;
-        root.walk(&mut |o, _| {
-            if o.str("hidName").as_deref() == Some("CVineClimbingGameplay") {
-                entry = Some(o.clone());
-            }
-        });
-        Self::from_object(&entry.context("GSF library has no CVineClimbingGameplay")?)
+        Self::from_object(&entry(bytes, "CVineClimbingGameplay")?)
     }
 
     fn from_object(o: &Object) -> Result<Self> {
@@ -82,9 +87,92 @@ impl VineSettings {
     }
 }
 
+/// A sniping challenge (`CSnipingChallenge`, WIL_050's): the player held
+/// crouched at a rifle, the view kept within angles of where they are to
+/// look. Angles in degrees, positive yaw turning left (counter-clockwise
+/// seen from above), positive pitch up.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SnipingSettings {
+    /// The rifle lent (`weapons:FC3/M93.M93_SniperChallenge`).
+    pub weapon_archetype: String,
+    pub yaw: [f32; 2],
+    pub pitch: [f32; 2],
+    pub crouch: bool,
+    /// The music state it plays.
+    pub music: String,
+}
+
+impl SnipingSettings {
+    pub fn parse(bytes: &[u8], name: &str) -> Result<Self> {
+        Self::from_object(&entry(bytes, name)?)
+    }
+
+    fn from_object(o: &Object) -> Result<Self> {
+        let number = |name: &str| o.f32(name).filter(|v| v.is_finite()).with_context(|| format!("sniping setting {name} is missing"));
+        let settings = Self {
+            weapon_archetype: o.str("WeaponArchetype").filter(|s| !s.is_empty()).context("sniping challenge has no weapon")?,
+            yaw: [number("gCameraYawMinDeviation")?, number("gCameraYawMaxDeviation")?],
+            pitch: [number("gCameraPitchMinDeviation")?, number("gCameraPitchMaxDeviation")?],
+            crouch: o.bool("IsStanceCrouch").unwrap_or(false),
+            music: o.str_h(0xA504_B211).unwrap_or_default(),
+        };
+        ensure!(settings.yaw[0] <= settings.yaw[1] && settings.pitch[0] <= settings.pitch[1], "inverted sniping view limits");
+        Ok(settings)
+    }
+
+    /// A script's own value for one of the settings (its GSF box's
+    /// `gCameraYawMinDeviation`, `IsStanceCrouch`...), over the library's.
+    pub fn set(&mut self, key: &str, value: &str) {
+        let number = value.parse::<f32>().ok().filter(|v| v.is_finite());
+        match (key, number) {
+            ("gCameraYawMinDeviation", Some(v)) => self.yaw[0] = v,
+            ("gCameraYawMaxDeviation", Some(v)) => self.yaw[1] = v,
+            ("gCameraPitchMinDeviation", Some(v)) => self.pitch[0] = v,
+            ("gCameraPitchMaxDeviation", Some(v)) => self.pitch[1] = v,
+            ("IsStanceCrouch", _) => self.crouch = value.eq_ignore_ascii_case("true") || value == "1",
+            ("WeaponArchetype", _) if !value.is_empty() => self.weapon_archetype = value.to_string(),
+            _ => {}
+        }
+    }
+
+    /// The lent rifle's model folder (`m93`), which names our weapon.
+    pub fn weapon_folder(&self) -> Option<String> {
+        let name = self.weapon_archetype.rsplit('/').next()?;
+        let folder = name.split('.').next()?.to_ascii_lowercase();
+        (!folder.is_empty()).then_some(folder)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sniping_challenge_takes_the_scripts_limits_over_the_librarys() {
+        let mut s = SnipingSettings {
+            weapon_archetype: "weapons:FC3/M93.M93_SniperChallenge".into(),
+            yaw: [-30.0, 30.0],
+            pitch: [-13.0, 30.0],
+            crouch: false,
+            music: String::new(),
+        };
+        for (k, v) in [("gCameraYawMinDeviation", "-18"), ("gCameraYawMaxDeviation", "92"), ("gCameraPitchMaxDeviation", "7"), ("IsStanceCrouch", "true")] {
+            s.set(k, v);
+        }
+        s.set("gCameraPitchMinDeviation", "nan");
+        assert_eq!((s.yaw, s.pitch, s.crouch), ([-18.0, 92.0], [-13.0, 7.0], true));
+        assert_eq!(s.weapon_folder().as_deref(), Some("m93"));
+    }
+
+    #[test]
+    #[ignore = "requires locally installed Far Cry 3 archives"]
+    fn installed_sniping_challenge_settings() {
+        let vfs = crate::Vfs::open_install(&crate::find_install().expect("installed Far Cry 3"), None).unwrap();
+        let s = SnipingSettings::parse(&vfs.read(LIBRARY).unwrap(), "CSnipingChallenge_CIT020").unwrap();
+        assert_eq!(s.weapon_archetype, "weapons:FC3/M93.M93_SniperChallenge");
+        assert_eq!((s.yaw, s.pitch, s.crouch), ([-30.0, 30.0], [-13.0, 30.0], true));
+        assert_eq!(s.music, "MUS_MG_KnifeThrowing_LP");
+    }
 
     #[test]
     #[ignore = "requires locally installed Far Cry 3 archives"]

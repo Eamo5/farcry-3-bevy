@@ -1232,6 +1232,7 @@ fn run_story(
         mut trees,
         mut doors,
         mut stims,
+        mut sniping,
     ): (
         MessageWriter<crate::progression::XpGain>,
         ResMut<crate::progression::Progress>,
@@ -1247,6 +1248,7 @@ fn run_story(
         ResMut<crate::tree_growth::TreeGrowth>,
         ResMut<crate::doors::Doors>,
         ResMut<crate::stims::Stims>,
+        ResMut<crate::sniping::Sniping>,
     ),
 ) {
     // (Not a run condition: those may run off the main thread.)
@@ -1329,6 +1331,7 @@ fn run_story(
             action_maps.reset();
             trees.reset();
             vines.reset();
+            sniping.reset();
             postfx.reset();
             ui.subtitle = None;
             // Rebuild mission actors and discard transient wildlife together.
@@ -1574,9 +1577,12 @@ fn run_story(
         .unwrap_or(6.0).max(0.5);
     // (At the wheel, the autopilot drives into the boxes scripts wait on.)
     let at_wheel = p.driving && vehicle_views.iter().any(|(e, v, _, _)| driving.vehicle == Some(e) && v.is_driver_seat(driving.seat));
+    // (Not while a sniping challenge holds the player at its rifle: WIL_050's
+    // B20 has him cover Oliver from it on his way to the boat.)
     if gameplay
         && health.as_ref().is_none_or(|h| !h.dead)
         && (!p.driving || at_wheel)
+        && !sniping.holds_player()
         && cinema.view.is_none()
         && !cinema.plays_player()
         && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
@@ -1663,6 +1669,30 @@ fn run_story(
                 && !(w.1 == "EnterFOV" && tails.contains(&w.0))
                 && (!p.driving || matches!(w.1.as_str(), "Enter" | "EnterFOV"))
         });
+        // (In the stall report: the triggers it may step into and what holds
+        // each back.)
+        if (host.quiet > 20.0 && host.quiet - dt <= 20.0) || minute {
+            info!(
+                "story autopilot: trigger step: {} focused, {} watched, rock {awaiting_rock}, led {leading}, kept near {} companions",
+                focused.len(),
+                watched.len(),
+                kept.len()
+            );
+            for w in focused.iter().chain(watched.iter()) {
+                info!(
+                    "story autopilot: candidate {} {} {}: near companion {}, past door {}, on {}, used {}, fatal {}, tailed {}",
+                    w.0,
+                    w.1,
+                    data.name_of(w.0).unwrap_or("?"),
+                    near_companion(w.2),
+                    past_door(w.2),
+                    w.3,
+                    host.used.contains(&(w.0, w.1.clone())),
+                    host.fatal.contains(&(w.0, w.1.clone())),
+                    tails.contains(&w.0)
+                );
+            }
+        }
         if p.driving {
             // At the wheel (CIT_020's chase after the convoy): the vehicle
             // goes into the box, the player with it; or before a spot to be
@@ -2142,6 +2172,11 @@ fn run_story(
                         id: a(0).parse().unwrap_or(0),
                         params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                     }),
+                    "CreateSpecificGameplay" if a(1).starts_with("CSnipingChallenge") => sniping.pending.push(crate::sniping::Start {
+                        id: a(0).parse().unwrap_or(0),
+                        name: a(1),
+                        params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                    }),
                     // A script decides a QTE: `QteSetResult <id> success|failure`.
                     "SendGSFGenericEventToEntity" if a(2) == "QteSetResult" => {
                         qtes.decided.push((a(3).parse().unwrap_or(0), a(4).eq_ignore_ascii_case("success")));
@@ -2152,6 +2187,7 @@ fn run_story(
                         let id = a(0).parse().unwrap_or(0);
                         qtes.cancelled.push(id);
                         vines.cancelled.push(id);
+                        sniping.cancelled.push(id);
                     }
                     "StopBinkVideo" => videos.stops.push(false),
                     "StopFullscreenVideo" => videos.stops.push(true),
@@ -3078,6 +3114,9 @@ const TAKEDOWN_PATIENCE: f32 = 6.0;
 /// come nearer (m).
 const SHOOT_FROM: f32 = 15.0;
 
+/// Tests: beyond how far (m) the autopilot shoots through the sights.
+const LONG_SHOT: f32 = 30.0;
+
 /// Tests: how long (s) the autopilot lets a vehicle it set down settle before
 /// the next place its distance checks wait for.
 const VEHICLE_NEAR_AFTER: f32 = 2.0;
@@ -3261,12 +3300,25 @@ fn autopilot_loot(
     // (Nor while a scene plays the player through without its own view: a
     // quest giver's brief walked out of left its pickup untaken.)
     if time.is_paused() || !ui.boxes.is_empty() || cinema.view.is_some() || cinema.plays_player() || qtes.active() || busy.busy() {
+        let t = time.elapsed_secs();
+        if host.story.gameplays().iter().any(|g| sniping_challenge(&g.1)) && (t * 0.5) as u32 != ((t - time.delta_secs()) * 0.5) as u32 {
+            info!(
+                "story autopilot: sniping held: paused {}, boxes {}, scene view {}, scene plays the player {}, qte {}, hands busy {}",
+                time.is_paused(),
+                ui.boxes.len(),
+                cinema.view.is_some(),
+                cinema.plays_player(),
+                qtes.active(),
+                busy.busy()
+            );
+        }
         return;
     }
     let Ok((me, mut at, mut player, health, inventory)) = players.single_mut() else { return };
     // Shooting from where he is, not going after anyone: a passenger, gun in
     // hand, or on a mounted gun (HUR_040's barge).
-    let fixed = player.armed_passenger || player.mounted.is_some();
+    // (Or with a rifle lent where it was taken: a sniping challenge's.)
+    let fixed = player.armed_passenger || inventory.mounted_from.is_some();
     // (Held up where a high trigger was stepped into, the player may still
     // go after a character: getting there sets him down.)
     if health.dead || player.spawning || (player.driving && !player.armed_passenger) || landing_awaited(&host, &player) {
@@ -3428,6 +3480,15 @@ fn autopilot_loot(
                 (!counted.contains(&a.4.id)).cmp(&!counted.contains(&b.4.id)).then((near(a.0) - held(a.4.id)).total_cmp(&(near(b.0) - held(b.4.id))))
             })
     });
+    // (In a sniping challenge, every two seconds: whom it might shoot.)
+    if sniping && (now * 0.5) as u32 != ((now - time.delta_secs()) * 0.5) as u32 {
+        let foes: Vec<(u64, f32, bool, bool)> = npcs
+            .iter()
+            .filter(|q| !q.1.dead && q.5.faction.hostile_to_player())
+            .map(|q| (q.4.id, near(q.0), q.4.seated, skipped.contains_key(&q.4.id)))
+            .collect();
+        info!("story autopilot: sniping: camera {}, target {:?}, foes (id, m, seated, skipped) {foes:?}", scripted.camera_drawn, quest.map(|q| q.4.id));
+    }
     // (Held in the camera by a script, the player watches: a scene plays out
     // before him that needs its characters.)
     let quest = quest.filter(|_| !scripted.camera_drawn);
@@ -3588,11 +3649,21 @@ fn autopilot_loot(
             return;
         }
         *blocked = None;
+        use crate::controls::Action;
+        // A long shot (a sniping challenge's guards, 80 m off): through the
+        // sights, a sniper rifle's breath held, fired once they are up.
+        let class = inventory.def().class;
+        let long = aim.length() > LONG_SHOT && class != crate::weapons::WeaponClass::Melee;
+        if long {
+            actions.hold(Action::Aim);
+            if class == crate::weapons::WeaponClass::Sniper {
+                actions.hold(Action::Sprint);
+            }
+        }
         // (Not straight after being moved: the aim was taken from where the
         // player stood.)
-        if now >= *next_press && !player.spawning && now - player.spawned_at >= 0.5 {
+        if now >= *next_press && !player.spawning && now - player.spawned_at >= 0.5 && (!long || inventory.aim_blend > 0.95) {
             *next_press = now + 0.25;
-            use crate::controls::Action;
             // The gun that harms him most from here, of those that reach him
             // (a heavy stood a pistol for minutes beside the rifle carried),
             // else the one that reaches furthest: the next weapon round, as

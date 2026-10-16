@@ -378,7 +378,8 @@ pub struct Inventory {
     pub attachments: Vec<u32>,
     /// Attachment models (suppressors and sights), by `Attachment::model`.
     pub attachment_models: Vec<Handle<Fc3Model>>,
-    /// On a mounted gun (the last slot while on it): the slot to go back to.
+    /// On a mounted gun or with a weapon lent (the last slot while so): the
+    /// slot to go back to.
     pub mounted_from: Option<usize>,
     /// An automatic weapon's stop event (the tail and its echo), due once the
     /// trigger is let go.

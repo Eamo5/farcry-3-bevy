@@ -3589,13 +3589,33 @@ about as non-fighters and the first wave never emptied.
 * **The sniping challenge.** Once released, the player is to shoot the
   guards before the helicopter takes Oliver (`CSnipingChallenge_CIT020`, a
   scripted gameplay with the player crouched at a rifle, the view held
-  within set angles). We don't play that gameplay yet: a player can put
-  the camera away and shoot the guards from the vantage point with their
-  own guns. The autopilot used to end it at once; it now plays it that
-  way, shooting the hostile characters in reach (idle ones too: the
-  guards beating Oliver), going nearer first when they are beyond its
-  guns' reach (`SHOOT_FROM`). When the beater dies the beating breaks off
-  and its second markup never comes, as in the game.
+  within set angles), which is now played (`sniping`): the library's entry
+  (`gsf::SnipingSettings`: the rifle's archetype, the view's yaw and pitch
+  either side of its centre, crouched, its music) with the script's own
+  values over it (B20's view turns 18 degrees one way and 92 the other).
+  The rifle (`M93_SniperChallenge`, our Z93 by its model's folder) is lent
+  as a mounted gun is: the weapon in hand is put by (`mounted_from`), it
+  can't be switched away from and a save leaves it out. The player is
+  kept where they took it, crouched, unable to walk, jump or throw, the
+  view kept within the angles about where they are to look
+  (`EntityToLookAt`, else the rifle's facing; `player::ViewLimits`), until
+  the script destroys the gameplay, as B20 does once Oliver has reached the
+  boat: the player covers him from the rifle all the way. The autopilot
+  shoots from there and goes nowhere else meanwhile, the long shots
+  through the sights (beyond `LONG_SHOT`, a sniper rifle's breath held,
+  fired once the sights are up). When the beater dies the
+  beating breaks off and its second markup never comes, as in the game.
+* **Standing on the rock.** The script puts the player on a flat rock
+  above the ground at the rifle (vegetation, whose colliders come in
+  after the terrain's); placed before it was there, the player landed on
+  the terrain inside it and every shot hit the rock. A placement kept to
+  its height now also waits for its sector's rocks and their colliders
+  (`VegStreamer::solid_root`).
+* **Seen.** From a B20 checkpoint: the rifle lent, the first kill puts the
+  rest into combat, the five guards fall to it, the helicopter leaves
+  without Oliver, the waves after him fall to it too, and B20 completes in
+  about two minutes (eight on foot before); the rifle goes back, B25C's
+  scene plays and B30 starts.
 * **Groups going into combat.** The engine tells the groups scripts watch
   (`CGroupCombatEvent`) when their members' AI states change:
   `<State>Start` as the first member enters idle, investigate, alert or

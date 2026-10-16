@@ -211,6 +211,7 @@ impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InputCaptured>()
             .init_resource::<SceneHeadLook>()
+            .init_resource::<ViewLimits>()
             .init_resource::<PlayerBody>()
             .add_systems(OnExit(crate::menu::GameState::Loading), load_body)
             .add_systems(Startup, spawn_player.in_set(PlayerSpawn))
@@ -298,6 +299,28 @@ pub struct Player {
     pub sliding: Option<f32>,
     /// Dragging a body (slow, no sprinting or jumping).
     pub dragging: bool,
+}
+
+/// A scripted gameplay's hold on the view (a sniping challenge's), if one
+/// has it.
+#[derive(Resource, Default)]
+pub struct ViewLimits(pub Option<ViewArc>);
+
+/// How far the view may turn from a centre (radians): either side (left
+/// positive) and down and up.
+#[derive(Clone, Copy, Debug)]
+pub struct ViewArc {
+    pub yaw: f32,
+    pub pitch: f32,
+    pub yaw_range: [f32; 2],
+    pub pitch_range: [f32; 2],
+}
+
+impl ViewArc {
+    pub fn clamp(&self, yaw: f32, pitch: f32) -> (f32, f32) {
+        let off = (yaw - self.yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+        (self.yaw + off.clamp(self.yaw_range[0], self.yaw_range[1]), pitch.clamp(self.pitch + self.pitch_range[0], self.pitch + self.pitch_range[1]))
+    }
 }
 
 /// How far a mounted gun turns: either side of its facing, and down and up.
@@ -579,6 +602,7 @@ pub(crate) fn player_look(
     (cinema, fp, mut head): (Res<crate::cinema::Cinema>, Res<crate::fp::FpState>, ResMut<SceneHeadLook>),
     assist: Option<Res<crate::aim_assist::AimAssist>>,
     mut stuck: Local<LookWatch>,
+    limits: Res<ViewLimits>,
 ) {
     // A first-person scene lets the head turn within its clip's limits,
     // turning back once left alone.
@@ -645,6 +669,9 @@ pub(crate) fn player_look(
     }
     if let Some(arcs) = p.mounted {
         (p.yaw, p.pitch) = arcs.clamp(p.yaw, p.pitch);
+    }
+    if let Some(arc) = limits.0 {
+        (p.yaw, p.pitch) = arc.clamp(p.yaw, p.pitch);
     }
     // The mouse moving for a while in play with the view not turning (no
     // scene camera holding it): say once what holds it.

@@ -64,6 +64,7 @@ mod credits;
 mod qte;
 mod stims;
 mod vine;
+mod sniping;
 mod screen_blur;
 mod script_postfx;
 mod vine_puff;
@@ -442,6 +443,7 @@ fn main() {
         .add_plugins(stims::StimsPlugin)
         .add_plugins(poker::PokerPlugin)
         .add_plugins(credits::CreditsPlugin)
+        .add_plugins(sniping::SnipingPlugin)
         .add_plugins(story_alarms::StoryAlarmsPlugin)
         .add_plugins(story_props::StoryPropsPlugin)
         .add_plugins(story_rides::StoryRidesPlugin)
