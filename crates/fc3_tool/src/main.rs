@@ -2479,7 +2479,7 @@ fn main() -> Result<()> {
                 e.id.to_string() == needle || e.name.to_ascii_lowercase().contains(&needle)).collect();
             entries.sort_by_key(|e| e.id);
             for e in entries {
-                println!("{} {:?} layer {:#x} {} [{}] at {:?}", e.id, e.origin, e.layer, e.name, e.class, e.pos);
+                println!("{} {:?} layer {:#x} {} [{}] at {:?} angles {:?}", e.id, e.origin, e.layer, e.name, e.class, e.pos, e.angles);
                 let mut text = String::new();
                 fc3_formats::fcb::dump(&e.fields, &names, 16, &mut text);
                 fc3_formats::fcb::dump(&e.components, &names, 16, &mut text);
