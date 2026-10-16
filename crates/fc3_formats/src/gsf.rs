@@ -377,6 +377,212 @@ impl BossFightSettings {
     }
 }
 
+/// A shooting gallery (the sharpshooter challenges, `CShootingGallery...`):
+/// the player stands with the gallery's weapon, the view held within angles
+/// of where they face, while birds released in waves fly off within a frustum
+/// in front; the kill target reached, the wager comes back multiplied.
+/// Angles in degrees as the sniping challenge has them.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ShootingGallerySettings {
+    /// The weapon and the bird, by their place in the shared resources
+    /// (`ShootingGalleryResources`).
+    pub weapon: usize,
+    pub animal: usize,
+    pub yaw: [f32; 2],
+    pub pitch: [f32; 2],
+    /// Where birds may fly: angles left, right, up and down of the view's
+    /// middle, and how far.
+    pub frustum: [f32; 4],
+    pub frustum_distance: f32,
+    /// Seconds between birds released (least, most), and whether a wave's
+    /// birds go together.
+    pub spawn_delay: [f32; 2],
+    pub flock: bool,
+    /// The longest an automatic weapon goes without its magazine filled (s).
+    pub refill: f32,
+    /// The wager comes back this many times over.
+    pub winnings: f32,
+    /// The difficulty box's subtitle (a string id).
+    pub subtitle: u32,
+    /// The music state it plays.
+    pub music: String,
+    /// Easy, medium and hard.
+    pub difficulties: Vec<GalleryDifficulty>,
+    pub waves: Vec<GalleryWave>,
+}
+
+/// How a difficulty's birds fly, and what it asks and stakes.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct GalleryDifficulty {
+    pub speed: f32,
+    /// How many times a bird turns, by how much each way (least, most), how
+    /// often, over how long, and how far from its box it first turns.
+    pub turns: u32,
+    pub horizontal_turn: [f32; 2],
+    pub vertical_turn: [f32; 2],
+    pub turn_every: f32,
+    pub turn_time: f32,
+    pub turn_from: f32,
+    pub kill_target: u32,
+    pub wager: u32,
+}
+
+/// A wave: how many birds, and for each difficulty how long before they come
+/// and how long the wave lasts, and whether the next wave is announced.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct GalleryWave {
+    pub birds: u32,
+    pub delay: Vec<f32>,
+    pub duration: Vec<f32>,
+    pub announced: Vec<bool>,
+}
+
+impl ShootingGallerySettings {
+    pub fn parse(bytes: &[u8], name: &str) -> Result<Self> {
+        Self::from_object(&entry(bytes, name)?)
+    }
+
+    fn from_object(o: &Object) -> Result<Self> {
+        let n = |o: &Object, name: &str| o.f32(name).filter(|v| v.is_finite()).unwrap_or(0.0);
+        let difficulties: Vec<GalleryDifficulty> = o
+            .child("DifficultySettings")
+            .map(|d| d.children.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .map(|d| GalleryDifficulty {
+                speed: n(d, "BirdSpeed"),
+                turns: d.u32("BirdNumberOfDirectionChanges").unwrap_or(0),
+                horizontal_turn: [n(d, "BirdHorizMinTurningAngle"), n(d, "BirdHorizMaxTurningAngle")],
+                vertical_turn: [n(d, "BirdVertMinTurningAngle"), n(d, "BirdVertMaxTurningAngle")],
+                turn_every: n(d, "BirdTimeBetweenDirectionChanges"),
+                turn_time: n(d, "BirdTurningTime"),
+                turn_from: n(d, "BirdStartTurningDistance"),
+                kill_target: d.u32("KillTarget").unwrap_or(0),
+                wager: d.u32("WagerForChallenge").unwrap_or(0),
+            })
+            .collect();
+        let waves: Vec<GalleryWave> = o
+            .child("BirdWaveInformation")
+            .map(|w| w.children.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .map(|w| {
+                let per: Vec<&Object> = w.child("WaveDifficultySettings").map(|d| d.children.iter().map(|c| c.as_ref()).collect()).unwrap_or_default();
+                GalleryWave {
+                    birds: w.u32("BirdsToSpawn").unwrap_or(0),
+                    delay: per.iter().map(|d| n(d, "DelayBeforeSpawningBegins")).collect(),
+                    duration: per.iter().map(|d| n(d, "WaveDuration")).collect(),
+                    announced: per.iter().map(|d| d.bool("NextWaveMessageEnabled").unwrap_or(false)).collect(),
+                }
+            })
+            .collect();
+        let s = Self {
+            weapon: o.u32("WeaponSettingsIndex").unwrap_or(0) as usize,
+            animal: o.u32("AnimalSettingsIndex").unwrap_or(0) as usize,
+            yaw: [n(o, "gCameraYawMinDeviation"), n(o, "gCameraYawMaxDeviation")],
+            pitch: [n(o, "gCameraPitchMinDeviation"), n(o, "gCameraPitchMaxDeviation")],
+            frustum: [
+                n(o, "gCameraViewFrustumLeftAngle"),
+                n(o, "gCameraViewFrustumRightAngle"),
+                n(o, "gCameraViewFrustumUpAngle"),
+                n(o, "gCameraViewFrustumDownAngle"),
+            ],
+            frustum_distance: n(o, "gCameraViewFrustumDistance"),
+            spawn_delay: [n(o, "gDelayBetweenBirdSpawnsMin"), n(o, "gDelayBetweenBirdSpawnsMax")],
+            flock: o.bool("gBirdSpawnAsFlock").unwrap_or(false),
+            refill: n(o, "gMaxTimeBetweenAutomaticWeaponRefills"),
+            winnings: n(o, "gWinningsMultiplierForSuccess"),
+            subtitle: o.u32("DifficultyScreenSubTitle").unwrap_or(0),
+            music: o.str_h(0xA504_B211).unwrap_or_default(),
+            difficulties,
+            waves,
+        };
+        ensure!(!s.difficulties.is_empty() && !s.waves.is_empty(), "shooting gallery without difficulties or waves");
+        ensure!(s.yaw[0] <= s.yaw[1] && s.pitch[0] <= s.pitch[1], "inverted shooting gallery view limits");
+        Ok(s)
+    }
+
+    /// A wave's start delay and length at a difficulty (0 easy, 1 medium,
+    /// 2 hard).
+    pub fn wave_times(&self, wave: usize, difficulty: usize) -> Option<(f32, f32)> {
+        let w = self.waves.get(wave)?;
+        Some((*w.delay.get(difficulty).or(w.delay.last())?, *w.duration.get(difficulty).or(w.duration.last())?))
+    }
+}
+
+/// The galleries' shared resources (`CShootingGalleryResourceContainer`): the
+/// weapons and birds they pick by index, and the countdown's sounds.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ShootingGalleryResources {
+    /// A weapon archetype (`weapons:FC3/KW1911`), and whether it's mounted.
+    pub weapons: Vec<(String, bool)>,
+    pub animals: Vec<GalleryAnimal>,
+    pub countdown_sound: u32,
+    pub ready_sound: u32,
+}
+
+/// A gallery's bird: its archetype, its flight, death and impact clips, and
+/// its sounds (released, killed, hitting the ground).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct GalleryAnimal {
+    pub archetype: String,
+    pub fly: String,
+    pub death: String,
+    pub impact: String,
+    pub release_sound: u32,
+    pub death_sound: u32,
+    pub impact_sound: u32,
+}
+
+/// A sound event id written as hex text (`0x001A4F1F`); none for all ones.
+fn sound_id(o: &Object, name: &str) -> u32 {
+    o.str(name).and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok()).filter(|&i| i != u32::MAX).unwrap_or(0)
+}
+
+pub const SHOOTING_GALLERY_RESOURCES: &str = "CShootingGalleryResourceContainer";
+
+impl ShootingGalleryResources {
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        let o = entry(bytes, SHOOTING_GALLERY_RESOURCES)?;
+        let weapons = o
+            .child("WeaponResources")
+            .map(|w| w.children.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|w| Some((w.str("WeaponArchetype").filter(|s| !s.is_empty())?, w.u32("WeaponIsMounted").unwrap_or(0) != 0)))
+            .collect();
+        let animals = o
+            .child("AnimalResources")
+            .map(|a| a.children.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .map(|a| {
+                let audio = a.child("AnimalAudioSettings");
+                let sound = |name: &str| audio.map_or(0, |s| sound_id(s, name));
+                // (The clips are the hashed fields' companions.)
+                GalleryAnimal {
+                    archetype: a.str("AnimalArchetype").unwrap_or_default(),
+                    fly: a.str_h(0xF073_6FEE).unwrap_or_default(),
+                    death: a.str_h(0xEF7C_A492).unwrap_or_default(),
+                    impact: a.str_h(0x3A85_10EF).unwrap_or_default(),
+                    release_sound: sound("AnimalReleaseSound"),
+                    death_sound: sound("AnimalDeathSound"),
+                    impact_sound: sound("AnimalImpactSound"),
+                }
+            })
+            .collect();
+        let audio = o.child("AudioSettings");
+        let s = Self {
+            weapons,
+            animals,
+            countdown_sound: audio.map_or(0, |a| sound_id(a, "CountDownEachSecond")),
+            ready_sound: audio.map_or(0, |a| sound_id(a, "GetReadySound")),
+        };
+        ensure!(!s.weapons.is_empty() && !s.animals.is_empty(), "shooting gallery resources without weapons or birds");
+        Ok(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,6 +613,26 @@ mod tests {
     fn the_ink_monster_goes_through_its_phases_by_health() {
         let s = BossFightSettings { hp: 20000.0, phases: [17000.0, 12000.0, 1000.0], ..Default::default() };
         assert_eq!([20000.0, 17000.0, 16999.0, 12000.0, 900.0].map(|h| s.phase_at(h)), [0, 1, 1, 2, 3]);
+    }
+
+    #[test]
+    #[ignore = "requires locally installed Far Cry 3 archives"]
+    fn installed_shooting_gallery_settings() {
+        let vfs = crate::Vfs::open_install(&crate::find_install().expect("installed Far Cry 3"), None).unwrap();
+        let bytes = vfs.read(LIBRARY).unwrap();
+        let s = ShootingGallerySettings::parse(&bytes, "CShootingGalleryPistol_E6").unwrap();
+        assert_eq!((s.yaw, s.pitch, s.frustum, s.frustum_distance), ([-85.0, 85.0], [-20.0, 45.0], [85.0, 85.0, 45.0, 20.0], 30.0));
+        assert_eq!((s.spawn_delay, s.winnings), ([0.75, 1.75], 2.0));
+        assert_eq!(s.difficulties.iter().map(|d| (d.kill_target, d.wager)).collect::<Vec<_>>(), vec![(10, 100), (10, 200), (10, 250)]);
+        assert_eq!((s.difficulties[0].speed, s.difficulties[2].turns), (3.0, 7));
+        assert_eq!(s.waves.len(), 9);
+        assert_eq!((s.waves[0].birds, s.wave_times(0, 0), s.wave_times(0, 2)), (1, Some((1.5, 14.0)), Some((0.5, 4.0))));
+        let r = ShootingGalleryResources::parse(&bytes).unwrap();
+        assert_eq!(r.weapons[0], ("weapons:FC3/KW1911".to_string(), false));
+        assert_eq!(r.animals.len(), 3);
+        assert!(r.animals[1].fly.ends_with("seagull_fulb_flycycle_+000fw_nowep.mab"), "{}", r.animals[1].fly);
+        assert!(r.animals[0].death.contains("shootinggallery") && r.animals[0].release_sound != 0);
+        assert!(r.countdown_sound != 0 && r.ready_sound != 0);
     }
 
     #[test]
