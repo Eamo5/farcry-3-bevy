@@ -397,6 +397,7 @@ pub fn continue_game(
     explosives: Query<(Entity, &Explosive)>,
     mut commands: Commands,
     host: Option<NonSendMut<crate::story::StoryHost>>,
+    args: Option<Res<Args>>,
 ) {
     if requests.read().count() == 0 {
         return;
@@ -407,7 +408,9 @@ pub fn continue_game(
     pause_menu.tutorial_completed = save.craft_tutorial == Some(crate::progression::CraftTutorial::Done);
     continued.0 = true;
     let Ok((mut t, mut p, mut h, mut stats, mut inv)) = players.single_mut() else { return };
-    t.translation = save.position;
+    // (A test's `--pos` over a kept checkpoint: placed there instead.)
+    let position = args.filter(|a| a.placed).map_or(save.position, |a| a.start);
+    t.translation = position;
     t.rotation = Quat::from_rotation_y(save.yaw);
     p.yaw = save.yaw;
     p.pitch = 0.0;
@@ -419,7 +422,7 @@ pub fn continue_game(
     h.dead = false;
     stats.medkits = save.medkits;
     stats.kills = save.kills;
-    stats.spawn_point = save.position;
+    stats.spawn_point = position;
     restore_inventory(&mut inv, save);
     world.herbs = save.herbs;
     world.removed = save.removed.iter().copied().collect();
@@ -444,7 +447,7 @@ pub fn continue_game(
             commands.entity(e).try_despawn();
         }
     }
-    info!("continued from save at {:?}", save.position);
+    info!("continued from save at {position:?}");
 }
 
 /// Replace carried state, including upgrades and transient weapon actions.
