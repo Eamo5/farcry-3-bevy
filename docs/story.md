@@ -3993,6 +3993,16 @@ the game now plays (`boss_fight`) instead of ending it at once.
   particles (the ink, the eyes, the breath's flames, the arrows' blasts)
   and the rock's own model.
 
+## Button prompts (`CGSFInputManager`)
+
+BNG_010's bar (buying a drink, stopping) and CIT_050's end (the takedown)
+start a `CGSFInputManager` GSF only to put button prompts up: up to four
+buttons, each a localized text (`Button_N_OasisID`) on a button type
+(`ButtonType_N`). Nothing waits on it; it was ended at once, so the prompts
+never showed. They now show in the HUD's prompt while it runs
+(`input_prompts`), with the key for the types we know (1, the face button
+that interacts; 22, the takedown) and the text alone for the rest.
+
 ## JAS_170: the drop onto the beach
 
 JAS_170's B05 starts with the plane's crash scene, the player left some
