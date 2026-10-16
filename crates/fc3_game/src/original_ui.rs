@@ -1796,7 +1796,12 @@ fn drive_hud(
         With<crate::player::Player>,
     >,
     (game_state, hud_state): (Res<State<crate::menu::GameState>>, Res<crate::hud::HudState>),
-    (scripted, cinema, poker): (Res<crate::story::ScriptedPlayer>, Res<crate::cinema::Cinema>, Option<Res<crate::poker::PokerTable>>),
+    (scripted, cinema, poker, minigame): (
+        Res<crate::story::ScriptedPlayer>,
+        Res<crate::cinema::Cinema>,
+        Option<Res<crate::poker::PokerTable>>,
+        Option<Res<crate::hud::Minigame>>,
+    ),
     windows: Query<&Window, With<PrimaryWindow>>,
     mut original: ResMut<crate::hud::OriginalHud>,
     mut placement: ResMut<crate::map::MinimapPlacement>,
@@ -1829,7 +1834,8 @@ fn drive_hud(
         && !scripted.hud_hidden
         && (cinema.view.is_none() || cinema.free_aim.is_some())
         && !health.dead
-        && !poker.is_some_and(|p| p.holds_player());
+        && !poker.is_some_and(|p| p.holds_player())
+        && !minigame.is_some_and(|m| m.holds_player());
     // Ammo: the strip of the weapon in hand.
     hud.strip = None;
     hud.strip_frames.clear();
@@ -2008,7 +2014,7 @@ fn drive_story(
     hud: Res<crate::hud::HudState>,
     mut last: Local<Option<(Option<String>, Option<String>, Option<String>, Option<String>)>>,
     gallery: Option<Res<crate::shooting_gallery::Gallery>>,
-    poker: Option<Res<crate::poker::PokerTable>>,
+    (poker, minigame): (Option<Res<crate::poker::PokerTable>>, Option<Res<crate::hud::Minigame>>),
 ) {
     let Interface::Running(host) = &*state else { return };
     for card in std::mem::take(&mut ui.cards) {
@@ -2020,7 +2026,10 @@ fn drive_story(
     }
     let subtitle = ui.subtitle.as_ref().filter(|_| settings.subtitles).map(|s| s.0.clone());
     // (Not while a shooting gallery runs: its count is where the box is.)
-    let objective = ui.objective.clone().filter(|_| !gallery.is_some_and(|g| g.holds_player()) && !poker.is_some_and(|p| p.holds_player()));
+    let objective = ui
+        .objective
+        .clone()
+        .filter(|_| !gallery.is_some_and(|g| g.holds_player()) && !poker.is_some_and(|p| p.holds_player()) && !minigame.is_some_and(|m| m.holds_player()));
     let now = (objective, ui.mission.clone(), subtitle, hud.shown_prompt.clone());
     let first = last.is_none();
     let old = last.clone().unwrap_or_default();

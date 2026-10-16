@@ -408,11 +408,14 @@ pub fn continue_game(
     pause_menu.tutorial_completed = save.craft_tutorial == Some(crate::progression::CraftTutorial::Done);
     continued.0 = true;
     let Ok((mut t, mut p, mut h, mut stats, mut inv)) = players.single_mut() else { return };
-    // (A test's `--pos` over a kept checkpoint: placed there instead.)
-    let position = args.filter(|a| a.placed).map_or(save.position, |a| a.start);
+    // (A test's `--pos` over a kept checkpoint: placed there instead, facing
+    // its `--yaw`.)
+    let placed = args.filter(|a| a.placed);
+    let position = placed.as_ref().map_or(save.position, |a| a.start);
+    let yaw = placed.as_ref().map_or(save.yaw, |a| a.yaw);
     t.translation = position;
-    t.rotation = Quat::from_rotation_y(save.yaw);
-    p.yaw = save.yaw;
+    t.rotation = Quat::from_rotation_y(yaw);
+    p.yaw = yaw;
     p.pitch = 0.0;
     p.velocity = Vec3::ZERO;
     p.spawning = true;

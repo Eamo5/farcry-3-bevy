@@ -558,6 +558,9 @@ pub struct StoryHost {
     /// first parameter: `StartPokerJAS220`, `CinemaSequenceFinished`), for
     /// the minigames to read.
     pub gsf_events: Vec<String>,
+    /// Each specific gameplay's parameters (`CreateSpecificGameplay`'s,
+    /// by its id), for the minigames that read them.
+    pub gameplay_params: std::collections::HashMap<u64, Vec<(String, String)>>,
     /// The game is over: the end credits are due (`PopUpEndOfGame`; the
     /// story waits for `CreditsFinished`).
     pub end_of_game: bool,
@@ -702,6 +705,7 @@ impl StoryHost {
             ai_events: Vec::new(),
             detonations: Vec::new(),
             gsf_events: Vec::new(),
+            gameplay_params: Default::default(),
             end_of_game: false,
             damages: Vec::new(),
             spawned_props: Vec::new(),
@@ -870,12 +874,12 @@ fn draw_markers(
     cameras: Query<(&Camera, &GlobalTransform), With<crate::player::PlayerCamera>>,
     icons: Query<Entity, With<MarkerIcon>>,
     mut commands: Commands,
-    scale: Res<UiScale>,
+    (scale, minigame): (Res<UiScale>, Option<Res<crate::hud::Minigame>>),
 ) {
     for e in &icons {
         commands.entity(e).despawn();
     }
-    if markers.0.is_empty() || scripted.hud_hidden || cinema.view.is_some() {
+    if markers.0.is_empty() || scripted.hud_hidden || cinema.view.is_some() || minigame.is_some_and(|m| m.holds_player()) {
         if !markers.0.is_empty() {
             trace!("markers hidden: hud {} scene view {}", scripted.hud_hidden, cinema.view.is_some());
         }
@@ -1273,7 +1277,7 @@ fn run_story(
         mut trees,
         mut doors,
         mut stims,
-        (mut sniping, mut boss_fight, mut binds, mut unlimited_ammo, mut intoxication, mut prompts, mut chopper, mut car_chase, mut gallery, poker),
+        (mut sniping, mut boss_fight, mut binds, mut unlimited_ammo, mut intoxication, mut prompts, mut chopper, mut car_chase, mut gallery, (poker, minigame)),
     ): (
         MessageWriter<crate::progression::XpGain>,
         ResMut<crate::progression::Progress>,
@@ -1299,7 +1303,7 @@ fn run_story(
             ResMut<crate::chopper_fight::ChopperFight>,
             ResMut<crate::car_chase::CarChase>,
             ResMut<crate::shooting_gallery::Gallery>,
-            Res<crate::poker::PokerTable>,
+            (Res<crate::poker::PokerTable>, Res<crate::hud::Minigame>),
         ),
     ),
 ) {
@@ -1669,6 +1673,7 @@ fn run_story(
         && !boss_fight.holds_player()
         && !gallery.holds_player()
         && !poker.holds_player()
+        && !minigame.holds_player()
         && cinema.view.is_none()
         && !cinema.plays_player()
         && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
@@ -2132,6 +2137,10 @@ fn run_story(
             Command::Message(m) if m == "PhoneCallEnd" => ui.phone = None,
             Command::Native { name, args } => {
                 let a = |i: usize| args.get(i).cloned().unwrap_or_default();
+                if name == "CreateSpecificGameplay" {
+                    let params = args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect();
+                    host.gameplay_params.insert(a(0).parse().unwrap_or(0), params);
+                }
                 match name.as_str() {
                     "OverridePauseMenu" | "OverridePauseMenuTutorial" => {
                         pause_menu.override_page(a(1) == "true", a(2) == "true", name == "OverridePauseMenuTutorial");
@@ -3342,6 +3351,7 @@ fn played_gameplay(host: &StoryHost, id: u64, name: &str) -> bool {
         || host.story.is_qte_gameplay(id)
         || sniping_challenge(name)
         || crate::poker::poker_gameplay(name)
+        || crate::knives::knives_gameplay(name)
         || name == BOSS_FIGHT
         || name == INTOXICATED
         || name == INPUT_PROMPTS

@@ -663,6 +663,97 @@ impl PokerSettings {
     }
 }
 
+pub const KNIVES: &str = "CKnivesMiniGame";
+
+/// The knife throwing game (`CKnivesMiniGame`; the scripts start the base
+/// one at every site): knives a side, the throw's top speed and gravity,
+/// the view's reach (degrees each way, across and up and down), the aim's
+/// sway (`SwayHSizeMultiplier`, `SwayVSizeMultiplier`, and their speeds),
+/// the wager rows (practice, novice, skilled, expert) with their difficulty,
+/// the targets' worth (largest ring first), the difficulty box's subtitle,
+/// and the lines and sounds (by their field's name less `m_sound`:
+/// `ComePlayWithMe1`, `NPC_GoodThrowCheer2`, ...).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct KnivesSettings {
+    pub knives: u32,
+    pub speed: f32,
+    pub gravity: f32,
+    pub view: [f32; 2],
+    pub sway: [f32; 4],
+    pub wagers: [u32; 4],
+    pub difficulty: [f32; 4],
+    pub rewards: Vec<u32>,
+    pub subtitle: u32,
+    pub sounds: std::collections::BTreeMap<String, u32>,
+    pub win: u32,
+    pub fail: u32,
+    pub wheel_start: u32,
+    pub wheel_stop: u32,
+}
+
+/// The knife game's lines, by their fields' names less `m_sound` and the
+/// number (`NPC_Win` 1, 2...).
+pub const KNIVES_LINES: [&str; 13] = [
+    "ComePlayWithMe",
+    "GameOpening_Tutorial",
+    "GameOpening_Bugging",
+    "GameOpening",
+    "NPC_GoodThrowCheer",
+    "NPC_BadThrowCursing",
+    "Player_GoodThrowCursing",
+    "Player_BadThrowCheer",
+    "Player_VeryBadThrowCheer",
+    "NPC_Lose",
+    "NPC_Win",
+    "Rematch",
+    "",
+];
+
+impl KnivesSettings {
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        let o = entry(bytes, KNIVES)?;
+        let f = |name: &str| o.f32(name).unwrap_or(0.0);
+        let mut sounds = std::collections::BTreeMap::new();
+        for line in KNIVES_LINES.iter().filter(|l| !l.is_empty()) {
+            for n in [String::new()].into_iter().chain((1..=8).map(|n| n.to_string())) {
+                let name = format!("{line}{n}");
+                let id = sound_id(&o, &format!("m_sound{name}"));
+                if id != 0 {
+                    sounds.insert(name, id);
+                }
+            }
+        }
+        let wheel = o.child("TurningWheel");
+        Ok(Self {
+            knives: o.u32("NbKnife").unwrap_or(5),
+            speed: f("KnifeSpeed"),
+            gravity: o.f32("KnifeGravityFactor").unwrap_or(1.0),
+            view: [f("CameraHLimitAngle"), f("CameraVLimitAngle")],
+            sway: [f("SwayHSizeMultiplier"), f("SwayVSizeMultiplier"), f("SwayHSpeedMultiplier"), f("SwayVSpeedMultiplier")],
+            wagers: ["m_wagerPractice", "m_wagerNovice", "m_wagerSkilled", "m_wagerExpert"].map(|n| o.u32(n).unwrap_or(0)),
+            difficulty: ["m_wagerPracticeDifficulty", "m_wagerNoviceDifficulty", "m_wagerSkilledDifficulty", "m_wagerExpertDifficulty"].map(|n| f(n)),
+            rewards: o.child("Targets").map(|t| t.children.iter().map(|c| c.u32("Reward").unwrap_or(0)).collect()).unwrap_or_default(),
+            subtitle: o.u32("DifficultyScreenSubTitle").unwrap_or(0),
+            sounds,
+            win: sound_id(&o, "MiniGameWin"),
+            fail: sound_id(&o, "MiniGameFail"),
+            wheel_start: wheel.map_or(0, |w| sound_id(w, "SoundTurningWheelStart")),
+            wheel_stop: wheel.map_or(0, |w| sound_id(w, "SoundTurningWheelStop")),
+        })
+    }
+
+    /// A line of a kind, the `n`-th of those there are (wrapping).
+    pub fn line(&self, kind: &str, n: usize) -> Option<u32> {
+        let lines: Vec<u32> = self
+            .sounds
+            .iter()
+            .filter(|(k, _)| k.strip_prefix(kind).is_some_and(|r| r.is_empty() || r.chars().all(|c| c.is_ascii_digit())))
+            .map(|(_, v)| *v)
+            .collect();
+        (!lines.is_empty()).then(|| lines[n % lines.len()])
+    }
+}
+
 pub const POKER_RESOURCES: &str = "CPokerMiniGameResourceContainer";
 
 /// What a poker table's people say (`GSFPokerDialog`): each event's lines,
@@ -800,6 +891,13 @@ mod tests {
         assert_eq!((hoyt.npcs[0].player_type, hoyt.npcs[0].dialog, hoyt.npcs[1].player_type), (1, 5, 2));
         let sqc = PokerSettings::parse(&bytes, "SQC_100_OBJ20_Pokerminigame").unwrap();
         assert_eq!(sqc.difficulties.iter().map(|d| d.enabled).collect::<Vec<_>>(), vec![false, true, false, false]);
+        let knives = KnivesSettings::parse(&bytes).unwrap();
+        assert_eq!((knives.knives, knives.speed, knives.view), (5, 45.0, [10.0, 45.0]));
+        assert_eq!((knives.wagers, knives.difficulty), ([0, 50, 100, 200], [1.0, 2.0, 5.0, 7.0]));
+        assert_eq!(knives.rewards, vec![5, 10, 25, 50, 100]);
+        assert_eq!(knives.line("ComePlayWithMe", 0), Some(0x000A_2ABB));
+        assert_eq!(knives.line("NPC_Win", 6), knives.line("NPC_Win", 1));
+        assert!(knives.line("GameOpening", 0).is_some() && knives.wheel_start != 0);
         let voices = PokerVoices::parse(&bytes).unwrap();
         assert_eq!(voices.ways.each_ref().map(Vec::len), [4; 4]);
         assert_eq!(voices.jason["AllIn"][0], 0x0013_F1FF);

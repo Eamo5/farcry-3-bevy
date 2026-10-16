@@ -4039,8 +4039,8 @@ hands over the pistol; JAS_150 B20's chopper fight, `CChopperFightE3`).
 Such a gameplay now ends a second after it starts (`UNPLAYED_GRACE`), for
 anyone. The ones played are QTEs, the sniping challenge, poker, the Ink
 Monster, being intoxicated, button prompts, the chopper ride, JAS_130's
-climb to the front seat, the shooting galleries, and the vines under their
-test switch (`played_gameplay`).
+climb to the front seat, the shooting galleries, knife throwing, and the
+vines under their test switch (`played_gameplay`).
 
 **JAS_150's chopper ride** (`CChopperFightE3`, `chopper_fight`): B30C's
 scene carries the player through the ride and starts and stops the
@@ -4748,3 +4748,54 @@ table's own movie (`ACTI_Poker.feu`, `docs/ui.md`).
   before the reveal, `JasonLeavesPoker`, B10 completed.
 * **Not yet.** The faces of the scenes' scripted cards (every one is the
   same model in the data: the engine dealt them their rigged cards).
+
+### Knife throwing
+
+Five of the countries have a knife thrower: a challenger by a wheel. Each
+site's script (`fc3_activities/knifethrow/knifethrow.main.lua`) starts
+the base game, `CKnivesMiniGame`, when its layer comes in (the country's
+outpost taken) and names its places in the gameplay's parameters: the
+challenger
+(`CounterGuy/EntityID`), the wheel (`TurningWheel/EntityID`) and the anchor
+the moves are made about (`TransitionAnchor`). The story host now keeps
+each `CreateSpecificGameplay`'s parameters (`StoryHost::gameplay_params`).
+Nothing played it, so it ended a second in. It is played now (`knives`),
+from the game's settings (`gsf::KnivesSettings`: knives a side, the
+throw's speed and gravity, the view's reach, the aim's sway, the four
+wager rows and their difficulty, the rings' worth, the lines):
+
+* **The challenge.** Near the challenger the prompt takes them on; they
+  call a player who comes within 12 m over every 25 s. The wager box takes
+  a row (practice is free; one the player can't afford isn't taken),
+  watched from behind the throwing spot facing the challenger; Escape
+  backs out.
+* **The wheel.** The site's wheel turns once every 24 s with the bullseye's
+  five rings on its face (the prototypes' `knifewheel_target_*` models),
+  worth 5 at the edge up to 100 in the middle.
+* **The challenger's throws** come first: five throws, each its own move,
+  watched from behind them. The knife leaves the hand partway through the
+  move and lands nearer the middle the harder the row (its difficulty).
+* **The player's throws.** From the throwing spot, held there and looking
+  within the game's reach, the view sways in a figure of eight. Holding
+  fire charges the throw (the bar fills and empties); letting go throws
+  the knife at the power the game's curve gives the fill (next to nothing
+  below half, full past four fifths) times the top speed. It falls as it
+  flies and sticks where it meets the wheel, turning with it, or drops.
+  Escape leaves (the wager lost).
+* **The result.** The better score is paid the wager twice over; a draw
+  gives it back. The challenger cheers and curses the throws, and wins or
+  loses in their own lines, said from where they stand.
+* **Placed.** The game's places are the anchor's: the throwing spot, where
+  the player watches, where the challenger talks (from the moves' own
+  roots). Its wheel is found by its placed id once its sector is in; the
+  challenger's moves (talking, throwing, watching) play in built scenes of
+  their own at the anchor.
+* **Tests.** `FC3_KNIFE_TEST=<row>` takes the challenge on that row, aims
+  at the middle allowing for the drop and lets go four fifths up;
+  `FC3_KNIFE_SHOTS=<dir>` captures the wager box, the challenger's throws,
+  the player's and the result. Seen at G4's site (a kept checkpoint with
+  G3's outpost taken, the player placed south of the wheel): row 1 ($50),
+  the challenger's five throws, the player's five in the middle, won
+  500 to 60 and paid $100, the knives stuck in the turning wheel.
+* **Not yet.** The game's own HUD (`ACTI_knifeThrowing.feu`): the wager
+  box, scores, knives left and the power bar.

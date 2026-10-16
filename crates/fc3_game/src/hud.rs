@@ -35,6 +35,7 @@ impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(FrameTimeDiagnosticsPlugin::default())
             .init_resource::<HudState>()
+            .init_resource::<Minigame>()
             .init_resource::<OriginalHud>()
             .add_systems(Startup, (ui_font, setup_hud))
             .add_systems(
@@ -63,6 +64,20 @@ impl Plugin for HudPlugin {
 /// line run before it; the prompt is cleared once shown.
 #[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct HudSet;
+
+/// A minigame running that holds the player (knife throwing): its own
+/// movie is the HUD, the weapon is away, the radar and objective down,
+/// Escape its own; the story's autopilot leaves the player to it.
+#[derive(Resource, Default)]
+pub struct Minigame {
+    pub knives: bool,
+}
+
+impl Minigame {
+    pub fn holds_player(&self) -> bool {
+        self.knives
+    }
+}
 
 #[derive(Resource, Default)]
 pub struct HudState {

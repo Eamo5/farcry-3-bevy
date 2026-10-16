@@ -2328,7 +2328,7 @@ fn update_view_model(
     mut cams: Query<&mut Projection, With<PlayerCamera>>,
     fp: Res<crate::fp::FpState>,
     speed_fov: Option<Res<crate::vehicles::SpeedFov>>,
-    poker: Option<Res<crate::poker::PokerTable>>,
+    (poker, minigame): (Option<Res<crate::poker::PokerTable>>, Option<Res<crate::hud::Minigame>>),
 ) {
     let Ok((inv, player, health)) = players.single() else { return };
     let Ok((mut v, mut t, mut vis)) = vm.single_mut() else { return };
@@ -2338,7 +2338,9 @@ fn update_view_model(
     // Weapons are stowed while swimming, as in the original.
     // Swimming and driving put the weapon away; the arms may still show what they're doing.
     // (And at a poker table.)
-    let busy = ((player.swimming || (player.driving && !player.armed_passenger)) && !fp.in_context()) || poker.is_some_and(|p| p.holds_player());
+    let busy = ((player.swimming || (player.driving && !player.armed_passenger)) && !fp.in_context())
+        || poker.is_some_and(|p| p.holds_player())
+        || minigame.is_some_and(|m| m.holds_player());
     *vis = if in_menu || health.dead || player.noclip || busy || bino.blend > 0.5 || inv.scoped() { Visibility::Hidden } else { Visibility::Visible };
     let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
     if player.grounded {

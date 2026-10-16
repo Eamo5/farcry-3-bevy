@@ -225,7 +225,12 @@ fn pause_toggle(
     mut next: ResMut<NextState<GameState>>,
     mut journal: ResMut<crate::progression::PauseMenu>,
     original: Res<OriginalPause>,
-    (credits, gallery, poker): (Option<Res<crate::credits::EndCredits>>, Option<Res<crate::shooting_gallery::Gallery>>, Option<Res<crate::poker::PokerTable>>),
+    (credits, gallery, poker, minigame): (
+        Option<Res<crate::credits::EndCredits>>,
+        Option<Res<crate::shooting_gallery::Gallery>>,
+        Option<Res<crate::poker::PokerTable>>,
+        Option<Res<crate::hud::Minigame>>,
+    ),
 ) {
     use bevy::input::gamepad::GamepadButton as B;
     // (Esc and Start skip the end credits instead.)
@@ -237,7 +242,8 @@ fn pause_toggle(
     let esc = keys.just_pressed(KeyCode::Escape)
         && !(original.0 && *state.get() == GameState::Paused)
         && !(gallery.is_some_and(|g| g.claims_escape()) && *state.get() == GameState::Playing)
-        && !(poker.is_some_and(|p| p.claims_escape()) && *state.get() == GameState::Playing);
+        && !(poker.is_some_and(|p| p.claims_escape()) && *state.get() == GameState::Playing)
+        && !(minigame.is_some_and(|m| m.holds_player()) && *state.get() == GameState::Playing);
     if options.0 {
         if (esc && !crate::options::binding_key(&rebinding)) || pad(B::East) || pad(B::Start) {
             options.0 = false;
