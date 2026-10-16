@@ -525,6 +525,15 @@ Everything else is the engine's to drive (`original_ui::drive_map_page`):
   + MapVisual's _x / its _width) * MapScale's _width` (and the same down),
   the movie's own formula for the waypoint it makes; the map's `mf_XPos`
   and `mf_YPos` get the offsets.
+* Panning is the engine's as well (the movie only works out where a stick
+  or the mouse would take it): a drag with the left button moves the map's
+  picture (`MapVisual`, in the map's own pixels, and the fog's
+  `FogVisualMC` with it) within its edges, and the movie loads the tiles
+  coming into view. `FC3_MAP_PAN=<x>,<y>` (tests) drags that far in stage
+  pixels once it's centred.
+* The right button is the engine's `FireMouseRightButton` (its fourth
+  argument "true" pressed, "false" let go; Flash has no right button),
+  which sets or clears the waypoint under the cursor.
 * `SetupMarker 1 <x> <y> <type> <icon>` places the waypoint (`SetupMarker
   0` takes it away), and `onFastTravel <n>` travels to the n-th fast travel
   icon sent (the movie counts safehouses and liberated outposts).

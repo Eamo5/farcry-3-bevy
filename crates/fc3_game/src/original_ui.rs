@@ -494,7 +494,17 @@ struct MapPage {
     /// each way), and the view they were last put in.
     icons: Vec<(String, Vec2)>,
     placed: Option<[f64; 4]>,
+    /// The mouse (window pixels) and how far it has gone with the left
+    /// button down: a drag pans the map.
+    mouse: Option<Vec2>,
+    dragged: f32,
+    /// A test's drag, made once the map is in place (`FC3_MAP_PAN`).
+    pan_test: Option<Vec2>,
 }
+
+/// How far (window pixels) the mouse goes with its button down before it
+/// pans the map rather than clicks.
+const MAP_DRAG: f32 = 4.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Travel {
@@ -560,7 +570,12 @@ mod map_icon {
 /// (`onFastTravel <its turn>`) travels there. The icons are the engine's to
 /// place: as the map moves each goes where its fraction of the map is shown
 /// (`(fraction + MapVisual's place / its size) * MapScale's size`, as the
-/// movie places the waypoint it makes itself).
+/// movie places the waypoint it makes itself). Panning is the engine's too:
+/// a drag with the left button moves the map (`MapVisual`, and the fog's
+/// `FogVisualMC` with it, within the map's edges; the movie loads the tiles
+/// coming into view), and the right button is the engine's
+/// `FireMouseRightButton` (Flash has none), which sets or clears the
+/// waypoint under the cursor.
 #[allow(clippy::too_many_arguments)]
 fn drive_map_page(
     mut state: NonSendMut<Interface>,
@@ -576,6 +591,7 @@ fn drive_map_page(
     (mut waypoint, explored): (ResMut<crate::map::Waypoint>, Res<crate::map::Explored>),
     mut story: Option<NonSendMut<crate::story::StoryHost>>,
     mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    (mut cursor, buttons, windows): (MessageReader<CursorMoved>, Res<ButtonInput<bevy::input::mouse::MouseButton>>, Query<&Window, With<PrimaryWindow>>),
 ) {
     use crate::map::map_uv;
     use fc3_ui::ExternalValue as V;
@@ -676,6 +692,14 @@ fn drive_map_page(
                     page.zoom = (zoom * MAP_ZOOM_STEP.powi(steps)).clamp(MAP_ZOOM.0, MAP_ZOOM.1);
                     host.event("OnLevelOfZoomUpdated", &[&map_level(page.zoom).to_string(), &page.zoom.to_string()]);
                 }
+                // FC3_MAP_PAN=<x>,<y> (tests): dragged that far (stage
+                // pixels) once it's centred.
+                if let Some((x, y)) = std::env::var("FC3_MAP_PAN").ok().and_then(|s| {
+                    let (x, y) = s.split_once(',')?;
+                    Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
+                }) {
+                    page.pan_test = Some(Vec2::new(x, y));
+                }
             }
             // `1 <x> <y> <type> <icon>` placed (a fraction of the map each
             // way), `0` taken away.
@@ -717,12 +741,44 @@ fn drive_map_page(
     }
     if !page.open {
         wheel.clear();
+        cursor.clear();
         return;
     }
     let num = |v: V| match v {
         V::Number(n) => Some(n),
         _ => None,
     };
+    // A drag pans: the window's pixels to the stage's (shown whole), to the
+    // map's own (its whole width a tile size a tile at its zoom).
+    use bevy::input::mouse::MouseButton as Button;
+    let mut moved = Vec2::ZERO;
+    for c in cursor.read() {
+        if let Some(last) = page.mouse {
+            moved += c.position - last;
+        }
+        page.mouse = Some(c.position);
+    }
+    if buttons.pressed(Button::Left) {
+        page.dragged += moved.length();
+    } else {
+        page.dragged = 0.0;
+    }
+    let stage = windows.single().map_or(1.0, |w| (w.width() / fc3_ui::STAGE.0 as f32).min(w.height() / fc3_ui::STAGE.1 as f32)).max(0.01);
+    if page.dragged > MAP_DRAG && moved != Vec2::ZERO {
+        pan_map(host, page.zoom, moved / stage);
+    }
+    // (A test's drag waits for the movie's centring to be done.)
+    if page.placed.is_some() {
+        if let Some(by) = page.pan_test.take() {
+            pan_map(host, page.zoom, by);
+        }
+    }
+    if buttons.just_pressed(Button::Right) {
+        host.event("FireMouseRightButton", &["0", "0", "0", "true"]);
+    }
+    if buttons.just_released(Button::Right) {
+        host.event("FireMouseRightButton", &["0", "0", "0", "false"]);
+    }
     let view = (|| {
         Some([
             num(host.dps_get("MapVisual", "_x"))? / num(host.dps_get("MapVisual", "_width"))?.max(1.0),
@@ -753,6 +809,24 @@ fn drive_map_page(
             page.zoom = zoom;
             host.event("OnLevelOfZoomUpdated", &[&map_level(zoom).to_string(), &zoom.to_string()]);
         }
+    }
+}
+
+/// Drags the world map page's map by a distance on the stage: its picture
+/// (`MapVisual`, in the map's own pixels, the whole map a tile size a tile
+/// shown `zoom` wide) and the fog's with it, kept within the map's edges.
+fn pan_map(host: &fc3_ui::Host, zoom: f32, by: Vec2) {
+    use fc3_ui::ExternalValue as V;
+    let size = (MAP_LEVELS[map_level(zoom)] * 512.0) as f64;
+    let step = by.as_dvec2() * size / zoom as f64;
+    let at = |p: &str| match host.dps_get("MapVisual", p) {
+        V::Number(n) => n,
+        _ => 0.0,
+    };
+    let (x, y) = ((at("_x") + step.x).clamp(-size, 0.0), (at("_y") + step.y).clamp(-size, 0.0));
+    for clip in ["MapVisual", "FogVisualMC"] {
+        host.dps_set(clip, "_x", V::Number(x));
+        host.dps_set(clip, "_y", V::Number(y));
     }
 }
 
