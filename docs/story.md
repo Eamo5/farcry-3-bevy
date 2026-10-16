@@ -4790,12 +4790,20 @@ wager rows and their difficulty, the rings' worth, the lines):
   roots). Its wheel is found by its placed id once its sector is in; the
   challenger's moves (talking, throwing, watching) play in built scenes of
   their own at the anchor.
+* **The HUD** is the game's own movie (`ACTI_knifeThrowing.feu`,
+  `docs/ui.md`): the wager box, the scores, the knives a side, the power
+  bar and crosshair on the player's turn, each throw's points, and the
+  result. Space skips the challenger's throws (the rest thrown at once),
+  and Escape mid-game asks first (the leave box; the game waits).
 * **Tests.** `FC3_KNIFE_TEST=<row>` takes the challenge on that row, aims
   at the middle allowing for the drop and lets go four fifths up;
   `FC3_KNIFE_SHOTS=<dir>` captures the wager box, the challenger's throws,
-  the player's and the result. Seen at G4's site (a kept checkpoint with
+  the player's (held, and the third's points), the leave box and the
+  result. `FC3_KNIFE_SKIP` skips the challenger's throws and
+  `FC3_KNIFE_LEAVE` leaves before the player's third. Seen at G4's site (a kept checkpoint with
   G3's outpost taken, the player placed south of the wheel): row 1 ($50),
   the challenger's five throws, the player's five in the middle, won
   500 to 60 and paid $100, the knives stuck in the turning wheel.
-* **Not yet.** The game's own HUD (`ACTI_knifeThrowing.feu`): the wager
-  box, scores, knives left and the power bar.
+* **Not yet.** The player's own moves (walking to the spots, the knife in
+  hand drawn, held and thrown in first person) and the challenger's walks
+  between the spots: each is put at its spot.

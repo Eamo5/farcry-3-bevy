@@ -643,6 +643,45 @@ while the player is at a table: `original_ui::drive_poker`, the game in
   While the player is at a table the main HUD and the radar are down, as
   is the objective box.
 
+**Knife throwing** (`UI\Singleplayer\Activities\ACTI_knifeThrowing.feu`,
+level 4, while the player is at a knife thrower's game:
+`original_ui::drive_knives`, the game in `knives`, see `docs/story.md`):
+
+* Loaded, the movie sends `KnivesMovieLoaded`; the game answers
+  `LoadKnivesElements <knives> PC 0 "[Enter] " "[Esc] "` (the knives a
+  side, the platform and the accept and back keys' text) and the movie
+  `KnivesElementsLoaded`. It names three of its loaders' DPS ids
+  `_fireDPSID` (`LosingMsgBoxLoader_MC`, `CancelMsgBoxLoader_MC`,
+  `CrosshairLoader_MC`), which the engine took too, so the shim registers
+  both spellings.
+* The boxes are their loaders played to their `In` and `Out` labels by
+  DPS id, each with `Show...`/`Hide...` (which only starts and stops the
+  movie reporting the mouse over the box's buttons): `BettingLoader_MC`
+  (`BettingBox`), `CancelMsgBoxLoader_MC` (`CancelBox`, Escape mid-game),
+  `WinMsgBoxLoader_MC` (`WinBox`), `LosingMsgBoxLoader_MC` (`LoseBox`) and
+  `DrawMsgBoxLoader_MC` (`DrawBox`). The game's own elements come in the
+  same way: `ScoreLoader_MC` from the first throw, `BarAnimLoader_MC` and
+  `CrosshairLoader_MC` on the player's turn, `KnifeContainer_MC0`.. while
+  it's played.
+* By DPS id: the wagers (`BetValue<Row>_DT`), the row (`WagerCursor_MC`
+  played to `Practice`, `Novice`, `Skilled` or `Expert`), not enough money
+  (`NotEnoughMoney_MC`, the accept prompt dimmed:
+  `PromptAcceptContainer_MC` frame 10), the subtitle, the scores
+  (`PointsPlayer_DT`, `PointsNpc_DT`), the knives (`Knife_MC<n>`: `Faded`
+  once thrown, the player's next playing `Blink`, else `Normal`), the
+  power bar (`BarAnim_MC`, a frame a percent from 1), the throw's prompt
+  (`ThrowKnifePrompt_MC`) between throws and the skip's
+  (`SkipCinematicBox_MC`) over the challenger's, each throw's points as it
+  lands (`PointsPopUpText_MC`, the number: the movie has the plus;
+  `PointsPopUp_MC` played from 2) and the amount won or lost
+  (`WinAmount_DT`, `LostAmount_DT`).
+* The movie adds the knives and the popup at its top left: the engine
+  placed them. The knives stand in a row leftward from the bar's mark
+  (`KnifeInitialPosition_MC`, at the bar's left end) and the popup is
+  centred over the crosshair.
+* The mouse over the boxes comes as `OnBetRollOver <row>`,
+  `OnConfirmRollOver` and `OnCancelRollOver` (a click takes them).
+
 While the pause menu is up the HUD's level is hidden (`Host::level_visible`;
 the shim's `levelVisible`), as the game's was: subtitles showed through.
 

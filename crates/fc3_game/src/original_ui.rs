@@ -62,6 +62,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_credits,
                     drive_gallery,
                     drive_poker,
+                    drive_knives,
                     drive_pause,
                     drive_map_page,
                     run_interface,
@@ -2728,6 +2729,242 @@ fn drive_gallery(state: NonSend<Interface>, calls: Res<UiCalls>, mut gallery: Re
     if ok {
         shown.screen = Some(screen);
     }
+}
+
+/// The knife thrower's movie (`ACTI_knifeThrowing.feu`, level 4, while the
+/// player is at the game: `knives`). Loaded, it asks for its elements
+/// (`KnivesMovieLoaded`: `LoadKnivesElements` with the knives a side, the
+/// platform, whether pad icons show and the accept and back keys' text),
+/// then the game plays its boxes' loaders in and out by DPS id (`In`,
+/// `Out`) and tells each box it's shown (`Show...Box`, which only starts
+/// reporting the mouse over its buttons: `OnBetRollOver <row>`,
+/// `OnConfirmRollOver`, `OnCancelRollOver`): the wager box, the leave box,
+/// won, lost and a draw. It fills them the same way: the wagers, the row's
+/// cursor (played to the row's label), not enough money, the amount won or
+/// lost. While the game is on, the scores, the knives a side (thrown ones
+/// faded, the next blinking), the power bar (a frame a percent), the
+/// throw's prompt, the skip prompt over the challenger's throws, and each
+/// throw's points popping up as it lands.
+const KNIVES_MOVIE: &str = r"UI\Singleplayer\Activities\ACTI_knifeThrowing.feu";
+const KNIVES_LEVEL: u32 = 4;
+/// The wager box's rows' wagers, and the cursor's labels.
+const KNIFE_ROWS: [&str; 4] = ["BetValuePractice_DT", "BetValueNovice_DT", "BetValueSkilled_DT", "BetValueExpert_DT"];
+const KNIFE_CURSOR: [&str; 4] = ["Practice", "Novice", "Skilled", "Expert"];
+/// The knives a side stand in a row leftward from the power bar's mark for
+/// them (`KnifeInitialPosition_MC`, at the bar's left end), this far apart;
+/// a throw's points pop up this far over the crosshair (the movie's units).
+const KNIFE_PITCH: f64 = 16.0;
+const KNIFE_POPUP_RISE: f64 = 70.0;
+/// The game's strings: throw knife, skip.
+const KNIFE_THROW_TEXT: u32 = 155_735;
+const KNIFE_SKIP_TEXT: u32 = 155_730;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum KnifeBox {
+    Betting,
+    Playing,
+    Leaving,
+    Won,
+    Lost,
+    Draw,
+}
+
+impl KnifeBox {
+    /// The box's loader and its name in the movie's events.
+    fn loader(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            KnifeBox::Betting => Some(("BettingLoader_MC", "BettingBox")),
+            KnifeBox::Leaving => Some(("CancelMsgBoxLoader_MC", "CancelBox")),
+            KnifeBox::Won => Some(("WinMsgBoxLoader_MC", "WinBox")),
+            KnifeBox::Lost => Some(("LosingMsgBoxLoader_MC", "LoseBox")),
+            KnifeBox::Draw => Some(("DrawMsgBoxLoader_MC", "DrawBox")),
+            KnifeBox::Playing => None,
+        }
+    }
+}
+
+#[derive(Default)]
+struct KnivesShown {
+    loaded: bool,
+    elements: bool,
+    shown: Option<KnifeBox>,
+    /// The score, the knives, the power bar and the crosshair played in.
+    score: bool,
+    knives: bool,
+    bar: bool,
+    crosshair: bool,
+    /// Throws whose points have popped up.
+    landed: u32,
+    /// The throw's prompt and the skip's shown.
+    prompts: Option<(bool, bool)>,
+    sent: Option<crate::knives::KnifeHud>,
+}
+
+fn drive_knives(state: NonSend<Interface>, calls: Res<UiCalls>, mut knives: ResMut<crate::knives::KnifeGame>, mut shown: Local<KnivesShown>) {
+    use crate::knives::KnifePanel;
+    use fc3_ui::ExternalValue as V;
+    let Interface::Running(host) = &*state else { return };
+    let shown = &mut *shown;
+    let Some(hud) = knives.hud.clone() else {
+        if shown.loaded {
+            host.unload(KNIVES_LEVEL);
+            *shown = KnivesShown::default();
+            knives.hover = (false, false, None);
+        }
+        return;
+    };
+    if !shown.loaded {
+        host.load(KNIVES_MOVIE, KNIVES_LEVEL);
+        shown.loaded = true;
+    }
+    for call in calls.0.iter().filter(|c| c.command == "Send") {
+        let arg = |i: usize| call.args.get(i).map(String::as_str).unwrap_or("");
+        match arg(0) {
+            "KnivesMovieLoaded" => host.event("LoadKnivesElements", &[&hud.knives.to_string(), "PC", "0", "[Enter] ", "[Esc] "]),
+            "KnivesElementsLoaded" => {
+                shown.elements = true;
+                for id in ["CrosshairLoader_MC", "KnifeInitialPosition_MC", "BarAnim_MC", "BarAnimLoader_MC", "KnifeContainer_MC0", "PointsPopUp_MC"] {
+                    debug!("knives ui: {id}: {}", host.dps_info(id));
+                }
+            }
+            "OnConfirmRollOver" => knives.hover.0 = true,
+            "OnConfirmRollOut" => knives.hover.0 = false,
+            "OnCancelRollOver" => knives.hover.1 = true,
+            "OnCancelRollOut" => knives.hover.1 = false,
+            "OnBetRollOver" => knives.hover.2 = arg(1).parse().ok(),
+            "OnBetRollOut" => knives.hover.2 = None,
+            _ => {}
+        }
+    }
+    if !shown.elements {
+        return;
+    }
+    let label = |s: &str| V::String(s.to_string());
+    let want = match hud.panel {
+        KnifePanel::Betting { .. } => KnifeBox::Betting,
+        KnifePanel::Playing => KnifeBox::Playing,
+        KnifePanel::Leaving => KnifeBox::Leaving,
+        KnifePanel::Won(_) => KnifeBox::Won,
+        KnifePanel::Lost(_) => KnifeBox::Lost,
+        KnifePanel::Draw => KnifeBox::Draw,
+    };
+    if shown.shown != Some(want) {
+        debug!("knives ui: {:?} to {want:?}", shown.shown);
+        if let Some((clip, name)) = shown.shown.and_then(KnifeBox::loader) {
+            host.dps_play(clip, label("Out"));
+            host.event(&format!("Hide{name}"), &[]);
+        }
+        if let Some((clip, name)) = want.loader() {
+            host.dps_play(clip, label("In"));
+            host.event(&format!("Show{name}"), &[]);
+        }
+        shown.shown = Some(want);
+        shown.sent = None;
+    }
+    // The game's elements: the score from the first throw on, the knives
+    // and the power bar while it's played.
+    let playing = matches!(want, KnifeBox::Playing | KnifeBox::Leaving);
+    let mut ok = true;
+    for (clip, on, was) in [
+        ("ScoreLoader_MC", want != KnifeBox::Betting, &mut shown.score),
+        ("BarAnimLoader_MC", playing && hud.player_turn, &mut shown.bar),
+        ("CrosshairLoader_MC", want == KnifeBox::Playing && hud.player_turn, &mut shown.crosshair),
+    ] {
+        if on != *was {
+            ok &= host.dps_play(clip, label(if on { "In" } else { "Out" }));
+            *was = on;
+        }
+    }
+    // (The movie adds the knives and the popup at its top left: the game
+    // placed them, the knives from the bar's mark, the popup over the
+    // crosshair.)
+    let number = |id: &str, property: &str, or: f64| match host.dps_get(id, property) {
+        V::Number(n) if n.is_finite() => n,
+        _ => or,
+    };
+    if playing && !shown.knives {
+        let place = |id: &str| (number(id, "_x", 0.0), number(id, "_y", 0.0), number(id, "_xscale", 100.0) / 100.0, number(id, "_yscale", 100.0) / 100.0);
+        let ((lx, ly, lsx, lsy), (bx, by, bsx, bsy), (mx, my, _, _)) = (place("BarAnimLoader_MC"), place("BarAnim_MC"), place("KnifeInitialPosition_MC"));
+        let (x, y) = (lx + lsx * (bx + bsx * mx), ly + lsy * (by + bsy * my));
+        for i in 0..hud.knives {
+            ok &= host.dps_set(&format!("KnifeContainer_MC{i}"), "_x", V::Number(x - KNIFE_PITCH * i as f64));
+            ok &= host.dps_set(&format!("KnifeContainer_MC{i}"), "_y", V::Number(y));
+        }
+        // (Centred: its text stands right of its origin.)
+        let middle = host.dps_bounds("PointsPopUp_MC").map_or(0.0, |b| (b[0] + b[2]) / 2.0 - number("PointsPopUp_MC", "_x", 0.0));
+        ok &= host.dps_set("PointsPopUp_MC", "_x", V::Number(number("CrosshairLoader_MC", "_x", 640.0) - middle));
+        ok &= host.dps_set("PointsPopUp_MC", "_y", V::Number(number("CrosshairLoader_MC", "_y", 360.0) - KNIFE_POPUP_RISE));
+    }
+    if playing != shown.knives {
+        for i in 0..hud.knives {
+            ok &= host.dps_play(&format!("KnifeContainer_MC{i}"), label(if playing { "In" } else { "Out" }));
+        }
+        shown.knives = playing;
+        shown.sent = None;
+    }
+    // Each throw's points as it lands.
+    if hud.landed < shown.landed {
+        shown.landed = hud.landed;
+    }
+    if hud.landed > shown.landed {
+        // (The movie has the plus.)
+        ok &= host.dps_text("PointsPopUpText_MC", &hud.points.to_string());
+        ok &= host.dps_play("PointsPopUp_MC", V::Number(2.0));
+        shown.landed = hud.landed;
+    }
+    let old = shown.sent.clone();
+    let changed = |f: &dyn Fn(&crate::knives::KnifeHud) -> bool| old.as_ref().is_none_or(|o| f(o));
+    match &hud.panel {
+        KnifePanel::Betting { row, wagers, short, subtitle } => {
+            if changed(&|o| o.panel != hud.panel) {
+                ok &= host.dps_text("DifficultyBoxSubTitle_TX", &host.text(*subtitle));
+                for (id, w) in KNIFE_ROWS.iter().zip(wagers) {
+                    ok &= host.dps_text(id, &format!("${w}"));
+                }
+                ok &= host.dps_visible("NotEnoughMoney_MC", *short);
+                ok &= host.dps_frame("PromptAcceptContainer_MC", V::Number(if *short { 10.0 } else { 1.0 }));
+            }
+            let was = old.as_ref().and_then(|o| match o.panel {
+                KnifePanel::Betting { row, .. } => Some(row),
+                _ => None,
+            });
+            if was != Some(*row) {
+                ok &= host.dps_play("WagerCursor_MC", label(KNIFE_CURSOR[(*row).min(3)]));
+            }
+        }
+        KnifePanel::Won(w) => ok &= host.dps_text("WinAmount_DT", &format!("+ {w} $")),
+        KnifePanel::Lost(w) => ok &= host.dps_text("LostAmount_DT", &format!("- {w} $")),
+        _ => {}
+    }
+    if changed(&|o| o.scores != hud.scores) {
+        ok &= host.dps_text("PointsPlayer_DT", &hud.scores[0].to_string());
+        ok &= host.dps_text("PointsNpc_DT", &hud.scores[1].to_string());
+    }
+    // The knives a side: thrown ones faded, the player's next blinking.
+    if playing && changed(&|o| o.thrown != hud.thrown || o.player_turn != hud.player_turn) {
+        for i in 0..hud.knives {
+            let clip = format!("Knife_MC{i}");
+            ok &= match i.cmp(&hud.thrown) {
+                std::cmp::Ordering::Less => host.dps_frame(&clip, label("Faded")),
+                std::cmp::Ordering::Equal if hud.player_turn => host.dps_play(&clip, label("Blink")),
+                _ => host.dps_frame(&clip, label("Normal")),
+            };
+        }
+    }
+    if changed(&|o| o.power != hud.power) {
+        ok &= host.dps_frame("BarAnim_MC", V::Number(1.0 + (hud.power.unwrap_or(0.0).clamp(0.0, 1.0) * 99.0).round() as f64));
+    }
+    // The throw's prompt between throws, the skip's over the challenger's.
+    let prompts = (want == KnifeBox::Playing && hud.player_turn && hud.power.is_none(), hud.skip);
+    if old.is_none() || shown.prompts != Some(prompts) {
+        ok &= host.dps_visible("ThrowKnifePrompt_MC", prompts.0);
+        ok &= host.dps_text("ThrowKnifeButtonText_MC", &format!("[{}] {}", hud.throw_key, host.text(KNIFE_THROW_TEXT).to_uppercase()));
+        ok &= host.dps_visible("SkipCinematicBox_MC", prompts.1);
+        ok &= host.dps_text("SkipButtonText_MC", &format!("[Space] {}", host.text(KNIFE_SKIP_TEXT).to_uppercase()));
+        shown.prompts = Some(prompts);
+    }
+    // (Until its clips answer, the box is still coming: all again.)
+    shown.sent = if ok { Some(hud) } else { None };
 }
 
 /// The end credits (`EndCredits`, over all but the pause menu): loaded as

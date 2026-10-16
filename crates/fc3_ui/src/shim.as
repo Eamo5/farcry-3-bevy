@@ -220,7 +220,8 @@ this.onEnterFrame = function() {
 };
 
 // The clips the engine drives, by DPS id (_fireDPSId), found by walking the
-// loaded movies.
+// loaded movies. (The knife thrower's movie spells a few _fireDPSID, which
+// the engine took as well.)
 _global.__fireDps = new Object();
 _global.__fireScan = function(clip, depth) {
     if (depth > 32) {
@@ -231,6 +232,8 @@ _global.__fireScan = function(clip, depth) {
         if ((typeof(c) == "movieclip" || c instanceof TextField) && c._parent == clip) {
             if (c._fireDPSId != undefined) {
                 _global.__fireDps[c._fireDPSId] = c;
+            } else if (c._fireDPSID != undefined) {
+                _global.__fireDps[c._fireDPSID] = c;
             }
             if (typeof(c) == "movieclip") {
                 _global.__fireScan(c, depth + 1);

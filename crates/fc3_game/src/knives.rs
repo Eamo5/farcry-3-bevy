@@ -120,8 +120,14 @@ pub struct KnifeHud {
     pub player_turn: bool,
     /// The power bar's fill while the throw is held.
     pub power: Option<f32>,
-    /// The last throw's points and how long ago.
-    pub popup: Option<(u32, f32)>,
+    /// Throws landed this game (each pops its points up) and the last's
+    /// points.
+    pub landed: u32,
+    pub points: u32,
+    /// The throw's key, and whether the challenger's throws can be skipped
+    /// (with Space).
+    pub throw_key: String,
+    pub skip: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -135,6 +141,8 @@ pub enum KnifePanel {
         subtitle: u32,
     },
     Playing,
+    /// Escape mid-game: leave (and lose the wager)?
+    Leaving,
     Won(u32),
     Lost(u32),
     Draw,
@@ -185,8 +193,11 @@ struct Game {
     /// Throws in the air: whose, from, the aim's point on the wheel, when
     /// it lands (game seconds) and the points it makes there.
     throws: Vec<Throw>,
-    /// The last points and when.
-    popup: Option<(u32, f32)>,
+    /// Throws landed this game and the last's points.
+    landed: u32,
+    points: u32,
+    /// The leave box is up (the game waits), since when.
+    leaving: Option<f32>,
     /// The challenger's move playing (its scene's name and the move).
     pose: Option<(String, &'static str)>,
     poses: u32,
@@ -342,7 +353,9 @@ fn play_knives(
             wheel: None,
             rings: false,
             throws: Vec::new(),
-            popup: None,
+            landed: 0,
+            points: 0,
+            leaving: None,
             pose: None,
             poses: 0,
             quiet_until: 0.0,
@@ -376,7 +389,33 @@ fn play_knives(
     let near = site.at(TALK_SPOT).with_y(0.0).distance(player_at.with_y(0.0));
     let throw_at = site.at(THROW_SPOT);
     let wheel_centre = game.wheel.map_or(site.at([-3.875, 3.125, 1.5]), |(_, w)| w.translation);
+    // (Tests: FC3_KNIFE_SKIP skips the challenger's throws, FC3_KNIFE_LEAVE
+    // asks to leave before the player's third throw and says yes.)
+    let test_skip = test.is_some() && std::env::var_os("FC3_KNIFE_SKIP").is_some();
+    let test_leave = test.is_some() && std::env::var_os("FC3_KNIFE_LEAVE").is_some();
+    // Escape mid-game asks first (the leave box; leaving loses the wager),
+    // the game waiting meanwhile.
+    let mut paused = game.leaving.is_some();
+    if let Some(since) = game.leaving {
+        let yes = confirm || (test_leave && now - since > 1.5);
+        if yes {
+            info!("knives: the player leaves");
+            game.stage = Stage::Away;
+            game.left = true;
+            game.view = 0;
+            limits.0 = None;
+        }
+        if yes || cancel {
+            game.leaving = None;
+        }
+    } else if (matches!(game.stage, Stage::Challenger(..) | Stage::Thrower(..)) && cancel && test.is_none())
+        || (test_leave && matches!(game.stage, Stage::Thrower(2, None, _)))
+    {
+        game.leaving = Some(now);
+        paused = true;
+    }
     match game.stage {
+        _ if paused => {}
         Stage::Away => {
             // Calling the player over; taking them on.
             if near < CALL_REACH && now - game.called > CALL_EVERY {
@@ -417,6 +456,7 @@ fn play_knives(
                 }
                 game.wager = wager;
                 game.scores = [0; 2];
+                game.landed = 0;
                 game.stage = Stage::Challenger(0, 0.0);
                 info!("knives: row {} (wager {wager}, difficulty {})", game.row, game.settings.difficulty[game.row]);
             } else if cancel {
@@ -426,23 +466,22 @@ fn play_knives(
                 limits.0 = None;
             }
         }
+        // Space skips the challenger's throws: the rest thrown at once.
+        Stage::Challenger(thrown, into) if keys.just_pressed(KeyCode::Space) || test_skip => {
+            let first = if into >= NPC_RELEASE { thrown + 1 } else { thrown };
+            for _ in first..game.settings.knives {
+                let th = challenger_throw(game, now);
+                game.throws.push(th);
+            }
+            game.stage = Stage::Thrower(0, None, 1.0);
+        }
         Stage::Challenger(thrown, into) => {
             let into = into + dt;
             // (The knife leaves the hand partway through the move.)
             if into - dt < NPC_RELEASE && into >= NPC_RELEASE {
-                let difficulty = game.settings.difficulty[game.row].max(0.5);
-                let spread = 0.32 / difficulty.powf(0.6);
-                let (u, v) = (game.dealer.unit(), game.dealer.unit());
-                let r = spread * (-2.0 * (u.max(1e-6)).ln()).sqrt() * 0.7;
-                let angle = v * std::f32::consts::TAU;
-                let (centre, normal) = wheel_face(game, site);
-                let side = Vec3::Y.cross(normal).normalize_or_zero();
-                let to = centre + (side * angle.cos() + Vec3::Y * angle.sin()) * r;
-                let from = site.at(THROW_SPOT) + Vec3::Y * 1.6;
-                let on_wheel = r <= WHEEL_RADIUS;
-                let pts = if on_wheel { points(&game.settings.rewards, r) } else { 0 };
-                game.throws.push(Throw { player: false, from, to, lands: now + 0.25, points: pts, on_wheel, spawned: false });
-                sfx.write(crate::sound::PlaySfx { event: NPC_THROW_SOUND, at: Some(from), volume: 1.0 });
+                let th = challenger_throw(game, now);
+                sfx.write(crate::sound::PlaySfx { event: NPC_THROW_SOUND, at: Some(th.from), volume: 1.0 });
+                game.throws.push(th);
             }
             game.stage = Stage::Challenger(thrown, into);
             if into >= NPC_THROW {
@@ -515,20 +554,13 @@ fn play_knives(
             }
         }
     }
-    // Leaving mid-game: the wager is lost.
-    if matches!(game.stage, Stage::Challenger(..) | Stage::Thrower(..)) && cancel && test.is_none() {
-        info!("knives: the player leaves");
-        game.stage = Stage::Away;
-        game.left = true;
-        game.view = 0;
-        limits.0 = None;
-    }
     // Throws landing: points, the lines they draw.
     let landed: Vec<Throw> = game.throws.iter().filter(|th| th.lands <= now).cloned().collect();
     game.throws.retain(|th| th.lands > now || !th.spawned);
     for th in landed {
         game.scores[if th.player { 0 } else { 1 }] += th.points;
-        game.popup = Some((th.points, now));
+        game.landed += 1;
+        game.points = th.points;
         let line = match (th.player, th.points) {
             (false, p) if p >= 25 => "NPC_GoodThrowCheer",
             (false, _) => "NPC_BadThrowCursing",
@@ -601,6 +633,7 @@ fn play_knives(
         },
         _ => KnifePanel::Playing,
     };
+    let panel = if game.leaving.is_some() { KnifePanel::Leaving } else { panel };
     knives.hud = (game.stage != Stage::Away).then(|| KnifeHud {
         panel,
         scores: game.scores,
@@ -614,12 +647,18 @@ fn play_knives(
             Stage::Thrower(_, charge, _) => charge.map(fill_of),
             _ => None,
         },
-        popup: game.popup.map(|(p, at)| (p, now - at)),
+        landed: game.landed,
+        points: game.points,
+        throw_key: actions.label(Action::Fire, &settings),
+        skip: matches!(game.stage, Stage::Challenger(..)) && game.leaving.is_none(),
     });
     hold.knives = game.stage != Stage::Away;
-    // FC3_KNIFE_SHOTS=<dir> (tests): each stage captured a moment in.
+    // FC3_KNIFE_SHOTS=<dir> (tests): each stage captured a moment in (its
+    // box played in; a throw while it's held; the third's points as they
+    // pop up).
     if let Ok(dir) = std::env::var("FC3_KNIFE_SHOTS") {
         let label = match game.stage {
+            _ if game.leaving.is_some() => "leaving".into(),
             Stage::Away => String::new(),
             Stage::Betting => "betting".into(),
             Stage::Challenger(n, _) => {
@@ -630,6 +669,7 @@ fn play_knives(
                 }
             }
             Stage::Thrower(n, Some(_), _) if n >= 2 => "thrower".into(),
+            Stage::Thrower(3, None, _) => "landed".into(),
             Stage::Thrower(..) => String::new(),
             Stage::Result(_) => "result".into(),
         };
@@ -637,11 +677,33 @@ fn play_knives(
             game.shot = (label, 0.0, std::mem::take(&mut game.shot.2));
         }
         game.shot.1 += dt;
-        if !game.shot.0.is_empty() && game.shot.1 > 0.5 && !game.shot.2.contains(&game.shot.0) {
+        let moment = match game.shot.0.as_str() {
+            "thrower" => 0.4,
+            "landed" => 0.35,
+            _ => 1.0,
+        };
+        if !game.shot.0.is_empty() && game.shot.1 > moment && !game.shot.2.contains(&game.shot.0) {
             game.shot.2.push(game.shot.0.clone());
             crate::camera::capture(&mut commands, format!("{dir}/{}.png", game.shot.0));
         }
     }
+}
+
+/// A challenger's throw: nearer the middle the harder the row (its
+/// difficulty), landing a moment after it leaves the hand.
+fn challenger_throw(game: &mut Game, now: f32) -> Throw {
+    let difficulty = game.settings.difficulty[game.row].max(0.5);
+    let spread = 0.32 / difficulty.powf(0.6);
+    let (u, v) = (game.dealer.unit(), game.dealer.unit());
+    let r = spread * (-2.0 * (u.max(1e-6)).ln()).sqrt() * 0.7;
+    let angle = v * std::f32::consts::TAU;
+    let (centre, normal) = wheel_face(game, game.site);
+    let side = Vec3::Y.cross(normal).normalize_or_zero();
+    let to = centre + (side * angle.cos() + Vec3::Y * angle.sin()) * r;
+    let from = game.site.at(THROW_SPOT) + Vec3::Y * 1.6;
+    let on_wheel = r <= WHEEL_RADIUS;
+    let points = if on_wheel { points(&game.settings.rewards, r) } else { 0 };
+    Throw { player: false, from, to, lands: now + 0.25, points, on_wheel, spawned: false }
 }
 
 /// The wheel's face: its centre (the painted face's) and its normal toward
