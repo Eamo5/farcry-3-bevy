@@ -1178,7 +1178,10 @@ impl StorySeatRequests {
 fn requested_seat(v: &Vehicle, request: &SeatRequest) -> Option<usize> {
     let free = |s: &SeatSlot| s.pawn.is_none_or(|p| p == request.pawn);
     let kind = |s: &SeatSlot| request.kinds.is_empty() || request.kinds.contains(&s.kind);
-    let by_slot = (request.index >= 0).then(|| v.seats.iter().position(|s| s.slot == request.index && kind(s) && free(s))).flatten();
+    // (Forcing the player in, `ForceInVehicle`, counts among the kind's
+    // seats only: JAS_130's 4x4 bed is the second passenger seat, after
+    // the front one.)
+    let by_slot = (request.index >= 0 && !request.forced).then(|| v.seats.iter().position(|s| s.slot == request.index && kind(s) && free(s))).flatten();
     let by_kind = || {
         (request.index < 0 || !request.kinds.is_empty())
             .then(|| v.seats.iter().position(|s| free(s) && kind(s) && (request.index < 0 || request.index == s.index)))
@@ -2218,6 +2221,20 @@ mod story_vehicle_tests {
         v.seats[1].pawn = None;
         rules.unusable = true;
         assert_eq!(v.available_seat(&rules), None);
+    }
+
+    /// Forcing the player in counts the seats of the kind asked for alone
+    /// (JAS_130's 4x4: passenger seat 1 is the bed, behind the front seat).
+    #[test]
+    fn forcing_the_player_in_counts_the_kinds_seats() {
+        let seat = |kind, index, slot| SeatSlot { kind, index, slot, pose: Transform::IDENTITY, pawn: None };
+        let v = Vehicle { seats: vec![seat(1, 0, 0), seat(3, 0, 1), seat(3, 1, 2), seat(3, 2, 3)], ..vehicle() };
+        let mut requests = StorySeatRequests::default();
+        requests.force_player(&["1".into(), "3".into(), "1".into(), "100".into()]);
+        assert_eq!(requested_seat(&v, &requests.0[0]), Some(2));
+        // (A script's own seat request counts all the seats.)
+        let take = SeatRequest { forced: false, ..requests.0[0].clone() };
+        assert_eq!(requested_seat(&v, &take), Some(1));
     }
 
     #[test]
