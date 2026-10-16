@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::cache_assets::{cache_path, Fc3Clip, Fc3Skeleton};
+use crate::cache_assets::{cache_path, Fc3Clip, Fc3Model, Fc3Skeleton};
 use crate::characters::{CharacterRig, ClipOverride};
 use crate::combat::{DamageEvent, DamageKind, Health, Hit};
 use crate::pickups::{Pickup, PickupKind};
@@ -164,6 +164,14 @@ struct Fight {
     arena: Option<(Vec3, Vec3)>,
     /// Its mask has broken (`ChangeMaskNow`).
     mask_broken: bool,
+    /// The masks' models (`m_bossMaskArchetype`, `m_bossBrokenMaskArchetype`),
+    /// the one on its head now, and the middle of that one in the head's
+    /// frame (where the weak spot is).
+    masks: [Option<Handle<Fc3Model>>; 2],
+    mask_visual: Option<Entity>,
+    mask_center: Vec3,
+    /// A thrown rock's model (`m_rockArchetype`).
+    rock_model: Option<Handle<Fc3Model>>,
     /// Where goodies are laid (`m_goodiesSpawnSpot1..3`), each with the
     /// goodie lying there, and the seconds to the next round.
     goodie_spots: Vec<(Vec3, Option<Entity>)>,
@@ -176,6 +184,8 @@ struct Fight {
     /// Minions still to raise, and the seconds to the next.
     minions_due: u32,
     minion_timer: f32,
+    /// Seconds to the next puff of ink off its arms.
+    ink: f32,
     /// Debug screenshots taken.
     shots: u32,
 }
@@ -183,6 +193,10 @@ struct Fight {
 /// A goodie the fight laid out.
 #[derive(Component)]
 struct BossGoodie;
+
+/// The mask the fight put on the giant's head.
+#[derive(Component)]
+struct BossMask;
 
 /// A minion the giant summoned.
 #[derive(Component)]
@@ -210,18 +224,22 @@ struct Rock {
 /// keeps it, and the bow's explosive arrows carry no damage of their own);
 /// this puts the knockout some twenty-seven arrows away.
 const WEAK_SPOT: f32 = 6.0;
-/// The mask's reach about the head bone (m): the mask model is some 11 by
-/// 9 m.
+/// The mask's reach about its middle (m): the mask model is some 11 by 9 m.
 const MASK_RADIUS: f32 = 5.5;
-/// Where the mask sits from the head bone, in the bone's frame (its model's
-/// middle).
+/// Where the mask sits from the head bone, in the bone's frame, until its
+/// model is in (then its middle).
 const MASK_OFFSET: Vec3 = Vec3::new(0.0, 4.0, 3.0);
 /// A thrown rock's speed (m/s) and size.
 const ROCK_SPEED: f32 = 32.0;
 /// A move with no reference whose hips start this far from its root (m)
 /// carries the reference in them.
 const BAKED_REFERENCE: f32 = 30.0;
-const ROCK_SIZE: f32 = 1.6;
+/// (The rock's ink ball is 5 m across.)
+const ROCK_SIZE: f32 = 2.5;
+/// An explosive arrow's blast on the mask (m), and the seconds between
+/// puffs of ink off the arms.
+const ARROW_BLAST: f32 = 1.5;
+const INK_EVERY: f32 = 0.15;
 const GRAVITY: f32 = 9.81;
 
 fn start_and_end(
@@ -232,6 +250,7 @@ fn start_and_end(
     server: Res<AssetServer>,
     mut commands: Commands,
     rocks: Query<Entity, Or<(With<Rock>, With<BossGoodie>, With<BossMinion>)>>,
+    old_masks: Query<Entity, With<BossMask>>,
 ) {
     let cancelled = std::mem::take(&mut fight.cancelled);
     for start in std::mem::take(&mut fight.pending) {
@@ -269,6 +288,16 @@ fn start_and_end(
             ["m_boundaryNearLeft", "m_boundaryNearRight", "m_boundaryFarLeft", "m_boundaryFarRight"].iter().filter_map(|k| place(k)).collect();
         let arena = (corners.len() == 4).then(|| (corners.iter().copied().reduce(Vec3::min).unwrap(), corners.iter().copied().reduce(Vec3::max).unwrap()));
         let goodie_spots = (1..=3).filter_map(|i| place(&format!("m_goodiesSpawnSpot{i}"))).map(|p| (p, None)).collect();
+        // Its masks and rocks, drawn as their archetypes.
+        let model_of = |archetype: &str| {
+            let path = host.as_ref()?.story.data().archetype_named(archetype).and_then(crate::story_props::archetype_model)?;
+            Some(crate::weapons::model_handle(&server, &path))
+        };
+        let masks = [model_of(&s.mask_archetype), model_of(&s.broken_mask_archetype)];
+        let rock_model = model_of(&s.rock_archetype);
+        for m in &old_masks {
+            commands.entity(m).despawn();
+        }
         info!("boss fight {}: the giant {boss}, {} health, phases at {:?}", start.id, s.hp, s.phases);
         // Kept out of sight since it was placed (CIT_030's main graph): the
         // fight brings it on, rising for its arrival.
@@ -303,6 +332,10 @@ fn start_and_end(
             near_edge,
             arena,
             mask_broken: false,
+            masks,
+            mask_visual: None,
+            mask_center: MASK_OFFSET,
+            rock_model,
             goodie_spots,
             goodie_timer: 0.0,
             goodies_laid: 0,
@@ -310,6 +343,7 @@ fn start_and_end(
             pounded: false,
             minions_due: 0,
             minion_timer: 0.0,
+            ink: 0.0,
             shots: 0,
         });
     }
@@ -353,13 +387,14 @@ fn fight(
     mut damage: MessageWriter<DamageEvent>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     mut shakes: MessageWriter<crate::shake::Shake>,
-    (mut particles, mut rng, mut meshes, mut materials, cinema, placements): (
+    (mut particles, mut rng, mut meshes, mut materials, cinema, placements, models): (
         ResMut<crate::particles::Particles>,
         ResMut<crate::weapons::Rng>,
         ResMut<Assets<Mesh>>,
         ResMut<Assets<StandardMaterial>>,
         Res<crate::cinema::Cinema>,
         Res<crate::story::EntityPlacements>,
+        Res<Assets<Fc3Model>>,
     ),
     mut commands: Commands,
 ) {
@@ -384,6 +419,25 @@ fn fight(
     let Ok(rig) = rigs.get(rig_entity) else { return };
     let bone = |name: &str| rig.joint(fc3_formats::hash::name_hash(name)).and_then(|(_, j)| joints.get(j).ok()).copied();
     let head = bone("Head");
+    // The mask on its head: intact, or broken once `ChangeMaskNow` came.
+    if f.mask_visual.is_none() {
+        let joint = rig.joint(fc3_formats::hash::name_hash("Head")).map(|(_, j)| j);
+        if let (Some(handle), Some(joint)) = (f.masks[f.mask_broken as usize].clone(), joint) {
+            if let Some(model) = models.get(&handle) {
+                let v = crate::objects::spawn_model_wearing(&mut commands, &handle, model, Transform::IDENTITY, &[]);
+                commands.entity(v).insert((BossMask, ChildOf(joint)));
+                f.mask_visual = Some(v);
+                f.mask_center = (model.aabb_min + model.aabb_max) * 0.5;
+                debug!(
+                    "boss fight: the {} mask on its head ({} parts), its middle at {:.1?} (the head at {:.1?})",
+                    if f.mask_broken { "broken" } else { "whole" },
+                    model.lods.first().map_or(0, |l| l.parts.len()),
+                    head.map(|h| h.transform_point(f.mask_center)),
+                    head.map(|h| h.translation())
+                );
+            }
+        }
+    }
     // The weak spot on the head.
     let mask = *f.mask.get_or_insert_with(|| {
         commands
@@ -391,7 +445,7 @@ fn fight(
             .id()
     });
     if let (Some(h), Ok((mut st, mut sh))) = (head, spots.get_mut(mask)) {
-        st.translation = h.transform_point(MASK_OFFSET);
+        st.translation = h.transform_point(f.mask_center);
         sh.current = sh.max;
         sh.dead = false;
     }
@@ -404,6 +458,10 @@ fn fight(
         let amount = amount * WEAK_SPOT;
         f.hp = (f.hp - amount).max(0.0);
         debug!("boss fight: the mask hit for {amount:.0} ({:.0} left)", f.hp);
+        // (The bow's arrows are explosive: a blast on the mask.)
+        if let Some(h) = head {
+            crate::particles::fx::explosion(&mut particles, &mut rng, h.transform_point(f.mask_center), ARROW_BLAST);
+        }
         if amount >= f.s.hurt_threshold {
             sound(&mut sfx, &f.s, if amount > f.s.hurt_threshold * 4.0 { "BossGruntPainBig" } else { "BossGruntPainSmall" }, head.map(|h| h.translation()));
         }
@@ -514,17 +572,34 @@ fn fight(
                     let velocity = (player_at - from) / flight + Vec3::Y * 0.5 * GRAVITY * flight;
                     f.rocks_thrown += 1;
                     sound(&mut sfx, &f.s, "BossGruntRockThrow", head.map(|h| h.translation()));
-                    commands.spawn((
-                        Name::new("ink monster's rock"),
-                        Rock { velocity, age: 0.0, damage: f.s.rock_damage, radius: f.s.rock_radius },
-                        Transform::from_translation(from),
-                        Visibility::Visible,
-                        Collider::sphere(ROCK_SIZE),
-                        RigidBody::Kinematic,
-                        Health::new(f.s.rock_health.max(1.0)),
-                        Mesh3d(meshes.add(Sphere::new(ROCK_SIZE))),
-                        MeshMaterial3d(materials.add(StandardMaterial { base_color: Color::srgb(0.05, 0.05, 0.06), perceptual_roughness: 0.9, ..default() })),
-                    ));
+                    let rock = commands
+                        .spawn((
+                            Name::new("ink monster's rock"),
+                            Rock { velocity, age: 0.0, damage: f.s.rock_damage, radius: f.s.rock_radius },
+                            Transform::from_translation(from),
+                            Visibility::Visible,
+                            Collider::sphere(ROCK_SIZE),
+                            RigidBody::Kinematic,
+                            Health::new(f.s.rock_health.max(1.0)),
+                        ))
+                        .id();
+                    // (Its archetype's ink ball; a dark sphere until that is in.)
+                    match f.rock_model.as_ref().and_then(|h| models.get(h).map(|m| (h, m))) {
+                        Some((handle, model)) => {
+                            let v = crate::objects::spawn_model_wearing(&mut commands, handle, model, Transform::IDENTITY, &[]);
+                            commands.entity(v).insert(ChildOf(rock));
+                        }
+                        None => {
+                            commands.entity(rock).insert((
+                                Mesh3d(meshes.add(Sphere::new(ROCK_SIZE))),
+                                MeshMaterial3d(materials.add(StandardMaterial {
+                                    base_color: Color::srgb(0.05, 0.05, 0.06),
+                                    perceptual_roughness: 0.9,
+                                    ..default()
+                                })),
+                            ));
+                        }
+                    }
                 }
             }
             "StartFirebreath" => {
@@ -545,6 +620,9 @@ fn fight(
             }
             "ChangeMaskNow" => {
                 f.mask_broken = true;
+                if let Some(v) = f.mask_visual.take() {
+                    commands.entity(v).despawn();
+                }
                 debug!("boss fight: the mask breaks");
             }
             "DoCameraShakeAndPadRumble" => {
@@ -563,6 +641,25 @@ fn fight(
         let along = (player_at - mouth).dot(dir).clamp(0.0, reach);
         if (mouth + dir * along).distance(player_at) < f.s.breath_radius {
             harm(&mut damage, pe, f.s.breath_damage * dt, DamageKind::Fire, Some(mouth));
+        }
+    }
+    // Ink smoking off its arms (`smoke_arms`), while it stands.
+    f.ink -= dt;
+    if f.ink <= 0.0 && f.act != Act::KnockedOut {
+        f.ink = INK_EVERY;
+        for b in ["LeftForeArm", "RightForeArm", "LeftHand", "RightHand"] {
+            if let Some(at) = bone(b).map(|j| j.translation()) {
+                let jitter = Vec3::new(rng.f32() - 0.5, rng.f32() - 0.5, rng.f32() - 0.5) * 3.0;
+                let mut puff = crate::particles::Particle::new(crate::particles::Sheet::Smoke, at + jitter, 2.5, 4.0 + rng.f32() * 2.0);
+                puff.vel = Vec3::Y * 1.5 + jitter * 0.3;
+                puff.grow = 2.2;
+                puff.gravity = -0.3;
+                puff.drag = 0.6;
+                puff.spin = (rng.f32() - 0.5) * 0.8;
+                puff.colour = Vec4::new(0.03, 0.03, 0.04, 0.55);
+                puff.lit = true;
+                particles.spawn(puff);
+            }
         }
     }
     // Posed on its own skeleton, carried by the clip's root motion from where
