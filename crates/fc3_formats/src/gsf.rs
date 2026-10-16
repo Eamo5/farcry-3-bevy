@@ -143,9 +143,192 @@ impl SnipingSettings {
     }
 }
 
+/// CIT_030's fight with the Ink Monster (`CCitraBossFight`): the giant's
+/// health and the health it goes on to each phase at, its attacks' reach and
+/// harm, its moves (each a move of the move table, played facing the player:
+/// `+000fw`, `+045rt`, `-045lt`), the minions it calls and the goodies laid
+/// out meanwhile, and what it says.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BossFightSettings {
+    pub hp: f32,
+    /// The health at which phases 2, 3 and 4 (knocked out) begin.
+    pub phases: [f32; 3],
+    pub attack_cooldown: f32,
+    pub idle_between_attacks: f32,
+    pub sweep_range: f32,
+    pub sweep_damage: f32,
+    pub sweep_radius: f32,
+    pub death_hand_radius: f32,
+    pub rock_damage: f32,
+    pub rock_health: f32,
+    pub rock_radius: f32,
+    pub rock_archetype: String,
+    pub breath_damage: f32,
+    pub breath_radius: f32,
+    pub pound_radius: f32,
+    pub pound_damage: f32,
+    pub minions: f32,
+    pub minions_harder: f32,
+    pub minion_timer: f32,
+    pub minion_radius: f32,
+    pub minion_archetype: String,
+    /// A hit doing at least this plays the hurt move.
+    pub hurt_threshold: f32,
+    pub goodies: Vec<String>,
+    pub goodies_range: f32,
+    pub goodies_cooldown: f32,
+    pub mask_archetype: String,
+    pub broken_mask_archetype: String,
+    /// The moves, by what they are for (`idle`, `sweep_left`, `throw1`...).
+    pub moves: std::collections::BTreeMap<String, String>,
+    /// The sounds (`m_sound...` without the prefix), sound event ids.
+    pub sounds: std::collections::BTreeMap<String, u32>,
+}
+
+impl BossFightSettings {
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        Self::from_object(&entry(bytes, "CCitraBossFight")?)
+    }
+
+    fn from_object(o: &Object) -> Result<Self> {
+        let n = |name: &str| o.f32(name).filter(|v| v.is_finite()).unwrap_or(0.0);
+        let text = |name: &str| o.str(name).unwrap_or_default();
+        // (The move names are the hashed fields' companions.)
+        const MOVES: [(&str, u32); 23] = [
+            ("hidden", 0x96BF_112F),
+            ("idle", 0xEE02_6F11),
+            ("sweep_left", 0xE2FD_1ACB),
+            ("sweep_right", 0x5CEC_73A8),
+            ("breath", 0x89D3_D4A3),
+            ("breath_start", 0xA587_1968),
+            ("breath_cycle", 0x8A78_9D74),
+            ("breath_end", 0x1901_1594),
+            ("throw1", 0x5EC3_9E3E),
+            ("throw2", 0x36E6_25AC),
+            ("throw3", 0xC7C7_A45B),
+            ("throw1_exit", 0x388E_49CF),
+            ("throw3_exit", 0x1136_EF65),
+            ("throw2_exit", 0x7C38_E5B2),
+            ("summon_start", 0x7E36_363F),
+            ("summon_cycle", 0x51C9_B223),
+            ("summon_end", 0xFF2E_181A),
+            ("arrival", 0xF536_5C32),
+            ("hurt_idle", 0x9C8B_61DE),
+            ("hurt", 0xF5AB_DE1E),
+            ("hurt_right", 0xD0B6_1A20),
+            ("knockout", 0xE018_37ED),
+            ("knockout_idle", 0x5B36_0AFA),
+        ];
+        let moves = MOVES.iter().filter_map(|(k, h)| o.str_h(*h).filter(|s| !s.is_empty()).map(|s| (k.to_string(), s))).collect();
+        let mut sounds = std::collections::BTreeMap::new();
+        let mut goodies = Vec::new();
+        for name in [
+            "RockImpact",
+            "YouAreSpecial",
+            "YouAreCenterOfThisWorld",
+            "YouAreMakingDifference",
+            "EveryoneLooksUpToYou",
+            "YouWillDefeatAnyone",
+            "YourSenseHasBeenCloudedByOthers",
+            "ICanFeelTheFireInYou",
+            "YouAreStrong",
+            "Fight",
+            "YouAreFearless",
+            "CitraRakyat1",
+            "CitraRakyat2",
+            "CitraRakyat3",
+            "IAmJasonBrody",
+            "HolyShit",
+            "BossGruntArrival",
+            "BossGruntAttack",
+            "BossGruntRockThrow",
+            "BossGruntPainBig",
+            "BossGruntPainSmall",
+            "BossGruntInhale",
+            "BossGruntSummonIn",
+            "BossGruntSummonOut",
+        ] {
+            let id =
+                o.str(&format!("m_sound{name}")).and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok()).filter(|&i| i != u32::MAX && i != 0);
+            if let Some(id) = id {
+                sounds.insert(name.to_string(), id);
+            }
+        }
+        for name in ["Ammo", "RocketAmmo", "RocketLauncher", "BowAmmo", "MachineGun", "Bow", "HealthPack"] {
+            let a = text(&format!("m_goodies{name}Archetype"));
+            if !a.is_empty() {
+                goodies.push(a);
+            }
+        }
+        let s = Self {
+            hp: n("m_bossHP"),
+            phases: [n("m_bossHpPhase2"), n("m_bossHpPhase3"), n("m_bossHpPhase4")],
+            attack_cooldown: n("m_bossAttackCooldown"),
+            idle_between_attacks: n("m_idleTimeBetweenAttacks"),
+            sweep_range: n("m_sweepRange"),
+            sweep_damage: n("m_sweepDmg"),
+            sweep_radius: n("m_sweepHitRadius"),
+            death_hand_radius: n("m_deathHandHitRadius"),
+            rock_damage: n("m_rockThrowDmg"),
+            rock_health: n("m_rockHealth"),
+            rock_radius: n("m_rockHitRadius"),
+            rock_archetype: text("m_rockArchetype"),
+            breath_damage: n("m_firebreathDmg"),
+            breath_radius: n("m_firebreathRadius"),
+            pound_radius: n("m_summonPoundRadius"),
+            pound_damage: n("m_summonPoundDmg"),
+            minions: n("m_summonMinionsCount"),
+            minions_harder: n("m_summonMinionsCountHarder"),
+            minion_timer: n("m_summonMinionTimer"),
+            minion_radius: n("m_summonMinionsRadius"),
+            minion_archetype: text("m_summonMinionsArchetype"),
+            hurt_threshold: n("m_hurtAnimationThreshold"),
+            goodies,
+            goodies_range: n("m_goodiesSpawnRange"),
+            goodies_cooldown: n("m_goodiesSpawnCooldown"),
+            mask_archetype: text("m_bossMaskArchetype"),
+            broken_mask_archetype: text("m_bossBrokenMaskArchetype"),
+            moves,
+            sounds,
+        };
+        ensure!(s.hp > 0.0 && s.phases.iter().all(|p| *p < s.hp), "boss fight health out of order");
+        Ok(s)
+    }
+
+    /// The move for a part of the fight (`idle`, `sweep_left`...).
+    pub fn move_name(&self, what: &str) -> Option<&str> {
+        self.moves.get(what).map(String::as_str)
+    }
+
+    /// Which phase (0..=3) the giant is in at this health.
+    pub fn phase_at(&self, hp: f32) -> usize {
+        self.phases.iter().filter(|&&p| hp <= p).count()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_ink_monster_goes_through_its_phases_by_health() {
+        let s = BossFightSettings { hp: 20000.0, phases: [17000.0, 12000.0, 1000.0], ..Default::default() };
+        assert_eq!([20000.0, 17000.0, 16999.0, 12000.0, 900.0].map(|h| s.phase_at(h)), [0, 1, 1, 2, 3]);
+    }
+
+    #[test]
+    #[ignore = "requires locally installed Far Cry 3 archives"]
+    fn installed_boss_fight_settings() {
+        let vfs = crate::Vfs::open_install(&crate::find_install().expect("installed Far Cry 3"), None).unwrap();
+        let s = BossFightSettings::parse(&vfs.read(LIBRARY).unwrap()).unwrap();
+        assert_eq!((s.hp, s.phases), (20000.0, [17000.0, 12000.0, 1000.0]));
+        assert_eq!((s.sweep_damage, s.sweep_radius, s.rock_damage, s.rock_health), (35.0, 8.0, 40.0, 10.0));
+        assert_eq!(s.move_name("sweep_left"), Some("ex_bossfight_sweepleft"));
+        assert_eq!(s.move_name("knockout_idle"), Some("ex_bossfight_knockout_idle"));
+        assert_eq!(s.goodies.len(), 7);
+        assert!(s.sounds.contains_key("Fight") && !s.sounds.contains_key("HolyShit"));
+        assert!(s.minion_archetype.contains("BossMinion"));
+    }
 
     #[test]
     fn a_sniping_challenge_takes_the_scripts_limits_over_the_librarys() {
