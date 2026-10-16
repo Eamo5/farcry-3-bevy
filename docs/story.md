@@ -236,6 +236,21 @@ is the story's own:
   and armour pickups put on the shop armour's value. The SELL tab sells loot
   by the stack or all at once, at the item's price scaled by the sale-price
   skill.
+* **Treasure maps.** The MAPS tab sells the shopping database's treasure
+  maps (`bIsTreasureMap`: `shop::TreasureMap` in `story/treasure_maps.txt`,
+  written by the converter, or alone by `fc3tool treasure-maps write`).
+  Each opens for sale with its radio tower taken (its panel's entity),
+  else its mission completed (the towns' maps, JAS_060's and JAS_170's) or
+  its script group opened; in free roam all are for sale. Bought maps are
+  kept (`map <id>` in the save) and show on the world map what they
+  reveal in their cells (`C3`: rows lettered from the north, columns
+  numbered from the west, 1024 m each, the map's ten by ten grid): plants,
+  memory cards, letters, the four kinds of relic, photos and the three
+  kinds of loot chest, found in the cached sectors' entities (read once in
+  the background: about 4,100 on the island, the plants' two variants at
+  a spot counted once) and dropped from the map once picked up. The game's
+  names for most maps are blank, so the shop names them by what they show
+  and where.
 * **Crafting** follows the converted recipes throughout. Each gear chain
   (holster, rucksack, syringe kit, wallet, ammo, munitions, fuel and rocket
   packs, grenade pouch, quiver) crafts tier by tier, and capacities are its

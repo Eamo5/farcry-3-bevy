@@ -110,10 +110,189 @@ pub fn from_text(text: &str) -> Result<Vec<Weapon>> {
     }).collect()
 }
 
+pub const TREASURE_MAPS_REL: &str = "story/treasure_maps.txt";
+const MAPS_FORMAT: &str = "fc3maps 1";
+
+/// What a treasure map shows in a cell of the world map
+/// (`MarkersRevealed`), a bit each.
+pub mod reveal {
+    pub const PLANT: u16 = 1 << 0;
+    pub const SD_CARD: u16 = 1 << 1;
+    pub const LETTER: u16 = 1 << 2;
+    pub const TRIBAL_RELIC: u16 = 1 << 3;
+    pub const BOAR_RELIC: u16 = 1 << 4;
+    pub const SPIDER_RELIC: u16 = 1 << 5;
+    pub const SHARK_RELIC: u16 = 1 << 6;
+    pub const HERON_RELIC: u16 = 1 << 7;
+    pub const PHOTO: u16 = 1 << 8;
+    pub const LOOT_WOOD: u16 = 1 << 9;
+    pub const LOOT_METAL: u16 = 1 << 10;
+    pub const LOOT_REINFORCED: u16 = 1 << 11;
+    /// The flags' fields.
+    pub const FIELDS: [(&str, u16); 12] = [
+        ("bPlant", PLANT),
+        ("bSDCard", SD_CARD),
+        ("bJapLetter", LETTER),
+        ("bTribalRelic", TRIBAL_RELIC),
+        ("bBoarRelic", BOAR_RELIC),
+        ("bSpiderRelic", SPIDER_RELIC),
+        ("bSharkRelic", SHARK_RELIC),
+        ("bHeronRelic", HERON_RELIC),
+        ("bPhoto", PHOTO),
+        ("bLootWood", LOOT_WOOD),
+        ("bLootMetal", LOOT_METAL),
+        ("bLootReinforced", LOOT_REINFORCED),
+    ];
+}
+
+/// A map the shops sell (`bIsTreasureMap`): its name and description
+/// (string ids), price, and what opens it for sale (a radio tower's panel
+/// taken, else a mission completed or a script's unlock); what it shows in
+/// which cells of the world map (`C3`: the row's letter from the north, the
+/// column's number from the west, a kilometre and 24 m each).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreasureMap {
+    pub id: u32,
+    pub name_id: u32,
+    pub description_id: u32,
+    pub cost: u32,
+    pub tower: u64,
+    pub unlock_mission: String,
+    pub unlock_script: String,
+    pub reveals: Vec<(String, u16)>,
+}
+
+pub fn treasure_maps(items: &Object) -> Vec<TreasureMap> {
+    let mut out = Vec::new();
+    for item in items.children.iter().filter(|i| i.bool("bIsTreasureMap") == Some(true)) {
+        let (Some(id), Some(cost)) = (uint(item, "disId"), uint(item, "iCost")) else { continue };
+        let mut reveals = Vec::new();
+        for info in item.child("RevealInfos").map(|r| r.children.as_slice()).unwrap_or_default() {
+            let cell = text(info, "sMapName");
+            let shown =
+                info.child("MarkersRevealed").map_or(0, |m| reveal::FIELDS.iter().filter(|(f, _)| m.bool(f) == Some(true)).fold(0, |bits, (_, b)| bits | b));
+            if !cell.is_empty() && shown != 0 {
+                reveals.push((cell, shown));
+            }
+        }
+        out.push(TreasureMap {
+            id: id as u32,
+            name_id: uint(item, "locidItemNameId").unwrap_or(0) as u32,
+            description_id: uint(item, "locidDescriptionId").unwrap_or(0) as u32,
+            cost: cost as u32,
+            tower: uint(item, "RadioTowerEntityId").unwrap_or(0),
+            unlock_mission: text(item, "UnlockOnMissionComplete"),
+            unlock_script: text(item, "UnlockFromScript"),
+            reveals,
+        });
+    }
+    out.sort_by_key(|m| (m.cost, m.id));
+    out
+}
+
+/// A world map cell's name (`C3`) at a place (Dunia x, y): the rows are
+/// lettered from the north, the columns numbered from the west, a kilometre
+/// and 24 m each.
+pub fn map_cell(x: f32, y: f32) -> Option<String> {
+    let half = crate::worldmap::HALF_EXTENT;
+    let (row, col) = (((half - y) / 1024.0).floor(), ((x + half) / 1024.0).floor());
+    ((0.0..10.0).contains(&row) && (0.0..10.0).contains(&col)).then(|| format!("{}{}", (b'A' + row as u8) as char, col as u8))
+}
+
+pub fn treasure_maps_to_text(maps: &[TreasureMap]) -> String {
+    let mut out = format!("{MAPS_FORMAT}\n");
+    for m in maps {
+        let reveals: Vec<String> = m.reveals.iter().map(|(c, b)| format!("{c}:{b}")).collect();
+        out += &format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            m.id,
+            m.name_id,
+            m.description_id,
+            m.cost,
+            m.tower,
+            m.unlock_mission,
+            m.unlock_script,
+            reveals.join(" ")
+        );
+    }
+    out
+}
+
+pub fn treasure_maps_from_text(text: &str) -> Result<Vec<TreasureMap>> {
+    let mut lines = text.lines();
+    if lines.next() != Some(MAPS_FORMAT) {
+        bail!("not a current treasure map table")
+    }
+    lines
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            let f: Vec<_> = l.split('\t').collect();
+            if f.len() != 8 {
+                bail!("malformed treasure map entry")
+            }
+            let n = |i: usize| f[i].parse::<u32>().context("invalid treasure map number");
+            let reveals = f[7]
+                .split_whitespace()
+                .map(|r| {
+                    let (cell, bits) = r.split_once(':').context("malformed reveal")?;
+                    Ok((cell.to_string(), bits.parse::<u16>()?))
+                })
+                .collect::<Result<_>>()?;
+            Ok(TreasureMap {
+                id: n(0)?,
+                name_id: n(1)?,
+                description_id: n(2)?,
+                cost: n(3)?,
+                tower: f[4].parse().context("invalid tower")?,
+                unlock_mission: f[5].into(),
+                unlock_script: f[6].into(),
+                reveals,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    /// A treasure map item's price, tower and cells, through the table.
+    #[test]
+    fn treasure_maps_keep_their_cells_and_unlocks() {
+        let flags = object("MarkersRevealed", vec![("bSDCard", vec![1]), ("bBoarRelic", vec![1]), ("bPlant", vec![0])], Vec::new());
+        let info = object("RevealInfo", vec![("sMapName", b"C3".to_vec())], vec![flags]);
+        let blank = object("RevealInfo", vec![("sMapName", vec![0])], vec![object("MarkersRevealed", Vec::new(), Vec::new())]);
+        let item = object(
+            "Item",
+            vec![
+                ("bIsTreasureMap", vec![1]),
+                ("disId", 900u16.to_le_bytes().to_vec()),
+                ("iCost", 500u32.to_le_bytes().to_vec()),
+                ("locidItemNameId", 118992u32.to_le_bytes().to_vec()),
+                ("RadioTowerEntityId", 2073378669121767367u64.to_le_bytes().to_vec()),
+                ("UnlockOnMissionComplete", vec![0]),
+            ],
+            vec![object("RevealInfos", Vec::new(), vec![info, blank])],
+        );
+        let weapon = object("Item", vec![("bIsTreasureMap", vec![0])], Vec::new());
+        let maps = treasure_maps(&object("lib", Vec::new(), vec![item, weapon]));
+        assert_eq!(maps.len(), 1);
+        assert_eq!((maps[0].id, maps[0].cost, maps[0].tower), (900, 500, 2073378669121767367));
+        assert_eq!(maps[0].reveals, vec![("C3".to_string(), reveal::SD_CARD | reveal::BOAR_RELIC)]);
+        assert_eq!(treasure_maps_from_text(&treasure_maps_to_text(&maps)).unwrap(), maps);
+        assert!(treasure_maps_from_text("fc3maps 0\n").is_err());
+    }
+
+    /// The cells by place: C3's bar and radio tower, F2's and G4's towers.
+    #[test]
+    fn map_cells_are_lettered_from_the_north_and_numbered_from_the_west() {
+        assert_eq!(map_cell(-1176.0, 2849.0).as_deref(), Some("C3"));
+        assert_eq!(map_cell(-1538.0, 2506.0).as_deref(), Some("C3"));
+        assert_eq!(map_cell(-2529.0, -690.0).as_deref(), Some("F2"));
+        assert_eq!(map_cell(-579.0, -1501.0).as_deref(), Some("G4"));
+        assert_eq!(map_cell(1554.0, 2460.0).as_deref(), Some("C6"));
+    }
 
     fn object(name: &str, fields: Vec<(&str, Vec<u8>)>, children: Vec<Object>) -> Object {
         Object { name_hash: crate::hash::name_hash(name), fields: fields.into_iter().map(|(n, b)| (crate::hash::name_hash(n), b)).collect(),

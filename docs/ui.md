@@ -532,6 +532,16 @@ Everything else is the engine's to drive (`original_ui::drive_map_page`):
   legend strings; the quests share the handbook's). `fc3tool
   story-map-markers [filter]` lists the markers by type and sub-type.
   `FC3_MAP_REVEAL` (tests) lifts all the fog.
+* The treasure maps bought at the shops (`treasure_maps`) show what they
+  reveal in their cells, until it's picked up: relics 34, lost letters 32,
+  memory cards 33, loot chests 21 and the plants by the leaf they give
+  (green 57, blue 58, crimson 59, amber 60, white 61), each with the
+  game's own legend row. The movie shows every type with a legend row (its
+  per-zoom filter table is the engine's, which sent only what a zoom
+  showed; the movie never reads it). It makes the icons twenty a frame, so
+  thousands at once (every plant on the island) bog it down: only the
+  cells of maps bought are sent. `FC3_MAP_FINDS=<cell>,...` (tests) shows
+  everything in those cells and logs how many icons are in view.
 * Once the icons are in (`IconsLoaded`), `CenterMap <level> <zoom>`. The
   zoom is the whole map's width on the stage; it opens at 7168 (the
   movie's own start) and the wheel takes it a quarter in or out between

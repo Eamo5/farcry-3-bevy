@@ -480,6 +480,40 @@ fn main() -> Result<()> {
                 println!("{name}: {}", out.join(" "));
             });
         }
+        "treasure-maps" => {
+            // The maps the shops sell, and what each shows where; with
+            // `write`, the cache's table of them (the converter's own, a
+            // few KB, for a cache converted before it had one).
+            let items = vfs.read(fc3_formats::shop::ITEMS_LIB)?;
+            let at = items.windows(4).position(|w| w == b"nbCF").context("no shopping FCB header")?;
+            let maps = fc3_formats::shop::treasure_maps(&*fc3_formats::fcb::parse(&items[at..])?);
+            for m in &maps {
+                let cells: Vec<String> = m.reveals.iter().map(|(c, b)| format!("{c}:{b:#x}")).collect();
+                println!("{:5} ${:<5} tower {:20} {} {} {}", m.id, m.cost, m.tower, m.unlock_mission, m.unlock_script, cells.join(" "));
+            }
+            if args.get(1).is_some_and(|a| a == "write") {
+                let path = fc3_formats::cache::default_cache_root().join(fc3_formats::shop::TREASURE_MAPS_REL);
+                std::fs::write(&path, fc3_formats::shop::treasure_maps_to_text(&maps))?;
+                println!("wrote {} maps to {}", maps.len(), path.display());
+            }
+        }
+        "sector-pickups" => {
+            // The cached sectors' pickups (collectibles, plants, loot) by
+            // name, counted: sector-pickups [name filter]
+            let filter = args.get(1).map(|s| s.to_ascii_lowercase()).unwrap_or_else(|| "pickups/".into());
+            let dir = fc3_formats::cache::default_cache_root().join("sectors");
+            let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+            for entry in std::fs::read_dir(&dir)? {
+                let Ok(bytes) = std::fs::read(entry?.path()) else { continue };
+                let Ok(sector) = fc3_formats::cache::CachedSector::from_bytes(&bytes) else { continue };
+                for e in sector.entities.iter().filter(|e| e.name.to_ascii_lowercase().contains(&filter)) {
+                    *counts.entry(e.name.clone()).or_default() += 1;
+                }
+            }
+            for (name, n) in counts {
+                println!("{n:5} {name}");
+            }
+        }
         "gsf-dump" => {
             // The gameplay settings library's entries whose name (`hidName`)
             // contains a text, dumped: gsf-dump <text> [depth]

@@ -408,6 +408,8 @@ pub struct Progress {
     pub outposts: u32,
     /// Radio towers activated (indices into the world's tower list).
     pub towers: std::collections::BTreeSet<u32>,
+    /// Treasure maps bought (their shop ids: `treasure_maps`).
+    pub maps: std::collections::BTreeSet<u32>,
     /// Collectibles found: relics, lost letters, memory cards.
     pub relics: u32,
     pub letters: u32,
@@ -453,6 +455,7 @@ impl Default for Progress {
             recipes: HashSet::new(),
             outposts: 0,
             towers: Default::default(),
+            maps: Default::default(),
             relics: 0,
             letters: 0,
             cards: 0,
@@ -549,6 +552,9 @@ impl Progress {
         for t in &self.towers {
             s += &format!("tower {t}\n");
         }
+        for m in &self.maps {
+            s += &format!("map {m}\n");
+        }
         s += &format!("collectibles {} {} {}\n", self.relics, self.letters, self.cards);
         let list = |v: &[u32]| v.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(" ");
         s += &format!("plants {}\n", list(&self.plants));
@@ -606,6 +612,11 @@ impl Progress {
                 }
             }
             "recipe" => { self.recipes.insert(rest.trim().to_string()); }
+            "map" => {
+                if let Ok(id) = rest.trim().parse() {
+                    self.maps.insert(id);
+                }
+            }
             "upgrade" => {
                 if let (Some(k), Some(v)) = (it.next(), it.next().and_then(|v| v.parse().ok())) {
                     self.upgrades.insert(k.to_string(), v);
@@ -2317,6 +2328,8 @@ enum ShopItem {
     Arrows(u8),
     /// A supply from the game's shop database: its item id and price.
     Supply(u32, u32),
+    /// A treasure map: its id and price (`treasure_maps`).
+    Map(u32, u32),
     /// Selling every loot item carried, or one kind (its id).
     SellAll,
     Sell(u32),
@@ -2475,7 +2488,7 @@ impl ShopItem {
             ShopItem::Paint(..) => PAINT_PRICE,
             ShopItem::Arrows(1) => 150,
             ShopItem::Arrows(_) => 300,
-            ShopItem::Supply(_, price) => price,
+            ShopItem::Supply(_, price) | ShopItem::Map(_, price) => price,
             // (Paid, not charged.)
             ShopItem::SellAll | ShopItem::Sell(_) => 0,
             ShopItem::Weapon(d) => match inv.defs.get(d).map(|d| d.class) {
@@ -2492,6 +2505,8 @@ impl ShopItem {
     fn label(self, inv: &Inventory, supplies: &[fc3_formats::progression::Item]) -> String {
         match self {
             ShopItem::SellAll => "Sell all loot".into(),
+            // (Named by `TreasureMaps::label`.)
+            ShopItem::Map(..) => String::new(),
             ShopItem::Sell(id) => supplies.iter().find(|i| i.id == id).map(|i| i.name.clone()).unwrap_or_default(),
             ShopItem::Supply(id, _) => {
                 let Some(item) = supplies.iter().find(|i| i.id == id) else { return String::new() };
@@ -2530,9 +2545,10 @@ enum ShopButton {
 }
 
 /// Shop categories (tab 0 is supplies).
-const SHOP_TABS: [&str; 11] = ["SUPPLIES", "HANDGUNS", "SMG", "RIFLES", "SHOTGUNS", "SNIPER", "HEAVY", "BOWS", "ATTACHMENTS", "PAINT", "SELL"];
-/// Selling loot.
-const SELL_TAB: usize = 10;
+const SHOP_TABS: [&str; 12] = ["SUPPLIES", "HANDGUNS", "SMG", "RIFLES", "SHOTGUNS", "SNIPER", "HEAVY", "BOWS", "ATTACHMENTS", "PAINT", "MAPS", "SELL"];
+/// Treasure maps, and selling loot.
+const MAPS_TAB: usize = 10;
+const SELL_TAB: usize = 11;
 /// The attachments and paint tabs.
 const ATTACHMENTS_TAB: usize = 8;
 const PAINT_TAB: usize = 9;
@@ -2636,6 +2652,11 @@ struct ShopPrice(usize);
 
 #[derive(Component)]
 struct ShopHeader;
+
+/// The treasure maps for sale (as many as the tab shows).
+fn map_items(maps: &crate::treasure_maps::TreasureMaps) -> Vec<ShopItem> {
+    maps.for_sale.iter().map(|&(id, cost)| ShopItem::Map(id, cost)).take(14).collect()
+}
 
 /// Shop stock in a tab: supplies, or the weapons of one kind (owned ones
 /// show as owned).
@@ -2886,13 +2907,17 @@ fn shop_buttons(
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     mut tab: ResMut<ShopTab>,
     mut bought_items: MessageWriter<ItemBought>,
-    (catalog, restriction, crafting): (Res<ShopCatalog>, Res<ShopOverride>, Res<crate::crafting::CraftCatalog>),
+    (catalog, restriction, crafting, maps): (Res<ShopCatalog>, Res<ShopOverride>, Res<crate::crafting::CraftCatalog>, Res<crate::treasure_maps::TreasureMaps>),
 ) {
     if *state.get() != GameState::Shop {
         return;
     }
     let Ok((mut inv, mut stats)) = players.single_mut() else { return };
-    let items = if tab.0 == SELL_TAB && restriction.0.is_none() { sell_items(&progress, &crafting) } else { shop_items(&inv, tab.0, &catalog, &restriction, &crafting.items, &progress) };
+    let items = match tab.0 {
+        SELL_TAB if restriction.0.is_none() => sell_items(&progress, &crafting),
+        MAPS_TAB if restriction.0.is_none() => map_items(&maps),
+        _ => shop_items(&inv, tab.0, &catalog, &restriction, &crafting.items, &progress),
+    };
     for (interaction, kind, mut bg) in &mut buttons {
         match interaction {
             Interaction::Pressed => {
@@ -2993,6 +3018,13 @@ fn shop_buttons(
                         }
                         fresh
                     }
+                    ShopItem::Map(id, _) => {
+                        let fresh = progress.maps.insert(id);
+                        if fresh {
+                            hud.notify("Map bought: its finds are on the world map");
+                        }
+                        fresh
+                    }
                     ShopItem::Gear(id) if progress.upgrade(id) == 0 => {
                         progress.upgrades.insert(id.to_string(), 1);
                         true
@@ -3076,7 +3108,7 @@ fn refresh_shop(
     mut tabs: Query<(&ShopButton, &Interaction, &mut BackgroundColor)>,
     tab: Res<ShopTab>,
     perks: Res<Perks>,
-    (catalog, restriction, crafting): (Res<ShopCatalog>, Res<ShopOverride>, Res<crate::crafting::CraftCatalog>),
+    (catalog, restriction, crafting, maps): (Res<ShopCatalog>, Res<ShopOverride>, Res<crate::crafting::CraftCatalog>, Res<crate::treasure_maps::TreasureMaps>),
 ) {
     let open = *state.get() == GameState::Shop;
     if let Ok(mut v) = root.single_mut() {
@@ -3086,7 +3118,11 @@ fn refresh_shop(
         return;
     }
     let Ok(inv) = players.single() else { return };
-    let items = if tab.0 == SELL_TAB && restriction.0.is_none() { sell_items(&progress, &crafting) } else { shop_items(inv, tab.0, &catalog, &restriction, &crafting.items, &progress) };
+    let items = match tab.0 {
+        SELL_TAB if restriction.0.is_none() => sell_items(&progress, &crafting),
+        MAPS_TAB if restriction.0.is_none() => map_items(&maps),
+        _ => shop_items(inv, tab.0, &catalog, &restriction, &crafting.items, &progress),
+    };
     if let Ok(mut t) = header.single_mut() {
         let guns = inv.slots.iter().filter(|s| inv.defs[s.def].class != crate::weapons::WeaponClass::Melee).count();
         t.0 = format!("${} / {}      weapons carried {} / {}", progress.money, progress.money_cap(), guns, perks.weapon_slots);
@@ -3113,7 +3149,10 @@ fn refresh_shop(
             _ => false,
         };
         let price = item.price(inv, progress.towers.len(), &catalog);
-        t.0 = item.label(inv, &crafting.items);
+        t.0 = match item {
+            ShopItem::Map(id, _) => maps.label(id),
+            _ => item.label(inv, &crafting.items),
+        };
         if let ShopItem::Sell(id) = item {
             t.0 = format!("{}  x{}", t.0, progress.loot.get(&id).copied().unwrap_or(0));
         }
@@ -3867,6 +3906,7 @@ mod shop_tests {
             .insert_resource(catalog)
             .insert_resource(ShopOverride(Some((7, 42))))
             .init_resource::<crate::crafting::CraftCatalog>()
+            .init_resource::<crate::treasure_maps::TreasureMaps>()
             .add_message::<ItemBought>()
             .add_message::<crate::sound::PlaySfx>()
             .add_systems(Update, shop_buttons);

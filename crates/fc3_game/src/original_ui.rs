@@ -535,7 +535,7 @@ fn map_level(zoom: f32) -> usize {
 /// The legend's rows (`DataMap`): an icon type and its name (the game's
 /// map legend strings). Each type the map shows needs its row: the movie
 /// hides the icons of types without one.
-const MAP_LEGEND: [(f64, u32); 22] = [
+const MAP_LEGEND: [(f64, u32); 31] = [
     (map_icon::PLAYER, 93073),
     (map_icon::MARKER, 93074),
     (map_icon::MISSION, 93075),
@@ -558,6 +558,16 @@ const MAP_LEGEND: [(f64, u32); 22] = [
     (map_icon::SIDE_QUEST, QUESTS),
     (map_icon::ULC_QUEST, QUESTS),
     (map_icon::DOG, 93101),
+    // What the treasure maps show.
+    (map_icon::RELIC, 93106),
+    (map_icon::LETTER, 93108),
+    (map_icon::SD_CARD, 93107),
+    (map_icon::CHEST, 93105),
+    (map_icon::PLANT_GREEN, 155384),
+    (map_icon::PLANT_RED, 155385),
+    (map_icon::PLANT_YELLOW, 155386),
+    (map_icon::PLANT_WHITE, 155387),
+    (map_icon::PLANT_BLUE, 93104),
 ];
 /// The handbook's "quests" (the map's legend has no row of its own for
 /// them).
@@ -579,6 +589,15 @@ mod map_icon {
     pub const DOG: f64 = 10.0;
     pub const KNIFE: f64 = 11.0;
     pub const MARKER: f64 = 20.0;
+    pub const CHEST: f64 = 21.0;
+    pub const LETTER: f64 = 32.0;
+    pub const SD_CARD: f64 = 33.0;
+    pub const RELIC: f64 = 34.0;
+    pub const PLANT_GREEN: f64 = 57.0;
+    pub const PLANT_BLUE: f64 = 58.0;
+    pub const PLANT_RED: f64 = 59.0;
+    pub const PLANT_YELLOW: f64 = 60.0;
+    pub const PLANT_WHITE: f64 = 61.0;
     pub const POKER: f64 = 31.0;
     pub const SHOOTING: f64 = 36.0;
     pub const RACING: f64 = 37.0;
@@ -706,6 +725,7 @@ fn drive_map_page(
         Res<crate::story::ObjectiveMarkers>,
     ),
     (mut waypoint, explored): (ResMut<crate::map::Waypoint>, Res<crate::map::Explored>),
+    (island, treasure, world): (Res<crate::treasure_maps::Island>, Res<crate::treasure_maps::TreasureMaps>, Res<crate::pickups::WorldState>),
     mut story: Option<NonSendMut<crate::story::StoryHost>>,
     mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
     (mut cursor, buttons, windows): (MessageReader<CursorMoved>, Res<ButtonInput<bevy::input::mouse::MouseButton>>, Query<&Window, With<PrimaryWindow>>),
@@ -808,6 +828,28 @@ fn drive_map_page(
                     if d.unlocked {
                         page.travel.push(Travel::Safehouse(d.marker));
                     }
+                }
+                // What the treasure maps bought show in their cells, until
+                // it's been picked up (FC3_MAP_FINDS=C3,D4..., tests:
+                // everything in those cells).
+                let mut shown = treasure.shown(&progress.maps);
+                for cell in std::env::var("FC3_MAP_FINDS").unwrap_or_default().split(',').filter(|c| !c.is_empty()) {
+                    shown.insert(cell.trim().to_string(), u16::MAX);
+                }
+                for t in island.things.iter().filter(|t| shown.get(&t.cell).is_some_and(|b| b & t.find.reveal() != 0) && !world.removed.contains(&t.id)) {
+                    use crate::treasure_maps::{Find, Leaf};
+                    let kind = match t.find {
+                        Find::Relic(_) => map_icon::RELIC,
+                        Find::Letter => map_icon::LETTER,
+                        Find::MemoryCard => map_icon::SD_CARD,
+                        Find::Chest(_) => map_icon::CHEST,
+                        Find::Plant(Leaf::Green) => map_icon::PLANT_GREEN,
+                        Find::Plant(Leaf::Crimson) => map_icon::PLANT_RED,
+                        Find::Plant(Leaf::Amber) => map_icon::PLANT_YELLOW,
+                        Find::Plant(Leaf::White) => map_icon::PLANT_WHITE,
+                        Find::Plant(Leaf::Blue) => map_icon::PLANT_BLUE,
+                    };
+                    icon(kind, t.at, "", 0.0, false);
                 }
                 if let Some(at) = waypoint.0 {
                     icon(map_icon::MARKER, at, "", 0.0, true);
@@ -934,6 +976,18 @@ fn drive_map_page(
             host.dps_set(id, "_y", V::Number((uv.y as f64 + v[1]) * v[3]));
         }
         page.placed = Some(v);
+        // (A finds test: how many icons are in view.)
+        if std::env::var_os("FC3_MAP_FINDS").is_some() {
+            let on_stage: Vec<String> = page
+                .icons
+                .iter()
+                .filter_map(|(clip, _)| {
+                    let [x0, y0, ..] = host.dps_bounds(clip)?;
+                    ((0.0..1280.0).contains(&x0) && (0.0..720.0).contains(&y0)).then(|| clip.clone())
+                })
+                .collect();
+            info!("original UI: world map: {} icons in view", on_stage.len());
+        }
     }
     for w in wheel.read() {
         let zoom = if w.y > 0.0 {

@@ -1028,6 +1028,30 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
+    // ---- the maps the shops sell, and what each shows
+    if opts.only_sectors.is_none() {
+        let current = std::fs::read_to_string(job.root().join(fc3_formats::shop::TREASURE_MAPS_REL))
+            .map_err(anyhow::Error::from)
+            .and_then(|text| fc3_formats::shop::treasure_maps_from_text(&text))
+            .is_ok();
+        if job.should_write(fc3_formats::shop::TREASURE_MAPS_REL) || !current {
+            let maps = (|| -> Result<_> {
+                let items = job.vfs.read(fc3_formats::shop::ITEMS_LIB)?;
+                let at = items.windows(4).position(|w| w == b"nbCF").context("no shopping FCB header")?;
+                Ok(fc3_formats::shop::treasure_maps(&*fc3_formats::fcb::parse(&items[at..])?))
+            })();
+            match maps {
+                Ok(maps) => {
+                    let text = fc3_formats::shop::treasure_maps_to_text(&maps);
+                    if let Err(e) = write_atomic(job.root(), fc3_formats::shop::TREASURE_MAPS_REL, text.as_bytes(), job.ctx) {
+                        job.error(format!("treasure maps: {e:#}"));
+                    }
+                }
+                Err(e) => job.error(format!("treasure maps: {e:#}")),
+            }
+        }
+    }
+
     // ---- authored crafting/loot metadata (runtime rules migrate separately)
     if opts.only_sectors.is_none() {
         let current = std::fs::read_to_string(job.root().join(fc3_formats::progression::RECIPES_REL))
