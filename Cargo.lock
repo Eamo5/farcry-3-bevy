@@ -2931,6 +2931,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "fc3_formats",
+ "image",
  "naga",
  "rayon",
  "sysinfo",

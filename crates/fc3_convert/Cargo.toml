@@ -16,3 +16,4 @@ anyhow.workspace = true
 rayon = "1.10"
 naga = { version = "29", features = ["wgsl-in"] }
 sysinfo = { version = "0.38", default-features = false, features = ["disk"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

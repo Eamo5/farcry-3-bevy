@@ -1,8 +1,12 @@
 //! The baked world map: a top-down picture of the whole island for the
 //! in-game map and minimap, north up, 2 m per pixel.
 //!
-//! The converter shades it from the terrain's baked colour atlas, its heights
-//! (hill shading, cliffs) and the sea, then stores it as a BC1 DDS with mips.
+//! The converter puts it together from the game's own map, its map screen's
+//! tiles (`worlds\<world>\worldmap\<level>_<row>_<column>.xbt`; the third
+//! level's ten by ten span this same square at this same scale). Without
+//! them it shades one from the terrain's baked colour atlas, its heights
+//! (hill shading, cliffs) and the sea. Either is stored as a BC1 DDS with
+//! mips.
 
 use crate::terrain::{SECTOR_SIZE, WORLD_SECTORS};
 

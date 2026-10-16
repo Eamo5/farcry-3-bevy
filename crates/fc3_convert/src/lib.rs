@@ -554,6 +554,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         if let Err(e) = convert_world_map(&job, &atlas_ids) {
             job.error(format!("world map: {e:#}"));
         }
+        convert_world_map_tiles(&job);
     }
 
     // ---- sectors
@@ -1717,16 +1718,97 @@ fn convert_terrain(job: &Job, id: u32, refresh_holes: bool) -> Result<Option<u32
     Ok(Some(id))
 }
 
+/// The map screen's tiles (`worlds\<world>\worldmap\<level>_<row>_<column>.xbt`,
+/// four levels of zoom of 2, 5, 10 and 20 tiles a side) as the images its
+/// movie loads (`WorldMap.CMap` asks for `<level>_<row>_<column>.png` there,
+/// which `feu::movie_rel` finds in the cache).
+fn convert_world_map_tiles(job: &Job) {
+    let names: Vec<String> = [(0, 2), (1, 5), (2, 10), (3, 20)]
+        .into_iter()
+        .flat_map(|(level, n)| (0..n).flat_map(move |row| (0..n).map(move |col| format!("{level}_{row}_{col}"))))
+        .collect();
+    let written = std::sync::atomic::AtomicUsize::new(0);
+    names.par_iter().for_each(|name| {
+        let dir = format!("worlds\\{}\\worldmap\\{name}", job.opts.world);
+        let rel = fc3_formats::feu::movie_rel(&format!("{dir}.png"));
+        if !job.should_write(&rel) {
+            return;
+        }
+        let Some((w, h, rgba)) = job.vfs.read(&format!("{dir}.xbt")).ok().and_then(|main| {
+            let xbt = fc3_formats::texture::parse(&main).ok()?;
+            let mip0 = xbt.mip0_path.as_deref().and_then(|p| job.vfs.read(p).ok());
+            fc3_formats::texture::decode_rgba(&fc3_formats::texture::assemble_dds(&main, mip0.as_deref()).ok()?)
+        }) else {
+            return;
+        };
+        let rgb: Vec<u8> = rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+        let mut png = Vec::new();
+        use image::ImageEncoder;
+        if let Err(e) = image::codecs::png::PngEncoder::new(&mut png).write_image(&rgb, w, h, image::ExtendedColorType::Rgb8) {
+            job.error(format!("world map tile {name}: {e}"));
+            return;
+        }
+        match write_atomic(job.root(), &rel, &png, job.ctx) {
+            Ok(()) => {
+                written.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(e) => job.error(format!("world map tile {name}: {e:#}")),
+        }
+    });
+    let written = written.into_inner();
+    if written > 0 {
+        eprintln!("world map tiles: {written} written");
+    }
+}
+
+/// Marks the world map as made from the game's own map where it has one.
+const WORLD_MAP_STAMP: &str = "map/stamp-game-tiles.txt";
+
+/// The game's own map of the world, its map screen's: the tiles of its
+/// third level of zoom (`worlds\<world>\worldmap\2_<row>_<column>.xbt`,
+/// ten by ten of 512 pixels) span the world at 2 m a pixel, north up, as
+/// ours does. None when a tile is missing or of another size.
+fn game_world_map(job: &Job) -> Option<Vec<u8>> {
+    use fc3_formats::worldmap::MAP_SIZE;
+    const TILES: usize = 10;
+    let size = MAP_SIZE as usize;
+    let tile = size / TILES;
+    let mut rgba = vec![0u8; size * size * 4];
+    for row in 0..TILES {
+        for col in 0..TILES {
+            let main = job.vfs.read(&format!("worlds\\{}\\worldmap\\2_{row}_{col}.xbt", job.opts.world)).ok()?;
+            let xbt = fc3_formats::texture::parse(&main).ok()?;
+            let mip0 = xbt.mip0_path.as_deref().and_then(|p| job.vfs.read(p).ok());
+            let dds = fc3_formats::texture::assemble_dds(&main, mip0.as_deref()).ok()?;
+            let (w, h, pixels) = fc3_formats::texture::decode_rgba(&dds)?;
+            if (w as usize, h as usize) != (tile, tile) {
+                return None;
+            }
+            for y in 0..tile {
+                let at = ((row * tile + y) * size + col * tile) * 4;
+                rgba[at..at + tile * 4].copy_from_slice(&pixels[y * tile * 4..(y + 1) * tile * 4]);
+            }
+        }
+    }
+    Some(rgba)
+}
+
 /// Converts the world's terrain layer table and its tiling ground textures.
-/// Bakes the world map (`map/world.dds`): each 2x2-sector atlas becomes a
-/// 64-pixel tile shaded from its baked ground colour and the sectors' heights.
+/// Bakes the world map (`map/world.dds`): the game's own map where it has
+/// one (`game_world_map`), else each 2x2-sector atlas becomes a 64-pixel
+/// tile shaded from its baked ground colour and the sectors' heights.
 fn convert_world_map(job: &Job, atlas_ids: &[u32]) -> Result<()> {
     use fc3_formats::worldmap::{self as wm, MAP_SIZE, METRES_PER_PIXEL};
-    if !job.should_write(cache::WORLD_MAP_REL) {
+    let root = job.root();
+    if !job.should_write(cache::WORLD_MAP_REL) && exists(root, WORLD_MAP_STAMP) {
         return Ok(());
     }
+    if let Some(rgba) = game_world_map(job) {
+        write_atomic(root, cache::WORLD_MAP_REL, &wm::encode_dds(&rgba, MAP_SIZE, MAP_SIZE), job.ctx)?;
+        return write_atomic(root, WORLD_MAP_STAMP, b"the world map is the game's own\n", job.ctx);
+    }
+    write_atomic(root, WORLD_MAP_STAMP, b"the game has no map of this world; ours is shaded from the terrain\n", job.ctx)?;
     let tile = (2.0 * ft::SECTOR_SIZE / METRES_PER_PIXEL) as usize;
-    let root = job.root();
     // The developers' test areas aren't part of the islands; the map shows sea there.
     let test_area = |c: SectorCoord| {
         let [x, y] = c.origin();
