@@ -2639,7 +2639,7 @@ fn main() -> Result<()> {
                 let subs: std::collections::BTreeSet<u64> = list.iter().map(|m| m.sub_kind).collect();
                 println!("{kind:#010x}: {} ({enabled} enabled), sub kinds {subs:?}", list.len());
                 for m in list.iter().take(if filter.is_empty() { 4 } else { usize::MAX }) {
-                    println!("    {} {} sub {} layer {:#x} at {:.0?} tooltip {}", m.id, m.name, m.sub_kind, m.layer, m.pos, m.tooltip);
+                    println!("    {} {} sub {} layer {:#x} at {:.0?} tooltip {} enabled {}", m.id, m.name, m.sub_kind, m.layer, m.pos, m.tooltip, m.enabled);
                 }
             }
         }

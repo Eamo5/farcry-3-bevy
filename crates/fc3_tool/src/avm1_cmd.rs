@@ -33,6 +33,30 @@ pub fn run(args: &[String]) -> Result<()> {
         }
         return Ok(());
     }
+    if mode == "labels" {
+        // Each sprite's frame labels, with the frame each marks (a text in
+        // the labels to find the sprite by).
+        let filter = args.get(2).map(String::as_str).unwrap_or("");
+        let data = std::fs::read(path)?;
+        let buf = swf::decompress_swf(&data[..])?;
+        let movie = swf::parse_swf(&buf)?;
+        for tag in &movie.tags {
+            let swf::Tag::DefineSprite(sprite) = tag else { continue };
+            let mut frame = 1;
+            let mut labels = Vec::new();
+            for t in &sprite.tags {
+                match t {
+                    swf::Tag::FrameLabel(l) => labels.push(format!("{}={frame}", l.label.to_str_lossy(swf::UTF_8))),
+                    swf::Tag::ShowFrame => frame += 1,
+                    _ => {}
+                }
+            }
+            if !labels.is_empty() && labels.iter().any(|l| l.contains(filter)) {
+                println!("sprite {} ({} frames): {}", sprite.id, frame - 1, labels.join(" "));
+            }
+        }
+        return Ok(());
+    }
     if mode == "expr" {
         let filter = args.get(2).map(String::as_str).unwrap_or("");
         let data = std::fs::read(path)?;
