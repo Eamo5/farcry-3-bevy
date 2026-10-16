@@ -534,16 +534,33 @@ fn map_level(zoom: f32) -> usize {
 /// The legend's rows (`DataMap`): an icon type and its name (the game's
 /// map legend strings). Each type the map shows needs its row: the movie
 /// hides the icons of types without one.
-const MAP_LEGEND: [(f64, u32); 8] = [
+const MAP_LEGEND: [(f64, u32); 22] = [
     (map_icon::PLAYER, 93073),
     (map_icon::MARKER, 93074),
     (map_icon::MISSION, 93075),
+    (map_icon::MISSION_GIVER, 93076),
     (map_icon::TOWER_LOCKED, 93078),
     (map_icon::TOWER, 93078),
     (map_icon::OUTPOST_LOCKED, 93079),
     (map_icon::SAFEHOUSE, 93093),
     (map_icon::SAFEHOUSE_LOCKED, 93093),
+    (map_icon::SHOP, 93094),
+    (map_icon::KNIFE, 93099),
+    (map_icon::POKER, 93100),
+    (map_icon::RACING, 93101),
+    (map_icon::SHOOTING, 93102),
+    (map_icon::CHALLENGES, 93360),
+    (map_icon::SUPPLY_DROP, 93361),
+    (map_icon::WANTED, 93362),
+    (map_icon::HUNTING, 93363),
+    (map_icon::QUEST_GIVER, QUESTS),
+    (map_icon::SIDE_QUEST, QUESTS),
+    (map_icon::ULC_QUEST, QUESTS),
+    (map_icon::DOG, 93101),
 ];
+/// The handbook's "quests" (the map's legend has no row of its own for
+/// them).
+const QUESTS: u32 = 159341;
 /// The fog's cells a side (`WorldMap.CFog`): each is lifted as a whole.
 const MAP_FOG_CELLS: usize = 10;
 
@@ -551,12 +568,63 @@ const MAP_FOG_CELLS: usize = 10;
 mod map_icon {
     pub const PLAYER: f64 = 0.0;
     pub const MISSION: f64 = 1.0;
+    pub const MISSION_GIVER: f64 = 3.0;
+    pub const QUEST_GIVER: f64 = 4.0;
+    pub const SHOP: f64 = 5.0;
     pub const SAFEHOUSE_LOCKED: f64 = 6.0;
     pub const SAFEHOUSE: f64 = 7.0;
     pub const TOWER_LOCKED: f64 = 8.0;
     pub const TOWER: f64 = 9.0;
+    pub const DOG: f64 = 10.0;
+    pub const KNIFE: f64 = 11.0;
     pub const MARKER: f64 = 20.0;
+    pub const POKER: f64 = 31.0;
+    pub const SHOOTING: f64 = 36.0;
+    pub const RACING: f64 = 37.0;
+    pub const ULC_QUEST: f64 = 55.0;
+    pub const SIDE_QUEST: f64 = 62.0;
+    pub const HUNTING: f64 = 63.0;
+    pub const SUPPLY_DROP: f64 = 64.0;
+    pub const WANTED: f64 = 65.0;
+    pub const CHALLENGES: f64 = 66.0;
     pub const OUTPOST_LOCKED: f64 = 70.0;
+}
+
+/// The story's map markers' types (`mapobjectivetype`) the map shows as they
+/// stand, enabled in a layer that's in: activities, shops and the social
+/// challenges' boards. The rest (quest and mission givers, objectives)
+/// show when a script shows them.
+const MARKER_ACTIVITY: u64 = 0x058d_6bbd;
+const MARKER_SHOP: u64 = 0x1350_8ab1;
+const MARKER_CHALLENGES: u64 = 0x0375_88d5;
+/// A mission's brief: its giver.
+const MARKER_BRIEF: u64 = 0x82ca_abbe;
+const MARKER_QUEST_GIVER: u64 = 0x7d8e_4092;
+
+/// A marker's icon on the map, by its sub-type (the activity, the kind of
+/// quest) and then its type; none for a plain objective.
+fn marker_icon(kind: u64, sub: u64) -> Option<f64> {
+    let by_sub = match sub {
+        7_657_466_763_891 => Some(map_icon::DOG),
+        7_657_467_198_775 => Some(map_icon::POKER),
+        7_658_667_062_452 => Some(map_icon::KNIFE),
+        7_659_735_889_859 => Some(map_icon::SHOP),
+        7_705_350_686_419 => Some(map_icon::SHOOTING),
+        7_705_350_709_557 => Some(map_icon::RACING),
+        7_711_661_993_104 => Some(map_icon::SIDE_QUEST),
+        7_711_663_829_951 => Some(map_icon::HUNTING),
+        7_711_663_837_270 => Some(map_icon::WANTED),
+        7_711_663_843_368 => Some(map_icon::SUPPLY_DROP),
+        7_711_664_117_448 => Some(map_icon::ULC_QUEST),
+        _ => None,
+    };
+    by_sub.or(match kind {
+        MARKER_SHOP => Some(map_icon::SHOP),
+        MARKER_CHALLENGES => Some(map_icon::CHALLENGES),
+        MARKER_BRIEF => Some(map_icon::MISSION_GIVER),
+        MARKER_QUEST_GIVER => Some(map_icon::QUEST_GIVER),
+        _ => None,
+    })
 }
 
 /// The world map page, answered as the engine answered it: on `MapLoaded`
@@ -624,6 +692,10 @@ fn drive_map_page(
                     let (sx, sy) = (i % n, i / n);
                     lifted.insert(((n - 1 - sy) * MAP_FOG_CELLS / n, sx * MAP_FOG_CELLS / n));
                 }
+                // FC3_MAP_REVEAL (tests): all of it.
+                if std::env::var_os("FC3_MAP_REVEAL").is_some() {
+                    lifted.extend((0..MAP_FOG_CELLS).flat_map(|r| (0..MAP_FOG_CELLS).map(move |c| (r, c))));
+                }
                 for (row, col) in lifted {
                     host.event("SetFog", &["0", &row.to_string(), &col.to_string()]);
                 }
@@ -650,8 +722,32 @@ fn drive_map_page(
                     // (Its turn clockwise from north, as the movie turns it.)
                     icon(map_icon::PLAYER, t.translation, "", -p.yaw.to_degrees(), false);
                 }
-                for &goal in &objectives.0 {
-                    icon(map_icon::MISSION, goal, "", 0.0, false);
+                // The markers scripts show, as what they are (a quest's giver,
+                // a mission's, else an objective), and those standing in the
+                // layers that are in (activities, shops, the challenge boards).
+                match story.as_ref() {
+                    Some(h) => {
+                        let data = h.story.data();
+                        let shown: std::collections::HashMap<u64, [f32; 3]> = h.story.objective_markers().into_iter().collect();
+                        for (id, at) in &shown {
+                            let kind = data.markers.get(id).and_then(|m| marker_icon(m.kind, m.sub_kind));
+                            icon(kind.unwrap_or(map_icon::MISSION), crate::data::to_bevy(*at), "", 0.0, false);
+                        }
+                        for m in data.markers.values() {
+                            let standing = m.enabled && [MARKER_ACTIVITY, MARKER_SHOP, MARKER_CHALLENGES].contains(&m.kind);
+                            if !standing || shown.contains_key(&m.id) || !h.story.is_loaded(m.id) {
+                                continue;
+                            }
+                            if let Some(kind) = marker_icon(m.kind, m.sub_kind) {
+                                icon(kind, crate::data::to_bevy(m.pos), "", 0.0, false);
+                            }
+                        }
+                    }
+                    None => {
+                        for &goal in &objectives.0 {
+                            icon(map_icon::MISSION, goal, "", 0.0, false);
+                        }
+                    }
                 }
                 for (i, at) in ways.data.towers.iter().enumerate() {
                     let taken = progress.towers.contains(&(i as u32));
@@ -681,7 +777,13 @@ fn drive_map_page(
                     icon(map_icon::MARKER, at, "", 0.0, true);
                 }
                 page.icons = places;
-                debug!("original UI: world map: {} icons, {} to travel to", items.len(), page.travel.len());
+                let mut kinds = std::collections::BTreeMap::<i64, usize>::new();
+                for item in &items {
+                    if let Some(V::Number(k)) = item.get("iType") {
+                        *kinds.entry(*k as i64).or_default() += 1;
+                    }
+                }
+                debug!("original UI: world map: {} icons (by type {kinds:?}), {} to travel to", items.len(), page.travel.len());
                 host.set_data("IconMap", items);
             }
             "IconsLoaded" => {

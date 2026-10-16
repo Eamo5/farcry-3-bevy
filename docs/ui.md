@@ -514,6 +514,19 @@ Everything else is the engine's to drive (`original_ui::drive_map_page`):
   or not, outposts held, safehouses and liberated outposts (both fast
   travel) and the waypoint. The types are the movie's `E_*` (player 0,
   mission 1, safehouse 6/7, tower 8/9, marker 20, outpost 70).
+* The story's map markers (`story/markers.fcb`) add the rest. Activities,
+  shops and the social challenges' boards show as they stand: enabled in a
+  layer that's in (an activity's comes with its country's outpost taken).
+  Markers a script shows (`GlobalSetObjectiveMarker`) show as what they
+  are: a brief's marker as a mission giver, a quest giver's as its kind of
+  quest, anything else as an objective. A marker's type
+  (`mapobjectivetype`) and sub-type (the activity, the kind of quest) give
+  the icon (`original_ui::marker_icon`: shop 5, knife 11, poker 31,
+  shooting 36, racing 37, side, hunting, supply and wanted quests 62 to
+  65, the challenge boards 66), each with its legend row (the game's
+  legend strings; the quests share the handbook's). `fc3tool
+  story-map-markers [filter]` lists the markers by type and sub-type.
+  `FC3_MAP_REVEAL` (tests) lifts all the fog.
 * Once the icons are in (`IconsLoaded`), `CenterMap <level> <zoom>`. The
   zoom is the whole map's width on the stage; it opens at 7168 (the
   movie's own start) and the wheel takes it a quarter in or out between
