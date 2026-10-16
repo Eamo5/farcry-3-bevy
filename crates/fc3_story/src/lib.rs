@@ -910,6 +910,26 @@ impl Story {
         }
     }
 
+    /// A radio tower the player has taken (its panel used), as the engine
+    /// reports one: the state scripts read (`IsRadioTowerUnlocked`), then the
+    /// panel's start and finish on the player and on the panel (the radio
+    /// towers manager then tells the region its tower is unlocked, which
+    /// opens its supply runs).
+    pub fn take_radio_tower(&mut self, panel: u64) {
+        if !self.core.borrow_mut().radio_towers_unlocked.insert(panel) {
+            return;
+        }
+        for event in ["CRadioTowerStartedEvent", "CRadioTowerFinishedEvent"] {
+            for on in [PLAYER, panel] {
+                self.entity_event(on, event, vec![Arg::id(panel)]);
+            }
+        }
+    }
+
+    pub fn radio_tower_unlocked(&self, panel: u64) -> bool {
+        self.core.borrow().radio_towers_unlocked.contains(&panel)
+    }
+
     /// A cinematic sequence's progress, as the host plays it: `Started`,
     /// `Finished`, `FinishedLoop`, `Paused`, `Stopped`, `Skipped`, or
     /// `SyncPointReached` (with the sync point's name).
@@ -1151,6 +1171,17 @@ impl Story {
     }
 
     pub fn watched_proximity_in_graph(&self, graph: Option<&str>) -> Vec<(u64, f32, [f32; 3])> {
+        self.watched_proximity_of(PLAYER, graph)
+    }
+
+    /// The same for the vehicle the player is in: places a script waits for
+    /// it to come near (a supply run's flares and drop point).
+    pub fn watched_vehicle_proximity(&self, graph: Option<&str>) -> Vec<(u64, f32, [f32; 3])> {
+        let vehicle = self.core.borrow().vehicle_occupant(PLAYER).map(|o| o.vehicle);
+        vehicle.map(|v| self.watched_proximity_of(v, graph)).unwrap_or_default()
+    }
+
+    fn watched_proximity_of(&self, of: u64, graph: Option<&str>) -> Vec<(u64, f32, [f32; 3])> {
         let c = self.core.borrow();
         let graph = graph.map(str::to_ascii_lowercase);
         let dummy = self.domino.lua().globals().get::<mlua::Function>("DummyFunction").ok();
@@ -1168,9 +1199,9 @@ impl Story {
             // other way round: JAS_220's way to the airport measures from its
             // places to the player.)
             let (entities, id2) = (t.get::<values::Text>("Entities").ok(), t.get::<values::Text>("id2").ok());
-            let place = if entities.as_ref().is_some_and(|e| c.groups(e).contains(&PLAYER)) {
+            let place = if entities.as_ref().is_some_and(|e| c.groups(e).contains(&of)) {
                 id2.and_then(|x| x.id())
-            } else if id2.and_then(|x| x.id()) == Some(PLAYER) {
+            } else if id2.and_then(|x| x.id()) == Some(of) {
                 entities.and_then(|e| e.id())
             } else {
                 None
@@ -2010,6 +2041,31 @@ mod tests {
         let (unlocked, heard): (bool, i32) = story.domino().lua().load(r#"return IsSafeHouseUnlocked("77"), heard"#).eval().unwrap();
         assert!(unlocked);
         assert_eq!(heard, 1);
+    }
+
+    /// A radio tower the host takes reads unlocked, and the player's
+    /// listeners hear its panel finished, once.
+    #[test]
+    fn a_radio_tower_taken_is_unlocked_and_heard_once() {
+        let mut story = empty_story();
+        story
+            .domino()
+            .lua()
+            .load(
+                r##"
+            heard = {}
+            local box = { _type = { OnFinished = function(self, panel) heard[#heard + 1] = tostring(panel) end } }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback(GetLocalPlayerId(), box, "OnFinished", "CRadioTowerFinishedEvent")
+        "##,
+            )
+            .exec()
+            .unwrap();
+        story.take_radio_tower(88);
+        story.take_radio_tower(88);
+        let unlocked: bool = story.domino().lua().load(r#"return IsRadioTowerUnlocked("88")"#).eval().unwrap();
+        let heard: Vec<String> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        assert!(unlocked && story.radio_tower_unlocked(88));
+        assert_eq!(heard, ["88"]);
     }
 
     /// An alarm box switched off: the boxes listening on its group hear who

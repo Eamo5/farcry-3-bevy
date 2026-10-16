@@ -1683,6 +1683,22 @@ fn run_story(
                     drive.0 = Some((to_bevy(host.story.trigger_ground_point(*id, ground).unwrap_or(*point)), None));
                 }
                 host.quiet = 0.0;
+            } else if let Some((id, radius, point)) = host
+                .story
+                .watched_vehicle_proximity(graph.as_deref())
+                .into_iter()
+                .filter(|w| !host.used.contains(&(w.0, "drive near".to_string())))
+                .min_by(|a, b| to_bevy(a.2).distance(t.translation).total_cmp(&to_bevy(b.2).distance(t.translation)))
+                .filter(|_| host.quiet > VEHICLE_NEAR_AFTER && !cinema.drives_vehicle())
+            {
+                // A place a script waits for the vehicle to come near (a supply
+                // run's flares, nearest first, and its drop point, against
+                // the clock): there.
+                info!("story autopilot: drive near {} ({radius} m)", data.name_of(id).unwrap_or("?"));
+                host.used.insert((id, "drive near".into()));
+                let at = to_bevy(point);
+                drive.0 = Some((at.with_y(heights.height_at(at).unwrap_or(at.y)), None));
+                host.quiet = 0.0;
             } else if host.quiet > 20.0 && !cinema.drives_vehicle() {
                 // Nothing to drive into: on to an objective marker near
                 // (SAM_015's, Sam to be brought to a building: its box
@@ -2826,11 +2842,7 @@ fn tower_taken(story: &mut Story, at: Vec3) {
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(id, _)| id);
     if let Some(panel) = panel {
-        for event in ["CRadioTowerStartedEvent", "CRadioTowerFinishedEvent"] {
-            for on in [fc3_story::PLAYER, panel] {
-                story.entity_event(on, event, vec![Arg::id(panel)]);
-            }
-        }
+        story.take_radio_tower(panel);
     }
 }
 
@@ -3065,6 +3077,10 @@ const TAKEDOWN_PATIENCE: f32 = 6.0;
 /// Tests: how far from a foe the autopilot shoots him from, when it has to
 /// come nearer (m).
 const SHOOT_FROM: f32 = 15.0;
+
+/// Tests: how long (s) the autopilot lets a vehicle it set down settle before
+/// the next place its distance checks wait for.
+const VEHICLE_NEAR_AFTER: f32 = 2.0;
 
 /// Tests: how far (m) the autopilot stands from a hunt's quarry, shooting
 /// and with a blade.

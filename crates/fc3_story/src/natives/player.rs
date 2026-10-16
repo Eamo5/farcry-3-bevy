@@ -55,7 +55,7 @@ impl Core {
         self.removed.contains(&id) || self.dead.contains(&id) || self.view.spawned.get(&id).is_some_and(|l| !l.alive)
     }
 
-    fn vehicle_occupant(&self, pawn: u64) -> Option<crate::vehicles::Occupant> {
+    pub(crate) fn vehicle_occupant(&self, pawn: u64) -> Option<crate::vehicles::Occupant> {
         self.vehicle_departures.get(&pawn).copied().or_else(|| {
             if pawn == PLAYER {
                 self.view.player_state.vehicle.map(|vehicle| crate::vehicles::Occupant { vehicle, kind: self.view.player_state.seat,

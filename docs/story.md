@@ -4360,7 +4360,7 @@ then kill the rare animal with that weapon (B20) and skin it to craft
 
 ### Wanted Dead (SQW)
 
-A region's second outpost (or its radio tower) opens its other quests: a
+A region's second outpost opens its next quest: a
 wanted poster (`Lib_SideQuest.WantedSideQuestGiver`) sends the player to
 kill a commander with a blade or a takedown; its death check
 (`WantedSQDeathCheck`) takes only `WeaponMeleeAttack`, which takedowns and
@@ -4372,3 +4372,29 @@ the machete's blows now report.
   down, never shot.
 * **Seen.** D5's second outpost (ours 25, beside its safe house) taken,
   SQW_D5's poster used, its commander taken down: the quest completes.
+
+### Radio towers and supply runs (SQS)
+
+A radio tower taken opens its region's supply run. The radio towers
+manager (`FC3_RadioTowersManager`, a `RadioTowerManager` box per tower
+panel) listens on the player for the panel's `CRadioTowerFinishedEvent`
+and broadcasts `<cell>_RadioTowerIsUnlocked`, which the POI quests master
+turns into the run's giver: a car with a delivery bag
+(`Lib_SideQuest.SpeedSideQuestGiver`). Sat in it and accepted, the run is
+on: follow the flares to the drop point against the clock
+(`SpeedSideQuestLib`: the car within 7 m of the target, 2D).
+
+* **The tower taken.** Taking a tower raised the panel's events but never
+  marked the tower unlocked, so `IsRadioTowerUnlocked` stayed false (what
+  the manager asks on a load and after an exclusive mission). It is now
+  (`Story::take_radio_tower`: the state first, then the events, once).
+* **The autopilot drives the run.** It already boards a vehicle a script
+  waits for the player to get into, and accepts the dialog. A distance
+  check on the vehicle the player is in (either way round: the flares
+  measure to the car, the drop point from it,
+  `Story::watched_vehicle_proximity`) is now driven to, nearest first, two
+  seconds after the last; before, it went marker to marker twenty seconds
+  apart and lost on time.
+* **Seen.** From D5's tower (a kept checkpoint with the player placed at
+  its panel): the giver's car boarded, SQS_D5 accepted, its seven flares
+  and drop point reached with time to spare, and the run complete.
