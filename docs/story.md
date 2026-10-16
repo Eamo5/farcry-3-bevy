@@ -3992,9 +3992,18 @@ the game now plays (`boss_fight`) instead of ending it at once.
   fight's own autopilot holds the bow's sights on the mask, or on a minion
   close by, and fires. `FC3_BOSS_HP=<health>` starts the giant with that
   much (its phase for it).
-* Not yet: the broken mask's own model, the minions' ink look, the fight's
-  particles (the ink, the eyes, the breath's flames, the arrows' blasts)
-  and the rock's own model.
+* **Its looks.** The script removes the mask placed for the cinematics
+  (`Mask_0`) as the fight starts; the fight puts its own on the head bone
+  (`m_bossMaskArchetype`), the broken one at `ChangeMaskNow`
+  (`m_bossBrokenMaskArchetype`), and the weak spot sits at the mask model's
+  middle. Rocks are the archetype's ink ball (`m_rockArchetype`). The
+  converter keeps these archetypes with the scripts' (the GSF library's
+  `Library:Path` text fields). Ink smokes off the arms (`smoke_arms`), and
+  each hit on the mask bursts as the explosive arrows do. A scene's clip
+  made for another skeleton drives the character's own, so B15E's
+  finishing blow poses the giant on its skeleton.
+* Not yet: the minions' ink look and the fight's other particles (the
+  eyes, the breath's own flames).
 
 ## Button prompts (`CGSFInputManager`)
 
