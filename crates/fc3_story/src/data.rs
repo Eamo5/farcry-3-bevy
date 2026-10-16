@@ -74,6 +74,9 @@ pub struct Block {
     pub warn_on_zone_exit: bool,
     pub is_quest: bool,
     pub refs: Vec<u64>,
+    /// A base block (`CBaseMissionBlock`): the world's own content (a bar,
+    /// an outpost, an activity), not a mission's.
+    pub base: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -426,6 +429,7 @@ impl StoryData {
                 warn_on_zone_exit: b.bool("bWarnOnZoneExit").unwrap_or(false),
                 is_quest: b.bool("bIsQuest").unwrap_or(false),
                 refs: b.field("refMBlocksList").map(u64_list).unwrap_or_default(),
+                base: b.str_h(0xCF68_E402).as_deref() == Some("CBaseMissionBlock"),
                 ..Block::default()
             };
             if let Some(list) = b.child("MissionBlockLayersList") {

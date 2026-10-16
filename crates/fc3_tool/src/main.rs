@@ -2667,6 +2667,40 @@ fn main() -> Result<()> {
             // story's entities each holds: story-blocks <name filter>
             let filter = args.get(1).map(|s| s.to_ascii_lowercase()).unwrap_or_default();
             let data = fc3_story::data::StoryData::load(&fc3_formats::cache::default_cache_root())?;
+            // `standing`: the base blocks' own layers the story brings in
+            // with them (`fc3_story::standing_layers`).
+            if filter == "standing" {
+                let root = fc3_formats::cache::default_cache_root();
+                let pack = fc3_formats::scripts::ScriptPack::from_bytes(&std::fs::read(root.join(fc3_formats::scripts::DOMINO_PACK_REL))?)?;
+                let gameplays = std::fs::read(root.join(fc3_formats::gsf::CACHE_REL)).unwrap_or_default();
+                let standing = fc3_story::standing_layers(&pack, &data, &gameplays);
+                let mut rows: Vec<String> = Vec::new();
+                for (b, ls) in &standing {
+                    let block = data.blocks.get(b).map_or("?", |b| b.name.as_str());
+                    let init = data.active_on_init.contains(b);
+                    for l in ls {
+                        rows.push(format!("{block} {} (on from the start: {init})", data.layers.get(l).map_or("?", |l| l.name.as_str())));
+                    }
+                }
+                rows.sort();
+                for r in rows {
+                    println!("{r}");
+                }
+                return Ok(());
+            }
+            // `init`: what the manager has active from the start, as blocks
+            // or layers.
+            if filter == "init" {
+                for id in &data.active_on_init {
+                    let what = match (data.blocks.get(id), data.layers.get(id)) {
+                        (Some(b), _) => format!("block {}", b.name),
+                        (_, Some(l)) => format!("layer {} of {}", l.name, data.blocks.get(&l.block).map_or("?", |b| b.name.as_str())),
+                        _ => "?".to_string(),
+                    };
+                    println!("{id:#018x} {what}");
+                }
+                return Ok(());
+            }
             let mut blocks: Vec<_> = data.blocks.values().filter(|b| b.name.to_ascii_lowercase().contains(&filter)).collect();
             blocks.sort_by(|a, b| a.name.cmp(&b.name));
             for block in blocks {

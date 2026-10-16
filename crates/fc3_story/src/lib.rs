@@ -290,7 +290,11 @@ impl Story {
     pub fn open(cache: &Path) -> Result<Story> {
         let pack = ScriptPack::from_bytes(&std::fs::read(cache.join(DOMINO_PACK_REL))?)?;
         let data = StoryData::load(cache)?;
-        Story::new(pack, data)
+        let gameplays = std::fs::read(cache.join(fc3_formats::gsf::CACHE_REL)).unwrap_or_default();
+        let standing = standing_layers(&pack, &data, &gameplays);
+        let story = Story::new(pack, data)?;
+        story.core.borrow_mut().standing = standing;
+        Ok(story)
     }
 
     pub fn new(pack: ScriptPack, data: StoryData) -> Result<Story> {
@@ -1791,6 +1795,65 @@ impl Story {
         }
         self.pump();
     }
+}
+
+/// The world's own layers, by block: a base block's main layer
+/// (`..._main`) that doesn't come with its block and that no script and no
+/// gameplay names (by id or by name), as a bar's people and its poker table
+/// (`c3_poker`'s `C3_Poker_main`). Nothing in the data brings them in, yet
+/// the bars' tables were there to play once their country's activities
+/// opened: here such a layer comes in with any other of its block's layers
+/// (the poker block's marker layer, opened with its country). Those a
+/// script or a gameplay switches (an outpost's, a shooting gallery's base)
+/// are left to it, and those whose block nothing else brings in (a region's
+/// variants) stay out.
+pub fn standing_layers(pack: &ScriptPack, data: &StoryData, gameplays: &[u8]) -> HashMap<u64, Vec<u64>> {
+    // What the scripts name: long numbers (ids) and quoted strings.
+    let mut ids: HashSet<u64> = HashSet::new();
+    let mut names: HashSet<String> = HashSet::new();
+    for path in pack.paths() {
+        let Some(text) = pack.get(path) else { continue };
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i].is_ascii_digit() {
+                let start = i;
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                if i - start >= 12 {
+                    if let Ok(n) = text[start..i].parse::<u64>() {
+                        ids.insert(n);
+                    }
+                }
+            } else if bytes[i] == b'"' {
+                let start = i + 1;
+                i = start;
+                while i < bytes.len() && bytes[i] != b'"' && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                if i - start > 4 && i - start < 128 {
+                    names.insert(text[start..i].to_ascii_lowercase());
+                }
+                i += 1;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    let in_gameplays = |name: &str| !name.is_empty() && gameplays.windows(name.len()).any(|w| w.eq_ignore_ascii_case(name.as_bytes()));
+    let mut out: HashMap<u64, Vec<u64>> = HashMap::new();
+    for l in data.layers.values() {
+        let lower = l.name.to_ascii_lowercase();
+        if l.on_activate || !lower.ends_with("_main") || !data.blocks.get(&l.block).is_some_and(|b| b.base) {
+            continue;
+        }
+        if ids.contains(&l.id) || names.contains(&lower) || in_gameplays(&l.name) {
+            continue;
+        }
+        out.entry(l.block).or_default().push(l.id);
+    }
+    out
 }
 
 fn in_sectors(e: &data::Entry, sectors: Option<&HashSet<u32>>) -> bool {

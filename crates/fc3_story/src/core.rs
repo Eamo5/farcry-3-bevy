@@ -116,6 +116,8 @@ impl LayerState {
 
 pub struct Core {
     pub data: Rc<StoryData>,
+    /// Base blocks' own layers, by block (`standing_layers`).
+    pub standing: HashMap<u64, Vec<u64>>,
     pub view: View,
     /// What the host should do.
     pub out: Vec<Command>,
@@ -235,6 +237,7 @@ impl Core {
         let ca = crate::natives::ai::Actions::from_data(&data);
         Core {
             data,
+            standing: HashMap::new(),
             view: View::default(),
             out: Vec::new(),
             actions: VecDeque::new(),
@@ -431,6 +434,15 @@ impl Core {
         }
         self.layers.insert(layer, state);
         self.out.push(Command::Layer { layer, state });
+        // (A base block's own layer comes in with any of its others.)
+        if state.present() {
+            let own = self.data.layers.get(&layer).and_then(|l| self.standing.get(&l.block)).cloned().unwrap_or_default();
+            for l in own.into_iter().filter(|&l| l != layer) {
+                if !self.layer_state(l).present() {
+                    self.set_layer(l, LayerState::Active);
+                }
+            }
+        }
         if before.present() != state.present() {
             let watched: Vec<u64> = self
                 .listeners
