@@ -583,6 +583,86 @@ impl ShootingGalleryResources {
     }
 }
 
+/// A poker table (`CPokerMiniGame_...`, SQC_100's `..._Pokerminigame`):
+/// what kind of game it is, what the player may do, who plays at it, and
+/// what each difficulty stakes.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PokerSettings {
+    /// `PokerGameType`: 0 a bar's game, else a story's (1 JAS_140, 2 JAS_170,
+    /// 3 Hoyt's, 4 SQC_100).
+    pub kind: u32,
+    /// Whether the player may skip ahead (through a hand they've folded)
+    /// and leave the table.
+    pub skip_ahead: bool,
+    pub leave: bool,
+    /// The difficulty box's subtitle (a string id).
+    pub subtitle: u32,
+    pub npcs: Vec<PokerNpc>,
+    /// Practice, novice, skilled, expert.
+    pub difficulties: Vec<PokerDifficulty>,
+    /// The story's scenes played between hands (`ScriptedSequenceIDList`).
+    pub scenes: usize,
+}
+
+/// A computer player: its character, how it plays (`PlayerType`: 0
+/// unskilled, 1 skilled, 2 expert, 3 a loose cannon, 4 any, 5 as the
+/// difficulty has it), the seat it wants (0..4, 4 any) and its voice
+/// (`PokerDialogSet`: 0..4 a standard one, 4 Sam's, 5 Hoyt's).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PokerNpc {
+    pub entity: u64,
+    pub player_type: u32,
+    pub seat: u32,
+    pub dialog: u32,
+}
+
+/// A difficulty's row: offered or not, its buy-in, and its chips.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PokerDifficulty {
+    pub enabled: bool,
+    pub buy_in: u32,
+    pub chip: String,
+}
+
+impl PokerSettings {
+    pub fn parse(bytes: &[u8], name: &str) -> Result<Self> {
+        Self::from_object(&entry(bytes, name)?)
+    }
+
+    fn from_object(o: &Object) -> Result<Self> {
+        let list = |name: &str| o.child(name).map(|c| c.children.clone()).unwrap_or_default();
+        let npcs = list("NPCList")
+            .iter()
+            .filter_map(|n| {
+                let entity = n.u64("EntityID").filter(|e| *e != u64::MAX && *e != 0)?;
+                Some(PokerNpc {
+                    entity,
+                    player_type: n.u32("PlayerType").unwrap_or(5),
+                    seat: n.u32("DesiredSeatId").unwrap_or(4),
+                    dialog: n.u32("PokerDialogSet").unwrap_or(0),
+                })
+            })
+            .collect();
+        let difficulties = list("DifficultySettings")
+            .iter()
+            .map(|d| PokerDifficulty {
+                enabled: d.bool("PokerDifficultyIsEnabled").unwrap_or(true),
+                buy_in: d.u32("PokerGameBuyIn").unwrap_or(0),
+                chip: d.str("PokerChipArchetype").unwrap_or_default(),
+            })
+            .collect();
+        Ok(PokerSettings {
+            kind: o.u32("PokerGameType").unwrap_or(0),
+            skip_ahead: o.bool("SkipAheadEnabled").unwrap_or(false),
+            leave: o.bool("LeaveGameEnabled").unwrap_or(false),
+            subtitle: o.u32("DifficultyScreenSubTitle").unwrap_or(0),
+            npcs,
+            difficulties,
+            scenes: o.child("ScriptedSequenceIDList").map_or(0, |c| c.children.len().max(c.fields.len())),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,6 +713,26 @@ mod tests {
         assert!(r.animals[1].fly.ends_with("seagull_fulb_flycycle_+000fw_nowep.mab"), "{}", r.animals[1].fly);
         assert!(r.animals[0].death.contains("shootinggallery") && r.animals[0].release_sound != 0);
         assert!(r.countdown_sound != 0 && r.ready_sound != 0);
+    }
+
+    #[test]
+    #[ignore = "requires locally installed Far Cry 3 archives"]
+    fn installed_poker_settings() {
+        let vfs = crate::Vfs::open_install(&crate::find_install().expect("installed Far Cry 3"), None).unwrap();
+        let bytes = vfs.read(LIBRARY).unwrap();
+        let bar = PokerSettings::parse(&bytes, "CPokerMiniGame_C3").unwrap();
+        assert_eq!((bar.kind, bar.skip_ahead, bar.leave, bar.subtitle), (0, true, true, 172112));
+        assert_eq!(
+            bar.npcs.iter().map(|n| (n.entity, n.seat)).collect::<Vec<_>>(),
+            vec![(2077746065446029667, 2), (2077746064433105250, 0), (2077746063271283041, 1)]
+        );
+        assert_eq!(bar.difficulties.iter().map(|d| d.buy_in).collect::<Vec<_>>(), vec![0, 100, 150, 250]);
+        assert!(bar.difficulties[0].chip.contains("BottleCap"));
+        let hoyt = PokerSettings::parse(&bytes, "CPokerMiniGame_JAS_220_PokerGym_G3").unwrap();
+        assert_eq!((hoyt.kind, hoyt.leave, hoyt.npcs.len()), (3, false, 2));
+        assert_eq!((hoyt.npcs[0].player_type, hoyt.npcs[0].dialog, hoyt.npcs[1].player_type), (1, 5, 2));
+        let sqc = PokerSettings::parse(&bytes, "SQC_100_OBJ20_Pokerminigame").unwrap();
+        assert_eq!(sqc.difficulties.iter().map(|d| d.enabled).collect::<Vec<_>>(), vec![false, true, false, false]);
     }
 
     #[test]
