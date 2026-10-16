@@ -1251,7 +1251,7 @@ fn run_story(
         mut trees,
         mut doors,
         mut stims,
-        (mut sniping, mut boss_fight, mut binds, mut unlimited_ammo),
+        (mut sniping, mut boss_fight, mut binds, mut unlimited_ammo, mut intoxication),
     ): (
         MessageWriter<crate::progression::XpGain>,
         ResMut<crate::progression::Progress>,
@@ -1267,7 +1267,13 @@ fn run_story(
         ResMut<crate::tree_growth::TreeGrowth>,
         ResMut<crate::doors::Doors>,
         ResMut<crate::stims::Stims>,
-        (ResMut<crate::sniping::Sniping>, ResMut<crate::boss_fight::BossFight>, ResMut<crate::binds::Binds>, ResMut<crate::weapons::UnlimitedAmmo>),
+        (
+            ResMut<crate::sniping::Sniping>,
+            ResMut<crate::boss_fight::BossFight>,
+            ResMut<crate::binds::Binds>,
+            ResMut<crate::weapons::UnlimitedAmmo>,
+            ResMut<crate::intoxication::Intoxication>,
+        ),
     ),
 ) {
     // (Not a run condition: those may run off the main thread.)
@@ -1354,6 +1360,7 @@ fn run_story(
             boss_fight.reset();
             binds.reset();
             unlimited_ammo.0 = false;
+            intoxication.reset();
             postfx.reset();
             ui.subtitle = None;
             // Rebuild mission actors and discard transient wildlife together.
@@ -1888,7 +1895,12 @@ fn run_story(
                 }
             }
         } else if let Some((id, name)) = host.story.gameplays().into_iter().find(|g| {
-            g.1 != "QTEGSF" && !host.story.is_qte_gameplay(g.0) && !sniping_challenge(&g.1) && !g.1.starts_with("CPokerMiniGame") && g.1 != BOSS_FIGHT
+            g.1 != "QTEGSF"
+                && !host.story.is_qte_gameplay(g.0)
+                && !sniping_challenge(&g.1)
+                && !g.1.starts_with("CPokerMiniGame")
+                && g.1 != BOSS_FIGHT
+                && g.1 != INTOXICATED
         }) {
             // A minigame or QTE the game doesn't play yet: done. (A sniping
             // challenge is played: its targets shot, see `autopilot_loot`.)
@@ -2195,6 +2207,10 @@ fn run_story(
                         id: a(0).parse().unwrap_or(0),
                         params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                     }),
+                    "CreateSpecificGameplay" if a(1) == INTOXICATED => intoxication.pending.push(crate::intoxication::Start {
+                        id: a(0).parse().unwrap_or(0),
+                        params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                    }),
                     "CreateSpecificGameplay" if a(1) == BOSS_FIGHT => boss_fight.pending.push(crate::boss_fight::Start {
                         id: a(0).parse().unwrap_or(0),
                         params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
@@ -2228,6 +2244,7 @@ fn run_story(
                         vines.cancelled.push(id);
                         sniping.cancelled.push(id);
                         boss_fight.cancelled.push(id);
+                        intoxication.cancelled.push(id);
                     }
                     "StopBinkVideo" => videos.stops.push(false),
                     "StopFullscreenVideo" => videos.stops.push(true),
@@ -3218,6 +3235,8 @@ const ESCORT_IN_FIGHT: f32 = 20.0;
 
 /// CIT_030's fight with the Ink Monster: played (`boss_fight`), not ended.
 const BOSS_FIGHT: &str = "CCitraBossFight";
+/// Being intoxicated: played (`intoxication`) until its script stops it.
+const INTOXICATED: &str = "CIntoxicatedMiniGame";
 
 /// A sniping set-piece (`CSnipingChallenge_...`): the player shoots its
 /// targets from where they stand.

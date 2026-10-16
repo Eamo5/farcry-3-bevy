@@ -65,6 +65,7 @@ mod qte;
 mod stims;
 mod vine;
 mod sniping;
+mod intoxication;
 mod boss_fight;
 mod binds;
 mod screen_blur;
@@ -446,6 +447,7 @@ fn main() {
         .add_plugins(poker::PokerPlugin)
         .add_plugins(credits::CreditsPlugin)
         .add_plugins(sniping::SnipingPlugin)
+        .add_plugins(intoxication::IntoxicationPlugin)
         .add_plugins(boss_fight::BossFightPlugin)
         .add_plugins(binds::BindsPlugin)
         .add_plugins(story_alarms::StoryAlarmsPlugin)

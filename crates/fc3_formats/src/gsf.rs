@@ -41,6 +41,70 @@ pub fn entry(bytes: &[u8], name: &str) -> Result<Object> {
     entry.with_context(|| format!("GSF library has no {name}"))
 }
 
+/// Being intoxicated (`CIntoxicatedMiniGame`): how the view sways (its
+/// horizontal and vertical reach and speed, as multipliers), how fast the
+/// drunken walk wanders (`MovementspeedFactor`), whether it wanders at all,
+/// and how long watching the hands lasts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IntoxicationSettings {
+    pub speed: f32,
+    /// Horizontal size, vertical size, horizontal speed, vertical speed.
+    pub sway: [f32; 4],
+    pub drunken_control: bool,
+    pub watch_hands: f32,
+}
+
+const SWAY_FIELDS: [&str; 4] = ["SwayHSizeMultiplier", "SwayVSizeMultiplier", "SwayHSpeedMultiplier", "SwayVSpeedMultiplier"];
+
+impl IntoxicationSettings {
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        let o = entry(bytes, "CIntoxicatedMiniGame")?;
+        let n = |name: &str| o.f32(name).filter(|v| v.is_finite()).with_context(|| format!("intoxication setting {name} is missing"));
+        Ok(Self {
+            speed: n("MovementspeedFactor")?,
+            sway: [n(SWAY_FIELDS[0])?, n(SWAY_FIELDS[1])?, n(SWAY_FIELDS[2])?, n(SWAY_FIELDS[3])?],
+            drunken_control: !o.bool("DisableDrunkenControl").unwrap_or(false),
+            watch_hands: n("WatchHandsDuration").unwrap_or(10.0),
+        })
+    }
+
+    /// With a script's own values over the library's (`MovementspeedFactor`,
+    /// `SwayHSizeMultiplier`...).
+    pub fn with(mut self, value: impl Fn(&str) -> Option<f32>) -> Self {
+        if let Some(v) = value("MovementspeedFactor") {
+            self.speed = v;
+        }
+        for (i, name) in SWAY_FIELDS.iter().enumerate() {
+            if let Some(v) = value(name) {
+                self.sway[i] = v;
+            }
+        }
+        if let Some(v) = value("DisableDrunkenControl") {
+            self.drunken_control = v == 0.0;
+        }
+        self
+    }
+}
+
+/// The library archetypes the gameplays spawn by name (the Ink Monster's
+/// masks, rocks, goodies and minions: `Library:Path` text fields), lower
+/// case.
+pub fn archetype_names(bytes: &[u8]) -> Result<std::collections::HashSet<String>> {
+    let root = crate::fcb::parse(bytes)?;
+    let mut texts = String::new();
+    root.walk(&mut |o, _| {
+        for (_, value) in &o.fields {
+            let Some((0, text)) = value.split_last() else { continue };
+            if !text.is_empty() && text.iter().all(|b| b.is_ascii_graphic()) {
+                texts.push('"');
+                texts.push_str(&String::from_utf8_lossy(text));
+                texts.push('"');
+            }
+        }
+    });
+    Ok(crate::story::archetype_names_in(std::iter::once(texts)))
+}
+
 impl VineSettings {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         Self::from_object(&entry(bytes, "CVineClimbingGameplay")?)
@@ -309,6 +373,26 @@ impl BossFightSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scripts_intoxication_values_go_over_the_librarys() {
+        let s = IntoxicationSettings { speed: 2.5, sway: [0.5, 0.3, 0.2, 0.55], drunken_control: true, watch_hands: 10.0 };
+        let own = s.clone().with(|k| match k {
+            "MovementspeedFactor" => Some(1.9),
+            "SwayHSizeMultiplier" => Some(0.1),
+            _ => None,
+        });
+        assert_eq!((own.speed, own.sway), (1.9, [0.1, 0.3, 0.2, 0.55]));
+        assert!(own.drunken_control);
+    }
+
+    #[test]
+    #[ignore = "requires locally installed Far Cry 3 archives"]
+    fn installed_intoxication_settings() {
+        let vfs = crate::Vfs::open_install(&crate::find_install().expect("installed Far Cry 3"), None).unwrap();
+        let s = IntoxicationSettings::parse(&vfs.read(LIBRARY).unwrap()).unwrap();
+        assert_eq!((s.speed, s.sway, s.drunken_control, s.watch_hands), (2.5, [0.5, 0.3, 0.2, 0.55], true, 10.0));
+    }
 
     #[test]
     fn the_ink_monster_goes_through_its_phases_by_health() {

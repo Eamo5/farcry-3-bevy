@@ -2987,6 +2987,19 @@ The growth natives used to report every tree grown at once. Now each
 `UpdateRealTree` box hears its trees finish when they have finished, which
 is when its `GrowthCompleted` follows on.
 
+### Intoxicated (`CIntoxicatedMiniGame`)
+
+The mushroom's reaction (B10E) and the hallucination's drunken walk (B20E)
+start the `CIntoxicatedMiniGame` GSF and stop it themselves; it was ended
+at once. It is now played (`intoxication`) while a script keeps it on: the
+view sways and rolls by the library's multipliers (`SwayHSizeMultiplier`,
+`SwayVSizeMultiplier` and their speeds; a script's own values go over
+them), and, unless `DisableDrunkenControl`, the walk wanders off where it
+is steered at a rate set by `MovementspeedFactor`. It eases in and out over
+two seconds. `FC3_DRUNK_TEST` starts one at the library's values (debug).
+Not yet: its hand-watching moves (`WatchCough`, `WatchBubbleHands` generic
+events) and their particles.
+
 ### The dark room's light: the shaft and the hands
 
 Frames taken in the dark room (`FC3_CAPTURE_NEAR`, see `docs/shaders.md`)

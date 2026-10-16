@@ -603,6 +603,7 @@ pub(crate) fn player_look(
     assist: Option<Res<crate::aim_assist::AimAssist>>,
     mut stuck: Local<LookWatch>,
     limits: Res<ViewLimits>,
+    drunk: Res<crate::intoxication::Intoxication>,
 ) {
     // A first-person scene lets the head turn within its clip's limits,
     // turning back once left alone.
@@ -697,9 +698,11 @@ pub(crate) fn player_look(
     }
     t.rotation = Quat::from_rotation_y(p.yaw);
     if let Ok(mut ct) = camera.single_mut() {
-        // A scope drifting with the breath, and the view shaken.
-        ct.rotation =
-            Quat::from_rotation_y(sway.offset.x + shake.yaw) * Quat::from_rotation_x(p.pitch + sway.offset.y + shake.pitch) * Quat::from_rotation_z(shake.roll);
+        // A scope drifting with the breath, the view shaken, and swaying
+        // drunk (`intoxication`).
+        ct.rotation = Quat::from_rotation_y(sway.offset.x + shake.yaw + drunk.offset.x)
+            * Quat::from_rotation_x(p.pitch + sway.offset.y + shake.pitch + drunk.offset.y)
+            * Quat::from_rotation_z(shake.roll + drunk.roll);
         ct.translation.y = p.eye - HALF_HEIGHT;
     }
 }
@@ -1058,7 +1061,7 @@ pub(crate) fn player_move(
     progress: Res<crate::progression::Progress>,
     mut actions_out: MessageWriter<crate::fp::FpAction>,
     sway: Res<crate::weapons::ScopeSway>,
-    (scripted, collision_ids, mut next_collision_log, mut commands, body, mut stamina, mut flight, ways, layers): (
+    (scripted, collision_ids, mut next_collision_log, mut commands, body, mut stamina, mut flight, ways, layers, drunk): (
         Res<crate::story::ScriptedPlayer>,
         Query<(Option<&crate::objects::PlacedId>, Option<&Name>, Option<&ChildOf>)>,
         Local<f32>,
@@ -1068,6 +1071,7 @@ pub(crate) fn player_move(
         Local<Flight>,
         Res<crate::traversal::Ways>,
         Res<crate::mission_layers::MissionLayers>,
+        Res<crate::intoxication::Intoxication>,
     ),
 ) {
     let body = body.0;
@@ -1103,7 +1107,8 @@ pub(crate) fn player_move(
     if s_fwd {
         axis.y = 1.0;
     }
-    let wish = (forward * axis.y + right * axis.x).clamp_length_max(1.0) * scripted.movement;
+    // (Drunk, the walk wanders off where it is steered.)
+    let wish = Quat::from_rotation_y(drunk.drift) * (forward * axis.y + right * axis.x).clamp_length_max(1.0) * scripted.movement;
 
     if p.noclip {
         let look = Quat::from_rotation_y(p.yaw) * Quat::from_rotation_x(p.pitch) * Vec3::NEG_Z;
