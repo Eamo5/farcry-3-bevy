@@ -4706,5 +4706,16 @@ table's own movie (`ACTI_Poker.feu`, `docs/ui.md`).
   with cards or without, and once each, taking the cards, checking,
   betting small or large, going all in, folding, winning or losing a
   showdown, and getting impatient with a player who takes a while.
-* **Not yet.** Their voices, the help screen's odds, the scripted decks of
-  Hoyt's table.
+* **Voices.** The poker resource container's audio
+  (`gsf::PokerVoices`; `fc3tool gsf-dump pokerminigameresource` shows it)
+  has the player's lines, four dialogue sets for each way of playing (a
+  computer player's `PokerDialogSet` picks one; Sam's and Hoyt's are their
+  own), each with lines for betting (all in, call, check, fold, raise),
+  winning, collecting the pot, losing, busting out, the table cleaned,
+  calling the player over, impatience, and the player sitting down and
+  leaving. The game asks for lines as things happen (a bet sometimes, a
+  bust out always), and the table says one at a time, from the speaker's
+  chair (the player's own unplaced), each line's length apart; a bar's
+  players call a player who comes near over every 25 s.
+* **Not yet.** The help screen's odds, the scripted decks of Hoyt's
+  table.

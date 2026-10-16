@@ -25,7 +25,7 @@ use std::collections::HashMap;
 
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use fc3_formats::gsf::PokerSettings;
+use fc3_formats::gsf::{PokerDialog, PokerSettings, PokerVoices};
 
 use crate::cache_assets::Fc3Model;
 use crate::controls::{Action, ActionState};
@@ -67,6 +67,14 @@ const THINK: [f32; 2] = [0.9, 2.2];
 const RESULTS: f32 = 6.0;
 /// How long the player thinks before a computer player gets impatient (s).
 const IMPATIENT: f32 = 14.0;
+/// The chance a computer player, or the player, says something as they
+/// bet; how near the player a bar's table calls them over (m), and how often
+/// (s); the pause after a line (s).
+const NPC_SAYS: f32 = 0.45;
+const PLAYER_SAYS: f32 = 0.35;
+const ENTICE_REACH: f32 = 6.0;
+const ENTICE_EVERY: f32 = 25.0;
+const LINE_GAP: f32 = 0.6;
 /// The player's seat: back from the chair's anchor, facing the table.
 const SEAT_BACK: f32 = 0.25;
 const SEAT_PITCH: f32 = -28.0;
@@ -214,10 +222,28 @@ struct Place {
 struct Npc {
     name: Name,
     style: Style,
-    /// Its entry in the settings, its character, and its moves (`MOVES`).
+    /// Its entry in the settings, its character, its moves (`MOVES`) and
+    /// its lines.
     index: usize,
     entity: u64,
     moves: usize,
+    voice: PokerDialog,
+}
+
+/// A computer player's lines: Sam's or Hoyt's own (`PokerDialogSet` 4, 5),
+/// else its way of playing's set.
+fn voice_of(voices: &PokerVoices, dialog: u32, moves: usize) -> PokerDialog {
+    match dialog {
+        4 => voices.sam.clone(),
+        5 => voices.hoyt.clone(),
+        d => voices.ways[moves.min(3)].get(d as usize).or(voices.ways[moves.min(3)].first()).cloned().unwrap_or_default(),
+    }
+}
+
+/// One of the computer players at the table, at random.
+fn any_npc(npcs: &[Option<Npc>; 4], dealer: &mut Dealer) -> Option<usize> {
+    let at: Vec<usize> = (0..4).filter(|&i| npcs[i].is_some()).collect();
+    (!at.is_empty()).then(|| at[dealer.below(at.len())])
 }
 
 /// The computer players' moves at the table, each way of playing's own:
@@ -332,6 +358,13 @@ struct Game {
     /// thinking.
     poses: [Pose; 4],
     waiting: f32,
+    /// What's said: the table's lines, those asked for (a computer player's
+    /// seat or the player, the event, its chance), until when the table is
+    /// talking, and how long since a computer player called the player over.
+    voices: PokerVoices,
+    speech: Vec<(Option<usize>, &'static str, f32)>,
+    quiet_until: f32,
+    enticed: f32,
 }
 
 impl Game {
@@ -493,11 +526,9 @@ fn play_poker(
         return;
     };
     if poker.game.as_ref().is_none_or(|g| g.id != id) {
-        let settings = info
-            .as_ref()
-            .and_then(|i| std::fs::read(i.root.join(fc3_formats::gsf::CACHE_REL)).ok())
-            .and_then(|b| PokerSettings::parse(&b, &name).map_err(|e| warn!("poker: {name}: {e:#}")).ok())
-            .unwrap_or_default();
+        let bytes = info.as_ref().and_then(|i| std::fs::read(i.root.join(fc3_formats::gsf::CACHE_REL)).ok()).unwrap_or_default();
+        let settings = PokerSettings::parse(&bytes, &name).map_err(|e| warn!("poker: {name}: {e:#}")).unwrap_or_default();
+        let voices = PokerVoices::parse(&bytes).map_err(|e| warn!("poker: voices: {e:#}")).unwrap_or_default();
         let data = host.story.data();
         let player = players.single().map(|(t, _)| t.translation).unwrap_or_default();
         let place = find_place(&data, &settings.npcs.iter().map(|n| n.entity).collect::<Vec<_>>(), player);
@@ -513,7 +544,7 @@ fn play_poker(
                     _ => Name::Seat(0),
                 };
                 let (style, moves) = style(n.player_type, 0, &mut dealer);
-                Npc { name, style, index: i, entity: n.entity, moves }
+                Npc { name, style, index: i, entity: n.entity, moves, voice: voice_of(&voices, n.dialog, moves) }
             })
         });
         info!(
@@ -555,6 +586,10 @@ fn play_poker(
             left: false,
             poses: Default::default(),
             waiting: 0.0,
+            voices,
+            speech: Vec::new(),
+            quiet_until: 0.0,
+            enticed: 0.0,
         });
     }
     let Some(game) = poker.game.as_mut() else { return };
@@ -585,10 +620,22 @@ fn play_poker(
             if near && hud.prompt.is_none() {
                 hud.prompt = Some(format!("{}  Play poker", actions.label(Action::Interact, &settings)));
             }
+            // (Someone at the table calls a player who comes near over.)
+            let close = seat_at.is_some_and(|(at, _)| at.distance(player_at) < ENTICE_REACH);
+            game.enticed = if close { game.enticed + dt } else { ENTICE_EVERY - 4.0 };
+            if close && game.enticed > ENTICE_EVERY {
+                game.enticed = 0.0;
+                if let Some(i) = any_npc(&game.npcs, &mut game.dealer) {
+                    game.speech.push((Some(i), "NPC_EnticeHero", 1.0));
+                }
+            }
             near && (actions.just_pressed(Action::Interact) || (test.is_some() && !game.left))
         };
         if sit {
             game.seated = true;
+            if let Some(i) = any_npc(&game.npcs, &mut game.dealer) {
+                game.speech.push((Some(i), "Jason_EnterTable", 1.0));
+            }
             if let Some((at, centre)) = seat_at {
                 let to = (centre - at).with_y(0.0);
                 let yaw = (-to.x).atan2(-to.z);
@@ -657,6 +704,7 @@ fn play_poker(
                 for n in game.npcs.iter_mut().flatten() {
                     if let Some(npc) = game.settings.npcs.get(n.index) {
                         (n.style, n.moves) = style(npc.player_type, game.row, &mut game.dealer);
+                        n.voice = voice_of(&game.voices, npc.dialog, n.moves);
                     }
                 }
                 start_game(game, buy_in, buy_in);
@@ -767,6 +815,9 @@ fn finish(poker: &mut PokerTable, stand: bool, tell: &[&str], host: &mut StoryHo
         host.story.message(m);
     }
     info!("poker: the player gets up from {}", game.name);
+    if let Some(i) = any_npc(&game.npcs, &mut game.dealer) {
+        game.speech.push((Some(i), "Jason_LeaveTable", 1.0));
+    }
     game.seated = false;
     game.left = true;
     game.stage = Stage::Away;
@@ -845,6 +896,9 @@ fn play(
         if table.seats.iter().enumerate().all(|(i, s)| i == seat || s.chips == 0) {
             info!("poker: the player has cleaned the table");
             game.stage = Stage::Cleaned;
+            if let Some(i) = any_npc(&game.npcs, &mut game.dealer) {
+                game.speech.push((Some(i), "CleanUpTable", 1.0));
+            }
             if game.settings.kind == 4 || story {
                 let awaited = host.story.mission_messages();
                 if awaited.iter().any(|m| m == "JasonWinsGame") {
@@ -892,6 +946,7 @@ fn play(
                 _ => "fw",
             };
             game.poses[i].asked = Some(Move::Impatient(side));
+            game.speech.push((Some(i), "NPC_Impatient", 1.0));
         }
     } else {
         game.waiting = 0.0;
@@ -959,6 +1014,18 @@ fn play(
     if added > 0 {
         game.last_bet = added;
     }
+    let said = if s.folded {
+        "Fold"
+    } else if s.chips == 0 && added > 0 {
+        "AllIn"
+    } else if added == 0 {
+        "Check"
+    } else if now > before.2 {
+        "Raise"
+    } else {
+        "Call"
+    };
+    game.speech.push(if to_act == seat { (None, said, PLAYER_SAYS) } else { (Some(to_act), said, NPC_SAYS) });
     if game.npcs[to_act].is_some() {
         game.poses[to_act].asked = Some(if s.folded {
             Move::Fold
@@ -1006,6 +1073,21 @@ fn play(
             game.info = Some(Info { text: line::REVEALING, name: None, chips: None });
         }
         info!("poker: hand {} over: won {:?}", game.hands, outcome.won);
+        // (Someone put out of the game says so first; then the winner, and
+        // perhaps someone who lost a showdown.)
+        let who = |i: usize| if i == seat { None } else { Some(i) };
+        for &i in &in_it {
+            if matches!(how(i), Line::BustedOut) && i != seat {
+                game.speech.push((Some(i), "BustOut", 1.0));
+            }
+        }
+        for &i in &in_it {
+            match how(i) {
+                Line::Won(_) => game.speech.push((who(i), if in_it.len() > 1 { "WinHand" } else { "CollectChips" }, 0.8)),
+                Line::Lost if in_it.len() > 1 => game.speech.push((who(i), "LoseHand", 0.4)),
+                _ => {}
+            }
+        }
         for &i in &in_it {
             if game.npcs[i].is_some() {
                 game.poses[i].asked = Some(if matches!(how(i), Line::Won(_)) { Move::Win } else { Move::Lose });
@@ -1386,6 +1468,7 @@ fn pose_players(
     clips: Res<Assets<crate::cache_assets::Fc3Clip>>,
     mut handles: Local<HashMap<String, Handle<crate::cache_assets::Fc3Clip>>>,
     mut live: Local<Vec<String>>,
+    (time, bank, mut sfx): (Res<Time>, Option<Res<crate::sound::SoundBank>>, MessageWriter<crate::sound::PlaySfx>),
 ) {
     use fc3_formats::cinema::{Clip, ClipKind, Group, GroupKind, Sequence};
     let game = poker.game.as_mut();
@@ -1397,6 +1480,24 @@ fn pose_players(
     }
     live.retain(|n| held.contains(n) && posing);
     let Some(game) = game else { return };
+    // The lines asked for, one at a time (a computer player's from its
+    // chair, the player's his own).
+    let now = time.elapsed_secs();
+    for (who, event, chance) in std::mem::take(&mut game.speech) {
+        if now < game.quiet_until || game.dealer.unit() >= chance {
+            continue;
+        }
+        let lines = match who {
+            Some(s) => game.npcs[s].as_ref().and_then(|n| n.voice.get(event)),
+            None => game.voices.jason.get(event),
+        };
+        let Some(lines) = lines.filter(|l| !l.is_empty()).cloned() else { continue };
+        let line = lines[game.dealer.below(lines.len())];
+        let at = who.and_then(|s| game.place.map(|p| p.chairs[s] + Vec3::Y * 1.2));
+        sfx.write(crate::sound::PlaySfx { event: line, at, volume: 1.0 });
+        debug!("poker: {} says {event} ({line:#x})", who.map_or("the player".to_string(), |s| format!("seat {}", s + 1)));
+        game.quiet_until = now + bank.as_ref().and_then(|b| b.length(line)).unwrap_or(1.5) + LINE_GAP;
+    }
     for s in 0..4 {
         let pose = &mut game.poses[s];
         let (Some(npc), Some(place), true) = (game.npcs[s].as_ref(), game.place, posing) else {

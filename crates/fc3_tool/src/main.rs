@@ -480,6 +480,33 @@ fn main() -> Result<()> {
                 println!("{name}: {}", out.join(" "));
             });
         }
+        "gsf-dump" => {
+            // The gameplay settings library's entries whose name (`hidName`)
+            // contains a text, dumped: gsf-dump <text> [depth]
+            let needle = args.get(1).context("usage: gsf-dump <text> [depth]")?.to_ascii_lowercase();
+            let depth = args.get(2).and_then(|d| d.parse().ok()).unwrap_or(16);
+            let root = fc3_formats::fcb::parse(&vfs.read(fc3_formats::gsf::LIBRARY)?)?;
+            let mut names = fc3_formats::fcb::NameDb::default();
+            for n in KNOWN_NAMES {
+                names.add(n);
+            }
+            if let Some(dll) = fc3_formats::find_install().and_then(|d| d.parent().map(|p| p.join("bin").join("FC3.dll"))) {
+                if let Ok(b) = std::fs::read(dll) {
+                    names.add_identifiers_from(&b);
+                }
+            }
+            let mut found = Vec::new();
+            root.walk(&mut |o, _| {
+                if o.str("hidName").is_some_and(|n| n.to_ascii_lowercase().contains(&needle)) {
+                    found.push(o.clone());
+                }
+            });
+            for o in found {
+                let mut out = String::new();
+                fc3_formats::fcb::dump(&o, &names, depth, &mut out);
+                println!("{out}");
+            }
+        }
         "library-dump" => {
             // Full FCB tree of the first entity-library prototype whose name contains a substring.
             let needle = args.get(1).context("usage: library-dump <substr | 0x library id>")?.to_ascii_lowercase();

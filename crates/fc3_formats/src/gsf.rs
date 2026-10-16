@@ -663,6 +663,73 @@ impl PokerSettings {
     }
 }
 
+pub const POKER_RESOURCES: &str = "CPokerMiniGameResourceContainer";
+
+/// What a poker table's people say (`GSFPokerDialog`): each event's lines,
+/// as sound events (`AllIn`, `Call`, `Check`, `Fold`, `Raise`,
+/// `CollectChips`, `LoseHand`, `WinHand`, `BustOut`, `CleanUpTable`,
+/// `NPC_EnticeHero`, `NPC_Impatient`, `Jason_EnterTable`,
+/// `Jason_LeaveTable`).
+pub type PokerDialog = std::collections::BTreeMap<String, Vec<u32>>;
+
+pub const POKER_EVENTS: [&str; 14] = [
+    "AllIn",
+    "Call",
+    "Check",
+    "Fold",
+    "Raise",
+    "CollectChips",
+    "LoseHand",
+    "WinHand",
+    "BustOut",
+    "CleanUpTable",
+    "NPC_EnticeHero",
+    "NPC_Impatient",
+    "Jason_EnterTable",
+    "Jason_LeaveTable",
+];
+
+/// The poker tables' voices (the resource container's `AudioResources`):
+/// the player's own lines, each way of playing's four dialogue sets
+/// (unskilled, skilled, expert, loose cannon: a computer player's
+/// `PokerDialogSet` picks one), Sam's and Hoyt's; and the table's sounds
+/// for a game won and lost.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PokerVoices {
+    pub jason: PokerDialog,
+    pub ways: [Vec<PokerDialog>; 4],
+    pub sam: PokerDialog,
+    pub hoyt: PokerDialog,
+    pub win: u32,
+    pub fail: u32,
+}
+
+impl PokerVoices {
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        let o = entry(bytes, POKER_RESOURCES)?;
+        let audio = o.child("AudioResources").context("no AudioResources")?;
+        let dialog = |bank: &Object| -> PokerDialog {
+            POKER_EVENTS
+                .iter()
+                .map(|e| {
+                    let lines = bank.child(e).map(|c| c.children.iter().map(|g| sound_id(g, "GearString")).filter(|&i| i != 0).collect()).unwrap_or_default();
+                    (e.to_string(), lines)
+                })
+                .collect()
+        };
+        let bank = |name: &str| audio.child(name).map(|b| dialog(b)).unwrap_or_default();
+        let sets = |name: &str| audio.child(name).map(|b| b.children_named("GSFPokerDialog").map(|d| dialog(d)).collect()).unwrap_or_default();
+        Ok(Self {
+            jason: bank("Jason_Dialog_Bank"),
+            ways: ["Unskilled_Dialog_Bank", "Skilled_Dialog_Bank", "Expert_Dialog_Bank", "Loose_Cannon_Dialog_Bank"].map(sets),
+            sam: bank("Sam_Dialog_Bank"),
+            hoyt: bank("Hoyt_Dialog_Bank"),
+            win: sound_id(audio, "MiniGameWin"),
+            fail: sound_id(audio, "MiniGameFail"),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -733,6 +800,12 @@ mod tests {
         assert_eq!((hoyt.npcs[0].player_type, hoyt.npcs[0].dialog, hoyt.npcs[1].player_type), (1, 5, 2));
         let sqc = PokerSettings::parse(&bytes, "SQC_100_OBJ20_Pokerminigame").unwrap();
         assert_eq!(sqc.difficulties.iter().map(|d| d.enabled).collect::<Vec<_>>(), vec![false, true, false, false]);
+        let voices = PokerVoices::parse(&bytes).unwrap();
+        assert_eq!(voices.ways.each_ref().map(Vec::len), [4; 4]);
+        assert_eq!(voices.jason["AllIn"][0], 0x0013_F1FF);
+        assert_eq!(voices.ways[0][0]["Fold"].len(), 6);
+        assert!(voices.jason["NPC_EnticeHero"].is_empty() && !voices.hoyt["WinHand"].is_empty());
+        assert_eq!((voices.win, voices.fail), (0x001C_2527, 0x001C_2525));
     }
 
     #[test]
