@@ -1251,7 +1251,7 @@ fn run_story(
         mut trees,
         mut doors,
         mut stims,
-        mut sniping,
+        (mut sniping, mut boss_fight, mut binds, mut unlimited_ammo),
     ): (
         MessageWriter<crate::progression::XpGain>,
         ResMut<crate::progression::Progress>,
@@ -1267,7 +1267,7 @@ fn run_story(
         ResMut<crate::tree_growth::TreeGrowth>,
         ResMut<crate::doors::Doors>,
         ResMut<crate::stims::Stims>,
-        ResMut<crate::sniping::Sniping>,
+        (ResMut<crate::sniping::Sniping>, ResMut<crate::boss_fight::BossFight>, ResMut<crate::binds::Binds>, ResMut<crate::weapons::UnlimitedAmmo>),
     ),
 ) {
     // (Not a run condition: those may run off the main thread.)
@@ -1351,6 +1351,9 @@ fn run_story(
             trees.reset();
             vines.reset();
             sniping.reset();
+            boss_fight.reset();
+            binds.reset();
+            unlimited_ammo.0 = false;
             postfx.reset();
             ui.subtitle = None;
             // Rebuild mission actors and discard transient wildlife together.
@@ -1605,6 +1608,7 @@ fn run_story(
         && health.as_ref().is_none_or(|h| !h.dead)
         && (!p.driving || at_wheel)
         && !sniping.holds_player()
+        && !boss_fight.holds_player()
         && cinema.view.is_none()
         && !cinema.plays_player()
         && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
@@ -1883,12 +1887,9 @@ fn run_story(
                     }
                 }
             }
-        } else if let Some((id, name)) = host
-            .story
-            .gameplays()
-            .into_iter()
-            .find(|g| g.1 != "QTEGSF" && !host.story.is_qte_gameplay(g.0) && !sniping_challenge(&g.1) && !g.1.starts_with("CPokerMiniGame"))
-        {
+        } else if let Some((id, name)) = host.story.gameplays().into_iter().find(|g| {
+            g.1 != "QTEGSF" && !host.story.is_qte_gameplay(g.0) && !sniping_challenge(&g.1) && !g.1.starts_with("CPokerMiniGame") && g.1 != BOSS_FIGHT
+        }) {
             // A minigame or QTE the game doesn't play yet: done. (A sniping
             // challenge is played: its targets shot, see `autopilot_loot`.)
             info!("story autopilot: end gameplay {name}");
@@ -2194,6 +2195,22 @@ fn run_story(
                         id: a(0).parse().unwrap_or(0),
                         params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                     }),
+                    "CreateSpecificGameplay" if a(1) == BOSS_FIGHT => boss_fight.pending.push(crate::boss_fight::Start {
+                        id: a(0).parse().unwrap_or(0),
+                        params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                    }),
+                    "EnableUnlimitedAmmo" => unlimited_ammo.0 = a(0) == "true" || a(0) == "1",
+                    // Bound to another (on one of its bones): `parent, child, bone`.
+                    "CAPI_Entity.Bind" => {
+                        if let (Ok(parent), Ok(child)) = (a(0).parse(), a(1).parse()) {
+                            binds.bind(parent, child, &a(2));
+                        }
+                    }
+                    "CAPI_Entity.UnBind" => {
+                        if let Ok(child) = a(1).parse() {
+                            binds.unbind(child);
+                        }
+                    }
                     "CreateSpecificGameplay" if a(1).starts_with("CSnipingChallenge") => sniping.pending.push(crate::sniping::Start {
                         id: a(0).parse().unwrap_or(0),
                         name: a(1),
@@ -2210,6 +2227,7 @@ fn run_story(
                         qtes.cancelled.push(id);
                         vines.cancelled.push(id);
                         sniping.cancelled.push(id);
+                        boss_fight.cancelled.push(id);
                     }
                     "StopBinkVideo" => videos.stops.push(false),
                     "StopFullscreenVideo" => videos.stops.push(true),
@@ -3198,6 +3216,9 @@ const KEEP_CLEAR: f32 = 10.0;
 /// scripts want the player close (HOY_010's Sam).
 const ESCORT_IN_FIGHT: f32 = 20.0;
 
+/// CIT_030's fight with the Ink Monster: played (`boss_fight`), not ended.
+const BOSS_FIGHT: &str = "CCitraBossFight";
+
 /// A sniping set-piece (`CSnipingChallenge_...`): the player shoots its
 /// targets from where they stand.
 fn sniping_challenge(gameplay: &str) -> bool {
@@ -3323,6 +3344,10 @@ fn autopilot_loot(
                 host.reload_at.is_some()
             );
         }
+    }
+    // (The Ink Monster's fight plays itself: `boss_fight`.)
+    if host.story.gameplays().iter().any(|g| g.1 == BOSS_FIGHT) {
+        return;
     }
     // (Nor while a scene plays the player through without its own view: a
     // quest giver's brief walked out of left its pickup untaken.)

@@ -24,6 +24,7 @@ impl Plugin for WeaponsPlugin {
             .init_resource::<PaintTable>()
             .init_resource::<TestScript>()
             .init_resource::<ScopeSway>()
+            .init_resource::<UnlimitedAmmo>()
             .add_systems(Update, (fire_test_setup, fire_test_log, scope_sway, test_ammo))
             .add_message::<Explosion>()
             .add_message::<HitMarker>()
@@ -1244,11 +1245,16 @@ fn fire_test_log(
     );
 }
 
-/// `FC3_TEST_AMMO` (tests, like `FC3_GOD` for health): the player's guns
-/// never run dry; their spare ammunition stays full. `FC3_TEST_LOADOUT`
-/// (weapon names, comma separated): he carries those too, whatever a save
-/// gave him.
-fn test_ammo(mut players: Query<&mut Inventory, With<Player>>) {
+/// Ammunition a script made unlimited (`EnableUnlimitedAmmo`: the Ink
+/// Monster's fight, with its bow).
+#[derive(Resource, Default)]
+pub struct UnlimitedAmmo(pub bool);
+
+/// `FC3_TEST_AMMO` (tests, like `FC3_GOD` for health), or a script's
+/// unlimited ammunition: the player's guns never run dry; their spare
+/// ammunition stays full. `FC3_TEST_LOADOUT` (weapon names, comma
+/// separated): he carries those too, whatever a save gave him.
+fn test_ammo(mut players: Query<&mut Inventory, With<Player>>, unlimited: Res<UnlimitedAmmo>) {
     let Ok(mut inv) = players.single_mut() else { return };
     let inv = &mut *inv;
     if let Ok(names) = std::env::var("FC3_TEST_LOADOUT") {
@@ -1260,7 +1266,7 @@ fn test_ammo(mut players: Query<&mut Inventory, With<Player>>) {
             }
         }
     }
-    if std::env::var("FC3_TEST_AMMO").is_err() {
+    if std::env::var("FC3_TEST_AMMO").is_err() && !unlimited.0 {
         return;
     }
     for slot in &mut inv.slots {

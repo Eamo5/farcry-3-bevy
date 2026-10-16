@@ -65,6 +65,8 @@ mod qte;
 mod stims;
 mod vine;
 mod sniping;
+mod boss_fight;
+mod binds;
 mod screen_blur;
 mod script_postfx;
 mod vine_puff;
@@ -444,6 +446,8 @@ fn main() {
         .add_plugins(poker::PokerPlugin)
         .add_plugins(credits::CreditsPlugin)
         .add_plugins(sniping::SnipingPlugin)
+        .add_plugins(boss_fight::BossFightPlugin)
+        .add_plugins(binds::BindsPlugin)
         .add_plugins(story_alarms::StoryAlarmsPlugin)
         .add_plugins(story_props::StoryPropsPlugin)
         .add_plugins(story_rides::StoryRidesPlugin)

@@ -3907,6 +3907,65 @@ plays the player, and only goes for a box within `ALARM_REACH` (150 m).
   * leaves alone a box that failed the mission as it stepped in (within
     2 s), over reloads: B30's on-foot box fails it whenever entered.
 
+## CIT_030: the Ink Monster (B10E, `boss_fight`)
+
+B10E's hallucination fight is a GSF of its own, `CCitraBossFight`, which
+the game now plays (`boss_fight`) instead of ending it at once.
+
+* **Its settings** come from the GSF library's entry
+  (`gsf::BossFightSettings`): the giant's 20000 health and the health its
+  three later phases begin at, its attacks' reach and harm (a sweep's hand
+  hits within 8 m, a rock within 4 m, the breath within 3 m of its line),
+  its moves by what they are for, the minions, goodies and masks, and its
+  sounds.
+* **The giant** (`BossMerc_0`, a pawn on the `Giant` kit with its own
+  legless skeleton, `giant\hips_ref`) is placed 98 m under the temple and
+  kept out of sight from its spawn by CIT_030's main graph
+  (`VisibilityModifier`). B10E plays a one-frame scene
+  (`CIT_030_BRIEF_PlaceBoss`) that lifts it into place, onto the anchor
+  B15E's finishing blow is played about (`QTE_Anchor_DONOTEDELETE`); a
+  finished scene now leaves its characters where it put them, in the
+  story's placements, even one not yet in the world. The fight waits for
+  that scene, plays from where it left the giant, and shows it.
+* **Its moves** are each a move of the move table built three ways, facing
+  ahead (`+000fw`) or turned 45 degrees (`+045rt`, `-045lt`); the fight
+  takes the one for where the player stands across the arena, along its
+  near edge (`m_boundaryNearLeft`/`Right`, named as the giant sees them).
+  The moves are played as gameplay moves: their reference node is the
+  giant's place and only its motion since the clip began moves it; the
+  sweeps, whose reference is at their root and in their hips instead, have
+  it taken off. Played so, a sweep's hand comes down to the arena's floor
+  along its near edge at the clip's `SweepHit`, the head stands some 38 m
+  above the floor south of the arena, and the knocked-out body comes to
+  rest under the invisible bridge's top, where B15E's finishing blow
+  begins.
+* **Its moments** are the clips' named events (`EntityEvent`): `SweepHit`,
+  `ThrowRock`, `StartFirebreath`/`StopFirebreath`, camera shakes. The
+  turned builds name none; theirs are the forward build's.
+* **The fight**: idling, then sweeps and rocks in turn, the fire breath from
+  the second phase. A sweep harms the player if its nearer hand is within
+  its reach as it comes down; a rock flies at where he was and can be shot
+  down; the breath follows him slowly from the jaw. The mask is a sphere
+  on the head bone: hits on it come off the giant's health (six times a
+  man's: the fight's own scale isn't in the data, and the bow's explosive
+  arrows carry no damage of their own, so this puts the knockout some
+  twenty-seven arrows away). At the last phase it is knocked out; the fight
+  sends `citrabossfight_EnableInvisibleBridge` and ends, and B10E goes on
+  to B15E. After its arrival it sends the hint message.
+* **The bow.** B10E puts the player's inventory aside and gives him
+  `BOW.citraBossFightBow` through `ManageInventory`, which waits for it to
+  spawn: it resolves by its family's folder, and the story sees it under
+  the script's name while it is carried. `EnableUnlimitedAmmo` keeps it
+  stocked (`weapons::UnlimitedAmmo`), until a reload.
+* **Binds.** `CAPI_Entity.Bind` (the mask on the giant's `Head`) makes the
+  bound thing ride on the other's bone (`binds`); `UnBind` lets go.
+* **The autopilot** leaves the player to the fight while it is on: the
+  fight's own autopilot holds the bow's sights on the mask and fires.
+* Not yet: the summoned minions and their pounding, the goodies laid out
+  at the three spawn spots, the mask's breaking (`ChangeMaskNow`), the
+  fight's particles (the ink, the eyes, the breath's flames, the arrows'
+  blasts) and the rock's own model.
+
 ## JAS_170: the drop onto the beach
 
 JAS_170's B05 starts with the plane's crash scene, the player left some
