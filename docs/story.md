@@ -4696,5 +4696,15 @@ table's own movie (`ACTI_Poker.feu`, `docs/ui.md`).
   street's board (`board3`...), `FC3_POKER_AIM=<yaw>,<pitch>` turns the
   seated view, and `fc3tool model <xbg> uvs` lists a model's submeshes
   with their reach in positions, normals, UVs and colours.
-* **Not yet.** The players seated and playing their moves, their voices,
-  the help screen's odds, the scripted decks of Hoyt's table.
+* **The players.** The computer players sit at their chairs (a bar's
+  while its table's game is on, waiting for the player without cards; a
+  story's once the player sits with them), each in a built scene of its own
+  at its chair's anchor, facing as the anchor does (the anchors stand on
+  the floor and the moves are made about them). Their moves are their way
+  of playing's own (the poker minigame's `unskilled`, `skilled`, `expert`
+  and `loosecanon` folders, by `PlayerType` or the difficulty): seated
+  with cards or without, and once each, taking the cards, checking,
+  betting small or large, going all in, folding, winning or losing a
+  showdown, and getting impatient with a player who takes a while.
+* **Not yet.** Their voices, the help screen's odds, the scripted decks of
+  Hoyt's table.
