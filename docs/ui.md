@@ -495,6 +495,40 @@ as it changes. Display resolution, the calibration popup's gamma and
 contrast, the key bindings page and the vegetation, terrain and water
 qualities aren't ours to set yet.
 
+**World map** (`WorldMap.feu`, quick launch 2; the map key opens the pause
+menu straight at it, the game's own map screen standing down while it's up,
+`GameState::Map` still telling the story the map is open). The movie draws
+the game's own map tiles, which it loads itself
+(`worlds\fc3_main\worldmap\<level>_<row>_<column>.png`: four levels of zoom of
+2, 5, 10 and 20 tiles a side, 512 pixels each; the converter writes them
+from the archives' `.xbt` as PNGs where `feu::movie_rel` finds them).
+Everything else is the engine's to drive (`original_ui::drive_map_page`):
+
+* On `MapLoaded` the game sends the legend (`DataMap`: `iIconID`, `bDisplay`,
+  `sName`, the game's legend strings; the movie hides every icon whose type
+  has no row), the fog lifted where the player has been (`SetFog 0 <row>
+  <column>`: the movie masks the map with a ten by ten grid of cells, and
+  the original lifted them with radio towers), and the icons (`IconMap`:
+  `iType`, `iXPos`/`iYPos` as fractions of the map, `sName`, `iIndex`,
+  `iAngle`, `bIsMarker`), here the player, objectives, radio towers taken
+  or not, outposts held, safehouses and liberated outposts (both fast
+  travel) and the waypoint. The types are the movie's `E_*` (player 0,
+  mission 1, safehouse 6/7, tower 8/9, marker 20, outpost 70).
+* Once the icons are in (`IconsLoaded`), `CenterMap <level> <zoom>`. The
+  zoom is the whole map's width on the stage; it opens at 7168 (the
+  movie's own start) and the wheel takes it a quarter in or out between
+  1024 and 20480, with `OnLevelOfZoomUpdated <level> <zoom>` (the level
+  whose tiles are shown at most 1024 pixels wide; the movie loads them).
+  `FC3_MAP_ZOOM_STEPS=<n>` (tests) zooms n steps once it's centred.
+* The icons are placed by the engine, not the movie: each is a DPS clip
+  (`Icon_<index>`) that goes, whenever the view changes, to `(its fraction
+  + MapVisual's _x / its _width) * MapScale's _width` (and the same down),
+  the movie's own formula for the waypoint it makes; the map's `mf_XPos`
+  and `mf_YPos` get the offsets.
+* `SetupMarker 1 <x> <y> <type> <icon>` places the waypoint (`SetupMarker
+  0` takes it away), and `onFastTravel <n>` travels to the n-th fast travel
+  icon sent (the movie counts safehouses and liberated outposts).
+
 While the pause menu is up the HUD's level is hidden (`Host::level_visible`;
 the shim's `levelVisible`), as the game's was: subtitles showed through.
 

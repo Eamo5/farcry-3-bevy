@@ -42,6 +42,7 @@ impl Plugin for OriginalUiPlugin {
         app.add_plugins((ExtractResourcePlugin::<Canvas>::default(), UiMaterialPlugin::<CanvasMaterial>::default()))
             .insert_non_send(Interface::Waiting)
             .init_resource::<UiCalls>()
+            .init_resource::<MapPage>()
             .add_systems(Startup, make_canvas)
             .add_systems(
                 Update,
@@ -60,6 +61,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_camera,
                     drive_credits,
                     drive_pause,
+                    drive_map_page,
                     run_interface,
                 )
                     .chain()
@@ -248,11 +250,13 @@ fn drive_pause(
         Local<CraftPage>,
         Option<ResMut<crate::syringes::Boosts>>,
     ),
+    mut map_page: ResMut<MapPage>,
 ) {
     use crate::menu::GameState;
     use fc3_ui::input::{MouseButton, PlayerEvent};
     let Interface::Running(host) = &mut *state else { return };
-    let paused = *game.get() == GameState::Paused;
+    // (The map key opens it at its world map page, as the game did.)
+    let paused = matches!(game.get(), GameState::Paused | GameState::Map);
     if paused != *open {
         *open = paused;
         original.0 = paused;
@@ -262,6 +266,8 @@ fn drive_pause(
         moves.clear();
         buttons.clear();
         calls.0.clear();
+        map_page.open = false;
+        map_page.calls.clear();
         if paused {
             host.answer("ShowGamePadInterface", "0");
             host.answer("IsSplitscreen", "0");
@@ -288,8 +294,19 @@ fn drive_pause(
         }
         let arg = |i: usize| call.args.get(i).map(String::as_str).unwrap_or("");
         match arg(0) {
-            "RequestPageToLoad" => open_page(host, "-1"),
+            "RequestPageToLoad" => open_page(host, if *game.get() == GameState::Map { "2" } else { "-1" }),
+            // The world map page's (`drive_map_page`).
+            "MapLoaded" | "IconsLoaded" | "SetupMarker" | "onFastTravel" => map_page.calls.push(call.clone()),
+            "OnSwitchMode"
+            | "LoadSoundTutorial"
+            | "OnEnterTransitionEnd"
+            | "OnCenterMap"
+            | "OnUpdatingLevelOfZoomEnded"
+            | "OnIconFocused"
+            | "OnIconUnfocused"
+            | "SinglePlayerMenuCheckConnectionStatus" => {}
             "SinglePlayerMenuLoaded" => {
+                map_page.open = false;
                 let mission = story.as_ref().is_some_and(|s| s.story.missions().iter().any(|m| m.1 == "Running"));
                 // crafting, skills, save, checkpoint, restart, abandon, debug
                 host.event("SetUnlockedMenus", &["1", "1", "1", if mission { "1" } else { "0" }, "0", "0", "0", "", ""]);
@@ -315,10 +332,10 @@ fn drive_pause(
             "Quit" | "QuitToDesktop" => {
                 exit.write(AppExit::Success);
             }
-            // Skills (3), crafting (8), the handbook (10), the options (12)
-            // and the rucksack (13) are the original's, and back (-1) is the
-            // pause page.
-            "RequestPageChange" if matches!(arg(1), "3" | "8" | "10" | "12" | "13" | "-1") => open_page(host, arg(1)),
+            // The world map (2), skills (3), crafting (8), the handbook
+            // (10), the options (12) and the rucksack (13) are the
+            // original's, and back (-1) is the pause page.
+            "RequestPageChange" if matches!(arg(1), "2" | "3" | "8" | "10" | "12" | "13" | "-1") => open_page(host, arg(1)),
             "OnOptionLoaded" => send_option_sections(host),
             "OnRequestOptions" => send_options(host, &settings, arg(1).parse().unwrap_or(0)),
             "SetOptions" => {
@@ -456,6 +473,285 @@ fn drive_pause(
                 host.input(PlayerEvent::KeyUp { key });
             }
             pressed.1 += 1;
+        }
+    }
+}
+
+/// The world map page (`WorldMap.feu`, quick launch 2): the calls it made
+/// this frame (`drive_pause` hands them on), whether it's up, its zoom, and
+/// where each of its fast travel icons goes.
+#[derive(Resource, Default)]
+struct MapPage {
+    calls: Vec<fc3_ui::EngineCall>,
+    open: bool,
+    /// The whole map's width on the stage (pixels).
+    zoom: f32,
+    /// Fast travel icons by their turn among them (the movie's
+    /// `iTypeIndex`): an outpost (its place in `Outposts`) or a
+    /// safehouse (its marker).
+    travel: Vec<Travel>,
+    /// Each icon's clip (`Icon_<index>`) and place (a fraction of the map
+    /// each way), and the view they were last put in.
+    icons: Vec<(String, Vec2)>,
+    placed: Option<[f64; 4]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Travel {
+    Outpost(usize),
+    Safehouse(u64),
+}
+
+/// The map's zoom, the whole map's width on the stage: from the whole of it
+/// in view to 2 stage pixels a metre. It opens where the movie's own start
+/// has it (0.7 of a tile's widest at the third level), and a wheel step
+/// takes it a quarter in or out.
+const MAP_ZOOM: (f32, f32) = (1024.0, 20480.0);
+const MAP_ZOOM_START: f32 = 7168.0;
+const MAP_ZOOM_STEP: f32 = 1.25;
+/// The tiles a side at each level of zoom (`WorldMap.CMap.SetMapSize`), and
+/// the widest a tile is shown before the next level's are loaded (stage
+/// pixels: twice its own).
+const MAP_LEVELS: [f32; 4] = [2.0, 5.0, 10.0, 20.0];
+const MAP_TILE_WIDEST: f32 = 1024.0;
+
+/// The level of zoom whose tiles show the map at a width.
+fn map_level(zoom: f32) -> usize {
+    MAP_LEVELS.iter().position(|n| zoom / n <= MAP_TILE_WIDEST).unwrap_or(MAP_LEVELS.len() - 1)
+}
+
+/// The legend's rows (`DataMap`): an icon type and its name (the game's
+/// map legend strings). Each type the map shows needs its row: the movie
+/// hides the icons of types without one.
+const MAP_LEGEND: [(f64, u32); 8] = [
+    (map_icon::PLAYER, 93073),
+    (map_icon::MARKER, 93074),
+    (map_icon::MISSION, 93075),
+    (map_icon::TOWER_LOCKED, 93078),
+    (map_icon::TOWER, 93078),
+    (map_icon::OUTPOST_LOCKED, 93079),
+    (map_icon::SAFEHOUSE, 93093),
+    (map_icon::SAFEHOUSE_LOCKED, 93093),
+];
+/// The fog's cells a side (`WorldMap.CFog`): each is lifted as a whole.
+const MAP_FOG_CELLS: usize = 10;
+
+/// The icons' types (`WorldMap.CIconManager.E_*`).
+mod map_icon {
+    pub const PLAYER: f64 = 0.0;
+    pub const MISSION: f64 = 1.0;
+    pub const SAFEHOUSE_LOCKED: f64 = 6.0;
+    pub const SAFEHOUSE: f64 = 7.0;
+    pub const TOWER_LOCKED: f64 = 8.0;
+    pub const TOWER: f64 = 9.0;
+    pub const MARKER: f64 = 20.0;
+    pub const OUTPOST_LOCKED: f64 = 70.0;
+}
+
+/// The world map page, answered as the engine answered it: on `MapLoaded`
+/// the legend (`DataMap`), the fog lifted where the player has been
+/// (`SetFog 0 <row> <column>`), and the icons (`IconMap`: the player, the
+/// objectives, radio towers, outposts, safehouses and liberated outposts to
+/// travel to, and the waypoint, each placed as a fraction of the map); once
+/// they are in (`IconsLoaded`) the map centred on the player (`CenterMap
+/// <level> <zoom>`). The wheel zooms (`OnLevelOfZoomUpdated`, the movie
+/// loading the level's tiles itself), a marker placed or taken away
+/// (`SetupMarker`) is the waypoint, and a fast travel icon chosen
+/// (`onFastTravel <its turn>`) travels there. The icons are the engine's to
+/// place: as the map moves each goes where its fraction of the map is shown
+/// (`(fraction + MapVisual's place / its size) * MapScale's size`, as the
+/// movie places the waypoint it makes itself).
+#[allow(clippy::too_many_arguments)]
+fn drive_map_page(
+    mut state: NonSendMut<Interface>,
+    mut page: ResMut<MapPage>,
+    mut next: ResMut<NextState<crate::menu::GameState>>,
+    mut players: Query<(&mut Transform, &mut crate::player::Player)>,
+    (outposts, ways, progress, objectives): (
+        Res<crate::outposts::Outposts>,
+        Res<crate::traversal::Ways>,
+        Res<crate::progression::Progress>,
+        Res<crate::story::ObjectiveMarkers>,
+    ),
+    (mut waypoint, explored): (ResMut<crate::map::Waypoint>, Res<crate::map::Explored>),
+    mut story: Option<NonSendMut<crate::story::StoryHost>>,
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+) {
+    use crate::map::map_uv;
+    use fc3_ui::ExternalValue as V;
+    let Interface::Running(host) = &mut *state else { return };
+    for call in std::mem::take(&mut page.calls) {
+        let arg = |i: usize| call.args.get(i).map(String::as_str).unwrap_or("");
+        match arg(0) {
+            "MapLoaded" => {
+                page.open = true;
+                page.zoom = MAP_ZOOM_START;
+                page.travel.clear();
+                page.icons.clear();
+                page.placed = None;
+                let legend = MAP_LEGEND
+                    .iter()
+                    .map(|&(kind, name)| {
+                        [("iIconID", V::Number(kind)), ("bDisplay", V::Bool(true)), ("sName", V::String(host.text(name)))]
+                            .into_iter()
+                            .map(|(k, v)| (k.to_string(), v))
+                            .collect()
+                    })
+                    .collect();
+                host.set_data("DataMap", legend);
+                // (Rows run north to south; the explored sectors south to
+                // north.)
+                let n = fc3_formats::terrain::WORLD_SECTORS as usize;
+                let mut lifted = std::collections::BTreeSet::new();
+                for (i, _) in explored.cells.iter().enumerate().filter(|(_, c)| **c != 0) {
+                    let (sx, sy) = (i % n, i / n);
+                    lifted.insert(((n - 1 - sy) * MAP_FOG_CELLS / n, sx * MAP_FOG_CELLS / n));
+                }
+                for (row, col) in lifted {
+                    host.event("SetFog", &["0", &row.to_string(), &col.to_string()]);
+                }
+                let mut items = Vec::new();
+                let mut places = Vec::new();
+                let mut icon = |kind: f64, at: Vec3, name: &str, angle: f32, marked: bool| {
+                    let uv = map_uv(at);
+                    places.push((format!("Icon_{}", items.len()), uv));
+                    let fields: std::collections::BTreeMap<String, V> = [
+                        ("iType", V::Number(kind)),
+                        ("iXPos", V::Number(uv.x as f64)),
+                        ("iYPos", V::Number(uv.y as f64)),
+                        ("sName", V::String(name.to_string())),
+                        ("iIndex", V::Number(items.len() as f64)),
+                        ("iAngle", V::Number(angle as f64)),
+                        ("bIsMarker", V::Number(if marked { 1.0 } else { 0.0 })),
+                    ]
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v))
+                    .collect();
+                    items.push(fields);
+                };
+                if let Ok((t, p)) = players.single() {
+                    // (Its turn clockwise from north, as the movie turns it.)
+                    icon(map_icon::PLAYER, t.translation, "", -p.yaw.to_degrees(), false);
+                }
+                for &goal in &objectives.0 {
+                    icon(map_icon::MISSION, goal, "", 0.0, false);
+                }
+                for (i, at) in ways.data.towers.iter().enumerate() {
+                    let taken = progress.towers.contains(&(i as u32));
+                    icon(if taken { map_icon::TOWER } else { map_icon::TOWER_LOCKED }, Vec3::from(*at), "", 0.0, false);
+                }
+                let destinations = story.as_ref().map(|h| h.story.travel_destinations()).unwrap_or_default();
+                for (i, o) in outposts.list.iter().enumerate() {
+                    // (A liberated outpost's own safehouse stands for it.)
+                    if o.liberated && destinations.iter().any(|d| o.contains(crate::data::to_bevy(d.position))) {
+                        continue;
+                    }
+                    // (Liberated, it's a place to travel to, as the radar
+                    // has it.)
+                    icon(if o.liberated { map_icon::SAFEHOUSE } else { map_icon::OUTPOST_LOCKED }, o.centre, "", 0.0, false);
+                    if o.liberated {
+                        page.travel.push(Travel::Outpost(i));
+                    }
+                }
+                for d in &destinations {
+                    let name = crate::story::plain(&d.name);
+                    icon(if d.unlocked { map_icon::SAFEHOUSE } else { map_icon::SAFEHOUSE_LOCKED }, crate::data::to_bevy(d.position), &name, 0.0, false);
+                    if d.unlocked {
+                        page.travel.push(Travel::Safehouse(d.marker));
+                    }
+                }
+                if let Some(at) = waypoint.0 {
+                    icon(map_icon::MARKER, at, "", 0.0, true);
+                }
+                page.icons = places;
+                debug!("original UI: world map: {} icons, {} to travel to", items.len(), page.travel.len());
+                host.set_data("IconMap", items);
+            }
+            "IconsLoaded" => {
+                let zoom = page.zoom;
+                host.event("CenterMap", &[&map_level(zoom).to_string(), &zoom.to_string()]);
+                // FC3_MAP_ZOOM_STEPS=<n> (tests): n wheel steps in (out
+                // when negative) once it's centred.
+                if let Some(steps) = std::env::var("FC3_MAP_ZOOM_STEPS").ok().and_then(|s| s.parse::<i32>().ok()) {
+                    page.zoom = (zoom * MAP_ZOOM_STEP.powi(steps)).clamp(MAP_ZOOM.0, MAP_ZOOM.1);
+                    host.event("OnLevelOfZoomUpdated", &[&map_level(page.zoom).to_string(), &page.zoom.to_string()]);
+                }
+            }
+            // `1 <x> <y> <type> <icon>` placed (a fraction of the map each
+            // way), `0` taken away.
+            "SetupMarker" => {
+                waypoint.0 = (arg(1) == "1").then(|| crate::map::world_at(Vec2::new(arg(2).parse().unwrap_or(0.5), arg(3).parse().unwrap_or(0.5))));
+            }
+            "onFastTravel" => {
+                let Some(&to) = arg(1).parse::<usize>().ok().and_then(|i| page.travel.get(i)) else { continue };
+                if !story.as_ref().is_none_or(|h| h.story.fast_travel_enabled()) {
+                    continue;
+                }
+                let Ok((mut t, mut p)) = players.single_mut() else { continue };
+                let travelled = match to {
+                    Travel::Outpost(i) => {
+                        let done = crate::outposts::fast_travel(&outposts, i, &mut t, &mut p);
+                        if let (true, Some(host)) = (done, story.as_mut()) {
+                            host.story.report_outpost_travel(fc3_story::Pose {
+                                position: crate::data::to_dunia(t.translation),
+                                angles: [0.0, 0.0, -p.yaw.to_degrees()],
+                            });
+                        }
+                        done
+                    }
+                    Travel::Safehouse(marker) => match story.as_mut().and_then(|h| h.story.fast_travel(marker)) {
+                        Some(pose) => {
+                            crate::story::teleport(&mut t, &mut p, pose.position, pose.angles[2]);
+                            true
+                        }
+                        None => false,
+                    },
+                };
+                info!("original UI: world map: fast travel to {to:?}: {travelled}");
+                if travelled {
+                    next.set(crate::menu::GameState::Playing);
+                }
+            }
+            _ => {}
+        }
+    }
+    if !page.open {
+        wheel.clear();
+        return;
+    }
+    let num = |v: V| match v {
+        V::Number(n) => Some(n),
+        _ => None,
+    };
+    let view = (|| {
+        Some([
+            num(host.dps_get("MapVisual", "_x"))? / num(host.dps_get("MapVisual", "_width"))?.max(1.0),
+            num(host.dps_get("MapVisual", "_y"))? / num(host.dps_get("MapVisual", "_height"))?.max(1.0),
+            num(host.dps_get("MapScale", "_width"))?,
+            num(host.dps_get("MapScale", "_height"))?,
+        ])
+    })();
+    if let Some(v) = view.filter(|v| page.placed.as_ref() != Some(v) && v.iter().all(|n| n.is_finite())) {
+        host.dps_set_parent("MapScale", "mf_XPos", V::Number(v[0]));
+        host.dps_set_parent("MapScale", "mf_YPos", V::Number(v[1]));
+        for (id, uv) in &page.icons {
+            host.dps_set(id, "_x", V::Number((uv.x as f64 + v[0]) * v[2]));
+            host.dps_set(id, "_y", V::Number((uv.y as f64 + v[1]) * v[3]));
+        }
+        page.placed = Some(v);
+    }
+    for w in wheel.read() {
+        let zoom = if w.y > 0.0 {
+            page.zoom * MAP_ZOOM_STEP
+        } else if w.y < 0.0 {
+            page.zoom / MAP_ZOOM_STEP
+        } else {
+            continue;
+        };
+        let zoom = zoom.clamp(MAP_ZOOM.0, MAP_ZOOM.1);
+        if zoom != page.zoom {
+            page.zoom = zoom;
+            host.event("OnLevelOfZoomUpdated", &[&map_level(zoom).to_string(), &zoom.to_string()]);
         }
     }
 }

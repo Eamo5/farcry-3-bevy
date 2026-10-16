@@ -128,7 +128,7 @@ pub fn map_uv(p: Vec3) -> Vec2 {
 }
 
 /// Bevy-space ground position (y = 0) at a map UV.
-fn world_at(uv: Vec2) -> Vec3 {
+pub(crate) fn world_at(uv: Vec2) -> Vec3 {
     let (x, y) = worldmap::from_map(uv.x * MAP_SIZE as f32, uv.y * MAP_SIZE as f32);
     Vec3::new(x, 0.0, -y)
 }
@@ -617,14 +617,15 @@ fn update_full_map(
     scroll: Res<AccumulatedMouseScroll>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut view: ResMut<FullMapView>,
-    (mut waypoint, gps): (ResMut<Waypoint>, Res<Gps>),
+    (mut waypoint, gps, original): (ResMut<Waypoint>, Res<Gps>, Res<crate::menu::OriginalPause>),
     players: Query<(&Transform, &Player)>,
     mut full: Query<(&MaterialNode<MapMaterial>, &mut Visibility, &ComputedNode), (With<FullMap>, Without<FullMapHint>)>,
     mut hint: Query<&mut Visibility, (With<FullMapHint>, Without<FullMap>)>,
     mut materials: ResMut<Assets<MapMaterial>>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
 ) {
-    let open = *state.get() == GameState::Map;
+    // (The original interface's map stands in for ours: `original_ui`.)
+    let open = *state.get() == GameState::Map && !original.0;
     let Ok((node, mut vis, computed)) = full.single_mut() else { return };
     *vis = if open { Visibility::Inherited } else { Visibility::Hidden };
     if let Ok(mut v) = hint.single_mut() {
