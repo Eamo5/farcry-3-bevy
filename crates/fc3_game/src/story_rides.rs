@@ -4,6 +4,10 @@
 //! search the battlefield. If the vehicle can't be made or driven (no model
 //! for it, no ground under it, its driver killed), whoever is left comes on
 //! foot from where they are.
+//!
+//! A mission's vehicle a script moves far from where it was placed is made
+//! where it was moved to while its own sector is out of the world (JAS_130
+//! B60's truck, brought back to the road on a reload with Liza beside it).
 
 use std::collections::HashSet;
 
@@ -19,8 +23,11 @@ pub struct StoryRidesPlugin;
 
 impl Plugin for StoryRidesPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Rides>()
-            .add_systems(Update, ride_reinforcements.after(crate::story_actors::ActorSet).run_if(in_state(crate::menu::GameState::Playing)));
+        app.init_resource::<Rides>().add_systems(
+            Update,
+            (ride_reinforcements.after(crate::story_actors::ActorSet), place_moved_vehicles.after(crate::story::StorySet))
+                .run_if(in_state(crate::menu::GameState::Playing)),
+        );
     }
 }
 
@@ -139,6 +146,52 @@ fn layout_of(data: &fc3_story::data::StoryData, archetype: &fc3_story::data::Ent
         .max_by_key(|l| l.seats.len())
         .filter(|l| !l.seats.is_empty())
         .unwrap_or(own)
+}
+
+/// How near the player (m) a mission's vehicle moved away from its sector
+/// is made where it was moved to.
+const MOVED_REACH: f32 = 220.0;
+
+/// Mission vehicles moved by a script (`TeleportEntity`) whose own sector
+/// isn't in the world, so its layer can't make them (`mission_layers`): made
+/// from their story entry where they were put, belonging to their layer.
+#[allow(clippy::too_many_arguments)]
+fn place_moved_vehicles(
+    host: Option<NonSend<crate::story::StoryHost>>,
+    placements: Res<crate::story::EntityPlacements>,
+    (assets, server, models, spatial): (Option<Res<crate::vehicles::VehicleAssets>>, Res<AssetServer>, Res<Assets<Fc3Model>>, SpatialQuery),
+    vehicles: Query<&Vehicle>,
+    loaded: Query<&crate::objects::SectorObjects>,
+    players: Query<&Transform, With<Player>>,
+    mut commands: Commands,
+) {
+    let (Some(host), Some(assets)) = (host, assets) else { return };
+    let Ok(pt) = players.single() else { return };
+    let data = host.story.data();
+    for (id, pose) in placements.moved() {
+        if pose.translation.distance(pt.translation) > MOVED_REACH || vehicles.iter().any(|v| v.story_id() == id) || !host.story.is_loaded(id) {
+            continue;
+        }
+        let Some(entry) = data.entities.get(&id).filter(|e| e.component("CFCXVehicle").is_some()) else { continue };
+        // (With its own sector in the world, its layer makes it there and
+        // the move takes it on.)
+        let fc3_story::data::Origin::Sector(sector) = entry.origin else { continue };
+        let home = fc3_formats::terrain::SectorCoord::from_id(sector);
+        if loaded.iter().any(|so| so.coord == home) {
+            continue;
+        }
+        let Some(def) = vehicle_def(entry) else { continue };
+        let Some(model) = Some(&assets.models[def]).filter(|h| crate::cache_assets::usable(&server, h.id())).and_then(|h| models.get(h)) else { continue };
+        let ground = crate::vehicles::is_boat(def)
+            || spatial.cast_ray(pose.translation + Vec3::Y * 1.5, Dir3::NEG_Y, 6.0, true, &SpatialQueryFilter::default()).is_some();
+        if model.lods.is_empty() || !ground {
+            continue;
+        }
+        let layout = layout_of(&data, entry);
+        let root = crate::vehicles::build_story_vehicle(&mut commands, def, model, pose.translation, pose.rotation, id, &layout);
+        commands.entity(root).insert((crate::vehicles::MissionVehicle(entry.layer), crate::objects::PlacedId(id)));
+        info!("story: vehicle {id} made where a script moved it, {:.1}", pose.translation);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

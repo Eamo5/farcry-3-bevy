@@ -162,6 +162,11 @@ impl EntityPlacements {
         self.poses.get(&id).map(|(_, t)| *t)
     }
 
+    /// Everything a script or a scene has put somewhere, and where.
+    pub fn moved(&self) -> impl Iterator<Item = (u64, Transform)> + '_ {
+        self.poses.iter().map(|(id, (_, t))| (*id, *t))
+    }
+
     /// Where a scene left a character (`cinema`): it stays there, and comes
     /// into the world there if it isn't in it yet.
     pub fn place(&mut self, id: u64, at: Transform) {
