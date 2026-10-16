@@ -866,6 +866,9 @@ pub struct Clip {
     /// Sounds the clip plays as it runs (`PlaySound` events): `(time s, sound
     /// event id)`, in time order. Reloads, draws, takedowns...
     pub sounds: Vec<(f32, u32)>,
+    /// Gameplay events the clip raises on its character (`EntityEvent`s by
+    /// name: the Ink Monster's `SweepHit`, `ThrowRock`...), in time order.
+    pub events: Vec<(f32, String)>,
     /// Nested clips for attached objects (weapons, magazines, props), in file order.
     pub sub_clips: Vec<Clip>,
 }
@@ -1015,6 +1018,7 @@ pub fn stitch(segments: Vec<Clip>) -> Option<Clip> {
             }
         }
         out.sounds.extend(seg.sounds.into_iter().map(|(t, s)| (t + offset, s)));
+        out.events.extend(seg.events.into_iter().map(|(t, e)| (t + offset, e)));
         out.attachments.extend(seg.attachments);
         offset += seg.duration;
     }
@@ -1245,12 +1249,12 @@ fn parse_block(d: &[u8], b: usize) -> Result<(Clip, Option<usize>)> {
         vec![]
     };
     // Sound events, in the event sections (6 and 7) up to the next block.
-    let sounds = match [secs[6], secs[7]].into_iter().filter(|&x| x != 0).min() {
+    let (sounds, events) = match [secs[6], secs[7]].into_iter().filter(|&x| x != 0).min() {
         Some(start) => {
             let end = if secs[8] > start { secs[8] } else { d.len() };
-            parse_sounds(d, start, end, duration)
+            (parse_sounds(d, start, end, duration), parse_entity_events(d, start, end, duration))
         }
-        None => vec![],
+        None => (vec![], vec![]),
     };
 
     let next = if secs[8] != 0 { Some(secs[8]) } else { None };
@@ -1266,10 +1270,57 @@ fn parse_block(d: &[u8], b: usize) -> Result<(Clip, Option<usize>)> {
             reference_translation: vec_to_bevy(ref_tr),
             attachments,
             sounds,
+            events,
             sub_clips: vec![],
         },
         next,
     ))
+}
+
+/// `EntityEvent`s in sections 6-7 (`CPawnEvent`s): embedded nbCF objects,
+/// each with its time before it, naming the event (`sEventName`). Some carry
+/// no size before them: those are read to the section's end.
+fn parse_entity_events(d: &[u8], s: usize, end: usize, duration: f32) -> Vec<(f32, String)> {
+    let end = end.min(d.len());
+    let name_field = crate::hash::name_hash("sEventName");
+    let mut out = Vec::new();
+    let mut q = s;
+    while q + 4 <= end {
+        let Some(at) = d[q..end].windows(4).position(|w| w == b"nbCF") else { break };
+        let o = q + at;
+        q = o + 4;
+        if o < s + 12 {
+            continue;
+        }
+        let time = f32::from_le_bytes(d[o - 12..o - 8].try_into().unwrap());
+        let size = u16::from_le_bytes([d[o - 2], d[o - 1]]) as usize;
+        if !(time.is_finite() && (-0.01..=duration + 0.5).contains(&time)) {
+            continue;
+        }
+        let stop = if size < 16 { end } else { (o + size).min(end) };
+        let Ok(obj) = crate::fcb::parse(&d[o..stop]) else { continue };
+        let mut entity_event = false;
+        let mut name = None;
+        obj.walk(&mut |c, _| {
+            for (h, v) in &c.fields {
+                let text = String::from_utf8_lossy(v);
+                let text = text.trim_end_matches('\0');
+                if text == "EntityEvent" {
+                    entity_event = true;
+                } else if *h == name_field && !text.is_empty() {
+                    name = Some(text.to_string());
+                }
+            }
+        });
+        if let (true, Some(n)) = (entity_event, name) {
+            out.push((time.max(0.0), n));
+        }
+        if size >= 16 {
+            q = o + size;
+        }
+    }
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    out
 }
 
 /// `PlaySound` events in sections 6-7: each is an embedded nbCF object whose
@@ -1651,5 +1702,26 @@ mod tests {
         for i in 0..16 {
             assert!((p[i] - MAT4_IDENTITY[i]).abs() < 1e-5);
         }
+    }
+}
+
+#[cfg(test)]
+mod entity_event_tests {
+    /// The Ink Monster's clips name their moments: a sweep's hits, a throw's
+    /// rock (an event with no size before it), the fire breath's start.
+    #[test]
+    #[ignore = "requires locally installed Far Cry 3 archives"]
+    fn installed_boss_clips_name_their_moments() {
+        let vfs = crate::Vfs::open_install(&crate::find_install().expect("installed Far Cry 3"), None).unwrap();
+        let clip = |name: &str| {
+            let path = format!(r"graphics\characters\_common\animations\exoticgameplay\ex_cit_03_bossfight\ex_bossfight_cit_030_{name}.mab");
+            super::parse_clip(&vfs.read(&path).unwrap()).unwrap()
+        };
+        let sweep = clip("sweepleft_+000fw");
+        assert!(sweep.events.iter().any(|(t, e)| e == "SweepHit" && (*t - 2.979).abs() < 0.01), "{:?}", sweep.events);
+        let throw = clip("throw1_+000fw");
+        assert!(throw.events.iter().any(|(t, e)| e == "ThrowRock" && (*t - 4.431).abs() < 0.01), "{:?}", throw.events);
+        let breath = clip("breath_+000fw");
+        assert!(breath.events.iter().any(|(_, e)| e == "StartFirebreath") && breath.events.iter().any(|(_, e)| e == "StopFirebreath"));
     }
 }
