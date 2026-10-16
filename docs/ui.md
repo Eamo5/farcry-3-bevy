@@ -581,6 +581,45 @@ gallery itself in `shooting_gallery`, see `docs/story.md`):
   result rather than pausing, and the objective box (where the count goes)
   is shut.
 
+**Poker tables** (`UI\Singleplayer\Activities\ACTI_Poker.feu`, level 4,
+while the player is at a table: `original_ui::drive_poker`, the game in
+`poker`, see `docs/story.md`):
+
+* Loaded, the movie sends `PokerMovieLoaded`; the game answers
+  `LoadPokerElements PC 0 <accept> <cancel> <help back> <help next>` (the
+  keys' texts before the boxes' buttons; the accept's left empty, as the
+  buttons have no room for it) and the movie `PokerElementsLoaded`, after
+  which `ShowPokerElements` shows it.
+* Its boxes by event: `ShowDifficultyBox` (with `HideMainHUDElements`),
+  `ShowMainHUDElements` (the table's own panel), `ShowQuitBox <buy-in>
+  <chips>`, `ShowRestartBox` (busted out), `ShowCleanedTableBox $<won>`
+  and SQC_100's `ShowCleanedTableSQC100Box`, each with its `Hide...`.
+* A hand's end in two steps: `ResetEndOfHandResults 1 0 <lines> <lines>
+  0` sizes the box; once it answers `ResetEndOfHandResultsComplete`,
+  `UpdateHandsRevealedInfo <n> <line>...` (each `Name[c1 c2 c3 c4
+  c5][<hand's string id>]`, or with n 0 just the winner's name: "all
+  other players folded") and `UpdatePlayerWinningsInfo <won>-<busted>-
+  <W|L per line> <amount>...` (the movie writes "WINS $amount", or
+  "Busted out!" for `BustedOut`); winners' lines first, then those it
+  put out, then the rest.
+* By DPS id: the seats' names, chips and frames in the table's diagram
+  (`P<n>Name_MC`, `P<n>Money_MC`, `P<n>Stats_MC`: 1 in the hand, 10 out
+  of it, 20 nobody; P1 the player, P2 on the left, P3 across, P4 on the
+  right; the diagram, `TopLeftBox_MC`, while 1 is held), the button
+  (`DealerContainer_MC` 1/20/30/40), `PotCounter_MC`, `LastBetCounter_MC`,
+  `PlayerChipCount_MC`, the info box's line (`InfoBoxText_MC`, the game's
+  strings with `0` the player and `1` the chips), the action panel on the
+  player's turn (`TopRightBoxB_MC`, `Check_MC` CHECK/CALL/RAISE,
+  `BetAmount_MC`, `BetUpDownArrows_MC` dimmed at the bet's ends), and the
+  difficulty box's wagers, selection and accept button.
+* The player's cards and the board: `UpdateCurrentHandInfo <cards>
+  <folded> <hand's string id> True <board>` (cards as `Ah Kd ...`, hole
+  cards first; the movie draws them) and `CurrentHandBox_MC` shown.
+* The mouse over the boxes' buttons comes as `OnConfirmRollOver`,
+  `OnCancelRollOver` and `OnDifficultyRollOver <row>` (a click takes
+  them). While the player is at a table the main HUD and the radar are
+  down, as is the objective box.
+
 While the pause menu is up the HUD's level is hidden (`Host::level_visible`;
 the shim's `levelVisible`), as the game's was: subtitles showed through.
 

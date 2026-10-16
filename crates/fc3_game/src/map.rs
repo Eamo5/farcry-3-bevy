@@ -557,7 +557,7 @@ fn update_minimap(
     mut materials: ResMut<Assets<MapMaterial>>,
     scripted: Res<crate::story::ScriptedPlayer>,
     cinema: Res<crate::cinema::Cinema>,
-    (reach, placement): (Res<MinimapReach>, Res<MinimapPlacement>),
+    (reach, placement, poker): (Res<MinimapReach>, Res<MinimapPlacement>, Option<Res<crate::poker::PokerTable>>),
 ) {
     let Ok((node, mut vis, mut layout, mut transform)) = minimap.single_mut() else { return };
     // In another HUD's disc (scaled about its centre, icons and all), or its
@@ -575,8 +575,9 @@ fn update_minimap(
         transform.scale = Vec2::splat(scale);
     }
     let Ok((t, p, h)) = players.single() else { return };
-    // Missions hide it with the HUD, and scenes take the screen.
-    let show = *state.get() == GameState::Playing && !h.dead && !scripted.hud_hidden && cinema.view.is_none();
+    // Missions hide it with the HUD, and scenes and a poker table take the
+    // screen.
+    let show = *state.get() == GameState::Playing && !h.dead && !scripted.hud_hidden && cinema.view.is_none() && !poker.is_some_and(|p| p.holds_player());
     *vis = if show { Visibility::Inherited } else { Visibility::Hidden };
     if !show {
         return;

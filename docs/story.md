@@ -4365,12 +4365,13 @@ ends when the game says the player leaves the table (`JasonLeavesPoker`).
   and the block waited for messages that never came. The scripted
   sequences the game's instance lists (`ScriptedSequenceIDList`) aren't in
   any database we read, so the game (`poker.rs`) follows the script
-  instead: once started, after a hand's time (`HAND_SECS`) it broadcasts
-  the next scene a running mission's script waits for
-  (`Story::mission_messages`), the next once the script says it has played,
-  and last the game's own end (`JasonWinsGame`, `JasonLeavesPoker`). All
-  five scenes play, and B10 completes. The hands themselves (cards, bets,
-  the table's movie) and the bars' tables are not played yet.
+  instead: once started, after each hand it broadcasts the next scene a
+  running mission's script waits for (`Story::mission_messages`), the next
+  once the script says it has played, and last the game's own end
+  (`JasonWinsGame`, `JasonLeavesPoker`). The hands are played between them
+  (see "Poker tables"); at a story's table anyone out has their stake again,
+  as the scenes, not the cards, end the game. All five scenes play
+  (OPTIONAL among them), with a hand before each, and B10 completes.
 
 ## JAS_220: from Hoyt's compound to the airport
 
@@ -4636,3 +4637,51 @@ galleries' resources (`gsf::ShootingGallerySettings`,
   keeper used (the race isn't played yet), then the sniper gallery's
   keeper: novice chosen ($100), the 700 lent, four boxes, ten birds shot,
   $200 won and the keeper told.
+
+### Poker tables
+
+Poker is Texas hold'em (`holdem`: the deck, the best five of seven cards,
+the blinds, four streets, all-ins and side pots, the computer players'
+choices by their chances against what calling costs) at a table the
+gameplay's settings name (`gsf::PokerSettings`: its computer players,
+their seats and ways of playing, the four buy-ins), played with the
+table's own movie (`ACTI_Poker.feu`, `docs/ui.md`).
+
+* **The bars' tables.** Each bar's table is an encounter prefab in its
+  base block's main layer (`c3_poker`'s `C3_Poker_main`: the table, its
+  chairs and anchors, the bartender and the bar's people), with a
+  start-on-load script (`fc3_activities/poker/<cell>_poker`) that starts
+  the table's gameplay when the player comes within 200 m and its three
+  players are in, and stops it past 250 m. The country's activities master
+  opens the block with its marker layer only, and nothing in the data
+  brings the main layer in. The engine had it; here a base block's main
+  layer that no script and no gameplay names comes in with any other of
+  its block's layers (`fc3_story::standing_layers`; `fc3tool story-blocks
+  standing` lists them).
+* **Sitting down.** The computer players find the table (the centre
+  anchor nearest them) and take the seats they ask for; the player has
+  the one left. Near the free chair the prompt sits the player there,
+  facing the table, the weapon away and the HUD down; the difficulty box
+  takes a buy-in (practice is free), paid and played for as chips by
+  everyone at the table. Leaving pays out the player's chips; going bust
+  offers another game; cleaning the table wins every buy-in. The data has
+  no blinds or stacks: practice starts everyone with 1000 chips, a buy-in
+  with that many; the blinds are a fortieth and a twentieth of it,
+  doubling every ten hands.
+* **Keys.** Up and down set the bet by the big blind, Space or Enter
+  checks, calls or raises to it, E folds, Q goes all in, Escape leaves,
+  1 shows the table's totals. The boxes take Enter and Escape, and the
+  mouse over their buttons.
+* **The story's tables** (JAS_170's, Hoyt's) start on their script's
+  event and play for nothing, a scene between hands as their scripts wait
+  for them; under the autopilot (and `FC3_POKER_TEST=<row>`, which also
+  sits at a bar's table and leaves after `FC3_POKER_HANDS`) the player's
+  hands play themselves. SQC_100's is a bar's game: its script hears the
+  player clean the table (`JasonWinsGame`) and leave.
+* **Seen.** C3's bar (a kept checkpoint with C3's outpost taken, the
+  player placed in the bar): the table's gameplay started, the player sat
+  in the fourth seat, paid $100 and played six hands (blinds, calls,
+  raises, folds, showdowns) to leave with $180.
+* **Not yet.** The cards and chips on the table, the players seated and
+  playing their moves, their voices, the help screen's odds, the
+  scripted decks of Hoyt's table.

@@ -69,6 +69,7 @@ mod intoxication;
 mod input_prompts;
 mod chopper_fight;
 mod car_chase;
+mod holdem;
 mod shooting_gallery;
 mod boss_fight;
 mod binds;

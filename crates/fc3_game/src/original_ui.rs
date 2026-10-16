@@ -61,6 +61,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_camera,
                     drive_credits,
                     drive_gallery,
+                    drive_poker,
                     drive_pause,
                     drive_map_page,
                     run_interface,
@@ -1741,7 +1742,7 @@ fn drive_hud(
         With<crate::player::Player>,
     >,
     (game_state, hud_state): (Res<State<crate::menu::GameState>>, Res<crate::hud::HudState>),
-    (scripted, cinema): (Res<crate::story::ScriptedPlayer>, Res<crate::cinema::Cinema>),
+    (scripted, cinema, poker): (Res<crate::story::ScriptedPlayer>, Res<crate::cinema::Cinema>, Option<Res<crate::poker::PokerTable>>),
     windows: Query<&Window, With<PrimaryWindow>>,
     mut original: ResMut<crate::hud::OriginalHud>,
     mut placement: ResMut<crate::map::MinimapPlacement>,
@@ -1769,8 +1770,12 @@ fn drive_hud(
     *armour_full = if progress.armour > 0.0 { armour_full.max(progress.armour) } else { 0.0 };
     hud.armour = (progress.armour > 0.0)
         .then(|| 1 + (progress.armour / *armour_full * (ARMOUR_FRAMES - 1) as f32).round().clamp(0.0, (ARMOUR_FRAMES - 1) as f32) as u32);
-    hud.shown =
-        *game_state.get() == crate::menu::GameState::Playing && !scripted.hud_hidden && (cinema.view.is_none() || cinema.free_aim.is_some()) && !health.dead;
+    // (Not at a poker table: its own movie is the HUD there.)
+    hud.shown = *game_state.get() == crate::menu::GameState::Playing
+        && !scripted.hud_hidden
+        && (cinema.view.is_none() || cinema.free_aim.is_some())
+        && !health.dead
+        && !poker.is_some_and(|p| p.holds_player());
     // Ammo: the strip of the weapon in hand.
     hud.strip = None;
     hud.strip_frames.clear();
@@ -1949,6 +1954,7 @@ fn drive_story(
     hud: Res<crate::hud::HudState>,
     mut last: Local<Option<(Option<String>, Option<String>, Option<String>, Option<String>)>>,
     gallery: Option<Res<crate::shooting_gallery::Gallery>>,
+    poker: Option<Res<crate::poker::PokerTable>>,
 ) {
     let Interface::Running(host) = &*state else { return };
     for card in std::mem::take(&mut ui.cards) {
@@ -1960,7 +1966,7 @@ fn drive_story(
     }
     let subtitle = ui.subtitle.as_ref().filter(|_| settings.subtitles).map(|s| s.0.clone());
     // (Not while a shooting gallery runs: its count is where the box is.)
-    let objective = ui.objective.clone().filter(|_| !gallery.is_some_and(|g| g.holds_player()));
+    let objective = ui.objective.clone().filter(|_| !gallery.is_some_and(|g| g.holds_player()) && !poker.is_some_and(|p| p.holds_player()));
     let now = (objective, ui.mission.clone(), subtitle, hud.shown_prompt.clone());
     let first = last.is_none();
     let old = last.clone().unwrap_or_default();
@@ -2232,6 +2238,227 @@ fn drive_camera(
     }
     // (Until its clips answer, the movie is still loading: all again.)
     *shown = Some(if ok { now } else { old });
+}
+
+/// A poker table's movie (`ACTI_Poker.feu`, level 4, while the player is
+/// at a table: `poker`). Loaded, it asks for its elements
+/// (`PokerMovieLoaded`: `LoadPokerElements` with the platform, whether
+/// pad icons show, the accept and back keys' text and the help pages'),
+/// then the game shows its boxes as the table goes (the difficulty box, the
+/// table's own panel, a hand's results, leaving, busted out, the table
+/// cleaned) and fills them by DPS id: the four seats' names, chips and
+/// state in the table's diagram (P1 the player, then on round the table),
+/// the button, the pot, the last bet, the player's chips, the info box's
+/// line, the player's action panel (check, call or raise and the bet,
+/// the arrows dimmed at its ends), and the player's cards and the board
+/// (`UpdateCurrentHandInfo`). A hand's results come in two steps: the box
+/// sized for its lines (`ResetEndOfHandResults`), then, once it says it's
+/// ready, the hands shown and what each won. The mouse over a box's buttons
+/// or a difficulty's row comes as `On...RollOver`.
+const POKER_MOVIE: &str = r"UI\Singleplayer\Activities\ACTI_Poker.feu";
+const POKER_LEVEL: u32 = 4;
+/// The difficulty box's rows' wagers.
+const POKER_ROWS: [&str; 4] = [
+    "DifficultyBoxWagerAmountFreeText_MC",
+    "DifficultyBoxWagerAmountEasyText_MC",
+    "DifficultyBoxWagerAmountMediumText_MC",
+    "DifficultyBoxWagerAmountHardText_MC",
+];
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PokerBox {
+    Difficulty,
+    Table,
+    Results,
+    Quit,
+    Busted,
+    Cleaned,
+    CleanedStory,
+}
+
+#[derive(Default)]
+struct PokerShown {
+    loaded: bool,
+    elements: bool,
+    shown: Option<PokerBox>,
+    /// The results box ready for its lines, and them sent.
+    results_ready: bool,
+    results_sent: bool,
+    sent: Option<crate::poker::PokerHud>,
+}
+
+fn drive_poker(state: NonSend<Interface>, calls: Res<UiCalls>, mut poker: ResMut<crate::poker::PokerTable>, mut shown: Local<PokerShown>) {
+    use crate::poker::{Line, Name, Panel};
+    use fc3_ui::ExternalValue as V;
+    let Interface::Running(host) = &*state else { return };
+    let Some(hud) = poker.hud.clone() else {
+        if shown.loaded {
+            host.unload(POKER_LEVEL);
+            *shown = PokerShown::default();
+            poker.hover = (false, false, None);
+        }
+        return;
+    };
+    if !shown.loaded {
+        host.load(POKER_MOVIE, POKER_LEVEL);
+        shown.loaded = true;
+    }
+    for call in calls.0.iter().filter(|c| c.command == "Send") {
+        let arg = |i: usize| call.args.get(i).map(String::as_str).unwrap_or("");
+        match arg(0) {
+            // (No key before the accept buttons: there's no room for it.)
+            "PokerMovieLoaded" => host.event("LoadPokerElements", &["PC", "0", "", "[Esc] ", "", ""]),
+            "PokerElementsLoaded" => {
+                shown.elements = true;
+                host.event("ShowPokerElements", &[]);
+            }
+            "OnConfirmRollOver" => poker.hover.0 = true,
+            "OnConfirmRollOut" => poker.hover.0 = false,
+            "OnCancelRollOver" => poker.hover.1 = true,
+            "OnCancelRollOut" => poker.hover.1 = false,
+            "OnDifficultyRollOver" => poker.hover.2 = arg(1).parse().ok(),
+            "OnDifficultyRollOut" => poker.hover.2 = None,
+            "ResetEndOfHandResultsComplete" => shown.results_ready = true,
+            _ => {}
+        }
+    }
+    if !shown.elements {
+        return;
+    }
+    let name = |n: &Name| match n {
+        Name::Text(id) => host.text(*id),
+        Name::Seat(s) => format!("Player {s}"),
+    };
+    let want = match &hud.panel {
+        Panel::Difficulty { .. } => PokerBox::Difficulty,
+        Panel::Table => PokerBox::Table,
+        Panel::Results(_) => PokerBox::Results,
+        Panel::Quit { .. } => PokerBox::Quit,
+        Panel::Busted => PokerBox::Busted,
+        Panel::Cleaned { .. } => PokerBox::Cleaned,
+        Panel::CleanedStory => PokerBox::CleanedStory,
+    };
+    if shown.shown != Some(want) {
+        match shown.shown {
+            Some(PokerBox::Difficulty) => host.event("HideDifficultyBox", &[]),
+            Some(PokerBox::Results) => host.event("HideEndOfHandResultsBox", &[]),
+            Some(PokerBox::Quit) => host.event("HideQuitBox", &[]),
+            Some(PokerBox::Busted) => host.event("HideRestartBox", &[]),
+            Some(PokerBox::Cleaned) => host.event("HideCleanedTableBox", &[]),
+            Some(PokerBox::CleanedStory) => host.event("HideCleanedTableSQC100Box", &[]),
+            Some(PokerBox::Table) | None => {}
+        }
+        match &hud.panel {
+            Panel::Difficulty { .. } => {
+                host.event("HideMainHUDElements", &[]);
+                host.event("ShowDifficultyBox", &[]);
+            }
+            Panel::Table => host.event("ShowMainHUDElements", &[]),
+            Panel::Results(r) => {
+                let n = r.lines.len().max(1).to_string();
+                host.event("ShowMainHUDElements", &[]);
+                host.event("ResetEndOfHandResults", &["1", "0", &n, &n, "0"]);
+                shown.results_ready = false;
+                shown.results_sent = false;
+            }
+            Panel::Quit { buy_in, chips } => host.event("ShowQuitBox", &[&buy_in.to_string(), &chips.to_string(), "1"]),
+            Panel::Busted => host.event("ShowRestartBox", &[]),
+            Panel::Cleaned { won } => host.event("ShowCleanedTableBox", &[&format!("${won}")]),
+            Panel::CleanedStory => host.event("ShowCleanedTableSQC100Box", &[]),
+        }
+        shown.shown = Some(want);
+        shown.sent = None;
+    }
+    // A hand's results, once the box is sized for them.
+    if let (Panel::Results(r), true, false) = (&hud.panel, shown.results_ready, shown.results_sent) {
+        let folded = r.lines.iter().all(|l| l.1.is_none());
+        let mut revealed: Vec<String> = r
+            .lines
+            .iter()
+            .map(|(n, hand, _)| match hand {
+                Some((cards, id)) => format!("{}[{cards}][{id}]", name(n)),
+                None => name(n),
+            })
+            .collect();
+        revealed.resize(4, String::new());
+        let count = if folded { "0".to_string() } else { r.lines.len().to_string() };
+        host.event("UpdateHandsRevealedInfo", &[&count, &revealed[0], &revealed[1], &revealed[2], &revealed[3]]);
+        let won = r.lines.iter().filter(|l| matches!(l.2, Line::Won(_))).count();
+        let busted = r.lines.iter().filter(|l| l.2 == Line::BustedOut).count();
+        let flags: String = r.lines.iter().map(|l| if matches!(l.2, Line::Won(_)) { 'W' } else { 'L' }).collect();
+        let mut amounts: Vec<String> = r
+            .lines
+            .iter()
+            .map(|l| match l.2 {
+                Line::Won(w) => w.to_string(),
+                Line::BustedOut => "BustedOut".to_string(),
+                Line::Lost => String::new(),
+            })
+            .collect();
+        amounts.resize(4, String::new());
+        host.event("UpdatePlayerWinningsInfo", &[&format!("{won}-{busted}-{flags}"), &amounts[0], &amounts[1], &amounts[2], &amounts[3]]);
+        shown.results_sent = true;
+    }
+    if shown.sent.as_ref() == Some(&hud) {
+        return;
+    }
+    let mut ok = true;
+    match &hud.panel {
+        Panel::Difficulty { row, wagers, enabled, short, subtitle } => {
+            ok &= host.dps_text("DifficultyBoxSubTitle_TX", &host.text(*subtitle));
+            for (id, w) in POKER_ROWS.iter().zip(wagers) {
+                ok &= host.dps_text(id, &format!("${w}"));
+            }
+            ok &= host.dps_visible("DifficultyBoxInsufficientFundsText_MC", *short && enabled[*row]);
+            ok &= host.dps_visible("DifficultyBoxDifficultyUnavailableText_MC", !enabled[*row]);
+            ok &= host.dps_frame("DifficultyBoxSelectionArrows_MC", V::Number([1.0, 10.0, 20.0, 30.0][(*row).min(3)]));
+            ok &= host.dps_frame("DifficultyBoxAcceptButton_MC", V::Number(if *short || !enabled[*row] { 10.0 } else { 1.0 }));
+        }
+        _ => {
+            for (i, (n, chips, frame)) in hud.seats.iter().enumerate() {
+                ok &= host.dps_text(&format!("P{}Name_MC", i + 1), &name(n));
+                ok &= host.dps_text(&format!("P{}Money_MC", i + 1), &if *frame == 20 { String::new() } else { format!("${chips}") });
+                ok &= host.dps_frame(&format!("P{}Stats_MC", i + 1), V::Number(*frame as f64));
+            }
+            ok &= host.dps_visible("TopLeftBox_MC", hud.totals);
+            ok &= host.dps_frame("DealerContainer_MC", V::Number([1.0, 20.0, 30.0, 40.0][hud.dealer.min(3)]));
+            ok &= host.dps_text("PotCounter_MC", &format!("${}", hud.pot));
+            ok &= host.dps_text("LastBetCounter_MC", &format!("${}", hud.last_bet));
+            ok &= host.dps_text("PlayerChipCount_MC", &format!("${}", hud.chips));
+            let info = hud
+                .info
+                .as_ref()
+                .map(|i| crate::poker::fill(&host.text(i.text), &i.name.as_ref().map(|n| name(n)).unwrap_or_default(), i.chips))
+                .unwrap_or_default();
+            ok &= host.dps_text("InfoBoxText_MC", &info);
+            ok &= host.dps_visible("TopRightBoxB_MC", hud.actions.is_some());
+            if let Some((label, bet, lower, higher)) = hud.actions {
+                ok &= host.dps_text("Check_MC", &host.text(label).to_uppercase());
+                ok &= host.dps_text("BetAmount_MC", &format!("${bet}"));
+                let arrows = match (lower, higher) {
+                    (true, true) => 1.0,
+                    (false, true) => 10.0,
+                    (true, false) => 20.0,
+                    (false, false) => 30.0,
+                };
+                ok &= host.dps_frame("BetUpDownArrows_MC", V::Number(arrows));
+            }
+            if shown.sent.as_ref().map(|s| &s.cards) != Some(&hud.cards) {
+                match &hud.cards {
+                    Some((cards, folded, kind, board)) => {
+                        let flag = |b: bool| if b { "True" } else { "False" };
+                        host.event("UpdateCurrentHandInfo", &[cards, flag(*folded), &kind.to_string(), "True", flag(*board)]);
+                        ok &= host.dps_visible("CurrentHandBox_MC", true);
+                    }
+                    None => ok &= host.dps_visible("CurrentHandBox_MC", false),
+                }
+            }
+        }
+    }
+    // (Until its clips answer, the box is still coming: all again.)
+    if ok {
+        shown.sent = Some(hud);
+    }
 }
 
 /// A sharpshooter challenge's HUD (`Acti_Shooting.feu`, level 4, while a

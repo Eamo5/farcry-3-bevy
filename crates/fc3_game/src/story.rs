@@ -1273,7 +1273,7 @@ fn run_story(
         mut trees,
         mut doors,
         mut stims,
-        (mut sniping, mut boss_fight, mut binds, mut unlimited_ammo, mut intoxication, mut prompts, mut chopper, mut car_chase, mut gallery),
+        (mut sniping, mut boss_fight, mut binds, mut unlimited_ammo, mut intoxication, mut prompts, mut chopper, mut car_chase, mut gallery, poker),
     ): (
         MessageWriter<crate::progression::XpGain>,
         ResMut<crate::progression::Progress>,
@@ -1299,6 +1299,7 @@ fn run_story(
             ResMut<crate::chopper_fight::ChopperFight>,
             ResMut<crate::car_chase::CarChase>,
             ResMut<crate::shooting_gallery::Gallery>,
+            Res<crate::poker::PokerTable>,
         ),
     ),
 ) {
@@ -1667,6 +1668,7 @@ fn run_story(
         && !sniping.holds_player()
         && !boss_fight.holds_player()
         && !gallery.holds_player()
+        && !poker.holds_player()
         && cinema.view.is_none()
         && !cinema.plays_player()
         && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
@@ -3339,7 +3341,7 @@ fn played_gameplay(host: &StoryHost, id: u64, name: &str) -> bool {
     name == "QTEGSF"
         || host.story.is_qte_gameplay(id)
         || sniping_challenge(name)
-        || name.starts_with("CPokerMiniGame")
+        || crate::poker::poker_gameplay(name)
         || name == BOSS_FIGHT
         || name == INTOXICATED
         || name == INPUT_PROMPTS
