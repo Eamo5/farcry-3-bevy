@@ -2620,6 +2620,29 @@ fn main() -> Result<()> {
                 None => println!("{} actions with markups", data.action_markups.len()),
             }
         }
+        "story-map-markers" => {
+            // The map markers by type (`mapobjectivetype`, a hash; the
+            // markers' names tell what it is) with their sub-types: how
+            // many, how many enabled, a few (all when filtered by a name or
+            // a type's text): story-map-markers [filter]
+            let data = fc3_story::data::StoryData::load(&fc3_formats::cache::default_cache_root())?;
+            let filter = args.get(1).map(|s| s.to_ascii_lowercase()).unwrap_or_default();
+            let mut by_kind: std::collections::BTreeMap<u64, Vec<&fc3_story::data::Marker>> = Default::default();
+            for m in data.markers.values() {
+                by_kind.entry(m.kind).or_default().push(m);
+            }
+            for (kind, list) in by_kind {
+                if !format!("{kind:#010x}").contains(&filter) && !list.iter().any(|m| m.name.to_ascii_lowercase().contains(&filter)) {
+                    continue;
+                }
+                let enabled = list.iter().filter(|m| m.enabled).count();
+                let subs: std::collections::BTreeSet<u64> = list.iter().map(|m| m.sub_kind).collect();
+                println!("{kind:#010x}: {} ({enabled} enabled), sub kinds {subs:?}", list.len());
+                for m in list.iter().take(if filter.is_empty() { 4 } else { usize::MAX }) {
+                    println!("    {} {} sub {} layer {:#x} at {:.0?} tooltip {}", m.id, m.name, m.sub_kind, m.layer, m.pos, m.tooltip);
+                }
+            }
+        }
         "story-layer" => {
             // A mission layer: its block, whether it comes with the block,
             // and the block's other layers: story-layer <id>
