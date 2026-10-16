@@ -1652,6 +1652,16 @@ fn perceive(
     let mut noises: Vec<Noise> = noises.read().copied().collect();
     noises.append(&mut shouts);
     let hurt: Vec<(Entity, Option<Vec3>, Option<Entity>)> = damage.read().map(|d| (d.target, d.source, d.instigator)).collect();
+    // The people the player shot this frame (dropped or not): where they
+    // were and where the shot came from.
+    let shot: Vec<(Entity, Vec3, Option<Vec3>)> = hurt
+        .iter()
+        .filter(|(_, _, by)| *by == Some(pe))
+        .filter_map(|(target, src, _)| {
+            let at = npcs.get(*target).map(|q| q.1.translation).or_else(|_| bodies.get(*target).map(|b| b.1.translation)).ok()?;
+            Some((*target, at, *src))
+        })
+        .collect();
     let chest = pt.translation + Vec3::Y * 0.4;
     // Everyone alive, for picking fights between factions.
     let roster: Vec<(Entity, Vec3, Faction)> = npcs.iter().filter(|(_, _, _, h)| !h.dead).map(|(e, t, n, _)| (e, t.translation, n.faction)).collect();
@@ -1896,6 +1906,35 @@ fn perceive(
             if t.translation.distance(n.at) < n.radius {
                 npc.awareness = npc.awareness.max(0.6);
                 npc.last_known = Some(n.at);
+            }
+        }
+        // A comrade shot before his eyes (where he would notice a body, the
+        // game's corpse detection, and in sight): under fire, a fight at once
+        // towards where the shot came from (WIL_050's guards round Oliver,
+        // sniped one by one, bring the next wave by going into combat).
+        if !friendly && npc.state != NpcState::Combat {
+            let witnessed = shot.iter().find(|(target, at, _)| {
+                let to_body = *at + Vec3::Y * 0.3 - eye;
+                let flat = Vec3::new(to_body.x, 0.0, to_body.z);
+                let in_sight = match senses {
+                    Some(s) => s.sees(fc3_formats::senses::CORPSE, facing.dot(flat), facing.cross(Vec3::Y).dot(flat), to_body.y).is_some(),
+                    None => to_body.length() <= BODY_SIGHT && facing.dot(flat.normalize_or_zero()) >= 0.2,
+                };
+                *target != e
+                    && in_sight
+                    && Dir3::new(to_body).is_ok_and(|dir| {
+                        let filter = SpatialQueryFilter::from_excluded_entities([e, *target]);
+                        spatial.cast_ray(eye, dir, to_body.length(), true, &filter).is_none_or(|h| h.distance > to_body.length() - 0.8)
+                    })
+            });
+            if let Some((_, at, src)) = witnessed {
+                if std::env::var_os("FC3_SENSE_DEBUG").is_some() {
+                    info!("sense: a comrade shot {:.0} m off; under fire", at.distance(eye));
+                }
+                npc.state = NpcState::Combat;
+                npc.state_time = 0.0;
+                npc.awareness = 1.0;
+                npc.last_known = Some(src.unwrap_or(pt.translation));
             }
         }
         for (target, src, by) in &hurt {

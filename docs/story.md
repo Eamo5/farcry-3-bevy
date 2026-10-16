@@ -670,6 +670,12 @@ is the story's own:
   of two guards in view of the other; `--npc-test grenade` drops a grenade
   at the feet of the guard facing the player (`FC3_SENSE_DEBUG` logs each
   sighting).
+* **A comrade shot before his eyes**: a guard who sees the player shoot
+  someone (in that same body-sight volume, unblocked) is under fire and
+  fights at once, towards where the shot came from. Before, a sniped
+  guard's friends only heard a shot and went to look; WIL_050's B20 waits
+  for its guards to go into combat before it sends the next wave, and five
+  of them sniped from the rifle never did.
 * **Where wildlife spawns** (`wildlife::spawn_animals`,
   `fc3_formats::encounters`): the converter reads the world's wildlife
   regions (`CWildlifeRegion` shapes, most in the metasectors: 509 of
