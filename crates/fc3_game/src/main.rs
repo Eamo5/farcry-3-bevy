@@ -69,6 +69,7 @@ mod intoxication;
 mod input_prompts;
 mod chopper_fight;
 mod car_chase;
+mod shooting_gallery;
 mod boss_fight;
 mod binds;
 mod screen_blur;
@@ -454,6 +455,7 @@ fn main() {
         .add_plugins(input_prompts::InputPromptsPlugin)
         .add_plugins(chopper_fight::ChopperFightPlugin)
         .add_plugins(car_chase::CarChasePlugin)
+        .add_plugins(shooting_gallery::ShootingGalleryPlugin)
         .add_plugins(boss_fight::BossFightPlugin)
         .add_plugins(binds::BindsPlugin)
         .add_plugins(story_alarms::StoryAlarmsPlugin)

@@ -538,6 +538,31 @@ Everything else is the engine's to drive (`original_ui::drive_map_page`):
   0` takes it away), and `onFastTravel <n>` travels to the n-th fast travel
   icon sent (the movie counts safehouses and liberated outposts).
 
+**Sharpshooter challenges** (`UI\Singleplayer\Activities\Acti_Shooting.feu`,
+level 4, while a shooting gallery runs: `original_ui::drive_gallery`, the
+gallery itself in `shooting_gallery`, see `docs/story.md`):
+
+* Loaded, the movie sends `ShootingGalleryMovieLoaded`; the game answers
+  `LoadShootingGalleryElements PC 0 "[Enter] " "[Esc] "` (the platform and
+  the accept and back keys' text) and the movie `ShootingGalleryElementsLoaded`.
+* Its boxes come and go by event as the gallery goes: `Show`/`Hide` +
+  `DifficultyBox`, `ReadyBox`, `CountdownBox`, `ShootingGalleryElements`
+  with `TimeRemainingBox` (the count and the clock), `ResultBox`; the clock
+  turns red with `SetTimeRemainingIconToRed` (the last five seconds).
+* The game fills them by DPS id: the four wagers (`WagerValue*Text_MC`),
+  the target (`KillCountText_MC`), `InsufficientFundsText_MC` shown when the
+  row chosen costs more than the player has, the selection bar's place
+  (`SelectionArrowsContainer_MC`'s `_y`: -23, 3, 33 and 61 for the rows),
+  the gallery's subtitle (`DifficultyBoxSubTitle_TX`, a string id), the
+  countdown, the count, the target and the time left, and the result:
+  `MedalResults_MC` at frame 1 (target reached) or 30 (short of it), the
+  birds killed, the money won, and the failure's count and target.
+* The mouse over a row comes as `OnDifficultyRollOver <row>` (a click
+  takes it) and over the back button as `OnCancelRollOver`/`Out`.
+* While it runs, Escape backs out of the difficulty box and leaves the
+  result rather than pausing, and the objective box (where the count goes)
+  is shut.
+
 While the pause menu is up the HUD's level is hidden (`Host::level_visible`;
 the shim's `levelVisible`), as the game's was: subtitles showed through.
 

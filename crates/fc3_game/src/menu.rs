@@ -225,7 +225,7 @@ fn pause_toggle(
     mut next: ResMut<NextState<GameState>>,
     mut journal: ResMut<crate::progression::PauseMenu>,
     original: Res<OriginalPause>,
-    credits: Option<Res<crate::credits::EndCredits>>,
+    (credits, gallery): (Option<Res<crate::credits::EndCredits>>, Option<Res<crate::shooting_gallery::Gallery>>),
 ) {
     use bevy::input::gamepad::GamepadButton as B;
     // (Esc and Start skip the end credits instead.)
@@ -233,7 +233,10 @@ fn pause_toggle(
         return;
     }
     let pad = |b: B| gamepads.iter().any(|g| g.just_pressed(b));
-    let esc = keys.just_pressed(KeyCode::Escape) && !(original.0 && *state.get() == GameState::Paused);
+    // (A shooting gallery's boxes back out with it: `shooting_gallery`.)
+    let esc = keys.just_pressed(KeyCode::Escape)
+        && !(original.0 && *state.get() == GameState::Paused)
+        && !(gallery.is_some_and(|g| g.claims_escape()) && *state.get() == GameState::Playing);
     if options.0 {
         if (esc && !crate::options::binding_key(&rebinding)) || pad(B::East) || pad(B::Start) {
             options.0 = false;

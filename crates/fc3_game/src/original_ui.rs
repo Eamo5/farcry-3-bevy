@@ -60,6 +60,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_potions,
                     drive_camera,
                     drive_credits,
+                    drive_gallery,
                     drive_pause,
                     drive_map_page,
                     run_interface,
@@ -1810,6 +1811,7 @@ fn drive_story(
     settings: Res<crate::settings::Settings>,
     hud: Res<crate::hud::HudState>,
     mut last: Local<Option<(Option<String>, Option<String>, Option<String>, Option<String>)>>,
+    gallery: Option<Res<crate::shooting_gallery::Gallery>>,
 ) {
     let Interface::Running(host) = &*state else { return };
     for card in std::mem::take(&mut ui.cards) {
@@ -1820,7 +1822,9 @@ fn drive_story(
         }
     }
     let subtitle = ui.subtitle.as_ref().filter(|_| settings.subtitles).map(|s| s.0.clone());
-    let now = (ui.objective.clone(), ui.mission.clone(), subtitle, hud.shown_prompt.clone());
+    // (Not while a shooting gallery runs: its count is where the box is.)
+    let objective = ui.objective.clone().filter(|_| !gallery.is_some_and(|g| g.holds_player()));
+    let now = (objective, ui.mission.clone(), subtitle, hud.shown_prompt.clone());
     let first = last.is_none();
     let old = last.clone().unwrap_or_default();
     if !first && old == now {
@@ -2091,6 +2095,147 @@ fn drive_camera(
     }
     // (Until its clips answer, the movie is still loading: all again.)
     *shown = Some(if ok { now } else { old });
+}
+
+/// A sharpshooter challenge's HUD (`Acti_Shooting.feu`, level 4, while a
+/// gallery runs: `shooting_gallery`). Loaded, it asks for its elements
+/// (`ShootingGalleryMovieLoaded`: `LoadShootingGalleryElements` with the
+/// platform and the accept and back keys' text), then the game shows its
+/// boxes as the gallery goes (`Show...`/`Hide...`: the difficulty box, get
+/// ready, the countdown, the bird count and time left, the result) and fills
+/// them by DPS id: the wagers, the target, the selection bar's place (its
+/// `_y` by row), the count, the seconds left, the result's frame (1 done, 30
+/// short of the target) and the money won. The mouse over a row or the back
+/// button comes as `OnDifficultyRollOver <row>` and `OnCancelRollOver`.
+const GALLERY_MOVIE: &str = r"UI\Singleplayer\Activities\Acti_Shooting.feu";
+const GALLERY_LEVEL: u32 = 4;
+/// The difficulty box's selection bar's `_y` at each row (practice, novice,
+/// skilled, expert): over each row's text.
+const GALLERY_ROWS_Y: [f64; 4] = [-23.0, 3.0, 33.0, 61.0];
+/// The result's frames: done, and short of the target.
+const GALLERY_DONE_FRAME: f64 = 1.0;
+const GALLERY_SHORT_FRAME: f64 = 30.0;
+/// Seconds left below which the clock goes red.
+const GALLERY_HURRY: f32 = 5.0;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GalleryBox {
+    Difficulty,
+    Ready,
+    Countdown,
+    Playing,
+    Result,
+}
+
+#[derive(Default)]
+struct GalleryShown {
+    loaded: bool,
+    elements: bool,
+    shown: Option<GalleryBox>,
+    screen: Option<crate::shooting_gallery::Screen>,
+    red: bool,
+}
+
+fn drive_gallery(state: NonSend<Interface>, calls: Res<UiCalls>, mut gallery: ResMut<crate::shooting_gallery::Gallery>, mut shown: Local<GalleryShown>) {
+    use crate::shooting_gallery::Screen;
+    use fc3_ui::ExternalValue as V;
+    let Interface::Running(host) = &*state else { return };
+    let Some(screen) = gallery.screen.clone() else {
+        if shown.loaded {
+            host.unload(GALLERY_LEVEL);
+            *shown = GalleryShown::default();
+        }
+        return;
+    };
+    if !shown.loaded {
+        host.load(GALLERY_MOVIE, GALLERY_LEVEL);
+        shown.loaded = true;
+    }
+    for call in calls.0.iter().filter(|c| c.command == "Send") {
+        let arg = |i: usize| call.args.get(i).map(String::as_str).unwrap_or("");
+        match arg(0) {
+            "ShootingGalleryMovieLoaded" => host.event("LoadShootingGalleryElements", &["PC", "0", "[Enter] ", "[Esc] "]),
+            "ShootingGalleryElementsLoaded" => shown.elements = true,
+            "OnDifficultyRollOver" => gallery.hovered = arg(1).parse().ok(),
+            "OnDifficultyRollOut" => gallery.hovered = None,
+            "OnCancelRollOver" => gallery.cancel_hovered = true,
+            "OnCancelRollOut" => gallery.cancel_hovered = false,
+            _ => {}
+        }
+    }
+    if !shown.elements {
+        return;
+    }
+    let want = match screen {
+        Screen::Choosing { .. } => GalleryBox::Difficulty,
+        Screen::Ready => GalleryBox::Ready,
+        Screen::Countdown(_) => GalleryBox::Countdown,
+        Screen::Playing { .. } => GalleryBox::Playing,
+        Screen::Result { .. } => GalleryBox::Result,
+    };
+    if shown.shown != Some(want) {
+        match shown.shown {
+            Some(GalleryBox::Difficulty) => host.event("HideDifficultyBox", &[]),
+            Some(GalleryBox::Ready) => host.event("HideReadyBox", &[]),
+            Some(GalleryBox::Countdown) => host.event("HideCountdownBox", &[]),
+            Some(GalleryBox::Playing) => host.event("HideShootingGalleryElements", &[]),
+            Some(GalleryBox::Result) => host.event("HideResultBox", &[]),
+            None => {}
+        }
+        match want {
+            GalleryBox::Difficulty => host.event("ShowDifficultyBox", &[]),
+            GalleryBox::Ready => host.event("ShowReadyBox", &[]),
+            GalleryBox::Countdown => host.event("ShowCountdownBox", &[]),
+            GalleryBox::Playing => {
+                host.event("ShowShootingGalleryElements", &[]);
+                host.event("ShowTimeRemainingBox", &[]);
+                shown.red = false;
+            }
+            GalleryBox::Result => host.event("ShowResultBox", &[]),
+        }
+        shown.shown = Some(want);
+        shown.screen = None;
+    }
+    if shown.screen.as_ref() == Some(&screen) {
+        return;
+    }
+    let money = |n: u32| format!("${n}");
+    let mut ok = true;
+    match &screen {
+        &Screen::Choosing { row, wagers, target, short, subtitle } => {
+            ok &= host.dps_text("DifficultyBoxSubTitle_TX", &host.text(subtitle));
+            for (id, w) in ["WagerValuePracticeText_MC", "WagerValueEasyText_MC", "WagerValueMedText_MC", "WagerValueHardText_MC"].iter().zip(wagers) {
+                ok &= host.dps_text(id, &money(w));
+            }
+            ok &= host.dps_text("KillCountText_MC", &target.to_string());
+            ok &= host.dps_visible("InsufficientFundsText_MC", short);
+            ok &= host.dps_set("SelectionArrowsContainer_MC", "_y", V::Number(GALLERY_ROWS_Y[row.min(3)]));
+        }
+        Screen::Ready => {}
+        &Screen::Countdown(n) => ok &= host.dps_text("CountdownBoxText_MC", &n.to_string()),
+        &Screen::Playing { kills, target, left, .. } => {
+            ok &= host.dps_text("BirdCountBoxText_MC", &kills.to_string());
+            ok &= host.dps_text("BirdTargetBoxText_MC", &target.to_string());
+            let s = left.ceil() as u32;
+            ok &= host.dps_text("TimeRemainingText_MC", &format!("{}:{:02}", s / 60, s % 60));
+            if left < GALLERY_HURRY && !shown.red {
+                host.event("SetTimeRemainingIconToRed", &[]);
+                shown.red = true;
+            }
+        }
+        &Screen::Result { success, kills, target, won } => {
+            ok &= host.dps_visible("ResultBox_Clip", true);
+            ok &= host.dps_frame("MedalResults_MC", V::Number(if success { GALLERY_DONE_FRAME } else { GALLERY_SHORT_FRAME }));
+            ok &= host.dps_text("BirdsKilledText_MC", &kills.to_string());
+            ok &= host.dps_text("VictoryWinAmountText_MC", &won.to_string());
+            ok &= host.dps_text("FailureBirdCountTextBox_MC", &kills.to_string());
+            ok &= host.dps_text("FailTargetBirdCount_MC", &target.to_string());
+        }
+    }
+    // (Until its clips answer, the box is still coming: all again.)
+    if ok {
+        shown.screen = Some(screen);
+    }
 }
 
 /// The end credits (`EndCredits`, over all but the pause menu): loaded as

@@ -590,6 +590,19 @@ impl StoryHost {
         self.quiet = 0.0;
     }
 
+    /// A library weapon's def (`weapon_def`), else the def drawing the model
+    /// the shop's table gives its family (a shooting gallery's
+    /// `weapons:FC3/R700`: the 700's, as `FC3/R700.R700_NPC` and the rest).
+    pub(crate) fn weapon_def(&self, inv: &crate::weapons::Inventory, archetype: &str) -> Option<usize> {
+        weapon_def(inv, archetype, &self.story.data()).or_else(|| {
+            let family = |a: &str| a.split_once(':').map_or(a, |(_, n)| n).split('.').next().unwrap_or_default().to_ascii_lowercase();
+            let wanted = family(archetype);
+            let model = self.shop_items.iter().find(|(_, (a, _))| family(a) == wanted).map(|(m, _)| m)?;
+            let folder = model.rsplit('\\').nth(1)?;
+            inv.defs.iter().position(|d| d.model.split('\\').next().is_some_and(|f| f.eq_ignore_ascii_case(folder)))
+        })
+    }
+
     fn forward_menu_events(&mut self, events: &mut StoryMenuEvents) {
         for event in events.0.drain(..) { self.story.generic_event(event, vec![]); }
     }
@@ -1260,7 +1273,7 @@ fn run_story(
         mut trees,
         mut doors,
         mut stims,
-        (mut sniping, mut boss_fight, mut binds, mut unlimited_ammo, mut intoxication, mut prompts, mut chopper, mut car_chase),
+        (mut sniping, mut boss_fight, mut binds, mut unlimited_ammo, mut intoxication, mut prompts, mut chopper, mut car_chase, mut gallery),
     ): (
         MessageWriter<crate::progression::XpGain>,
         ResMut<crate::progression::Progress>,
@@ -1285,6 +1298,7 @@ fn run_story(
             ResMut<crate::input_prompts::InputPrompts>,
             ResMut<crate::chopper_fight::ChopperFight>,
             ResMut<crate::car_chase::CarChase>,
+            ResMut<crate::shooting_gallery::Gallery>,
         ),
     ),
 ) {
@@ -1376,6 +1390,7 @@ fn run_story(
             prompts.reset();
             chopper.reset();
             car_chase.reset();
+            gallery.reset();
             postfx.reset();
             ui.subtitle = None;
             // Rebuild mission actors and discard transient wildlife together.
@@ -1651,6 +1666,7 @@ fn run_story(
         && (!p.driving || at_wheel)
         && !sniping.holds_player()
         && !boss_fight.holds_player()
+        && !gallery.holds_player()
         && cinema.view.is_none()
         && !cinema.plays_player()
         && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
@@ -2236,6 +2252,11 @@ fn run_story(
                         params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                     }),
                     "CreateSpecificGameplay" if a(1) == CHOPPER_FIGHT => chopper.pending.push(a(0).parse().unwrap_or(0)),
+                    "CreateSpecificGameplay" if shooting_gallery(&a(1)) => gallery.pending.push(crate::shooting_gallery::Start {
+                        id: a(0).parse().unwrap_or(0),
+                        name: a(1),
+                        params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                    }),
                     "CreateSpecificGameplay" if a(1) == CAR_CHASE => car_chase.pending.push(crate::car_chase::Start {
                         id: a(0).parse().unwrap_or(0),
                         params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
@@ -2273,6 +2294,16 @@ fn run_story(
                     "SendGSFGenericEventToEntity" if a(2) == "QteSetResult" => {
                         qtes.decided.push((a(3).parse().unwrap_or(0), a(4).eq_ignore_ascii_case("success")));
                     }
+                    // A gallery's spots (its shooter's, its birds' boxes)
+                    // registering, to the player: `<player>
+                    // SpawnPointRegistration <kind> <spot>`.
+                    "SendGSFGenericEventToEntity" if a(1) == "SpawnPointRegistration" => {
+                        if let Ok(spot) = a(3).parse::<u64>() {
+                            if !gallery.spawn_points.iter().any(|(_, s)| *s == spot) {
+                                gallery.spawn_points.push((a(2).to_string(), spot));
+                            }
+                        }
+                    }
                     "SendGSFGenericEventToEntity" => {
                         intoxication.events.push(a(2).to_string());
                         host.gsf_events.push(a(2).to_string());
@@ -2288,6 +2319,7 @@ fn run_story(
                         prompts.end(id);
                         chopper.cancelled.push(id);
                         car_chase.cancelled.push(id);
+                        gallery.cancelled.push(id);
                     }
                     "StopBinkVideo" => videos.stops.push(false),
                     "StopFullscreenVideo" => videos.stops.push(true),
@@ -3291,13 +3323,18 @@ const CHOPPER_FIGHT: &str = "CChopperFightE3";
 /// JAS_130's climb from the 4x4's bed to its front seat: played
 /// (`car_chase`), ending once he's there.
 const CAR_CHASE: &str = "CExoticCarChase";
+/// A sharpshooter challenge's gallery (`CShootingGalleryPistol_E6`...):
+/// played (`shooting_gallery`), not its entice system or its resources.
+fn shooting_gallery(name: &str) -> bool {
+    name.starts_with("CShootingGallery") && !name.ends_with("EnticeSystem") && !name.ends_with("ResourceContainer")
+}
 /// Seconds a specific gameplay the game doesn't play runs before it ends.
 const UNPLAYED_GRACE: f32 = 1.0;
 
 /// The specific gameplays the game plays itself (QTEs, the sniping
 /// challenge, poker, the Ink Monster, being drunk, button prompts, the
-/// chopper ride, JAS_130's climb to the front seat; the vines under their
-/// test).
+/// chopper ride, JAS_130's climb to the front seat, the shooting
+/// galleries; the vines under their test).
 fn played_gameplay(host: &StoryHost, id: u64, name: &str) -> bool {
     name == "QTEGSF"
         || host.story.is_qte_gameplay(id)
@@ -3308,6 +3345,7 @@ fn played_gameplay(host: &StoryHost, id: u64, name: &str) -> bool {
         || name == INPUT_PROMPTS
         || name == CHOPPER_FIGHT
         || name == CAR_CHASE
+        || shooting_gallery(name)
         || (name == "CVineClimbingGameplay" && std::env::var_os("FC3_VINE_GAMEPLAY_TEST").is_some())
 }
 

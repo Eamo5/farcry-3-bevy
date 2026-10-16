@@ -1646,6 +1646,13 @@ impl Story {
         self.core.borrow().layer_state(layer)
     }
 
+    /// A gameplay's own layer brought in or taken out, as a block's is (a
+    /// shooting gallery's difficulty: its birds' boxes).
+    pub fn set_layer_state(&mut self, layer: u64, state: LayerState) {
+        self.core.borrow_mut().set_layer(layer, state);
+        self.pump();
+    }
+
     /// Every layer whose entities are in the world now.
     pub fn present_layers(&self) -> Vec<u64> {
         self.core.borrow().layers.iter().filter(|(_, s)| s.present()).map(|(l, _)| *l).collect()

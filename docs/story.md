@@ -4024,8 +4024,8 @@ hands over the pistol; JAS_150 B20's chopper fight, `CChopperFightE3`).
 Such a gameplay now ends a second after it starts (`UNPLAYED_GRACE`), for
 anyone. The ones played are QTEs, the sniping challenge, poker, the Ink
 Monster, being intoxicated, button prompts, the chopper ride, JAS_130's
-climb to the front seat, and the vines under their test switch
-(`played_gameplay`).
+climb to the front seat, the shooting galleries, and the vines under their
+test switch (`played_gameplay`).
 
 **JAS_150's chopper ride** (`CChopperFightE3`, `chopper_fight`): B30C's
 scene carries the player through the ride and starts and stops the
@@ -4590,3 +4590,49 @@ on: follow the flares to the drop point against the clock
 * **Seen.** From D5's tower (a kept checkpoint with the player placed at
   its panel): the giver's car boarded, SQS_D5 accepted, its seven flares
   and drop point reached with time to spare, and the run complete.
+
+### Sharpshooter challenges (shooting galleries)
+
+A country's activities include a sharpshooter challenge: a keeper
+(`shooting_gallery.main.lua`, its `PawnInteractionListener`) who, used,
+starts the gallery's gameplay (`CShootingGallerySniper`, `...Pistol`...:
+`CreateSpecificGameplay` with the challenge's block and layers, its
+difficulties' layers and the messages it is to broadcast), then hears how
+it went (`shooting_gallery_mini_game_finished`, `_failed`, `_quit`,
+`_cancelled`) and stops it. Nothing played it, so it ended a second in.
+It is played now (`shooting_gallery`), from the gallery's settings and the
+galleries' resources (`gsf::ShootingGallerySettings`,
+`ShootingGalleryResources`):
+
+* **The difficulty box.** Practice (free) or one of the gallery's three
+  difficulties, each with its wager and kill target; a row the player
+  can't afford isn't taken. Escape backs out (the cancel message).
+* **The challenge's layers.** The base layer and the difficulty's come in
+  (`Story::set_layer_state`); their spots register themselves with the
+  player (`common/gsfspawnpointregister`: `SendGSFGenericEventToEntity <player>
+  SpawnPointRegistration <kind> <spot>`), the shooter's spot and the birds'
+  boxes (`BirdBox`). The player is placed at the shooter's spot facing the
+  boxes, held there within the gallery's view limits, and lent its weapon
+  (the resources' archetype, found by its family in the shop's table:
+  `weapons:FC3/R700` is the 700), its magazine kept full.
+* **Get ready, the countdown** (`ShootingMinigame_StartCountdown` sent, as
+  the script waits for it), **then the waves**: each wave's birds (the
+  gallery's animal, its model and fly and death clips) leave the loaded
+  boxes one by one (or as a flock) after the wave's delay, fly off toward
+  points within the gallery's frustum at their difficulty's speed, turning
+  now and then by its angles, and fall when shot. A wave's time up, what's
+  left of it gets away and the next comes.
+* **The result.** The kill target reached, the wager comes back times the
+  gallery's winnings; the last wave over without it, it's lost. Enter
+  plays again (the difficulty box), Escape leaves: the finish or fail
+  message goes to the keeper.
+* **The autopilot** leaves the player at a gallery (as at the sniping
+  challenge); with `FC3_GALLERY_TEST=<row>` that row is chosen and the
+  birds are shot through the sights, and `FC3_GALLERY_SHOTS=<dir>`
+  captures each box and the first wave.
+* **Seen.** From a kept checkpoint with the player placed outside C3's
+  outpost (`--pos` over a checkpoint now holds for its game snapshot too)
+  and `--outpost-test`: the outpost taken, the activities in, the race
+  keeper used (the race isn't played yet), then the sniper gallery's
+  keeper: novice chosen ($100), the 700 lent, four boxes, ten birds shot,
+  $200 won and the keeper told.
