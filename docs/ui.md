@@ -610,8 +610,9 @@ while the player is at a table: `original_ui::drive_poker`, the game in
   `PlayerChipCount_MC`, the info box's line (`InfoBoxText_MC`, the game's
   strings with `0` the player and `1` the chips), the action panel on the
   player's turn (`TopRightBoxB_MC`, `Check_MC` CHECK/CALL/RAISE,
-  `BetAmount_MC`, `BetUpDownArrows_MC` dimmed at the bet's ends), and the
-  difficulty box's wagers, selection and accept button.
+  `BetAmount_MC`, `BetUpDownArrows_MC` dimmed at the bet's ends; at
+  Hoyt's last hand `TopRightBoxBJAS220_MC`, BET LIFE, in its place), and
+  the difficulty box's wagers, selection and accept button.
 * The player's cards and the board: `UpdateCurrentHandInfo <cards>
   <folded> <hand's string id> True <board>` (cards as `Ah Kd ...`, hole
   cards first; the movie draws them) and `CurrentHandBox_MC` shown.

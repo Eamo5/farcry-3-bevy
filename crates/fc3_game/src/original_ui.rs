@@ -2495,7 +2495,8 @@ fn drive_poker(state: NonSend<Interface>, calls: Res<UiCalls>, mut poker: ResMut
                 .map(|i| crate::poker::fill(&host.text(i.text), &i.name.as_ref().map(|n| name(n)).unwrap_or_default(), i.chips))
                 .unwrap_or_default();
             ok &= host.dps_text("InfoBoxText_MC", &info);
-            ok &= host.dps_visible("TopRightBoxB_MC", hud.actions.is_some());
+            ok &= host.dps_visible("TopRightBoxB_MC", hud.actions.is_some() && !hud.bet_life);
+            ok &= host.dps_visible("TopRightBoxBJAS220_MC", hud.bet_life);
             if let Some((label, bet, lower, higher)) = hud.actions {
                 ok &= host.dps_text("Check_MC", &host.text(label).to_uppercase());
                 ok &= host.dps_text("BetAmount_MC", &format!("${bet}"));

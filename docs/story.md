@@ -4721,4 +4721,15 @@ table's own movie (`ACTI_Poker.feu`, `docs/ui.md`).
   probabilities from the player's cards and the board, and the movie's own
   pages. `FC3_POKER_HELP` has a test open it once it holds cards on a flop
   (captured as `help`).
-* **Not yet.** The scripted decks of Hoyt's table.
+* **Hoyt's last hand.** The script listens for all its scenes at once;
+  when the reveal (`JAS220_B10C_04`) is the one due next, the hand being
+  played is Hoyt's last: on the player's turn the movie's own panel offers
+  only BET LIFE (Q, Enter or Space; the autopilot at once; E isn't taken,
+  Hoyt waits), and the bet ends the hand there, the scene showing how it
+  ends. The table's own props are put away while a story scene plays,
+  which brings its own (the table's scripted cards, chips and decks, in
+  `PokerScriptedEntities`). Seen: HOY_040 B10 from its checkpoint, the four
+  scenes and the optional one with hands between, BET LIFE in the hand
+  before the reveal, `JasonLeavesPoker`, B10 completed.
+* **Not yet.** The faces of the scenes' scripted cards (every one is the
+  same model in the data: the engine dealt them their rigged cards).

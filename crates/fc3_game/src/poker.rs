@@ -46,6 +46,10 @@ impl Plugin for PokerPlugin {
     }
 }
 
+/// The scene that shows how Hoyt's last hand ends: the hand before it, the
+/// player bets their life (the movie's own panel), and it ends there.
+const BET_LIFE_SCENE: &str = "JAS220_B10C_04";
+
 /// The messages the game itself broadcasts when the player is done at the
 /// table, in this order (not scripted scenes of its story).
 const DONE: [&str; 2] = ["JasonWinsGame", "JasonLeavesPoker"];
@@ -142,6 +146,8 @@ pub struct PokerHud {
     pub cards: Option<(String, bool, u32, bool)>,
     /// The table's diagram (while the totals are asked for).
     pub totals: bool,
+    /// Hoyt's last hand: the player's panel is fold or bet their life.
+    pub bet_life: bool,
 }
 
 /// The movie's boxes.
@@ -376,6 +382,8 @@ struct Game {
     /// (for the cards then known).
     help: Option<u8>,
     odds: Option<(Vec<Card>, [f32; 10])>,
+    /// Hoyt's last hand is being played (`BET_LIFE_SCENE` waited for).
+    bet_life: bool,
     /// What's said: the table's lines, those asked for (a computer player's
     /// seat or the player, the event, its chance), until when the table is
     /// talking, and how long since a computer player called the player over.
@@ -606,6 +614,7 @@ fn play_poker(
             waiting: 0.0,
             help: None,
             odds: None,
+            bet_life: false,
             voices,
             speech: Vec::new(),
             quiet_until: 0.0,
@@ -934,6 +943,8 @@ fn play(
     }
     let seat = game.player_seat;
     let story = game.story();
+    // (The script listens for all its scenes at once: the one due next.)
+    game.bet_life = game.settings.kind == 3 && next(&host.story.mission_messages(), &game.sent) == Next::Scene(BET_LIFE_SCENE.to_string());
     let Some(table) = game.table.as_mut() else { return };
     // Leaving (where the table lets the player).
     if cancel && (game.settings.leave || test.is_some()) {
@@ -1016,6 +1027,27 @@ fn play(
         }
     } else {
         game.waiting = 0.0;
+    }
+    // Hoyt's last hand: the player bets their life (Q, Enter or Space; the
+    // autopilot at once), and the scene shows how it ends; folding isn't
+    // taken (Hoyt waits).
+    if to_act == seat && game.bet_life && table.street != Street::Over {
+        if keys.just_pressed(KeyCode::KeyE) {
+            if let Some(i) = (0..4).find(|&i| game.npcs[i].as_ref().is_some_and(|n| n.name == Name::Text(HOYT))) {
+                game.speech.push((Some(i), "NPC_Impatient", 1.0));
+            }
+        }
+        if !(auto || confirm || keys.just_pressed(KeyCode::KeyQ)) {
+            return;
+        }
+        info!("poker: the player bets their life");
+        table.act(seat, Bet::AllIn);
+        table.street = Street::Over;
+        table.to_act = None;
+        game.info = Some(Info { text: line::ALL_IN, name: Some(Name::Text(JASON)), chips: Some(table.seats[seat].put_in) });
+        game.speech.push((None, "AllIn", 1.0));
+        after_hand(game, host);
+        return;
     }
     let action = if to_act == seat && !auto {
         // The player: the bet up and down by the big blind, then check,
@@ -1267,6 +1299,7 @@ fn hud_of(game: &Game, panel: Panel, keys: &ButtonInput<KeyCode>) -> PokerHud {
         actions,
         cards,
         totals: keys.pressed(KeyCode::Digit1),
+        bet_life: game.bet_life && actions.is_some(),
     }
 }
 
@@ -1451,7 +1484,7 @@ fn set_table(
     let want = poker
         .game
         .as_ref()
-        .filter(|g| g.seated)
+        .filter(|g| g.seated && g.scene.is_none())
         .and_then(|g| Some(table_props(g.place.as_ref()?, g.table.as_ref()?, g.player_seat, g.stake)))
         .unwrap_or_default();
     if want.is_empty() && props.is_empty() {
