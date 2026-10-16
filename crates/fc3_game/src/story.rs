@@ -162,6 +162,13 @@ impl EntityPlacements {
         self.poses.get(&id).map(|(_, t)| *t)
     }
 
+    /// Where a scene left a character (`cinema`): it stays there, and comes
+    /// into the world there if it isn't in it yet.
+    pub fn place(&mut self, id: u64, at: Transform) {
+        self.revision += 1;
+        self.poses.insert(id, (self.revision, Transform { scale: Vec3::ONE, ..at }));
+    }
+
     fn set(&mut self, id: u64, pose: fc3_story::Pose) {
         self.revision += 1;
         let transform = Transform {

@@ -529,10 +529,11 @@ fn play_scenes(
     mut ui: ResMut<crate::story::StoryUi>,
     keys: Res<ButtonInput<KeyCode>>,
     mut hold: ResMut<crate::fp::Cinematic>,
-    (mut faces, mut library, seats): (
+    (mut faces, mut library, seats, mut placements): (
         Query<&mut crate::faces::Face>,
         Option<ResMut<crate::faces::FaceLibrary>>,
         Option<Res<crate::vehicles::StorySeatRequests>>,
+        Option<ResMut<crate::story::EntityPlacements>>,
     ),
     mut props: Query<(&crate::objects::PlacedId, &mut Transform, Option<&mut crate::vehicles::Vehicle>), Without<StoryActor>>,
 ) {
@@ -828,6 +829,22 @@ fn play_scenes(
         let p = cinema.playing.remove(i);
         if p.scene == 0 {
             if let Some(done) = cinema.built_results.get_mut(&p.file) { *done = true; }
+        }
+        // Its characters stay where it leaves them, as the original's pawns
+        // do; one not in the world yet comes in there (CIT_030's one-frame
+        // scene putting the hidden giant in place for its fight).
+        if let (true, Some(placements)) = (p.scene != 0, placements.as_mut()) {
+            let end = p.t.min(p.seq.duration);
+            // (At the scene's place, or its anchor's where it has one.)
+            let anchor = p.anchor.and_then(|id| props.iter().find(|(pid, _, _)| pid.0 == id).map(|(_, at, _)| *at));
+            for g in p.seq.groups.iter().filter(|g| g.kind == GroupKind::Character) {
+                let Some(&id) = p.bindings.get(&g.uid) else { continue };
+                let Some((source, ct)) = clip_at(&g.clips, end, |s| p.clips.get(s).and_then(|h| clips.get(h)).map(|c| c.0.duration)) else { continue };
+                let origin = if anchored_at(&g.clips, end) { anchor.unwrap_or(p.origin) } else { p.origin };
+                if let Some(clip) = p.clips.get(source).and_then(|h| clips.get(h)) {
+                    placements.place(id, origin * clip_root(&clip.0, ct));
+                }
+            }
         }
         host.story.sequence_event(&p.scene.to_string(), &p.file, "Finished", None);
         cinema.released.push(p);
