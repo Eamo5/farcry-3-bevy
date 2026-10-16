@@ -3263,6 +3263,9 @@ const STRATEGIC_REACH: f32 = 15.0;
 /// captive) while it fights (m): the foes' grenades and firebombs come where
 /// the player is.
 const KEEP_CLEAR: f32 = 10.0;
+/// Tests: how near the player's eye (m) someone not to be shot is beside
+/// him rather than in the line of fire, unless right in front.
+const BESIDE: f32 = 2.0;
 
 /// Tests: how far the autopilot lets a companion leading the way get in a
 /// fight (m), coming back to `KEEP_CLEAR` and a little more behind it: the
@@ -3761,8 +3764,11 @@ fn autopilot_loot(
         let in_line = story_actors.iter().filter(|(_, a, _)| !a.dead && a.id != actor.id && !hostile.contains(&a.id)).find_map(|(t, _, _)| {
             let p = t.translation + Vec3::Y * 0.3;
             let along = (p - eye).dot(aim.normalize_or_zero()).clamp(0.0, aim.length());
-            // (Wider with range: the gun's spread.)
-            ((eye + aim.normalize_or_zero() * along).distance(p) < 1.2 + along * 0.025 && along < aim.length() + 1.0).then_some(p)
+            // (Wider with range: the gun's spread. Right beside him, only
+            // straight ahead: JAS_130's Liza at the wheel as he shoots from
+            // the seat next to her.)
+            let width = if along < BESIDE { 0.35 } else { 1.2 + along * 0.025 };
+            ((eye + aim.normalize_or_zero() * along).distance(p) < width && along < aim.length() + 1.0).then_some(p)
         });
         if let Some(bystander) = in_line {
             let since = *blocked.get_or_insert(now);
