@@ -26,8 +26,16 @@ impl Plugin for PawnAnimsPlugin {
 
 /// A move the scripts asked a character to play, or to stop playing.
 pub enum Request {
-    Play { pawn: u64, name: String, looping: bool },
-    Stop { pawn: u64 },
+    /// (`quiet`: a gameplay's own move, of which the scripts hear nothing.)
+    Play {
+        pawn: u64,
+        name: String,
+        looping: bool,
+        quiet: bool,
+    },
+    Stop {
+        pawn: u64,
+    },
 }
 
 #[derive(Resource, Default)]
@@ -49,6 +57,7 @@ struct Playing {
     clip: String,
     handle: Handle<Fc3Clip>,
     looping: bool,
+    quiet: bool,
     waited: f32,
     scene: Option<String>,
     finishing: bool,
@@ -64,7 +73,13 @@ const SCENE: &str = "pawn_anim";
 /// A move's clip for the player: a first-person one (`1st...`), its
 /// `Default` state's when that is one.
 fn player_clip(states: &MoveStates) -> Option<&str> {
-    let first_person = |c: &str| c.rsplit('\\').next().is_some_and(|f| f.to_ascii_lowercase().starts_with("1st"));
+    // (Or an exotic one's, `ex_1st...`: the mushroom's cough.)
+    let first_person = |c: &str| {
+        c.rsplit('\\').next().is_some_and(|f| {
+            let f = f.to_ascii_lowercase();
+            f.starts_with("1st") || f.starts_with("ex_1st")
+        })
+    };
     states
         .iter()
         .find(|(s, c)| s.eq_ignore_ascii_case("default") && first_person(c))
@@ -92,14 +107,16 @@ fn run_pawn_anims(
     let anims = &mut *anims;
     for r in std::mem::take(&mut anims.requests) {
         match r {
-            Request::Play { pawn, name, looping } => {
+            Request::Play { pawn, name, looping, quiet } => {
                 let clip = (pawn == PLAYER).then(|| table.0.get(&name.to_ascii_lowercase())).flatten().and_then(player_clip);
                 let Some(clip) = clip else {
                     // (A character's moves, and moves with no first-person
                     // clip, aren't played yet: over at once.)
                     info!("pawn anim: {name} on {pawn} not played");
-                    tell(&mut host, pawn, "Started");
-                    tell(&mut host, pawn, "Finished");
+                    if !quiet {
+                        tell(&mut host, pawn, "Started");
+                        tell(&mut host, pawn, "Finished");
+                    }
                     continue;
                 };
                 // A new move cuts short the one playing.
@@ -107,11 +124,13 @@ fn run_pawn_anims(
                     if let Some(s) = old.scene {
                         cinema.stop_built(&s);
                     }
-                    tell(&mut host, PLAYER, "Interrupted");
+                    if !old.quiet {
+                        tell(&mut host, PLAYER, "Interrupted");
+                    }
                 }
                 info!("pawn anim: {name}: {clip}");
                 let handle = server.load(cache_path(&fc3_formats::cache::anim_rel(clip)));
-                anims.active = Some(Playing { clip: clip.to_string(), handle, looping, waited: 0.0, scene: None, finishing: false });
+                anims.active = Some(Playing { clip: clip.to_string(), handle, looping, quiet, waited: 0.0, scene: None, finishing: false });
             }
             Request::Stop { pawn } => {
                 if pawn != PLAYER {
@@ -121,11 +140,19 @@ fn run_pawn_anims(
                     if let Some(s) = old.scene {
                         cinema.stop_built(&s);
                     }
-                    tell(&mut host, PLAYER, "Interrupted");
+                    if !old.quiet {
+                        tell(&mut host, PLAYER, "Interrupted");
+                    }
                 }
             }
         }
     }
+    let quiet = anims.active.as_ref().is_some_and(|p| p.quiet);
+    let tell = |host: &mut StoryHost, pawn: u64, what: &str| {
+        if !quiet {
+            tell(host, pawn, what);
+        }
+    };
     let Some(p) = anims.active.as_mut() else { return };
     match &p.scene {
         None => {

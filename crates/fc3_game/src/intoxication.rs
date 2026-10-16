@@ -27,6 +27,9 @@ pub struct Start {
 pub struct Intoxication {
     pub pending: Vec<Start>,
     pub cancelled: Vec<u64>,
+    /// The scripts' generic events (`WatchCough`...): moves to play while
+    /// intoxicated.
+    pub events: Vec<String>,
     active: Option<(u64, fc3_formats::gsf::IntoxicationSettings)>,
     /// How strongly it holds the player now (0..1, easing in and out), and
     /// the settings it eases out with.
@@ -44,6 +47,7 @@ impl Intoxication {
     /// A checkpoint reload: sober again.
     pub fn reset(&mut self) {
         self.pending.clear();
+        self.events.clear();
         self.active = None;
         self.fading = None;
         self.strength = 0.0;
@@ -64,11 +68,23 @@ const WANDER_RATE: f32 = 0.04;
 /// Seconds to ease in and out.
 const EASE: f32 = 2.0;
 
-fn run(mut drunk: ResMut<Intoxication>, time: Res<Time>, info: Option<Res<crate::data::CacheInfo>>, mut tested: Local<bool>) {
-    // FC3_DRUNK_TEST (debug): drunk from the start, at the library's values.
-    if !*tested && std::env::var_os("FC3_DRUNK_TEST").is_some() {
-        *tested = true;
-        drunk.pending.push(Start { id: u64::MAX, params: HashMap::new() });
+fn run(
+    mut drunk: ResMut<Intoxication>,
+    time: Res<Time>,
+    info: Option<Res<crate::data::CacheInfo>>,
+    mut tested: Local<bool>,
+    mut anims: ResMut<crate::pawn_anims::PawnAnims>,
+) {
+    // FC3_DRUNK_TEST (debug): drunk from the start, at the library's values;
+    // a value other than 1 is also sent as a generic event (`WatchCough`).
+    if !*tested {
+        if let Ok(test) = std::env::var("FC3_DRUNK_TEST") {
+            *tested = true;
+            drunk.pending.push(Start { id: u64::MAX, params: HashMap::new() });
+            if test != "1" {
+                drunk.events.push(test);
+            }
+        }
     }
     let cancelled = std::mem::take(&mut drunk.cancelled);
     for start in std::mem::take(&mut drunk.pending) {
@@ -94,6 +110,14 @@ fn run(mut drunk: ResMut<Intoxication>, time: Res<Time>, info: Option<Res<crate:
                 drunk.active = Some((start.id, s));
             }
             Err(e) => warn!("intoxication: not played: {e:#}"),
+        }
+    }
+    // Its generic events play its moves (the cough, watching the bubbles on
+    // the hands), the scripts hearing nothing of them.
+    for event in std::mem::take(&mut drunk.events) {
+        if let Some(name) = drunk.active.as_ref().and_then(|(_, s)| s.moves.get(&event)) {
+            info!("intoxicated: {event} plays {name}");
+            anims.requests.push(crate::pawn_anims::Request::Play { pawn: fc3_story::PLAYER, name: name.clone(), looping: false, quiet: true });
         }
     }
     if drunk.active.as_ref().is_some_and(|(id, _)| cancelled.contains(id)) {

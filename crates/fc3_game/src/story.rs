@@ -2259,7 +2259,10 @@ fn run_story(
                     "SendGSFGenericEventToEntity" if a(2) == "QteSetResult" => {
                         qtes.decided.push((a(3).parse().unwrap_or(0), a(4).eq_ignore_ascii_case("success")));
                     }
-                    "SendGSFGenericEventToEntity" => host.gsf_events.push(a(2).to_string()),
+                    "SendGSFGenericEventToEntity" => {
+                        intoxication.events.push(a(2).to_string());
+                        host.gsf_events.push(a(2).to_string());
+                    }
                     "PopUpEndOfGame" => host.end_of_game = true,
                     "DestroySpecificGameplay" => {
                         let id = a(0).parse().unwrap_or(0);
@@ -2496,7 +2499,7 @@ fn run_story(
                     // A move played on a character by name, and stopped.
                     "CAPI_AI.StartPlayAnim" => {
                         if let Ok(pawn) = a(0).parse::<u64>() {
-                            pawn_anims.requests.push(crate::pawn_anims::Request::Play { pawn, name: a(1), looping: a(2) == "true" });
+                            pawn_anims.requests.push(crate::pawn_anims::Request::Play { pawn, name: a(1), looping: a(2) == "true", quiet: false });
                         }
                     }
                     "CAPI_AI.StopPlayAnim" => {

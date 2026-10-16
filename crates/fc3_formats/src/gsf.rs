@@ -52,6 +52,8 @@ pub struct IntoxicationSettings {
     pub sway: [f32; 4],
     pub drunken_control: bool,
     pub watch_hands: f32,
+    /// The moves its generic events play (`WatchCough`, `WatchBubbleHands`).
+    pub moves: std::collections::BTreeMap<String, String>,
 }
 
 const SWAY_FIELDS: [&str; 4] = ["SwayHSizeMultiplier", "SwayVSizeMultiplier", "SwayHSpeedMultiplier", "SwayVSpeedMultiplier"];
@@ -65,6 +67,11 @@ impl IntoxicationSettings {
             sway: [n(SWAY_FIELDS[0])?, n(SWAY_FIELDS[1])?, n(SWAY_FIELDS[2])?, n(SWAY_FIELDS[3])?],
             drunken_control: !o.bool("DisableDrunkenControl").unwrap_or(false),
             watch_hands: n("WatchHandsDuration").unwrap_or(10.0),
+            // (The move names are the hashed fields' companions.)
+            moves: [("WatchCough", 0x0F83_34F1), ("WatchBubbleHands", 0x73E5_9597)]
+                .into_iter()
+                .filter_map(|(event, h)| o.str_h(h).filter(|m| !m.is_empty()).map(|m| (event.to_string(), m)))
+                .collect(),
         })
     }
 
@@ -376,7 +383,7 @@ mod tests {
 
     #[test]
     fn a_scripts_intoxication_values_go_over_the_librarys() {
-        let s = IntoxicationSettings { speed: 2.5, sway: [0.5, 0.3, 0.2, 0.55], drunken_control: true, watch_hands: 10.0 };
+        let s = IntoxicationSettings { speed: 2.5, sway: [0.5, 0.3, 0.2, 0.55], drunken_control: true, watch_hands: 10.0, moves: Default::default() };
         let own = s.clone().with(|k| match k {
             "MovementspeedFactor" => Some(1.9),
             "SwayHSizeMultiplier" => Some(0.1),
@@ -392,6 +399,8 @@ mod tests {
         let vfs = crate::Vfs::open_install(&crate::find_install().expect("installed Far Cry 3"), None).unwrap();
         let s = IntoxicationSettings::parse(&vfs.read(LIBRARY).unwrap()).unwrap();
         assert_eq!((s.speed, s.sway, s.drunken_control, s.watch_hands), (2.5, [0.5, 0.3, 0.2, 0.55], true, 10.0));
+        assert_eq!(s.moves.get("WatchCough").map(String::as_str), Some("mushseq_cough"));
+        assert_eq!(s.moves.get("WatchBubbleHands").map(String::as_str), Some("player_bubblehands"));
     }
 
     #[test]

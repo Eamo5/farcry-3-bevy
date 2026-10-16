@@ -2996,9 +2996,12 @@ view sways and rolls by the library's multipliers (`SwayHSizeMultiplier`,
 `SwayVSizeMultiplier` and their speeds; a script's own values go over
 them), and, unless `DisableDrunkenControl`, the walk wanders off where it
 is steered at a rate set by `MovementspeedFactor`. It eases in and out over
-two seconds. `FC3_DRUNK_TEST` starts one at the library's values (debug).
-Not yet: its hand-watching moves (`WatchCough`, `WatchBubbleHands` generic
-events) and their particles.
+two seconds. The scripts' generic events to it (`WatchCough`,
+`WatchBubbleHands`) play its moves on the player (the library's
+`mushseq_cough` and `player_bubblehands`, first-person `ex_1st...` clips),
+quietly: the scripts hear no `Domino_PlayAnim` of them. `FC3_DRUNK_TEST`
+starts one at the library's values (debug; a value other than 1 is also
+sent as an event). Not yet: the hands' distortion and light-trail particles.
 
 ### The dark room's light: the shaft and the hands
 
