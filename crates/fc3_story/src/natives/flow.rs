@@ -113,6 +113,16 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     // ---- group events (numbers for ids)
     r.f("CEntityGroupManager:RegisterScriptEvent", |c, (group, event, target, method): (Text, Text, Value, Option<String>)| {
         let cb = callback(target, method)?;
+        // A listener for a contextual action's start that comes once a
+        // character is already on it hears it then, as it would the next
+        // time the character took it up (an activity's keeper settles at
+        // their spot before their script listens for it, and is made usable
+        // when it hears it).
+        if event.0 == "CA_Start" {
+            if let Some((&pawn, _)) = group.id().and_then(|action| c.ca.current.iter().find(|(_, cur)| cur.action == action && cur.started)) {
+                c.actions.push_back(crate::core::Action::Call(cb.clone(), vec![crate::Arg::Str(event.0.clone()), crate::Arg::id(pawn)]));
+            }
+        }
         Some(c.listen(Listen::Group(group.0, event.0), cb) as f64)
     })?;
     r.f("CEntityGroupManager:UnregisterScriptEvent", |c, (_group, id): (Text, Num)| {

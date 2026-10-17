@@ -4525,6 +4525,17 @@ told the story of an outpost taken, so no activity ever opened.
   appeared.
 * **`CAPI_Player.IsInQTE`.** Asked as the flag scene's action map is
   popped; answered from the QTEs (`PlayerView::in_qte`).
+* **Keepers the player can use.** An activity's keeper (a race's, a
+  gallery's) is made usable by its script (`SetUsability` on the pawn,
+  `PawnInteractionListener`/`PawnInteractiveState`), which nothing read:
+  only the autopilot, raising `Use` itself, could start one. A pawn made
+  usable is now a use target within 2.5 m, faced (unless the script lets
+  it be used any way round), with the game's "Interact" (89343). A race's
+  keeper is made usable when they start their spot (the STP's `CA_Start`),
+  but the script listens for that only after its resource gameplay has
+  come and gone, by when the keeper is long settled there: a listener for
+  a contextual action's start that comes while a character is on it hears
+  it then. `FC3_USE_DEBUG` logs the usable pawns near the player.
 
 ### Hunts (SQA, Path of the Hunter)
 

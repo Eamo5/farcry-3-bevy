@@ -172,6 +172,12 @@ pub struct UseTarget {
     pub text: String,
 }
 
+/// How near (m) a usable pawn is used, within how wide a look (the cosine
+/// of half the angle), and its prompt (the game's "Interact").
+const PAWN_USE_REACH: f32 = 2.5;
+const PAWN_USE_COS: f32 = 0.6;
+const PAWN_USE_TEXT: u32 = 89_343;
+
 /// Something the world should do.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
@@ -640,6 +646,16 @@ impl Story {
         self.core.borrow().is_loaded(id)
     }
 
+    /// The pawns scripts have made usable, where they are, and whether a
+    /// `Use` is listened for on them.
+    pub fn usable_pawns(&self) -> Vec<(u64, Option<[f32; 3]>, bool)> {
+        let c = self.core.borrow();
+        c.usable_pawns
+            .keys()
+            .map(|&id| (id, c.position(id), c.listeners.values().any(|l| matches!(&l.on, Listen::Entity(e, ev) if *e == id && ev == "Use"))))
+            .collect()
+    }
+
     /// The nearest usable mission trigger within reach, respecting the
     /// script's use/inside/look/angle restrictions and current placement.
     pub fn use_target(&self, player: [f32; 3], eye: [f32; 3], look: [f32; 3]) -> Option<UseTarget> {
@@ -654,6 +670,20 @@ impl Story {
             .collect();
         ids.into_iter()
             .filter_map(|id| {
+                // A pawn made usable: used standing by it (and facing it,
+                // unless the script lets it be used any way round).
+                if let Some(&any_way) = c.usable_pawns.get(&id) {
+                    if !c.is_loaded(id) || c.dead.contains(&id) {
+                        return None;
+                    }
+                    let at = c.position(id)?;
+                    let (dx, dy) = (at[0] - player[0], at[1] - player[1]);
+                    let flat = dx.hypot(dy);
+                    let facing = any_way || flat < 0.5 || (dx * look[0] + dy * look[1]) / (flat * look[0].hypot(look[1]).max(1e-3)) > PAWN_USE_COS;
+                    let near = flat < PAWN_USE_REACH && (at[2] - player[2]).abs() < 2.0;
+                    let text = c.data.strings.get(PAWN_USE_TEXT).map_or_else(|| "Interact".to_string(), str::to_string);
+                    return (near && facing).then_some(UseTarget { entity: id, position: at, text });
+                }
                 if !c.is_loaded(id) || !c.trigger_on(id) {
                     return None;
                 }

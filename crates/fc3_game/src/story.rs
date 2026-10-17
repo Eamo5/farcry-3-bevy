@@ -2745,6 +2745,12 @@ pub(crate) fn story_interactions(
     let look = Quat::from_euler(EulerRot::YXZ, player.yaw, player.pitch, 0.0) * Vec3::NEG_Z;
     let eye = at.translation + Vec3::Y * (crate::player::EYE_HEIGHT - crate::player::HALF_HEIGHT);
     let target = host.story.use_target(to_dunia(at.translation), to_dunia(eye), to_dunia(look));
+    // FC3_USE_DEBUG (tests): the usable pawns within 30 m, once a second.
+    if std::env::var_os("FC3_USE_DEBUG").is_some() && time.elapsed_secs() as u32 != (time.elapsed_secs() - time.delta_secs()) as u32 {
+        let here = to_dunia(at.translation);
+        let near: Vec<_> = host.story.usable_pawns().into_iter().filter(|(_, p, _)| p.is_some_and(|p| (p[0] - here[0]).hypot(p[1] - here[1]) < 30.0)).collect();
+        info!("use: pawns {near:?}, target {:?}", target.as_ref().map(|t| t.entity));
+    }
     let used = hold.advance(target.as_ref().map(|t| t.entity), pressed, time.delta_secs());
     if target.is_some() || hold.latched {
         if pressed {

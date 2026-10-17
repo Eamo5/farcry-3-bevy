@@ -227,6 +227,10 @@ pub struct Core {
     pub use_rules: HashMap<u64, crate::triggers::UseRules>,
     pub vehicle_rules: HashMap<u64, crate::vehicles::Rules>,
     pub vehicle_departures: HashMap<u64, crate::vehicles::Occupant>,
+    /// Pawns a script has made usable (`SetUsability`: an activity's keeper,
+    /// a mission giver), and whether they're used whichever way the player
+    /// faces.
+    pub usable_pawns: HashMap<u64, bool>,
 }
 
 impl Core {
@@ -294,6 +298,7 @@ impl Core {
             use_rules: HashMap::new(),
             vehicle_rules: HashMap::new(),
             vehicle_departures: HashMap::new(),
+            usable_pawns: HashMap::new(),
         }
     }
 

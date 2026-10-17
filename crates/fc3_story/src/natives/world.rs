@@ -437,6 +437,18 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         if let Value::Table(t) = params {
             args.extend(t.sequence_values::<Text>().filter_map(Result::ok).map(|t| t.0));
         }
+        // A pawn made usable (`SetUsability <on> <ignore orientation>`): the
+        // player can use it (`use_target`).
+        if args[1] == "SetUsability" {
+            if let Some(id) = Text(args[0].clone()).id() {
+                let flag = |i: usize| args.get(i).is_some_and(|a| a == "true" || a == "1");
+                if flag(2) {
+                    c.usable_pawns.insert(id, flag(3));
+                } else {
+                    c.usable_pawns.remove(&id);
+                }
+            }
+        }
         c.emit(Command::Native { name: "SendCommandEventToEntity".into(), args });
         true
     })?;
