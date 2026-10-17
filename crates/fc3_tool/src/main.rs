@@ -3038,6 +3038,7 @@ fn main() -> Result<()> {
             }
             for event in &clip.sounds { println!("sound {:.3}s {:#x}", event.0, event.1); }
             for attachment in &clip.attachments { println!("attachment {attachment:?}"); }
+            for sub in &clip.sub_clips { println!("sub-clip: skeleton {:#x}, {} tracks", sub.skeleton_id, sub.tracks.len()); }
         }
         "moves" => {
             // The engine's named moves, their states and clips: moves [name

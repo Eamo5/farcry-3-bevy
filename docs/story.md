@@ -4798,12 +4798,16 @@ wager rows and their difficulty, the rings' worth, the lines):
 * **Tests.** `FC3_KNIFE_TEST=<row>` takes the challenge on that row, aims
   at the middle allowing for the drop and lets go four fifths up;
   `FC3_KNIFE_SHOTS=<dir>` captures the wager box, the challenger's throws,
-  the player's (held, and the third's points), the leave box and the
-  result. `FC3_KNIFE_SKIP` skips the challenger's throws and
+  the knife drawn, the player's throw (held, and the third's points), the
+  leave box and the result. `FC3_KNIFE_SKIP` skips the challenger's throws and
   `FC3_KNIFE_LEAVE` leaves before the player's third. Seen at G4's site (a kept checkpoint with
   G3's outpost taken, the player placed south of the wheel): row 1 ($50),
   the challenger's five throws, the player's five in the middle, won
   500 to 60 and paid $100, the knives stuck in the turning wheel.
-* **Not yet.** The player's own moves (walking to the spots, the knife in
-  hand drawn, held and thrown in first person) and the challenger's walks
-  between the spots: each is put at its spot.
+* **The player's arms** on their turn play the game's own first-person
+  moves (`fp`'s knife context, the knife on the right hand by its own
+  track): drawn once, held ready, the throw held back, thrown and put away
+  after the last. The knife leaves the hand 0.37 s into the throw, when
+  the flying one sets off; the throw's whoosh is the move's own.
+* **Not yet.** The walks between the spots (the player's and the
+  challenger's): each is put at its spot.

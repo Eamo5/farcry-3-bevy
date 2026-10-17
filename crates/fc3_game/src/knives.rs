@@ -85,9 +85,14 @@ const MOVES: &str = r"graphics\characters\_common\animations\exoticgameplay\mini
 const TALK_MOVE: &str = "ex_knifethrow_gm_talkilde.mab";
 const THROW_MOVE: &str = "ex_knife_throw_npc_throw_knife.mab";
 const WATCH_MOVE: &str = "ex_knife_throw_npc_spectate_idle.mab";
-/// A throw's whoosh, the player's and the challenger's.
-const THROW_SOUND: u32 = 0x0006_BC53;
+/// The challenger's throw's whoosh (the player's comes with their arms'
+/// throw).
 const NPC_THROW_SOUND: u32 = 0x0015_911F;
+/// The player's arms' throw (`fp`'s knife context): how long it takes, and
+/// when the knife leaves the hand; the wait after each throw.
+const THROW_ARMS: f32 = 0.4;
+const PLAYER_RELEASE: f32 = 0.367;
+const BETWEEN_THROWS: f32 = 1.5;
 
 /// The game the player is at, if any, and what its HUD shows.
 #[derive(Resource, Default)]
@@ -105,6 +110,35 @@ impl KnifeGame {
     pub fn holds_player(&self) -> bool {
         self.game.as_ref().is_some_and(|g| g.stage != Stage::Away)
     }
+
+    /// What the player's arms do, on their turn.
+    pub fn arms(&self) -> Option<KnifeArms> {
+        let g = self.game.as_ref()?;
+        let Stage::Thrower(thrown, charge, wait) = g.stage else { return None };
+        Some(match charge {
+            Some(_) => KnifeArms::Charging,
+            None if thrown > 0 && BETWEEN_THROWS - wait < THROW_ARMS => KnifeArms::Throwing,
+            None if thrown >= g.settings.knives => {
+                if wait > 0.1 {
+                    KnifeArms::Away
+                } else {
+                    return None;
+                }
+            }
+            None => KnifeArms::Ready,
+        })
+    }
+}
+
+/// The player's arms on their turn (`fp`'s knife context, the game's own
+/// first-person moves with the knife in hand): drawn and held ready, the
+/// throw held, thrown, put away after the last.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KnifeArms {
+    Ready,
+    Charging,
+    Throwing,
+    Away,
 }
 
 /// The HUD's state.
@@ -217,6 +251,8 @@ struct Throw {
     player: bool,
     from: Vec3,
     to: Vec3,
+    /// When it leaves the hand and lands (game seconds).
+    leaves: f32,
     lands: f32,
     points: u32,
     on_wheel: bool,
@@ -504,16 +540,17 @@ fn play_knives(
                     let dir = Quat::from_euler(EulerRot::YXZ, p.yaw, p.pitch, 0.0) * Vec3::NEG_Z;
                     let (centre, normal) = wheel_face(game, site);
                     let speed = game.settings.speed.max(1.0) * power;
+                    // (It leaves the hand partway through the arms' throw.)
+                    let leaves = now + PLAYER_RELEASE;
                     let (to, pts, on_wheel, lands) = match flight(eye, dir, speed, game.settings.gravity, centre, normal) {
-                        Some((hit, r, time)) if r <= WHEEL_RADIUS => (hit, points(&game.settings.rewards, r), true, now + time),
-                        Some((hit, _, time)) => (hit, 0, false, now + time),
-                        None => (eye + dir * 2.0 - Vec3::Y * 1.5, 0, false, now + 0.5),
+                        Some((hit, r, time)) if r <= WHEEL_RADIUS => (hit, points(&game.settings.rewards, r), true, leaves + time),
+                        Some((hit, _, time)) => (hit, 0, false, leaves + time),
+                        None => (eye + dir * 2.0 - Vec3::Y * 1.5, 0, false, leaves + 0.5),
                     };
                     info!("knives: the player throws at {:.2} power ({pts} points)", power);
-                    game.throws.push(Throw { player: true, from: eye - Vec3::Y * 0.15, to, lands, points: pts, on_wheel, spawned: false });
-                    sfx.write(crate::sound::PlaySfx { event: THROW_SOUND, at: None, volume: 1.0 });
+                    game.throws.push(Throw { player: true, from: eye - Vec3::Y * 0.15, to, leaves, lands, points: pts, on_wheel, spawned: false });
                     let thrown = thrown + 1;
-                    next = Stage::Thrower(thrown, None, 1.5);
+                    next = Stage::Thrower(thrown, None, BETWEEN_THROWS);
                 }
                 None if held && wait == 0.0 && thrown < game.settings.knives => next = Stage::Thrower(thrown, Some(0.0), 0.0),
                 None if thrown >= game.settings.knives && wait == 0.0 && game.throws.is_empty() => {
@@ -654,8 +691,8 @@ fn play_knives(
     });
     hold.knives = game.stage != Stage::Away;
     // FC3_KNIFE_SHOTS=<dir> (tests): each stage captured a moment in (its
-    // box played in; a throw while it's held; the third's points as they
-    // pop up).
+    // box played in; the knife drawn; a throw while it's held; the third's
+    // points as they pop up).
     if let Ok(dir) = std::env::var("FC3_KNIFE_SHOTS") {
         let label = match game.stage {
             _ if game.leaving.is_some() => "leaving".into(),
@@ -670,6 +707,7 @@ fn play_knives(
             }
             Stage::Thrower(n, Some(_), _) if n >= 2 => "thrower".into(),
             Stage::Thrower(3, None, _) => "landed".into(),
+            Stage::Thrower(0, None, _) => "drawn".into(),
             Stage::Thrower(..) => String::new(),
             Stage::Result(_) => "result".into(),
         };
@@ -680,6 +718,7 @@ fn play_knives(
         let moment = match game.shot.0.as_str() {
             "thrower" => 0.4,
             "landed" => 0.35,
+            "drawn" => 0.95,
             _ => 1.0,
         };
         if !game.shot.0.is_empty() && game.shot.1 > moment && !game.shot.2.contains(&game.shot.0) {
@@ -703,7 +742,7 @@ fn challenger_throw(game: &mut Game, now: f32) -> Throw {
     let from = game.site.at(THROW_SPOT) + Vec3::Y * 1.6;
     let on_wheel = r <= WHEEL_RADIUS;
     let points = if on_wheel { points(&game.settings.rewards, r) } else { 0 };
-    Throw { player: false, from, to, lands: now + 0.25, points, on_wheel, spawned: false }
+    Throw { player: false, from, to, leaves: now, lands: now + 0.25, points, on_wheel, spawned: false }
 }
 
 /// The wheel's face: its centre (the painted face's) and its normal toward
@@ -835,7 +874,13 @@ fn dress_wheel(
             .spawn((
                 Transform::from_translation(th.from).looking_to(th.to - th.from, Vec3::Y),
                 Visibility::Visible,
-                Knife { from: th.from, to: th.to, start: now, lands: now + (th.lands - clock).max(0.05), on_wheel: th.on_wheel },
+                Knife {
+                    from: th.from,
+                    to: th.to,
+                    start: now + (th.leaves - clock).max(0.0),
+                    lands: now + (th.lands - clock).max((th.leaves - clock).max(0.0) + 0.05),
+                    on_wheel: th.on_wheel,
+                },
             ))
             .id();
         for part in &knife.parts {
@@ -863,6 +908,8 @@ fn fly_knives(
         if parent.is_some() {
             continue;
         }
+        // (Unseen until it leaves the hand.)
+        t.scale = if now < k.start { Vec3::ZERO } else { Vec3::ONE };
         let f = ((now - k.start) / (k.lands - k.start)).clamp(0.0, 1.0);
         if f < 1.0 {
             t.translation = k.from.lerp(k.to, f);

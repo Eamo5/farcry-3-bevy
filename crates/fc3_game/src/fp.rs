@@ -15,6 +15,7 @@ use fc3_formats::hash::name_hash;
 
 use crate::cache_assets::{cache_path, skinned_cache_path, Fc3Clip, Fc3Model, ModelSettings};
 use crate::characters::{spawn_rig_with, AnimKind, AnimRequest, AnimRestart, CharacterAssets, CharacterRig, ClipSet};
+use crate::knives::KnifeArms;
 use crate::player::Player;
 use crate::weapons::{Inventory, ViewModel};
 
@@ -105,7 +106,21 @@ enum Context {
     Repair,
     /// Raising the camera to tag (then looking through it).
     Camera,
+    /// At the knife thrower's game, the knife in hand.
+    Knife(KnifeArms),
 }
+
+/// The knife thrower's game's first-person moves: drawing the knife, held
+/// ready, the throw held, thrown, put away.
+const KNIFE_DRAW: &str = r"exoticgameplay\minigames\knifethrowing\1st_uppb_draw_nodir_knife.mab";
+const KNIFE_READY: &str = r"exoticgameplay\minigames\knifethrowing\1st_uppb_idle_nodir_knife.mab";
+const KNIFE_HELD: &str = r"exoticgameplay\minigames\knifethrowing\1st_uppb_hold_nodir_knife.mab";
+const KNIFE_THROW: &str = r"exoticgameplay\minigames\knifethrowing\1st_uppb_throw_nodir_knife.mab";
+const KNIFE_AWAY: &str = r"exoticgameplay\minigames\knifethrowing\1st_uppb_holster_nodir_knife.mab";
+/// When the knife leaves the hand in the throw, and its skeleton in the
+/// moves (the prop's own, `npc_knife_3`).
+const THROWN_KNIFE_RELEASE: f32 = 0.367;
+const THROWN_KNIFE_PROP: u32 = 0x4ADE_B988;
 
 /// The swimming strokes are additive: the game lays them over the swimming
 /// aim pose (`aimingswimsurface`). Played alone, their torso lies at the
@@ -153,6 +168,10 @@ impl Context {
             Context::Skydive => r"vehicles\other\wingsuit\1stge_fulb_skydivefalling_nodir_nowep_wingsuit.mab",
             Context::Repair => r"weapons\special\repairtool\1stge_uppb_canrepairshootcycle_+000fw_sprt.mab",
             Context::Camera => r"weapons\camera\1stge_uppb_iron_+000fw_eqcam.mab",
+            Context::Knife(KnifeArms::Ready) => KNIFE_READY,
+            Context::Knife(KnifeArms::Charging) => KNIFE_HELD,
+            Context::Knife(KnifeArms::Throwing) => KNIFE_THROW,
+            Context::Knife(KnifeArms::Away) => KNIFE_AWAY,
         }
     }
 
@@ -165,6 +184,7 @@ impl Context {
             Context::Skydive => Some((r"vehicles\other\wingsuit\1stge_fulb_jump2skydive_nodir_nowep_wingsuit.mab", 1.0)),
             Context::Repair => Some((r"weapons\special\repairtool\1stge_uppb_transitionaim2canrepair_+000fw_sprt.mab", 0.333)),
             Context::Camera => Some((r"weapons\camera\1stge_uppb_draw_+000fw_eqcam.mab", 0.567)),
+            Context::Knife(KnifeArms::Ready) => Some((KNIFE_DRAW, 0.833)),
             _ => None,
         }
     }
@@ -403,6 +423,7 @@ const PROPS: &[(&str, &str)] = &[
     ("welding_torch", r"graphics\__fc3_graphics\_common\weapons\weldingtorch\welding_torch.xbg"),
     // The tagging camera (its clips call it the monocular).
     ("monocular", r"graphics\__fc3_graphics\_common\props\equipment\camera.xbg"),
+    ("npc_knife_3", r"graphics\__fc3_graphics\_common\weapons\npcknife\npc_knife_3.xbg"),
 ];
 
 /// The tagging camera's prop skeleton in its clips (a single bone).
@@ -1456,6 +1477,8 @@ pub struct FpState {
     torch: Option<Entity>,
     /// The tagging camera in hand.
     camera: Option<Entity>,
+    /// The thrower's knife in hand.
+    knife: Option<Entity>,
 }
 
 impl FpState {
@@ -1638,7 +1661,13 @@ fn drive_arms(
         Res<crate::traversal::Ways>,
         Res<SwimClips>,
     ),
-    (mut cinematic, mut busy, repairing, bino): (ResMut<Cinematic>, ResMut<HandsBusy>, Res<crate::vehicles::Repairing>, Res<crate::stealth::Binoculars>),
+    (mut cinematic, mut busy, repairing, bino, knives): (
+        ResMut<Cinematic>,
+        ResMut<HandsBusy>,
+        Res<crate::vehicles::Repairing>,
+        Res<crate::stealth::Binoculars>,
+        Option<Res<crate::knives::KnifeGame>>,
+    ),
     mut commands: Commands,
 ) {
     let Some(rig) = state.rig else { return };
@@ -1647,10 +1676,12 @@ fn drive_arms(
     // Swimming, climbing, on a zip line or at the wheel: the arms do that
     // instead, with the weapon put away.
     let speed = Vec2::new(p.velocity.x, p.velocity.z).length();
+    let knife = knives.as_ref().and_then(|k| k.arms());
     let context = if p.driving && driving.first_person && !p.armed_passenger {
         driving.vehicle.and_then(|v| vehicles.get(v).ok()).and_then(|v| v.first_person_clip(driving.seat)).map(Context::Vehicle)
     } else {
         match *holding {
+            _ if knife.is_some() => knife.map(Context::Knife),
             _ if p.air == crate::player::AirMode::Wingsuit => Some(Context::Wingsuit),
             _ if p.air == crate::player::AirMode::Chute => Some(Context::Chute),
             // Into a long fall (and out of it only on landing).
@@ -1693,6 +1724,7 @@ fn drive_arms(
     if context != state.context {
         debug!("first-person context: {:?} -> {context:?}", state.context);
         debug!("fp context {:?} -> {context:?} (active {})", state.context, state.active);
+        let was = state.context;
         state.context = context;
         let shown = |v: bool| if v { Visibility::Inherited } else { Visibility::Hidden };
         match (context, chars.as_ref()) {
@@ -1707,7 +1739,9 @@ fn drive_arms(
                 };
                 let mut clips = HashMap::from([(AnimKind::Idle, clip)]);
                 state.intro = 0.0;
-                if let Some((intro, secs)) = c.intro() {
+                // (The knife's drawn once, not between throws.)
+                let drawn = matches!((c, was), (Context::Knife(_), Some(Context::Knife(_))));
+                if let Some((intro, secs)) = c.intro().filter(|_| !drawn) {
                     clips.insert(AnimKind::Shot, load(intro));
                     state.intro = secs;
                 }
@@ -1926,6 +1960,20 @@ fn wingsuit_membrane(
         }
         _ => {}
     }
+    // The knife in hand at the knife thrower's game.
+    match (matches!(state.context, Some(Context::Knife(_))), state.knife) {
+        (true, None) => {
+            let hand = state.rig.and_then(|r| rigs.get(r).ok()).and_then(|r| r.joint(name_hash("RightHand"))).map(|(_, j)| j);
+            if let (Some(hand), Some(model)) = (hand, state.props.get("npc_knife_3").and_then(|h| models.get(h))) {
+                state.knife = Some(spawn_prop(model, hand, &mut commands));
+            }
+        }
+        (false, Some(e)) => {
+            commands.entity(e).despawn();
+            state.knife = None;
+        }
+        _ => {}
+    }
     if state.context != Some(Context::Wingsuit) {
         if let Some(e) = state.membrane.take() {
             commands.entity(e).despawn();
@@ -2003,6 +2051,16 @@ fn align_arms(state: Res<FpState>, clips: Res<Assets<Fc3Clip>>, rigs: Query<&Cha
     if let (Some(e), Some(prop)) = (state.camera, clip.0.sub_clips.iter().find(|c| c.skeleton_id == CAMERA_PROP && c.tracks.len() == 1)) {
         if let Ok(mut pt) = transforms.get_mut(e) {
             *pt = pose(prop);
+        }
+    }
+    // The thrower's knife, by its own track; gone from the hand once the
+    // throw lets it go.
+    if let (Some(e), Some(prop)) = (state.knife, clip.0.sub_clips.iter().find(|c| c.skeleton_id == THROWN_KNIFE_PROP)) {
+        if let Ok(mut pt) = transforms.get_mut(e) {
+            *pt = pose(prop);
+            if state.context == Some(Context::Knife(KnifeArms::Throwing)) && t >= THROWN_KNIFE_RELEASE {
+                pt.scale = Vec3::ZERO;
+            }
         }
     }
     // The welding torch, by its track (the hand's; the other is the left

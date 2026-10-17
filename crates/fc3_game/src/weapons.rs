@@ -2337,10 +2337,10 @@ fn update_view_model(
     let in_menu = *game_state.get() != crate::menu::GameState::Playing;
     // Weapons are stowed while swimming, as in the original.
     // Swimming and driving put the weapon away; the arms may still show what they're doing.
-    // (And at a poker table.)
-    let busy = ((player.swimming || (player.driving && !player.armed_passenger)) && !fp.in_context())
-        || poker.is_some_and(|p| p.holds_player())
-        || minigame.is_some_and(|m| m.holds_player());
+    // (And at a poker table, or a minigame unless the arms play its part:
+    // the knife thrower's.)
+    let busy = ((player.swimming || (player.driving && !player.armed_passenger) || minigame.is_some_and(|m| m.holds_player())) && !fp.in_context())
+        || poker.is_some_and(|p| p.holds_player());
     *vis = if in_menu || health.dead || player.noclip || busy || bino.blend > 0.5 || inv.scoped() { Visibility::Hidden } else { Visibility::Visible };
     let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
     if player.grounded {
