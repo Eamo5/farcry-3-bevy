@@ -970,6 +970,7 @@ fn drive_map_page(
         ])
     })();
     if let Some(v) = view.filter(|v| page.placed.as_ref() != Some(v) && v.iter().all(|n| n.is_finite())) {
+        debug!("world map: view {v:?}; MapVisual {}; MapScale {}", host.dps_info("MapVisual"), host.dps_info("MapScale"));
         host.dps_set_parent("MapScale", "mf_XPos", V::Number(v[0]));
         host.dps_set_parent("MapScale", "mf_YPos", V::Number(v[1]));
         for (id, uv) in &page.icons {

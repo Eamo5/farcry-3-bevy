@@ -506,7 +506,12 @@ menu straight at it, the game's own map screen standing down while it's up,
 the game's own map tiles, which it loads itself
 (`worlds\fc3_main\worldmap\<level>_<row>_<column>.png`: four levels of zoom of
 2, 5, 10 and 20 tiles a side, 512 pixels each; the converter writes them
-from the archives' `.xbt` as PNGs where `feu::movie_rel` finds them).
+from the archives' `.xbt` as PNGs where `feu::movie_rel` finds them; the
+radar's map, `map/world.dds`, is their third level put together). It
+centres on the player icon's own place (`CenterMap` sets `MapVisual` from
+it), and the icons' places are worked out from `MapVisual` and `MapScale`
+as the map moves (logged at debug level). Seen: the map over G3's coast
+and pier at the player's place, the radar showing the same coast.
 Everything else is the engine's to drive (`original_ui::drive_map_page`):
 
 * On `MapLoaded` the game sends the legend (`DataMap`: `iIconID`, `bDisplay`,
