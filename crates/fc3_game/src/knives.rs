@@ -84,7 +84,9 @@ const RING_MODELS: [&str; 5] = [
 const MOVES: &str = r"graphics\characters\_common\animations\exoticgameplay\minigames\knifethrowing\";
 const TALK_MOVE: &str = "ex_knifethrow_gm_talkilde.mab";
 const THROW_MOVE: &str = "ex_knife_throw_npc_throw_knife.mab";
+const TO_WATCH_MOVE: &str = "ex_knife_throw_npc_move_to_spectate.mab";
 const WATCH_MOVE: &str = "ex_knife_throw_npc_spectate_idle.mab";
+const END_MOVE: &str = "ex_knife_throw_npc_game_end.mab";
 /// The challenger's throw's whoosh (the player's comes with their arms'
 /// throw).
 const NPC_THROW_SOUND: u32 = 0x0015_911F;
@@ -93,6 +95,10 @@ const NPC_THROW_SOUND: u32 = 0x0015_911F;
 const THROW_ARMS: f32 = 0.4;
 const PLAYER_RELEASE: f32 = 0.367;
 const BETWEEN_THROWS: f32 = 1.5;
+/// The player's walk from where they watched to the throwing spot as
+/// their turn starts (their move's length), and the knife drawn after.
+const TO_THROW: f32 = 4.3;
+const DRAW: f32 = 1.0;
 
 /// The game the player is at, if any, and what its HUD shows.
 #[derive(Resource, Default)]
@@ -117,6 +123,8 @@ impl KnifeGame {
         let Stage::Thrower(thrown, charge, wait) = g.stage else { return None };
         Some(match charge {
             Some(_) => KnifeArms::Charging,
+            // (Walking to the throwing spot.)
+            None if thrown == 0 && wait > DRAW => return None,
             None if thrown > 0 && BETWEEN_THROWS - wait < THROW_ARMS => KnifeArms::Throwing,
             None if thrown >= g.settings.knives => {
                 if wait > 0.1 {
@@ -232,8 +240,9 @@ struct Game {
     points: u32,
     /// The leave box is up (the game waits), since when.
     leaving: Option<f32>,
-    /// The challenger's move playing (its scene's name and the move).
-    pose: Option<(String, &'static str)>,
+    /// The challenger's move playing: its scene's name, the move, and when
+    /// it ends (a move played once; forever for one that loops).
+    pose: Option<(String, &'static str, f32)>,
     poses: u32,
     /// Lines: until when the challenger talks, and when they last called.
     quiet_until: f32,
@@ -244,6 +253,21 @@ struct Game {
     /// A test's captures.
     shot: (String, f32, Vec<String>),
     left: bool,
+}
+
+impl Game {
+    /// Where the player stands on their turn: walking first from where they
+    /// watched to the throwing spot.
+    fn thrower_at(&self) -> Vec3 {
+        let (from, to) = (self.site.at(WATCH_SPOT), self.site.at(THROW_SPOT));
+        match self.stage {
+            Stage::Thrower(0, None, wait) if wait > DRAW => {
+                let f = (1.0 - (wait - DRAW) / TO_THROW).clamp(0.0, 1.0);
+                from.lerp(to, f * f * (3.0 - 2.0 * f))
+            }
+            _ => to,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -423,7 +447,6 @@ fn play_knives(
     let confirm = keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::Space) || (click && confirm_hover);
     let cancel = keys.just_pressed(KeyCode::Escape) || (click && cancel_hover);
     let near = site.at(TALK_SPOT).with_y(0.0).distance(player_at.with_y(0.0));
-    let throw_at = site.at(THROW_SPOT);
     let wheel_centre = game.wheel.map_or(site.at([-3.875, 3.125, 1.5]), |(_, w)| w.translation);
     // (Tests: FC3_KNIFE_SKIP skips the challenger's throws, FC3_KNIFE_LEAVE
     // asks to leave before the player's third throw and says yes.)
@@ -509,7 +532,7 @@ fn play_knives(
                 let th = challenger_throw(game, now);
                 game.throws.push(th);
             }
-            game.stage = Stage::Thrower(0, None, 1.0);
+            game.stage = Stage::Thrower(0, None, TO_THROW + DRAW);
         }
         Stage::Challenger(thrown, into) => {
             let into = into + dt;
@@ -522,7 +545,7 @@ fn play_knives(
             game.stage = Stage::Challenger(thrown, into);
             if into >= NPC_THROW {
                 let thrown = thrown + 1;
-                game.stage = if thrown >= game.settings.knives { Stage::Thrower(0, None, 1.0) } else { Stage::Challenger(thrown, 0.0) };
+                game.stage = if thrown >= game.settings.knives { Stage::Thrower(0, None, TO_THROW + DRAW) } else { Stage::Challenger(thrown, 0.0) };
             }
         }
         Stage::Thrower(thrown, charge, wait) => {
@@ -615,7 +638,7 @@ fn play_knives(
     let place = match game.stage {
         Stage::Betting | Stage::Result(_) => Some((site.at(WATCH_SPOT), talk_at, 1)),
         Stage::Challenger(..) => Some((site.at(WATCH_SPOT), wheel_centre, 2)),
-        Stage::Thrower(..) => Some((throw_at, wheel_centre, 3)),
+        Stage::Thrower(..) => Some((game.thrower_at(), wheel_centre, 3)),
         Stage::Away => None,
     };
     if let Some((at, look, view)) = place {
@@ -718,7 +741,7 @@ fn play_knives(
         let moment = match game.shot.0.as_str() {
             "thrower" => 0.4,
             "landed" => 0.35,
-            "drawn" => 0.95,
+            "drawn" => TO_THROW + 0.95,
             _ => 1.0,
         };
         if !game.shot.0.is_empty() && game.shot.1 > moment && !game.shot.2.contains(&game.shot.0) {
@@ -756,9 +779,9 @@ fn wheel_face(game: &Game, site: Site) -> (Vec3, Vec3) {
     (centre + normal * FACE, normal)
 }
 
-/// The challenger's move for the stage: talking (waiting, the wager, the
-/// result), a throw each knife, watching the player's. Each in a scene of
-/// its own about the anchor.
+/// The challenger's move for the stage: talking (waiting, the wager), a
+/// throw each knife, off to watch and watching the player's, the game's end
+/// and then talking again. Each in a scene of its own about the anchor.
 fn pose_challenger(
     game: &mut Game,
     cinema: &mut crate::cinema::Cinema,
@@ -767,14 +790,18 @@ fn pose_challenger(
     handles: &mut HashMap<String, Handle<Fc3Clip>>,
 ) {
     use fc3_formats::cinema::{Clip, ClipKind, Group, GroupKind, Sequence};
-    let (want, once) = match game.stage {
-        Stage::Challenger(n, into) => (THROW_MOVE, Some((n, into))),
-        Stage::Thrower(..) => (WATCH_MOVE, None),
-        _ => (TALK_MOVE, None),
+    let current = game.pose.as_ref().map(|(_, m, _)| *m);
+    let ended = game.pose.as_ref().is_some_and(|(_, _, until)| game.clock >= *until);
+    let (want, looping) = match game.stage {
+        Stage::Challenger(..) => (THROW_MOVE, false),
+        Stage::Thrower(..) if current == Some(THROW_MOVE) || (current == Some(TO_WATCH_MOVE) && !ended) => (TO_WATCH_MOVE, false),
+        Stage::Thrower(..) => (WATCH_MOVE, true),
+        Stage::Result(_) if current != Some(TALK_MOVE) && !(current == Some(END_MOVE) && ended) => (END_MOVE, false),
+        _ => (TALK_MOVE, true),
     };
-    // (A throw's move starts with each knife; the rest loop.)
-    let fresh_throw = once.is_some_and(|(_, into)| into == 0.0 || game.pose.as_ref().is_none_or(|(_, m)| *m != THROW_MOVE));
-    if game.pose.as_ref().is_some_and(|(_, m)| *m == want) && !fresh_throw {
+    // (A throw's move starts again with each knife.)
+    let fresh_throw = matches!(game.stage, Stage::Challenger(_, into) if into == 0.0);
+    if current == Some(want) && !fresh_throw {
         return;
     }
     let path = format!("{MOVES}{want}");
@@ -790,11 +817,12 @@ fn pose_challenger(
     let groups = vec![Group { uid: 1, kind: GroupKind::Character, name: "challenger".into(), archetype: 0, clips: vec![anim] }];
     cinema.play_built(crate::cinema::Built {
         name: name.clone(),
-        seq: Sequence { name: name.clone(), duration: length, looping: once.is_none(), groups, ..Default::default() },
+        seq: Sequence { name: name.clone(), duration: length, looping, groups, ..Default::default() },
         origin: game.site.anchor,
         bindings: HashMap::from([(1, game.site.challenger)]),
     });
-    if let Some((old, _)) = game.pose.replace((name, want)) {
+    let until = if looping { f32::INFINITY } else { game.clock + length };
+    if let Some((old, ..)) = game.pose.replace((name, want, until)) {
         cinema.stop_built(&old);
     }
 }
@@ -969,7 +997,7 @@ fn hold_place(knives: Res<KnifeGame>, mut players: Query<(&mut Transform, &mut P
     let Some(game) = knives.game.as_ref() else { return };
     let at = match game.stage {
         Stage::Betting | Stage::Challenger(..) | Stage::Result(_) => game.site.at(WATCH_SPOT),
-        Stage::Thrower(..) => game.site.at(THROW_SPOT),
+        Stage::Thrower(..) => game.thrower_at(),
         Stage::Away => return,
     };
     let Ok((mut t, mut p)) = players.single_mut() else { return };

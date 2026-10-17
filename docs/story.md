@@ -4809,5 +4809,9 @@ wager rows and their difficulty, the rings' worth, the lines):
   track): drawn once, held ready, the throw held back, thrown and put away
   after the last. The knife leaves the hand 0.37 s into the throw, when
   the flying one sets off; the throw's whoosh is the move's own.
-* **Not yet.** The walks between the spots (the player's and the
-  challenger's): each is put at its spot.
+* **Changing places.** After the challenger's throws they walk off to
+  watch (their own move) while the player walks from where they watched to
+  the throwing spot over their move's 4.3 s and draws the knife there; the
+  result has the challenger's game-end move, then their talk.
+* **Not yet.** The player's walks are glides (their full-body moves aren't
+  played), and the challenger's walk in to throw.
