@@ -706,6 +706,30 @@ fn scripted_markers(host: &crate::story::StoryHost) -> Vec<(f64, Vec3)> {
 
 /// The markers standing in the layers that are in, enabled, that no script
 /// shows: activities, shops, the challenge boards.
+/// Each plant's radar icon (`plant_<colour>`), as its pickups name it
+/// (`CPickupCollectible`'s `sMinimapIconName`: a star rhododendron's is
+/// `plant_red`).
+fn plant_icons(host: &crate::story::StoryHost) -> std::collections::HashMap<crate::syringes::Plant, &'static str> {
+    let mut out = std::collections::HashMap::new();
+    for e in host.story.data().entities.values() {
+        let Some(plant) = e.name.strip_prefix("Pickups/Plants/").and_then(crate::syringes::Plant::from_name) else { continue };
+        if out.contains_key(&plant) {
+            continue;
+        }
+        let icon = e.component("CPickupCollectible").and_then(|c| c.str("sMinimapIconName"));
+        let label = match icon.as_deref() {
+            Some("plant_green") => "plant_green",
+            Some("plant_blue") => "plant_blue",
+            Some("plant_red") => "plant_red",
+            Some("plant_yellow") => "plant_yellow",
+            Some("plant_white") => "plant_white",
+            _ => continue,
+        };
+        out.insert(plant, label);
+    }
+    out
+}
+
 fn standing_markers(host: &crate::story::StoryHost) -> Vec<(f64, Vec3)> {
     let data = host.story.data();
     let scripted: std::collections::HashSet<u64> = host.story.objective_markers().into_iter().map(|m| m.0).collect();
@@ -3626,6 +3650,7 @@ fn drive_radar(
     ),
     mut last: Local<Option<Radar>>,
     (story, time, mut standing): (Option<NonSend<crate::story::StoryHost>>, Res<Time<Real>>, Local<(f32, Vec<(f64, Vec3)>)>),
+    mut plants: Local<Option<std::collections::HashMap<crate::syringes::Plant, &'static str>>>,
 ) {
     let Interface::Running(host) = &*state else { return };
     let Ok((at, player)) = players.single() else { return };
@@ -3711,17 +3736,29 @@ fn drive_radar(
             places.push((l.length(), marker(l, label)));
         }
     }
+    if plants.is_none() {
+        *plants = story.as_ref().map(|h| plant_icons(h));
+    }
+    let mut shown: Vec<(Vec3, &str)> = Vec::new();
     if hud.0.collectibles > 0.0 {
         for (t, pk) in &pickups {
             let label = match pk.kind {
                 crate::pickups::PickupKind::Relic => "Relic",
                 crate::pickups::PickupKind::Letter => "Letter",
                 crate::pickups::PickupKind::MemoryCard => "Sdcard",
+                // (Plants by their colour, as their pickups name it.)
+                crate::pickups::PickupKind::Plant(p) => match plants.as_ref().and_then(|m| m.get(&p)) {
+                    Some(label) => label,
+                    None => continue,
+                },
                 _ => continue,
             };
             let d = t.translation() - at.translation;
             let l = local(t.translation());
-            if Vec2::new(d.x, d.z).length() <= hud.0.collectibles && on_disc(l) {
+            // (A plant is two pickups, its own and its look: one marker.)
+            let twin = shown.iter().any(|(p, lb): &(Vec3, &str)| *lb == label && p.distance(t.translation()) < 1.0);
+            if Vec2::new(d.x, d.z).length() <= hud.0.collectibles && on_disc(l) && !twin {
+                shown.push((t.translation(), label));
                 places.push((l.length(), marker(l, label)));
             }
         }

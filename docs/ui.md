@@ -309,7 +309,10 @@ only what changed (and everything again until the movies have loaded):
   `LocMarker_<n>` (16) places: outposts (`OutpostLocked` while held,
   `FastTravel` once taken), their working alarm boxes (`Alarm`, `AlarmOn`
   while ringing), radio towers (`TowerLocked` until climbed, then `Tower`)
-  collectibles within the game's radius (`Relic`, `Letter`, `Sdcard`),
+  collectibles within the game's radius (`Relic`, `Letter`, `Sdcard`) and
+  plants within it by their colour (`plant_red`... as the plant's pickups
+  name it, `CPickupCollectible`'s `sMinimapIconName`; a plant's two pickups
+  one marker),
   and the story's markers the world map shows (`original_ui::radar_label`:
   `Shop`, `Poker`, `KnifeThrowing`, `ShootingChallenge`,
   `RacingChallenge`, `ChallengeBoard`, `MissionGiver`, `Quest`,
@@ -318,8 +321,7 @@ only what changed (and everything again until the movies have loaded):
   disc, `Outside` held on its rim, `Up` or `Down` when well above or
   below). `NorthMarkerMC` turns about the centre to the north
   (`_rotation`). The labels the movie has and the game doesn't use yet:
-  `companion`, `BeerPong`, safehouses, photo spots, ammo, encounters,
-  plants (`plant_<colour>`). `fc3tool swf-script <movie> labels [text]`
+  `companion`, `BeerPong`, safehouses, photo spots, ammo, encounters. `fc3tool swf-script <movie> labels [text]`
   lists a movie's sprites' frame labels.
   The game's own minimap icons stand down meanwhile.
 
