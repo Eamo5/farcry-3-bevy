@@ -57,6 +57,7 @@ pub mod prompt {
     pub const RUCKSACK_FULL: u32 = 98546;
     pub const RELOAD: u32 = 56331;
     pub const DISABLE_ALARM: u32 = 71685;
+    pub const HEAL: u32 = 56341;
 }
 
 /// How long an alarm box's switch is held to turn it off, as the game's

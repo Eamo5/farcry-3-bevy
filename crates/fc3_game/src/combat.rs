@@ -56,6 +56,8 @@ pub const HEALTH_SEGMENT: f32 = 25.0;
 const REGEN_DELAY: f32 = 4.0;
 const REGEN_RATE: f32 = 6.0;
 const MEDKIT_HEAL: f32 = 50.0;
+/// How long the heal input is held to patch up without a medkit.
+const MANUAL_HEAL_HOLD: f32 = 0.5;
 /// Seconds from the player's death to the respawn.
 pub const RESPAWN_SECS: f32 = 5.0;
 
@@ -547,7 +549,8 @@ fn fall_damage(
 #[allow(clippy::too_many_arguments)]
 fn use_medkit(
     actions: Res<crate::controls::ActionState>,
-    settings: Res<crate::settings::Settings>,
+    (settings, text, time): (Res<crate::settings::Settings>, Option<Res<crate::hud::GameText>>, Res<Time>),
+    mut held: Local<f32>,
     perks: Res<crate::progression::Perks>,
     busy: Res<crate::fp::HandsBusy>,
     mut hud: ResMut<crate::hud::HudState>,
@@ -559,11 +562,16 @@ fn use_medkit(
     if h.dead || busy.busy() || p.noclip {
         return;
     }
+    // (Patching up is held, as the game's "Hold [Heal] to heal" asks; a
+    // medkit is a press.)
     let manual = ps.medkits == 0 && h.current < HEALTH_SEGMENT;
     if manual && hud.prompt.is_none() {
-        hud.prompt = Some(format!("{}  heal", actions.label(Action::Medkit, &settings)));
+        let prompt = text.as_deref().and_then(|t| t.prompt(crate::hud::prompt::HEAL, &actions, &settings));
+        hud.prompt = Some(prompt.unwrap_or_else(|| format!("hold {}  heal", actions.label(Action::Medkit, &settings))));
     }
-    if !actions.just_pressed(Action::Medkit) || h.current >= h.max {
+    let patch_up = manual
+        && crate::hud::held_long_enough(&mut held, actions.pressed(Action::Medkit), actions.just_pressed(Action::Medkit), time.delta_secs(), MANUAL_HEAL_HOLD);
+    if !(patch_up || ps.medkits > 0 && actions.just_pressed(Action::Medkit)) || h.current >= h.max {
         return;
     }
     if ps.medkits > 0 {
