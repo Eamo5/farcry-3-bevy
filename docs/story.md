@@ -4857,9 +4857,14 @@ cache as they are, and the challenge manager's template (the rewards: $250,
   fighting: 695 points, the three rewards, the result page, the area clear
   and the gear back after).
 * **Not yet.** F4's start, the technical's spot, is a bridge over the
-  river our world doesn't have (no model there, no collision: the
-  technical drops into the river and the trial fails as the player is
-  off its spot); the helicopters G3's and C7's waves fly in (they land at
+  river our world doesn't have: the technical drops into the river and
+  the trial fails as the player is off its spot. The roads end on both
+  banks and the sector's navmesh has a deck 8 m wide at the spot's height
+  across the water, but no sector, metasector, encounter prefab or story
+  entity puts anything there, the sector collision (`sectcol*.hkx`) has
+  nothing at that height, and the road splines stop at the banks
+  (`fc3tool entities-near ... --meta`, `nav-near`, `hkx-file`,
+  `preload`); the helicopters G3's and C7's waves fly in (they land at
   their path's end), the loading screen, and the other natives the trials
   call that do nothing yet (`SwitchArmy`, tagging, `DisplayCustomUIMsg`,
   `RefillWeaponAmmo`, `SelectThrowGadget`).

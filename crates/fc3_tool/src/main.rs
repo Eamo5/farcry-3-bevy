@@ -1214,6 +1214,41 @@ fn main() -> Result<()> {
                 println!("{f:6} files {o:7} objects  {c}");
             }
         }
+        "hkx-file" => {
+            // One packfile's classes and collision (its own space), with the
+            // triangles reaching into a box, or a class's objects' words:
+            // hkx-file <path> [x y z half | hkClass]
+            let path = args.get(1).context("usage: hkx-file <path> [x y z half]")?;
+            let bytes = vfs.read(path)?;
+            let mut by: BTreeMap<String, usize> = BTreeMap::new();
+            for c in fc3_formats::havok::object_classes(&bytes)? {
+                *by.entry(c).or_default() += 1;
+            }
+            println!("{by:?}");
+            let g = fc3_formats::havok::collision_geometry(&bytes)?;
+            println!("{} bodies, {} triangles, shapes {:?}, unhandled {:?}", g.bodies, g.triangles.len(), g.shapes, g.unhandled);
+            let (lo, hi) = g.positions.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), p| {
+                (std::array::from_fn(|i| lo[i].min(p[i])), std::array::from_fn(|i| hi[i].max(p[i])))
+            });
+            println!("bounds {lo:?} .. {hi:?}");
+            if let Some(class) = args.get(2).filter(|a| a.starts_with("hk")) {
+                for (o, words, links) in fc3_formats::havok::object_words(&bytes, class, 0, 0x80)? {
+                    let floats: Vec<String> = words.iter().map(|w| format!("{:.2}", f32::from_bits(*w))).collect();
+                    println!("{o:x}: {} {links:?}", floats.join(" "));
+                }
+                return Ok(());
+            }
+            let num = |i: usize| args.get(i).and_then(|v| v.parse::<f32>().ok());
+            if let (Some(x), Some(y), Some(z), Some(h)) = (num(2), num(3), num(4), num(5)) {
+                let c = [x, y, z];
+                for t in &g.triangles {
+                    let v = t.map(|i| g.positions[i as usize]);
+                    if v.iter().any(|p| (0..3).all(|i| (p[i] - c[i]).abs() <= h)) {
+                        println!("{v:?}");
+                    }
+                }
+            }
+        }
         "hkx-surfaces" => {
             // Collision surfaces of models with an .hkx: hkx-surfaces [substr] [--each]
             let filter = args.get(1).filter(|a| !a.starts_with("--")).map(|s| s.to_ascii_lowercase());
@@ -1760,15 +1795,25 @@ fn main() -> Result<()> {
             std::fs::write(out, text)?;
         }
         "entities-near" => {
-            // Entities within r metres of Dunia (x, y): entities-near <x> <y> <r>
+            // Entities within r metres of Dunia (x, y), from the sectors round
+            // it and (--meta) every metasector: entities-near <x> <y> <r> [--meta]
             let num = |i: usize| args.get(i).and_then(|v| v.parse::<f32>().ok());
-            let (Some(x), Some(y), Some(r)) = (num(1), num(2), num(3)) else { bail!("usage: entities-near <x> <y> <r>") };
+            let (Some(x), Some(y), Some(r)) = (num(1), num(2), num(3)) else { bail!("usage: entities-near <x> <y> <r> [--meta]") };
             let c = fc3_formats::terrain::SectorCoord::containing(x, y);
             let reach = (r / 64.0).ceil() as i32 + 1;
+            let mut files: Vec<String> = Vec::new();
             for dy in -reach..=reach {
                 for dx in -reach..=reach {
-                    let s = fc3_formats::terrain::SectorCoord::new(c.x + dx, c.y + dy);
-                    let Ok(bytes) = vfs.read(&s.entities_path("fc3_main")) else { continue };
+                    files.push(fc3_formats::terrain::SectorCoord::new(c.x + dx, c.y + dy).entities_path("fc3_main"));
+                }
+            }
+            if args.iter().any(|a| a == "--meta") {
+                let meta = |n: &&String| n.contains(r"worlds\fc3_main\") && n.contains(r"\metasectors\") && n.ends_with(".data.fcb");
+                files.extend(vfs.names.values().filter(meta).cloned());
+            }
+            {
+                for path in &files {
+                    let Ok(bytes) = vfs.read(path) else { continue };
                     let Ok(ents) = fc3_formats::world::parse_all_entities(&bytes) else { continue };
                     for e in ents {
                         let d = ((e.pos[0] - x).powi(2) + (e.pos[1] - y).powi(2)).sqrt();
@@ -3084,6 +3129,70 @@ fn main() -> Result<()> {
                         println!("{p}:{}: {}", i + 1, line.trim());
                     }
                 }
+            }
+        }
+        "preload" => {
+            // A sector's preload list, its resource ids named where the
+            // archive knows them, per layer: preload <level> <sector id> [substr]
+            let (Some(level), Some(id)) = (args.get(1), args.get(2)) else { bail!("usage: preload <level> <sector id> [substr]") };
+            let filter = args.get(3).map(|s| s.to_ascii_lowercase());
+            let path = format!(r"worlds\fc3_main\levels\{level}\generated\preload\sector{id}.preload.fcb");
+            let root = fc3_formats::fcb::parse(&vfs.read(&path)?)?;
+            fn walk(o: &fc3_formats::fcb::Object, layer: u64, out: &mut Vec<(u64, u64)>) {
+                let layer = o.u64("LayerId").unwrap_or(layer);
+                if let Some(b) = o.field("ResIds") {
+                    if b.len() >= 4 {
+                        let n = u32::from_le_bytes(b[..4].try_into().unwrap()) as usize;
+                        for i in 0..n {
+                            let at = 4 + i * 8;
+                            if let Some(w) = b.get(at..at + 8) {
+                                out.push((layer, u64::from_le_bytes(w.try_into().unwrap())));
+                            }
+                        }
+                    }
+                }
+                for c in &o.children {
+                    walk(c, layer, out);
+                }
+            }
+            let mut ids = Vec::new();
+            walk(&root, 0, &mut ids);
+            for (layer, h) in ids {
+                let name = vfs.name_of(h).map(str::to_string).unwrap_or(format!("{h:016x}"));
+                if filter.as_ref().is_none_or(|f| name.to_ascii_lowercase().contains(f.as_str())) {
+                    println!("{layer:x} {name}");
+                }
+            }
+        }
+        "nav-near" => {
+            // Navmesh polygons of a sector with a vertex within r metres of
+            // Dunia (x, y), Dunia space: nav-near <level> <sector id> <x> <y> <r>
+            let (Some(level), Some(id)) = (args.get(1), args.get(2)) else { bail!("usage: nav-near <level> <sector id> <x> <y> <r>") };
+            let num = |i: usize| args.get(i).and_then(|v| v.parse::<f32>().ok());
+            let (Some(x), Some(y), Some(r)) = (num(3), num(4), num(5)) else { bail!("usage: nav-near <level> <sector id> <x> <y> <r>") };
+            let path = format!(r"worlds\fc3_main\levels\{level}\generated\nv\sector{id}.rnv");
+            for t in fc3_formats::nav::parse_rnv(&vfs.read(&path)?) {
+                for p in &t.polys {
+                    let vs: Vec<[f32; 3]> = p.verts.iter().map(|&i| t.verts[i as usize]).map(|v| [v[0], v[2], v[1]]).collect();
+                    if vs.iter().any(|v| ((v[0] - x).powi(2) + (v[1] - y).powi(2)).sqrt() <= r) {
+                        let text: Vec<String> = vs.iter().map(|v| format!("({:.1}, {:.1}, {:.1})", v[0], v[1], v[2])).collect();
+                        println!("tile {} {} layer {}: {}", t.x, t.y, t.layer, text.join(" "));
+                    }
+                }
+            }
+        }
+        "prefab-dump" => {
+            // An encounter prefab's entities (prefab space): prefab-dump <id, decimal or 0x>
+            let raw = args.get(1).context("usage: prefab-dump <id>")?;
+            let id = match raw.strip_prefix("0x") {
+                Some(h) => u64::from_str_radix(h, 16)?,
+                None => raw.parse()?,
+            };
+            let bytes = vfs.read(&fc3_formats::encounters::prefab_path(id))?;
+            let unpacked = fc3_formats::encounters::unpack(&bytes).context("not a packed prefab")?;
+            for e in fc3_formats::world::parse_all_entities(&unpacked)? {
+                let mesh = e.meshes.first().map_or(String::new(), |m| format!("  {m}"));
+                println!("{:28} {} at ({:.1}, {:.1}, {:.1}){mesh}", e.class, e.name, e.pos[0], e.pos[1], e.pos[2]);
             }
         }
         "scene-survey" => {

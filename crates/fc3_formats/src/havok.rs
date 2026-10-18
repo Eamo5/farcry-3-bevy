@@ -791,6 +791,23 @@ pub fn body_bytes(file: &[u8], from: u32, to: u32) -> Result<Vec<(String, Vec<u8
         .collect())
 }
 
+/// Each object of a class: its offset, the raw words from `from` to `to`,
+/// and the links its words hold (for working out field layouts).
+pub fn object_words(file: &[u8], class: &str, from: u32, to: u32) -> Result<Vec<(u32, Vec<u32>, Vec<(u32, String)>)>> {
+    let p = Packfile::parse(file)?;
+    let class_of: HashMap<u32, &str> = p.objects.iter().map(|(o, c)| (*o, c.as_str())).collect();
+    Ok(p.of_class(class)
+        .map(|o| {
+            let words = (from..to).step_by(4).map(|i| p.u32(o + i)).collect();
+            let links = (from..to)
+                .step_by(4)
+                .filter_map(|i| p.links.get(&(o + i)).map(|t| (i, class_of.get(t).map_or(format!("@{t:x}"), |c| c.to_string()))))
+                .collect();
+            (o, words, links)
+        })
+        .collect())
+}
+
 /// Every shape of a model's `.hkx` that characters collide with, as
 /// triangles in the model's (Dunia, Z-up) space.
 ///
