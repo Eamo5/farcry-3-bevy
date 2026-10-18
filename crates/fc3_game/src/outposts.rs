@@ -345,9 +345,14 @@ fn reinforce(time: Res<Time>, mut outposts: ResMut<Outposts>, mut convoys: Messa
 }
 
 /// Alarm boxes can be switched off up close.
+/// The game's "All alarms disabled".
+const ALL_ALARMS_DISABLED: u32 = 166404;
+
+#[allow(clippy::too_many_arguments)]
 fn sabotage_alarms(
     actions: Res<crate::controls::ActionState>,
-    settings: Res<crate::settings::Settings>,
+    (settings, text, time): (Res<crate::settings::Settings>, Option<Res<crate::hud::GameText>>, Res<Time>),
+    mut held: Local<f32>,
     mut outposts: ResMut<Outposts>,
     players: Query<(&Transform, &Health), With<Player>>,
     mut hud: ResMut<HudState>,
@@ -363,11 +368,18 @@ fn sabotage_alarms(
             if o.disabled[k] || a.distance(pt.translation) > 2.6 {
                 continue;
             }
-            hud.prompt = Some(format!("{}  disable alarm", actions.label(crate::controls::Action::Interact, &settings)));
-            if actions.just_pressed(crate::controls::Action::Interact) {
+            let prompt = text.as_deref().and_then(|t| t.prompt(crate::hud::prompt::DISABLE_ALARM, &actions, &settings));
+            hud.prompt = Some(prompt.unwrap_or_else(|| format!("hold {}  disable alarm", actions.label(crate::controls::Action::Interact, &settings))));
+            let interact = crate::controls::Action::Interact;
+            if crate::hud::held_long_enough(&mut held, actions.pressed(interact), actions.just_pressed(interact), time.delta_secs(), crate::hud::ALARM_HOLD) {
                 o.disabled[k] = true;
                 let left = o.disabled.iter().filter(|d| !**d).count();
-                hud.notify(if left == 0 { "All alarms disabled".to_string() } else { format!("Alarm disabled ({left} left)") });
+                // (The last, in the game's words; the count is ours alone.)
+                match text.as_deref().and_then(|t| t.get(ALL_ALARMS_DISABLED)).filter(|_| left == 0) {
+                    Some(all) => hud.notify(all.to_string()),
+                    None if left == 0 => hud.notify("All alarms disabled"),
+                    None => hud.notify_native(format!("Alarm disabled ({left} left)")),
+                }
                 sfx.write(crate::sound::PlaySfx { event: ALARM_OFF, at: Some(*a), volume: 1.0 });
                 // (The game's reward for it.)
                 let amount = skills.as_ref().and_then(|s| s.xp_reward("DisableAlarm")).unwrap_or(0.0) as u32;

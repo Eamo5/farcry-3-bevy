@@ -56,6 +56,26 @@ pub mod prompt {
     pub const BOARD_GLIDER: u32 = 112303;
     pub const RUCKSACK_FULL: u32 = 98546;
     pub const RELOAD: u32 = 56331;
+    pub const DISABLE_ALARM: u32 = 71685;
+}
+
+/// How long an alarm box's switch is held to turn it off, as the game's
+/// "HOLD [Interact] to disable alarm" asks (the story's autopilot taps).
+pub const ALARM_HOLD: f32 = 1.0;
+
+/// A held interaction: true once it has been held `need` seconds (a tap
+/// does it under the story's autopilot); letting go starts it over.
+pub fn held_long_enough(held: &mut f32, pressed: bool, just_pressed: bool, dt: f32, need: f32) -> bool {
+    if std::env::var_os("FC3_STORY_AUTOPILOT").is_some() && just_pressed {
+        *held = 0.0;
+        return true;
+    }
+    *held = if pressed { *held + dt } else { 0.0 };
+    if *held >= need {
+        *held = 0.0;
+        return true;
+    }
+    false
 }
 
 fn load_game_text(info: Option<Res<crate::data::CacheInfo>>, mut text: ResMut<GameText>) {
@@ -924,5 +944,21 @@ fn update_overlays(
         if let Some(v) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS).and_then(|d| d.smoothed()) {
             t.0 = format!("{v:.0} fps");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_held_switch_turns_only_once_held_long_enough() {
+        let mut held = 0.0;
+        assert!(!held_long_enough(&mut held, true, true, 0.4, ALARM_HOLD));
+        assert!(!held_long_enough(&mut held, true, false, 0.4, ALARM_HOLD));
+        // (Let go: it starts over.)
+        assert!(!held_long_enough(&mut held, false, false, 0.4, ALARM_HOLD));
+        assert!(!held_long_enough(&mut held, true, true, 0.6, ALARM_HOLD));
+        assert!(held_long_enough(&mut held, true, false, 0.6, ALARM_HOLD));
     }
 }

@@ -148,7 +148,8 @@ fn sound_alarms(host: Option<NonSendMut<StoryHost>>, time: Res<Time>, mut alarms
 fn disable_alarms(
     host: Option<NonSendMut<StoryHost>>,
     actions: Res<crate::controls::ActionState>,
-    settings: Res<crate::settings::Settings>,
+    (settings, text, time): (Res<crate::settings::Settings>, Option<Res<crate::hud::GameText>>, Res<Time>),
+    mut held: Local<f32>,
     mut alarms: ResMut<StoryAlarms>,
     players: Query<(&Transform, &Health), With<Player>>,
     mut hud: ResMut<crate::hud::HudState>,
@@ -166,8 +167,10 @@ fn disable_alarms(
     else {
         return;
     };
-    hud.prompt = Some(format!("{}  disable alarm", actions.label(crate::controls::Action::Interact, &settings)));
-    if !actions.just_pressed(crate::controls::Action::Interact) {
+    let prompt = text.as_deref().and_then(|t| t.prompt(crate::hud::prompt::DISABLE_ALARM, &actions, &settings));
+    hud.prompt = Some(prompt.unwrap_or_else(|| format!("hold {}  disable alarm", actions.label(crate::controls::Action::Interact, &settings))));
+    let interact = crate::controls::Action::Interact;
+    if !crate::hud::held_long_enough(&mut held, actions.pressed(interact), actions.just_pressed(interact), time.delta_secs(), crate::hud::ALARM_HOLD) {
         return;
     }
     info!("story alarm {id} disabled");

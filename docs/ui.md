@@ -417,8 +417,10 @@ only what changed (and everything again until the movies have loaded):
   the game has the prompt and it is pressed as ours is, it is the game's
   (`hud::GameText`, `hud::prompt`, its `[Action]`s the keys bound): a zip
   line (56342, `[ZipAttach]` the interact key, `[ZipDetach]` jump), a
-  plant (125973), a glider (112303), a full rucksack (98546). Its "Hold"
-  prompts (an alarm, a heal) stay ours while ours are presses.
+  plant (125973), a glider (112303), a full rucksack (98546), an alarm box
+  (71685: held a second, as the game had it, `hud::ALARM_HOLD`; the story's
+  autopilot taps; the last one's notice the game's 166404). Its "Hold [Heal]"
+  stays ours while healing is a press.
 * **Reload prompt**: `ReloadMC` with the game's "[Reload] Reload" (56331,
   by `SetReloadText`) while the weapon in hand's magazine is empty with
   more to load and no reload under way (rare: the game reloads by itself).
