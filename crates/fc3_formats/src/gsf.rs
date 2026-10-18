@@ -663,6 +663,109 @@ impl PokerSettings {
     }
 }
 
+pub const RACE_RESOURCES: &str = "CRacingMiniGameResourceContainer";
+
+/// A race (`CRacingMiniGame_*`; every one the engine's `CDrivingMiniGame`):
+/// its track (the mission block and base layer that bring its gates and
+/// vehicles in), its three rows (each a layer, a wager, the gates and the
+/// target time, s), what a win multiplies the wager by and the wager box's
+/// subtitle (the track's name, a string id).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RaceSettings {
+    pub block: String,
+    pub base_layer: String,
+    pub rows: Vec<RaceRow>,
+    pub winnings: f32,
+    pub subtitle: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RaceRow {
+    pub layer: String,
+    pub wager: u32,
+    pub gates: u32,
+    pub target: f32,
+}
+
+impl RaceSettings {
+    pub fn parse(bytes: &[u8], name: &str) -> Result<Self> {
+        let o = entry(bytes, name)?;
+        let info = o.child("RaceInformation").context("a race without its information")?;
+        let rows = info
+            .child("RaceDifficultySettings")
+            .map(|d| {
+                d.children
+                    .iter()
+                    .map(|r| RaceRow {
+                        layer: r.str("DifficultyMissionLayer").unwrap_or_default(),
+                        wager: r.u32("WagerForChallenge").unwrap_or(0),
+                        gates: r.u32("ExpectedNumberOfWaypoints").unwrap_or(0),
+                        target: r.f32("TargetTime").unwrap_or(120.0),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(Self {
+            block: info.str("MissionBlock").unwrap_or_default(),
+            base_layer: info.str("BaseMissionLayer").unwrap_or_default(),
+            rows,
+            winnings: o.f32("gWinningsMultiplier").unwrap_or(2.0),
+            subtitle: o.u32("DifficultyScreenSubTitle").unwrap_or(0),
+        })
+    }
+}
+
+/// The races' sounds and voices (`CRacingMiniGameResourceContainer`): out of
+/// time (each second near the end), the countdown's each second, get ready,
+/// the start, a win, a loss, a gate passed and the finish; the player's
+/// lines (agreeing to race, losing, winning, winning gold); the keepers'
+/// four sets (`AIDialogIndex`), each enticing, quitting, the player failing
+/// and the player winning; and the music state.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RaceResources {
+    pub out_of_time: u32,
+    pub countdown: u32,
+    pub get_ready: u32,
+    pub start: u32,
+    pub win: u32,
+    pub fail: u32,
+    pub gate: u32,
+    pub finish: u32,
+    pub player: [u32; 4],
+    pub keepers: Vec<[Vec<u32>; 4]>,
+    pub music: String,
+}
+
+impl RaceResources {
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        let o = entry(bytes, RACE_RESOURCES)?;
+        let audio = o.child("AudioSettings").context("race resources without their audio")?;
+        let gear = |list: Option<&std::sync::Arc<Object>>| -> Vec<u32> {
+            list.map(|l| l.children.iter().map(|g| sound_id(g, "GearString")).filter(|&i| i != 0).collect()).unwrap_or_default()
+        };
+        let player = audio.child("PlayerDialogSettings");
+        let line = |n: &str| player.map_or(0, |p| sound_id(p, n));
+        let keepers = audio
+            .child("AIDialogSettings")
+            .map(|d| d.children.iter().map(|k| ["AIEnticeSound", "AIQuitSound", "AIFailureSound", "AISuccessSound"].map(|n| gear(k.child(n)))).collect())
+            .unwrap_or_default();
+        let waypoint = audio.child("WaypoingSettings");
+        Ok(Self {
+            out_of_time: sound_id(audio, "sndOutOfTimeSound"),
+            countdown: sound_id(audio, "sndCountDownEachSecond"),
+            get_ready: sound_id(audio, "sndGetReady"),
+            start: sound_id(audio, "MiniGameStart"),
+            win: sound_id(audio, "MiniGameWin"),
+            fail: sound_id(audio, "MiniGameFail"),
+            gate: waypoint.map_or(0, |w| sound_id(w, "sndWaypointSound")),
+            finish: waypoint.map_or(0, |w| sound_id(w, "sndWaypointFinishSound")),
+            player: ["JasonAgreesToPlaySound", "JasonFailureSound", "JasonWinsSound", "JasonWinsGoldSound"].map(line),
+            keepers,
+            music: audio.child("MusicSettings").and_then(|m| m.str_h(0xA504_B211)).unwrap_or_default(),
+        })
+    }
+}
+
 pub const KNIVES: &str = "CKnivesMiniGame";
 
 /// The knife throwing game (`CKnivesMiniGame`; the scripts start the base
@@ -891,6 +994,15 @@ mod tests {
         assert_eq!((hoyt.npcs[0].player_type, hoyt.npcs[0].dialog, hoyt.npcs[1].player_type), (1, 5, 2));
         let sqc = PokerSettings::parse(&bytes, "SQC_100_OBJ20_Pokerminigame").unwrap();
         assert_eq!(sqc.difficulties.iter().map(|d| d.enabled).collect::<Vec<_>>(), vec![false, true, false, false]);
+        let race = RaceSettings::parse(&bytes, "CRacingMiniGame_G3_WaypointRace").unwrap();
+        assert_eq!(
+            (race.block.as_str(), race.base_layer.as_str(), race.winnings, race.subtitle),
+            ("RMG_G3_WaypointRace", "RMG_G3_WaypointRace_main", 2.0, 163186)
+        );
+        assert_eq!(race.rows.iter().map(|r| (r.wager, r.gates, r.target)).collect::<Vec<_>>(), vec![(75, 31, 140.0), (125, 31, 120.0), (175, 31, 105.0)]);
+        let sounds = RaceResources::parse(&bytes).unwrap();
+        assert_eq!((sounds.gate, sounds.countdown, sounds.music.as_str()), (0x66D0B, 0x1B869E, "Play_MUS_SideQuest_Race"));
+        assert!(sounds.keepers.len() == 4 && sounds.keepers.iter().all(|k| k[0].len() == 4 && k[3].len() == 4) && sounds.player[0] != 0);
         let knives = KnivesSettings::parse(&bytes).unwrap();
         assert_eq!((knives.knives, knives.speed, knives.view), (5, 45.0, [10.0, 45.0]));
         assert_eq!((knives.wagers, knives.difficulty), ([0, 50, 100, 200], [1.0, 2.0, 5.0, 7.0]));

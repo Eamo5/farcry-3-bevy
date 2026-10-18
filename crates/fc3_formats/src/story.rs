@@ -61,12 +61,12 @@ pub fn archetype_materials_from_text(text: &str) -> std::collections::HashMap<u6
 }
 
 /// The archetypes story entities have the engine spawn (a reinforcement
-/// point's `arkMerc` and `arkVehicle`).
+/// point's `arkMerc` and `arkVehicle`, a spawner's `arkArchetypeToSpawn`).
 pub fn spawned_archetypes(entities: &[StoryEntity]) -> std::collections::HashSet<u64> {
     let mut out = std::collections::HashSet::new();
     for e in entities {
         e.components.walk(&mut |o, _| {
-            for field in ["arkMerc", "arkVehicle"] {
+            for field in ["arkMerc", "arkVehicle", "arkArchetypeToSpawn"] {
                 if let Some(ark) = o.u64(field).filter(|&k| k != 0 && k != u64::MAX) {
                     out.insert(ark);
                 }

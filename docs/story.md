@@ -4039,8 +4039,9 @@ hands over the pistol; JAS_150 B20's chopper fight, `CChopperFightE3`).
 Such a gameplay now ends a second after it starts (`UNPLAYED_GRACE`), for
 anyone. The ones played are QTEs, the sniping challenge, poker, the Ink
 Monster, being intoxicated, button prompts, the chopper ride, JAS_130's
-climb to the front seat, the shooting galleries, knife throwing, and the
-vines under their test switch (`played_gameplay`).
+climb to the front seat, the shooting galleries, knife throwing, the races
+and their keepers' entice systems, and the vines under their test switch
+(`played_gameplay`).
 
 **JAS_150's chopper ride** (`CChopperFightE3`, `chopper_fight`): B30C's
 scene carries the player through the ride and starts and stops the
@@ -4759,6 +4760,58 @@ table's own movie (`ACTI_Poker.feu`, `docs/ui.md`).
   before the reveal, `JasonLeavesPoker`, B10 completed.
 * **Not yet.** The faces of the scenes' scripted cards (every one is the
   same model in the data: the engine dealt them their rigged cards).
+
+### Races
+
+Fifteen of the countries' activities are races: a keeper
+(`racechallenge.main.lua`) whose race opens with their country's outpost
+taken. Every race is the engine's one `CDrivingMiniGame` with its own
+track (`gsf::RaceSettings`: its mission block and base layer, three rows
+of a wager, the gates expected and a target time, what a win multiplies
+the wager by) and the races' shared sounds and voices
+(`gsf::RaceResources`). Nothing played them; they ended a second in. They
+are played now (`races`):
+
+* **The keeper.** Once settled at their spot the keeper is made usable
+  (see the activities above) and calls the player over now and then from
+  their dialog set (their entice system, `CRacingMiniGameEnticeSystem`).
+  Used, they start the race with its spawn point, its controller (the
+  prefab running the script) and themselves in its parameters.
+* **The wager box.** Practice (free; the first row's track and time), then
+  the three rows; a row the player can't afford isn't taken, Escape backs
+  out (the cancel message).
+* **The track.** The base layer and the row's come in: the gates (on the
+  map data's base layer) register themselves with the player
+  (`GateRegisterEvent`: the gate, its two bones, its place, the
+  tolerance) and are drawn where they stand; the vehicle spawners on the
+  base layer have their vehicle made (`CEntitySpawner`'s
+  `arkArchetypeToSpawn`, which the converter now keeps among the
+  archetypes); the player is put at the race's spawn point beside the
+  first.
+* **The countdown and the clock.** Get ready, 3, 2, 1 (4.5 s), go, then
+  the row's target time runs down, red and beeping in its last ten
+  seconds. Only the next gate counts (its marker shown, the next two's
+  flares burning on land): passed when the player, or the vehicle he
+  drives, crosses the line between its flares (the model's bones, within
+  the tolerance). The finish (the last gate) in time wins the wager back
+  doubled; the clock out loses it. Escape asks first (the quit box: the
+  wager lost). Enter again runs it again (the wager taken again).
+* **Far from the keeper.** The script that started the race stops with its
+  sector, which goes when the player drives some 400 m off, and stopping
+  it ends the race: the race's controller is now kept running while the
+  race runs (`Story::hold_script`).
+* **The result** tells the keeper how it went (finished or failed), who
+  stops the race and calls the player over again.
+* **Tests.** `FC3_RACE_TEST=<row>` has the nearest race keeper used, that
+  row chosen, the player put in the first vehicle and set down at each
+  gate in turn; `FC3_RACE_SHOTS=<dir>` captures each phase. Seen at G3's
+  race (a kept checkpoint with G3's outpost taken, the player by its
+  keeper): its 31 gates registered, the quad made, all of them passed with
+  114.7 s left, $150 paid and the keeper told.
+* **Not yet.** The racing voice of the player and the keepers' lines go
+  out, but not their flares' real particles (ours are sparks and a glow,
+  faint by day), the course's jump ramps or the D6 track's looting
+  pirates, nor the saved best times and medals.
 
 ### Knife throwing
 

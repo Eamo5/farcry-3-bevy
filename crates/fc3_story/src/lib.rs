@@ -288,6 +288,9 @@ pub struct Story {
     instances: HashMap<u64, Table>,
     /// Start-on-load graphs started (by entity).
     loaded_scripts: HashSet<u64>,
+    /// Start-on-load graphs kept running when their entity's sector goes
+    /// (a race's controller while the race drives far from it).
+    held_scripts: HashSet<u64>,
     errors: usize,
 }
 
@@ -308,7 +311,7 @@ impl Story {
         let core = Rc::new(RefCell::new(Core::new(Rc::new(data))));
         natives::register(&domino, &core).map_err(|e| anyhow::anyhow!("{e}"))?;
         domino.lua().load(include_str!("glue.lua")).set_name("glue").exec().map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(Story { domino, core, instances: HashMap::new(), loaded_scripts: HashSet::new(), errors: 0 })
+        Ok(Story { domino, core, instances: HashMap::new(), loaded_scripts: HashSet::new(), held_scripts: HashSet::new(), errors: 0 })
     }
 
     pub fn data(&self) -> Rc<StoryData> {
@@ -644,6 +647,18 @@ impl Story {
     /// present, not removed by a script).
     pub fn is_loaded(&self, id: u64) -> bool {
         self.core.borrow().is_loaded(id)
+    }
+
+    /// Keeps an entity's start-on-load graph running while its sector is out
+    /// of the world (or lets it go with it again): a race's controller, its
+    /// gameplay's owner, while the race drives far from it, as the engine
+    /// kept a gameplay going whoever started it.
+    pub fn hold_script(&mut self, owner: u64, hold: bool) {
+        if hold {
+            self.held_scripts.insert(owner);
+        } else {
+            self.held_scripts.remove(&owner);
+        }
     }
 
     /// The pawns scripts have made usable, where they are, and whether a
@@ -1811,6 +1826,7 @@ impl Story {
                 .loaded_scripts
                 .iter()
                 .copied()
+                .filter(|id| !self.held_scripts.contains(id))
                 .filter(|id| !c.is_loaded(*id) || c.data.entities.get(id).is_some_and(|e| !in_sectors(e, sectors)))
                 .collect();
             (starts, stops)

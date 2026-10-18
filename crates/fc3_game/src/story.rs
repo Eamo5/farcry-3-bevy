@@ -874,12 +874,14 @@ fn draw_markers(
     cameras: Query<(&Camera, &GlobalTransform), With<crate::player::PlayerCamera>>,
     icons: Query<Entity, With<MarkerIcon>>,
     mut commands: Commands,
-    (scale, minigame): (Res<UiScale>, Option<Res<crate::hud::Minigame>>),
+    (scale, minigame, races): (Res<UiScale>, Option<Res<crate::hud::Minigame>>, Option<Res<crate::races::Races>>),
 ) {
     for e in &icons {
         commands.entity(e).despawn();
     }
-    if markers.0.is_empty() || scripted.hud_hidden || cinema.view.is_some() || minigame.is_some_and(|m| m.holds_player()) {
+    // (A race's next gate with them.)
+    let all: Vec<Vec3> = markers.0.iter().copied().chain(races.and_then(|r| r.marker)).collect();
+    if all.is_empty() || scripted.hud_hidden || cinema.view.is_some() || minigame.is_some_and(|m| m.holds_player()) {
         if !markers.0.is_empty() {
             trace!("markers hidden: hud {} scene view {}", scripted.hud_hidden, cinema.view.is_some());
         }
@@ -892,7 +894,7 @@ fn draw_markers(
     let (lo, hi) = (Vec2::new(40.0, 90.0), size - Vec2::new(40.0, 150.0));
     let mid = (lo + hi) * 0.5;
     let view = cam_t.affine().inverse();
-    for &at in &markers.0 {
+    for &at in &all {
         let to = at - cam_t.translation();
         let local = view.transform_point3(at);
         let seen = cam.world_to_viewport(cam_t, at).ok().map(|p| crate::ui_nav::viewport_to_ui(p, scale.0))
@@ -1277,7 +1279,18 @@ fn run_story(
         mut trees,
         mut doors,
         mut stims,
-        (mut sniping, mut boss_fight, mut binds, mut unlimited_ammo, mut intoxication, mut prompts, mut chopper, mut car_chase, mut gallery, (poker, minigame)),
+        (
+            mut sniping,
+            mut boss_fight,
+            mut binds,
+            mut unlimited_ammo,
+            mut intoxication,
+            mut prompts,
+            mut chopper,
+            mut car_chase,
+            mut gallery,
+            (poker, minigame, mut races),
+        ),
     ): (
         MessageWriter<crate::progression::XpGain>,
         ResMut<crate::progression::Progress>,
@@ -1303,7 +1316,7 @@ fn run_story(
             ResMut<crate::chopper_fight::ChopperFight>,
             ResMut<crate::car_chase::CarChase>,
             ResMut<crate::shooting_gallery::Gallery>,
-            (Res<crate::poker::PokerTable>, Res<crate::hud::Minigame>),
+            (Res<crate::poker::PokerTable>, Res<crate::hud::Minigame>, ResMut<crate::races::Races>),
         ),
     ),
 ) {
@@ -1396,6 +1409,7 @@ fn run_story(
             chopper.reset();
             car_chase.reset();
             gallery.reset();
+            races.reset();
             postfx.reset();
             ui.subtitle = None;
             // Rebuild mission actors and discard transient wildlife together.
@@ -1672,6 +1686,7 @@ fn run_story(
         && !sniping.holds_player()
         && !boss_fight.holds_player()
         && !gallery.holds_player()
+        && !races.holds_player()
         && !poker.holds_player()
         && !minigame.holds_player()
         && cinema.view.is_none()
@@ -2268,6 +2283,23 @@ fn run_story(
                         name: a(1),
                         params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                     }),
+                    "CreateSpecificGameplay" if crate::races::race_gameplay(&a(1)) => races.pending.push(crate::races::Start {
+                        id: a(0).parse().unwrap_or(0),
+                        name: a(1),
+                        params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                    }),
+                    // A race's keeper calling the player over.
+                    "CreateSpecificGameplay" if crate::races::entice_gameplay(&a(1)) => {
+                        let param = |k: &str| args.iter().skip(2).find_map(|p| p.strip_prefix(k).and_then(|v| v.strip_prefix('=')));
+                        if let Some(keeper) = param("EnticeSystemSettings/hidChallengeKeeper/EntityID").and_then(|v| v.parse().ok()) {
+                            races.entices.retain(|e| e.keeper != keeper);
+                            races.entices.push(crate::races::Entice {
+                                id: a(0).parse().unwrap_or(0),
+                                keeper,
+                                set: param("hidAIDialogIndex").and_then(|v| v.parse().ok()).unwrap_or(0),
+                            });
+                        }
+                    }
                     "CreateSpecificGameplay" if a(1) == CAR_CHASE => car_chase.pending.push(crate::car_chase::Start {
                         id: a(0).parse().unwrap_or(0),
                         params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
@@ -2315,6 +2347,14 @@ fn run_story(
                             }
                         }
                     }
+                    // A race's gates registering, to the player: `<player>
+                    // GateRegisterEvent <gate> <bone> <bone> <index> <tolerance>`.
+                    "SendGSFGenericEventToEntity" if a(1) == "GateRegisterEvent" => {
+                        if let (Ok(id), Ok(index)) = (a(2).parse::<u64>(), a(5).parse::<u32>()) {
+                            races.gates.retain(|g| g.id != id);
+                            races.gates.push(crate::races::GateRegistration { id, index, tolerance: a(6).parse().unwrap_or(1.0) });
+                        }
+                    }
                     "SendGSFGenericEventToEntity" => {
                         intoxication.events.push(a(2).to_string());
                         host.gsf_events.push(a(2).to_string());
@@ -2331,6 +2371,7 @@ fn run_story(
                         chopper.cancelled.push(id);
                         car_chase.cancelled.push(id);
                         gallery.cancelled.push(id);
+                        races.cancelled.push(id);
                     }
                     "StopBinkVideo" => videos.stops.push(false),
                     "StopFullscreenVideo" => videos.stops.push(true),
@@ -3364,6 +3405,8 @@ fn played_gameplay(host: &StoryHost, id: u64, name: &str) -> bool {
         || name == CHOPPER_FIGHT
         || name == CAR_CHASE
         || shooting_gallery(name)
+        || crate::races::race_gameplay(name)
+        || crate::races::entice_gameplay(name)
         || (name == "CVineClimbingGameplay" && std::env::var_os("FC3_VINE_GAMEPLAY_TEST").is_some())
 }
 

@@ -648,6 +648,30 @@ while the player is at a table: `original_ui::drive_poker`, the game in
   While the player is at a table the main HUD and the radar are down, as
   is the objective box.
 
+**Races** (`UI\Singleplayer\Activities\ACTI_Driving.feu`, level 4, while a
+race runs: `original_ui::drive_races`, the race in `races`, see
+`docs/story.md`):
+
+* Loaded, the movie sends `DrivingMovieLoaded`; the game answers
+  `LoadDrivingElements PC 0 "" ""` (the accept and back keys' text left
+  empty: the result box has no room for them) and the movie
+  `DrivingElementsLoaded`.
+* Its boxes by event: `ShowDifficultyBox`, `ShowReadyBox` then
+  `ShowGeneralTextBox` (the count, then "go"), `ShowCheckpointDrivingElements`
+  (the clock and the gates), `ShowQuitBox`, and `HideDrivingElements` with
+  `ShowResultBox`, each with its `Hide...`.
+* By DPS id: the wagers (`WagerValue<Row>Text_MC`), the row's target time
+  (`WagerSelectionTargetTime_MC`, `m:ss.s`), `InsufficientFundsText_MC`,
+  the track's name (`DifficultyBoxSubTitle_TX`), the cursor
+  (`SelectionArrowsContainer_MC` played from 1, 10, 20 or 30), the count
+  and "go" (`MessageBoxText_MC`), the clock (`TimeBoxText_MC`, its
+  `textColor` red, 0xDA4024, in the last ten seconds) and the gates
+  (`CheckpointBoxText_MC`, `passed/expected`), and the result's medal
+  frame (`MedalResults_MC` 20 won, 30 lost), status (`RaceStatus_MC`), the
+  target time, the time left and the money won.
+* The mouse over a row comes as `OnDifficultyRollOver <row>`, over the
+  boxes' buttons as `OnConfirmRollOver` and `OnCancelRollOver`.
+
 **Knife throwing** (`UI\Singleplayer\Activities\ACTI_knifeThrowing.feu`,
 level 4, while the player is at a knife thrower's game:
 `original_ui::drive_knives`, the game in `knives`, see `docs/story.md`):

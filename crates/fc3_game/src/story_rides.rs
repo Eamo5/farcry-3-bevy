@@ -133,7 +133,7 @@ pub fn vehicle_def(archetype: &fc3_story::data::Entry) -> Option<usize> {
 /// A vehicle archetype's seats. The library's prototypes leave them out
 /// (the editor fills them in where a vehicle is placed), so they are taken
 /// from the placed vehicle drawn with the same model that has the most.
-fn layout_of(data: &fc3_story::data::StoryData, archetype: &fc3_story::data::Entry) -> fc3_story::vehicles::Layout {
+pub(crate) fn layout_of(data: &fc3_story::data::StoryData, archetype: &fc3_story::data::Entry) -> fc3_story::vehicles::Layout {
     let own = fc3_story::vehicles::Layout::from_entry(archetype).unwrap_or_default();
     if !own.seats.is_empty() {
         return own;

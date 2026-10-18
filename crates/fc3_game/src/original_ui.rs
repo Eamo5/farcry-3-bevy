@@ -63,6 +63,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_gallery,
                     drive_poker,
                     drive_knives,
+                    drive_races,
                     drive_pause,
                     drive_map_page,
                     run_interface,
@@ -2968,6 +2969,192 @@ fn drive_knives(state: NonSend<Interface>, calls: Res<UiCalls>, mut knives: ResM
     shown.sent = if ok { Some(hud) } else { None };
 }
 
+/// A race's HUD (`ACTI_Driving.feu`, level 4, while a race runs: `races`).
+/// Loaded, it asks for its elements (`DrivingMovieLoaded`:
+/// `LoadDrivingElements` with the platform, whether pad icons show and the
+/// accept and back keys' text), then the game shows its boxes by event as
+/// the race goes (`Show...`/`Hide...`: the wager box, the ready box and the
+/// count in the general text box, the race's own (the clock and the gates,
+/// `ShowCheckpointDrivingElements`), the quit box, the result) and fills
+/// them by DPS id: the wagers, the row's target time, not enough money, the
+/// track's name, the cursor (played from the row's frame), the clock (red
+/// in its last ten seconds), the gates passed, the count and "go", and the
+/// result's medal frame, status, times and winnings. The mouse over a row
+/// or a box's buttons comes as `OnDifficultyRollOver <row>`,
+/// `OnConfirmRollOver`, `OnCancelRollOver`.
+const RACE_MOVIE: &str = r"UI\Singleplayer\Activities\ACTI_Driving.feu";
+const RACE_LEVEL: u32 = 4;
+const RACE_ROWS: [&str; 4] = ["WagerValuePracticeText_MC", "WagerValueEasyText_MC", "WagerValueMedText_MC", "WagerValueHardText_MC"];
+/// The clock's colour in its last seconds, the result's medal frames (won,
+/// lost) and the game's strings: go, the challenge complete, failed.
+const RACE_HURRY_COLOUR: f64 = 0xDA_4024 as f64;
+const RACE_WON_FRAME: f64 = 20.0;
+const RACE_LOST_FRAME: f64 = 30.0;
+const RACE_GO: u32 = 154_848;
+const RACE_WON: u32 = 154_847;
+const RACE_LOST: u32 = 163_266;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RaceBox {
+    Choosing,
+    Countdown,
+    Racing,
+    Quit,
+    Result,
+}
+
+#[derive(Default)]
+struct RacesShown {
+    loaded: bool,
+    elements: bool,
+    shown: Option<RaceBox>,
+    /// The ready box and the general text box up.
+    ready: bool,
+    general: bool,
+    /// The clock's own colour (put back after the red).
+    colour: Option<f64>,
+    sent: Option<crate::races::RaceHud>,
+}
+
+fn drive_races(state: NonSend<Interface>, calls: Res<UiCalls>, mut races: ResMut<crate::races::Races>, mut shown: Local<RacesShown>) {
+    use crate::races::{race_time, RaceHud};
+    use fc3_ui::ExternalValue as V;
+    let Interface::Running(host) = &*state else { return };
+    let shown = &mut *shown;
+    let Some(hud) = races.hud.clone() else {
+        if shown.loaded {
+            host.unload(RACE_LEVEL);
+            *shown = RacesShown::default();
+            races.hover = (None, false, false);
+        }
+        return;
+    };
+    if !shown.loaded {
+        host.load(RACE_MOVIE, RACE_LEVEL);
+        shown.loaded = true;
+    }
+    for call in calls.0.iter().filter(|c| c.command == "Send") {
+        let arg = |i: usize| call.args.get(i).map(String::as_str).unwrap_or("");
+        match arg(0) {
+            "DrivingMovieLoaded" => host.event("LoadDrivingElements", &["PC", "0", "", ""]),
+            "DrivingElementsLoaded" => shown.elements = true,
+            "OnDifficultyRollOver" => races.hover.0 = arg(1).parse().ok(),
+            "OnDifficultyRollOut" => races.hover.0 = None,
+            "OnConfirmRollOver" => races.hover.1 = true,
+            "OnConfirmRollOut" => races.hover.1 = false,
+            "OnCancelRollOver" => races.hover.2 = true,
+            "OnCancelRollOut" => races.hover.2 = false,
+            _ => {}
+        }
+    }
+    if !shown.elements {
+        return;
+    }
+    let want = match hud {
+        RaceHud::Choosing { .. } => RaceBox::Choosing,
+        RaceHud::Ready { .. } | RaceHud::Count { .. } => RaceBox::Countdown,
+        RaceHud::Racing { quitting: true, .. } => RaceBox::Quit,
+        RaceHud::Racing { .. } => RaceBox::Racing,
+        RaceHud::Result { .. } => RaceBox::Result,
+    };
+    if shown.shown != Some(want) {
+        debug!("race ui: {:?} to {want:?}", shown.shown);
+        match shown.shown {
+            Some(RaceBox::Choosing) => host.event("HideDifficultyBox", &[]),
+            Some(RaceBox::Quit) => host.event("HideQuitBox", &[]),
+            Some(RaceBox::Result) => host.event("HideResultBox", &[]),
+            _ => {}
+        }
+        match want {
+            RaceBox::Choosing => {
+                host.event("HideDrivingElements", &[]);
+                host.event("ShowDifficultyBox", &[]);
+            }
+            RaceBox::Countdown | RaceBox::Racing => host.event("ShowCheckpointDrivingElements", &[]),
+            RaceBox::Quit => host.event("ShowQuitBox", &[]),
+            RaceBox::Result => {
+                host.event("HideDrivingElements", &[]);
+                host.event("ShowResultBox", &[]);
+            }
+        }
+        shown.shown = Some(want);
+        shown.sent = None;
+        races.hover = (None, false, false);
+    }
+    // The ready box, then the count and "go" in the general text box.
+    let ready = matches!(hud, RaceHud::Ready { .. });
+    if ready != shown.ready {
+        host.event(if ready { "ShowReadyBox" } else { "HideReadyBox" }, &[]);
+        shown.ready = ready;
+    }
+    let general = match hud {
+        RaceHud::Count { n, .. } => Some(n.to_string()),
+        RaceHud::Racing { go: true, quitting: false, .. } => Some(host.text(RACE_GO)),
+        _ => None,
+    };
+    if general.is_some() != shown.general {
+        host.event(if general.is_some() { "ShowGeneralTextBox" } else { "HideGeneralTextBox" }, &[]);
+        shown.general = general.is_some();
+        shown.sent = None;
+    }
+    if shown.sent.as_ref() == Some(&hud) {
+        return;
+    }
+    let old = shown.sent.clone();
+    let mut ok = true;
+    if let Some(text) = &general {
+        ok &= host.dps_text("MessageBoxText_MC", text);
+    }
+    match &hud {
+        RaceHud::Choosing { row, wagers, targets, short, subtitle } => {
+            ok &= host.dps_text("DifficultyBoxSubTitle_TX", &host.text(*subtitle));
+            for (id, w) in RACE_ROWS.iter().zip(wagers) {
+                ok &= host.dps_text(id, &format!("${w}"));
+            }
+            ok &= host.dps_visible("InsufficientFundsText_MC", *short);
+            ok &= host.dps_text("WagerSelectionTargetTime_MC", &race_time(targets[(*row).min(3)]));
+            let was = old.as_ref().and_then(|o| match o {
+                RaceHud::Choosing { row, .. } => Some(*row),
+                _ => None,
+            });
+            if was != Some(*row) {
+                ok &= host.dps_play("SelectionArrowsContainer_MC", V::Number([1.0, 10.0, 20.0, 30.0][(*row).min(3)]));
+            }
+        }
+        RaceHud::Racing { left, hurry, passed, gates, .. } => {
+            ok &= host.dps_text("TimeBoxText_MC", &race_time(*left));
+            ok &= host.dps_text("CheckpointBoxText_MC", &format!("{passed}/{gates}"));
+            let was = old.as_ref().is_some_and(|o| matches!(o, RaceHud::Racing { hurry: true, .. }));
+            if shown.colour.is_none() {
+                if let V::Number(c) = host.dps_get("TimeBoxText_MC", "textColor") {
+                    shown.colour = Some(c);
+                }
+            }
+            if *hurry != was || old.is_none() {
+                let colour = if *hurry { RACE_HURRY_COLOUR } else { shown.colour.unwrap_or(16_777_215.0) };
+                ok &= host.dps_set("TimeBoxText_MC", "textColor", V::Number(colour));
+            }
+        }
+        RaceHud::Result { won, target, left, money } => {
+            ok &= host.dps_frame("MedalResults_MC", V::Number(if *won { RACE_WON_FRAME } else { RACE_LOST_FRAME }));
+            ok &= host.dps_text("RaceStatus_MC", &host.text(if *won { RACE_WON } else { RACE_LOST }));
+            ok &= host.dps_text("MyTime_MC", &race_time(*target));
+            ok &= host.dps_text("FailureMyTime_MC", &race_time(*target));
+            ok &= host.dps_text("FinalTime_MC", &race_time(*left));
+            ok &= host.dps_text("WinAmount_MC", &format!("${money}"));
+        }
+        // (The clock and the gates as they'll start.)
+        RaceHud::Ready { target, gates } | RaceHud::Count { target, gates, .. } => {
+            ok &= host.dps_text("TimeBoxText_MC", &race_time(*target));
+            ok &= host.dps_text("CheckpointBoxText_MC", &format!("0/{gates}"));
+        }
+    }
+    // (Until its clips answer, the box is still coming: all again.)
+    if ok {
+        shown.sent = Some(hud);
+    }
+}
+
 /// The end credits (`EndCredits`, over all but the pause menu): loaded as
 /// the story asks for them (`crate::credits`), the HUD hidden under it, and
 /// once it says it's loaded (`OnCreditsLoaded`) sent the credits' entries,
@@ -3263,7 +3450,7 @@ fn drive_radar(
     vehicles: Query<(Entity, &GlobalTransform, &crate::vehicles::Vehicle, Option<&crate::vehicles::Wear>)>,
     (reach, driving, objectives): (Res<crate::map::MinimapReach>, Res<crate::vehicles::Driving>, Res<crate::story::ObjectiveMarkers>),
     (outposts, ways, progress): (Res<crate::outposts::Outposts>, Res<crate::traversal::Ways>, Res<crate::progression::Progress>),
-    (hud, pickups): (Res<crate::map::HudParams>, Query<(&GlobalTransform, &crate::pickups::Pickup)>),
+    (hud, pickups, races): (Res<crate::map::HudParams>, Query<(&GlobalTransform, &crate::pickups::Pickup)>, Option<Res<crate::races::Races>>),
     mut last: Local<Option<Radar>>,
     (story, time, mut standing): (Option<NonSend<crate::story::StoryHost>>, Res<Time<Real>>, Local<(f32, Vec<(f64, Vec3)>)>),
 ) {
@@ -3370,10 +3557,12 @@ fn drive_radar(
     // Objectives: held on the rim when further than the disc shows.
     let mut marks = Vec::new();
     // (The plain objectives: givers are places.)
-    let goals: Vec<Vec3> = match &scripted {
+    let mut goals: Vec<Vec3> = match &scripted {
         Some(s) => s.iter().filter(|(k, _)| *k == map_icon::MISSION).map(|(_, p)| *p).collect(),
         None => objectives.0.clone(),
     };
+    // (A race's next gate.)
+    goals.extend(races.as_ref().and_then(|r| r.marker));
     for &goal in &goals {
         let l = local(goal);
         let rise = goal.y - at.translation.y;

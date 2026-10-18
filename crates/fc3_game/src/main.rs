@@ -71,6 +71,7 @@ mod chopper_fight;
 mod car_chase;
 mod holdem;
 mod knives;
+mod races;
 mod treasure_maps;
 mod shooting_gallery;
 mod boss_fight;
@@ -461,6 +462,7 @@ fn main() {
         .add_plugins(shooting_gallery::ShootingGalleryPlugin)
         .add_plugins(treasure_maps::TreasureMapsPlugin)
         .add_plugins(knives::KnivesPlugin)
+        .add_plugins(races::RacesPlugin)
         .add_plugins(boss_fight::BossFightPlugin)
         .add_plugins(binds::BindsPlugin)
         .add_plugins(story_alarms::StoryAlarmsPlugin)
