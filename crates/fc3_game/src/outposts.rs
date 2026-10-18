@@ -380,7 +380,15 @@ fn sabotage_alarms(
     }
 }
 
+/// The original HUD's card for a liberated outpost (the game's strings):
+/// undetected, with no alarm, or not; and the count under it ("%d of 34").
+const CARD_UNDETECTED: u32 = 154986;
+const CARD_NO_ALARMS: u32 = 154987;
+const CARD_LIBERATED: u32 = 111340;
+const CARD_OUTPOSTS: u32 = 156253;
+
 /// An outpost falls when its whole garrison is dead.
+#[allow(clippy::too_many_arguments)]
 fn liberate(
     time: Res<Time>,
     mut outposts: ResMut<Outposts>,
@@ -388,10 +396,12 @@ fn liberate(
     players: Query<&Transform, With<Player>>,
     garrison: Query<(&Health, &Garrison, &crate::npc::Npc)>,
     mut hud: ResMut<HudState>,
+    mut story_ui: ResMut<crate::story::StoryUi>,
     mut done: MessageWriter<OutpostLiberated>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
 ) {
     let Ok(pt) = players.single() else { return };
+    let mut count = outposts.list.iter().filter(|o| o.liberated).count();
     for (i, o) in outposts.list.iter_mut().enumerate() {
         if o.liberated {
             continue;
@@ -421,11 +431,18 @@ fn liberate(
         o.liberated = true;
         o.alarm_since = None;
         let undetected = !o.detected && !o.alarm_raised;
-        hud.notify(match (undetected, o.alarm_raised) {
+        hud.notify_native(match (undetected, o.alarm_raised) {
             (true, _) => "OUTPOST LIBERATED - UNDETECTED",
             (false, false) => "OUTPOST LIBERATED - NO ALARMS",
             _ => "OUTPOST LIBERATED",
         });
+        count += 1;
+        let text = match (undetected, o.alarm_raised) {
+            (true, _) => CARD_UNDETECTED,
+            (false, false) => CARD_NO_ALARMS,
+            _ => CARD_LIBERATED,
+        };
+        story_ui.cards.push(crate::story::MissionCard::Event { text, count: Some((CARD_OUTPOSTS, count)) });
         done.write(OutpostLiberated { outpost: i, undetected, alarm: o.alarm_raised });
         sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 1.0 });
     }

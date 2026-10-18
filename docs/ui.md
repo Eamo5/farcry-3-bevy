@@ -360,7 +360,12 @@ only what changed (and everything again until the movies have loaded):
   complete or failed (`story::MissionCard`). The status is the game's
   string for a failure (155587); the table has none for a mission
   complete, so it is the handbook's "Complete" (158104) in capitals.
-  (`fc3tool oasis grep <text>` lists the strings containing a text.)
+  (`fc3tool oasis grep <text>` lists the strings containing a text.) A
+  liberated outpost and a radio tower take the same card
+  (`MissionCard::Event`), all the game's strings: the outpost's by how it
+  fell (154986 undetected, 154987 no alarms, 111340 else, each with its XP
+  line) over "%d of 34" (156253), the tower's 156250 over "%d of 18"
+  (156252). Their counts' icons (`<img>` in the text) aren't drawn.
 * **Mission timer**: `ObjectiveTimer` shows the first of the story's
   timers in `ObjectiveTimerText` (as the game's own HUD writes it), hidden
   without one.
@@ -413,7 +418,9 @@ While it runs, the game's own health, ammo, compass, crosshair, hit marker,
 prompt, objective, subtitles, banners and XP popups are hidden or left empty
 (`hud::ReplacedByOriginal`, `hud::OriginalHud`). So are our notices of
 what it shows its own way (`HudState::notify_native`): what a body or a
-chest gave, skins, rescues' and missions' cash, a new objective. A loot
+chest gave, skins, rescues' and missions' cash, a new objective, an
+outpost or tower taken; and our status line (an outpost's count, a
+vehicle's speed, the syringe and air bars). A loot
 line names its shop item (the rucksack's name for it), and a full rucksack
 plays the game's "Loot Rucksack Full" (172057) as a line
 (`HudState::loot_notes`). The original has no death screen in single

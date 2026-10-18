@@ -2265,6 +2265,10 @@ fn drive_story(
             crate::story::MissionCard::Start { title } => host.event("SetMissionStart", &[&title]),
             crate::story::MissionCard::Complete { title } => host.event("SetMissionTitle", &[&title, &host.text(MISSION_COMPLETE).to_uppercase(), "1"]),
             crate::story::MissionCard::Failed { text } => host.event("SetMissionTitle", &[&text, &host.text(MISSION_FAILED), "0"]),
+            crate::story::MissionCard::Event { text, count } => {
+                let status = count.map(|(id, n)| host.text(id).replace("%d", &n.to_string())).unwrap_or_default();
+                host.event("SetMissionTitle", &[&host.text(text), &status, "1"]);
+            }
         }
     }
     let subtitle = ui.subtitle.as_ref().filter(|_| settings.subtitles).map(|s| s.0.clone());

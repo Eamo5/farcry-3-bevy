@@ -325,11 +325,13 @@ fn setup_hud(mut commands: Commands) {
         children![(text("", 20.0), DetectText)],
     ));
 
-    // Context status (outposts), under the detection line.
+    // Context status (outposts), under the detection line. (The original HUD
+    // has none: its radar shows the outposts, its own timer the syringes.)
     commands.spawn((
         Node { position_type: PositionType::Absolute, top: Val::Px(100.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, ..default() },
         GlobalZIndex(1),
         HudElement,
+        ReplacedByOriginal,
         children![(text("", 16.0), StatusText)],
     ));
 

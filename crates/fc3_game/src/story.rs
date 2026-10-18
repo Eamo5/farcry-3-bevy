@@ -726,6 +726,12 @@ pub enum MissionCard {
     Start { title: String },
     Complete { title: String },
     Failed { text: String },
+    /// A world event's (an outpost liberated, a radio tower taken), by the
+    /// game's strings: its text, and under it a count (`%d` in the string).
+    Event {
+        text: u32,
+        count: Option<(u32, usize)>,
+    },
 }
 
 /// What the story shows on screen.

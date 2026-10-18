@@ -537,6 +537,11 @@ pub struct TowerTaken {
     pub at: Vec3,
 }
 
+/// The original HUD's card for a radio tower taken (the game's strings),
+/// and the count under it ("%d of 18").
+const CARD_TOWER: u32 = 156250;
+const CARD_TOWERS: u32 = 156252;
+
 /// At a radio tower's panel: take the tower over.
 #[allow(clippy::too_many_arguments)]
 fn tower_prompt(
@@ -551,6 +556,7 @@ fn tower_prompt(
     players: Query<(&Transform, &Health, &crate::weapons::Inventory), With<Player>>,
     mut taken: MessageWriter<TowerTaken>,
     skills: Option<Res<crate::progression::Skills>>,
+    mut story_ui: ResMut<crate::story::StoryUi>,
 ) {
     let Ok((t, h, inv)) = players.single() else { return };
     if hud.prompt.is_some() || h.dead {
@@ -574,7 +580,8 @@ fn tower_prompt(
         }
         let freed = catalog.freed_weapons(&inv.defs, progress.towers.len());
         let reward = if freed.is_empty() { String::new() } else { format!(" Free in shops: {}.", freed.join(", ")) };
-        hud.notify(format!("Radio tower taken: map revealed.{reward}"));
+        hud.notify_native(format!("Radio tower taken: map revealed.{reward}"));
+        story_ui.cards.push(crate::story::MissionCard::Event { text: CARD_TOWER, count: Some((CARD_TOWERS, progress.towers.len())) });
     }
 }
 
