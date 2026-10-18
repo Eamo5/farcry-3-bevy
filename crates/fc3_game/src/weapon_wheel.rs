@@ -17,7 +17,7 @@ impl Plugin for WeaponWheelPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WeaponWheel>()
             .add_systems(Startup, setup_wheel)
-            .add_systems(Update, (wheel_test, wheel_input, draw_wheel).chain().run_if(in_state(crate::menu::GameState::Playing)))
+            .add_systems(Update, (wheel_test, wheel_input, slot_keys, draw_wheel).chain().run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(OnExit(crate::menu::GameState::Playing), close_wheel);
     }
 }
@@ -73,6 +73,47 @@ impl WeaponWheel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_wheel_places_the_guns_first_and_the_machete_in_a_place_left() {
+        let defs = crate::weapons::weapon_defs();
+        let def = |name: &str| defs.iter().position(|d| d.name == name).unwrap();
+        let slot = |def| crate::weapons::WeaponSlot { def, mag: 0, reserve: 0 };
+        let slots = vec![slot(def("Machete")), slot(def("1911")), slot(def("MP5 SMG"))];
+        let mut inv = Inventory {
+            defs: defs.clone(),
+            models: Vec::new(),
+            slots,
+            current: 0,
+            grenades: 0,
+            molotovs: 0,
+            c4: 0,
+            mines: 0,
+            cooldown: 0.0,
+            reloading: 0.0,
+            switching: 0.0,
+            aiming: false,
+            aim_blend: 0.0,
+            recoil_kick: 0.0,
+            spread_bloom: 0.0,
+            shots_fired: 0,
+            recoil_offset: 0.0,
+            since_shot: 0.0,
+            reserve_scale: 1.0,
+            attachments: Vec::new(),
+            attachment_models: Vec::new(),
+            mounted_from: None,
+            auto_tail: 0,
+            arrow_kind: 0,
+            special_arrows: [0; 2],
+            paints: Vec::new(),
+            paint_options: Vec::new(),
+        };
+        assert_eq!(wheel_slots(&inv), vec![1, 2, 0]);
+        // (Four guns fill the wheel: the machete has its own input.)
+        inv.slots.extend([slot(def("SVD")), slot(def("PKM LMG"))]);
+        assert_eq!(wheel_slots(&inv), vec![1, 2, 3, 4]);
+    }
 
     #[test]
     fn quick_swap_returns_to_previous_identity_after_slot_reordering_or_removal() {
@@ -149,6 +190,23 @@ fn wheel_input(
             ((angle / std::f32::consts::TAU * PLACES as f32 + 0.5) as usize) % PLACES
         })
         .and_then(|p| places.get(p).copied());
+}
+
+/// The number keys 1 to 4 take the weapon in the wheel's place of that
+/// number (the game's own keys for its slots, which its wheel shows).
+pub const SLOT_KEYS: [KeyCode; PLACES] = [KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3, KeyCode::Digit4];
+
+fn slot_keys(keys: Res<ButtonInput<KeyCode>>, mut wheel: ResMut<WeaponWheel>, players: Query<(&Inventory, &Player, &crate::combat::Health)>) {
+    let Ok((inv, p, health)) = players.single() else { return };
+    if wheel.open || inv.mounted_from.is_some() || p.driving || p.swimming || health.dead {
+        return;
+    }
+    let places = wheel_slots(inv);
+    if let Some(slot) = SLOT_KEYS.iter().position(|k| keys.just_pressed(*k)).and_then(|p| places.get(p)) {
+        if *slot != inv.current {
+            wheel.pick = Some(*slot);
+        }
+    }
 }
 
 /// The ring of weapon names, the one under the cursor lit.

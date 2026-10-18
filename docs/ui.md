@@ -389,7 +389,9 @@ only what changed (and everything again until the movies have loaded):
   `WeaponAndGadgetLib.feu`'s icons (the name in its shop archetype,
   `weapons:FC3/<name>`; a weapon without one leaves its place empty), the
   throwables carried in `WheelGadgetTextSlot<n>` (grenades, C4, mines,
-  molotovs), `ItemName` the weapon under the cursor (else in hand) by
+  molotovs), by each place its number key (`KeyTextField<n>`: 1 to 4
+  take the weapon in that place, `weapon_wheel::SLOT_KEYS`, as the game's
+  keys did), `ItemName` the weapon under the cursor (else in hand) by
   its shop name, and two of the inner ring's arrows, which turn about
   the wheel's centre and point right at 0: `WheelCurWeaponArrowMC_0` to
   the place under the cursor, `_2` to the weapon in hand. Ours stands

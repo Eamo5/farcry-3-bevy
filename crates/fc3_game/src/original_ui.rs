@@ -2581,7 +2581,8 @@ fn drive_indicators(
 /// left, at the weapon's label in `WeaponAndGadgetLib`'s icons: its
 /// archetype's name, `weapons:FC3/<name>`; one without is left empty), the
 /// throwables carried (`WheelGadgetTextSlot<n>`: grenades, C4, mines,
-/// molotovs, the movie's own order), the weapon under the cursor (else in
+/// molotovs, the movie's own order), each place's number key
+/// (`KeyTextField<n>`), the weapon under the cursor (else in
 /// hand) named (`ItemName`), and the arrows on the inner ring
 /// (`WheelCurWeaponArrowMC_<n>`, turned about the wheel's centre: at 0 they
 /// point right) to the place under the cursor (0, lit) and the weapon in
@@ -2633,8 +2634,9 @@ fn drive_wheel(
         for (i, n) in [inv.grenades, inv.c4, inv.mines, inv.molotovs].into_iter().enumerate() {
             host.dps_text(&format!("WheelGadgetTextSlot{i}"), &n.to_string());
         }
-        for i in 0..4 {
-            host.dps_text(&format!("KeyTextField{i}"), "");
+        // (By each place, its number key: `weapon_wheel::SLOT_KEYS`.)
+        for p in 0..crate::weapon_wheel::PLACES {
+            host.dps_text(&format!("KeyTextField{p}"), &if p < places.len() { (p + 1).to_string() } else { String::new() });
         }
         host.dps_play("Wheel", num(WHEEL_IN as f64));
         host.dps_visible("WheelCurWeaponArrowMC_1", false);
