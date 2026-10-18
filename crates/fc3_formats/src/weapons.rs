@@ -17,7 +17,7 @@ use anyhow::{bail, Result};
 use crate::fcb::Object;
 
 pub const STATS_REL: &str = "weapons/stats.txt";
-const MAGIC: &str = "fc3-weapons 6";
+const MAGIC: &str = "fc3-weapons 8";
 
 /// Whether a cached table is in this version's form.
 pub fn is_current(text: &str) -> bool {
@@ -38,6 +38,11 @@ pub struct AttachmentOffer {
     /// The shop's name for it, the weapon's taken off ("reflex A").
     pub name: String,
     pub cost: u32,
+    /// Its name and description in the shop page (string ids) and its icon
+    /// there (`sShopIconName`: a frame of the page's icons).
+    pub name_id: u32,
+    pub description_id: u32,
+    pub icon: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -481,7 +486,10 @@ pub fn weapon_stats(library: &Object, shop_items: Option<&Object>) -> Vec<Weapon
             } else if kind == 67 && sold {
                 let attach = uint(e, "selAttachmentType").unwrap_or(0) as u32;
                 let cost = uint(e, "iCost").unwrap_or(0) as u32;
-                offers.push((key, AttachmentOffer { kind: attach, name: String::new(), cost }));
+                let name_id = uint(e, "locidItemNameId").unwrap_or(0) as u32;
+                let description_id = uint(e, "locidDescriptionId").unwrap_or(0) as u32;
+                let icon = e.str("sShopIconName").filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_graphic())).unwrap_or_default();
+                offers.push((key, AttachmentOffer { kind: attach, name: String::new(), cost, name_id, description_id, icon }));
             }
         }
         weapons.sort_by_key(|(k, _)| std::cmp::Reverse(k.len()));
@@ -500,7 +508,12 @@ pub fn weapon_stats(library: &Object, shop_items: Option<&Object>) -> Vec<Weapon
 pub fn to_text(stats: &[WeaponStats]) -> String {
     let mut s = format!("{MAGIC}\n");
     for w in stats {
-        let attachments = w.attachments.iter().map(|a| format!("{}:{}:{}", a.kind, a.cost, a.name)).collect::<Vec<_>>().join(";");
+        let attachments = w
+            .attachments
+            .iter()
+            .map(|a| format!("{}:{}:{}:{}:{}:{}", a.kind, a.cost, a.name_id, a.description_id, a.icon, a.name))
+            .collect::<Vec<_>>()
+            .join(";");
         let ranges = w.ranges.iter().map(|r| r.map(|v| v.to_string()).join(":")).collect::<Vec<_>>().join(";");
         let spread = w.spread.map(|s| s.to_text()).unwrap_or_default();
         let aim = w.aim.map(|a| a.to_text()).unwrap_or_default();
@@ -550,8 +563,11 @@ pub fn from_text(text: &str) -> Result<Vec<WeaponStats>> {
                     .map(|a| {
                         a.split(';')
                             .filter_map(|o| {
-                                let mut p = o.splitn(3, ':');
-                                Some(AttachmentOffer { kind: p.next()?.parse().ok()?, cost: p.next()?.parse().ok()?, name: p.next()?.to_string() })
+                                let mut p = o.splitn(6, ':');
+                                let (kind, cost) = (p.next()?.parse().ok()?, p.next()?.parse().ok()?);
+                                let (name_id, description_id) = (p.next()?.parse().ok()?, p.next()?.parse().ok()?);
+                                let icon = p.next()?.to_string();
+                                Some(AttachmentOffer { kind, cost, name_id, description_id, icon, name: p.next()?.to_string() })
                             })
                             .collect()
                     })
@@ -599,7 +615,14 @@ mod tests {
             holster: 0.3,
             pellets: 1,
             silent: false,
-            attachments: vec![AttachmentOffer { kind: ATTACH_SIGHT, name: "reflex A".into(), cost: 300 }],
+            attachments: vec![AttachmentOffer {
+                kind: ATTACH_SIGHT,
+                name: "reflex A".into(),
+                cost: 300,
+                name_id: 82897,
+                description_id: 82912,
+                icon: "ReflexSight".into(),
+            }],
             ranges: vec![[0.0, 25.0, 1.0, 1.0], [25.0, 40.0, 1.0, 0.7]],
             spread: Some(Spread {
                 hip: [2.0, 3.75],

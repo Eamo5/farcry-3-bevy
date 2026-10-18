@@ -1007,7 +1007,8 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     }
 
     // ---- weapon stock: authored item/category ids and prices
-    if opts.only_sectors.is_none() && job.should_write(fc3_formats::shop::WEAPONS_REL) {
+    let current = std::fs::read_to_string(job.root().join(fc3_formats::shop::WEAPONS_REL)).is_ok_and(|t| fc3_formats::shop::is_current(&t));
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::shop::WEAPONS_REL) || !current) {
         let stock = (|| -> Result<_> {
             let items = job.vfs.read(fc3_formats::shop::ITEMS_LIB)?;
             let at = items.windows(4).position(|w| w == b"nbCF").context("no shopping FCB header")?;

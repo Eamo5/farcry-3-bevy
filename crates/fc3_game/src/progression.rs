@@ -3764,11 +3764,21 @@ mod shop_tests {
 
     fn catalog(inv: &Inventory) -> (ShopCatalog, usize) {
         let def = inv.defs.iter().position(|d| d.name == "1911").unwrap();
-        (ShopCatalog(vec![fc3_formats::shop::Weapon {
-            id: 42, category: 7, cost: 75, sort: 0, name_id: 999,
-            unlock_script: String::new(), unlock_mission: String::new(),
-            archetype: "weapons:TestPistol".into(), model: inv.defs[def].model_path(),
-        }]), def)
+        (
+            ShopCatalog(vec![fc3_formats::shop::Weapon {
+                id: 42,
+                category: 7,
+                cost: 75,
+                sort: 0,
+                name_id: 999,
+                unlock_script: String::new(),
+                unlock_mission: String::new(),
+                archetype: "weapons:TestPistol".into(),
+                model: inv.defs[def].model_path(),
+                ..Default::default()
+            }]),
+            def,
+        )
     }
 
     #[test]
@@ -3880,9 +3890,16 @@ mod shop_tests {
         let defs = [index("1911"), index("6P9"), index("STG-90"), index("AK-74M Rifle")];
         for (id, def) in defs.into_iter().enumerate() {
             catalog.0.push(fc3_formats::shop::Weapon {
-                id: id as u32, category: 7, cost: 600, sort: 0, name_id: 999,
-                unlock_script: format!("Tower{}", if id == 3 { 2 } else { 1 }), unlock_mission: String::new(),
-                archetype: format!("weapons:Test{id}"), model: inv.defs[def].model_path(),
+                id: id as u32,
+                category: 7,
+                cost: 600,
+                sort: 0,
+                name_id: 999,
+                unlock_script: format!("Tower{}", if id == 3 { 2 } else { 1 }),
+                unlock_mission: String::new(),
+                archetype: format!("weapons:Test{id}"),
+                model: inv.defs[def].model_path(),
+                ..Default::default()
             });
             assert_eq!(ShopItem::Weapon(def).price(&inv, 0, &catalog), 600);
             assert_eq!(ShopItem::Weapon(def).price(&inv, 1, &catalog), if id == 3 { 600 } else { 0 });

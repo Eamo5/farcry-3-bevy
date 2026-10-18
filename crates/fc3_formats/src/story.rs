@@ -17,7 +17,7 @@ use crate::fcb::Object;
 
 /// Generated game files copied into the cache as they are: (archive path,
 /// cache path).
-pub const RAW_FILES: [(&str, &str); 13] = [
+pub const RAW_FILES: [(&str, &str); 15] = [
     (r"worlds\fc3_main\generated\fc3_main.managers.fcb", "story/managers.fcb"),
     (r"worlds\fc3_main\generated\fc3_main.omnis.fcb", "story/omnis.fcb"),
     (r"worlds\fc3_main\generated\fc3_main.mapsdata.fcb", "story/mapsdata.fcb"),
@@ -31,6 +31,8 @@ pub const RAW_FILES: [(&str, &str); 13] = [
     (r"languages\english\speechlength.bin", "story/speechlength.bin"),
     (r"generated\databases\generic\challengedata.lib", crate::challenges::DATA_REL),
     (r"generated\databases\generic\challengescorerules.lib", crate::challenges::RULES_REL),
+    (crate::shop::CATEGORIES_LIB, crate::shop::CATEGORIES_REL),
+    (crate::shop::SUBCATEGORIES_LIB, crate::shop::SUBCATEGORIES_REL),
 ];
 
 /// The story entities, in the cache.
