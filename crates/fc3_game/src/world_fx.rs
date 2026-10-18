@@ -53,6 +53,18 @@ impl Kind {
         })
     }
 
+    /// The effect a fire set down with something plays (the one the world's
+    /// own of its kind play).
+    fn usual_effect(self) -> Option<&'static str> {
+        Some(match self {
+            Kind::CampFire => "fc3_environment.fire.camp_fire",
+            Kind::Embers => "fc3_environment.fire.camp_fireext",
+            Kind::Candle => "fc3_gameplay_fire.fc3_gameplay_fire.candlelight",
+            Kind::Torch => "fc3_gameplay_fire.fc3_gameplay_fire.fire_torch_b_nolight",
+            _ => return None,
+        })
+    }
+
     /// How far off (m) it's played.
     fn range(self) -> f32 {
         match self {
@@ -90,7 +102,7 @@ fn place_fires(mut fires: MessageReader<PlaceFire>, effects: Option<ResMut<World
         }
         let Some(kind) = Kind::parse(&f.kind) else { continue };
         if !effects.list.iter().any(|(k, at, _)| *k == kind && at.distance(f.at) < 0.5) {
-            effects.list.push((kind, f.at, None));
+            effects.list.push((kind, f.at, kind.usual_effect().map(|e| (Quat::IDENTITY, e))));
         }
     }
 }

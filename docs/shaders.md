@@ -323,7 +323,9 @@ name`, after the `# fc3-world-fx 2` header; an older list is written again). The
 converter caches each named effect (109 of them; one the library lacks is
 skipped). `world_fx` plays each as authored (`authored_fx`), turned as placed,
 when it comes within its kind's reach, and takes it away a little past that.
-Fireflies play only after dark. Where an effect isn't cached, the particle
+Fireflies play only after dark. Fires set down with an encounter's props play
+their kind's usual effect (`camp_fire`, `camp_fireext`, `candlelight`, the
+torch's). Where an effect isn't cached, the particle
 flipbooks stand in. A waterfall's splashes fade out past 30 to 40 m by their own
 far clipping. Left out: quest and cinematic effects, lamp glows (the lamps draw
 their own), interiors, and the rest. `FC3_FX_DEBUG` logs how many effects play
