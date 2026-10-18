@@ -1879,7 +1879,7 @@ fn fire(
                 hit: if melee { crate::combat::Hit::Whole } else { crate::combat::Hit::Bullet(zone) },
             });
             any_hit = Some(headshot);
-            fx::blood(&mut shot_fx.particles, &mut rng, point, dir);
+            shot_fx.blood(&mut rng, point, dir, headshot);
             let impact = if d.class == WeaponClass::Melee { crate::sound::ev::MELEE_IMPACT } else { crate::sound::ev::IMPACT };
             let event = crate::sound::switched(impact, crate::surfaces::value::FLESH, 0);
             sfx.write(crate::sound::PlaySfx { event, at: Some(point), volume: 0.6 });

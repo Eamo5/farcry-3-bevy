@@ -533,6 +533,10 @@ pub struct ShotFx<'w, 's> {
     objects: Query<'w, 's, &'static crate::objects::WorldObject>,
     sector_roots: Query<'w, 's, &'static crate::objects::SectorObjects>,
     sectors: Res<'w, Assets<crate::cache_assets::Fc3Sector>>,
+    /// What was hit is made of, and the game's impact for it.
+    probe: crate::surfaces::SurfaceProbe<'w, 's>,
+    impacts: Res<'w, crate::authored_fx::BulletImpacts>,
+    commands: Commands<'w, 's>,
 }
 
 /// Guesses a prop's material from its entity name.
@@ -612,17 +616,43 @@ impl ShotFx<'_, '_> {
     pub fn bullet_end(&mut self, rng: &mut crate::weapons::Rng, from: Vec3, dir: Vec3, range: f32, hit: Option<(Entity, f32, Vec3)>) {
         let end = from + dir * hit.map(|h| h.1).unwrap_or(range);
         let sea = crate::water::plane_level(end);
+        // The game's own impact for what was hit (its material's), else
+        // ours.
         if from.y > sea && end.y < sea {
             let t = (from.y - sea) / (from.y - end.y);
-            fx::splash(&mut self.particles, rng, from.lerp(end, t), 0.6);
+            let at = from.lerp(end, t);
+            if !self.impacts.named(WATER).is_some_and(|fx| crate::authored_fx::play_along(&mut self.commands, fx, at, Vec3::Y)) {
+                fx::splash(&mut self.particles, rng, at, 0.6);
+            }
             return;
         }
         if let Some((e, _, normal)) = hit {
             let surface = self.surface(e);
-            fx::impact(&mut self.particles, &mut self.decals, rng, end, normal, surface);
+            let effect = self.impacts.of(self.probe.material_at(e, end, normal));
+            if effect.is_some_and(|fx| crate::authored_fx::play_along(&mut self.commands, fx, end, normal)) {
+                fx::impact_decal(&mut self.decals, rng, end, normal, surface);
+            } else {
+                fx::impact(&mut self.particles, &mut self.decals, rng, end, normal, surface);
+            }
+        }
+    }
+
+    /// A bullet in a body: the game's flesh impact (the head's for a
+    /// headshot), facing back along the shot, else our blood.
+    pub fn blood(&mut self, rng: &mut crate::weapons::Rng, at: Vec3, dir: Vec3, head: bool) {
+        let flesh = self.impacts.named(if head { FLESH_HEAD } else { FLESH });
+        if !flesh.is_some_and(|fx| crate::authored_fx::play_along(&mut self.commands, fx, at, -dir)) {
+            fx::blood(&mut self.particles, rng, at, dir);
         }
     }
 }
+
+/// The logic materials whose bullet impacts water and bodies make.
+const WATER: &str = "Base/Water_P_Deep";
+const FLESH: &str = "Base/Flesh_P";
+const FLESH_HEAD: &str = "Base/Flesh_P_Head";
+
+impl ShotFx<'_, '_> {}
 
 /// `FC3_FX_TEST=explosion|impacts|blood|splash`: repeats an effect where the
 /// camera looks, from just before the screenshot is due (for checking looks).
@@ -677,7 +707,7 @@ fn fx_test(
         }
         "blood" => {
             *next = t + 0.3;
-            fx::blood(&mut shot.particles, &mut rng, from + forward * 4.0, forward.as_vec3());
+            shot.blood(&mut rng, from + forward * 4.0, forward.as_vec3(), false);
         }
         "fire" => {
             *next = f32::INFINITY;
@@ -767,6 +797,12 @@ pub mod fx {
                 ps.spawn(s);
             }
         }
+        impact_decal(decals, rng, at, n, surface);
+    }
+
+    /// A bullet hole where a bullet struck.
+    pub fn impact_decal(decals: &mut Decals, rng: &mut Rng, at: Vec3, normal: Vec3, surface: Surface) {
+        let n = normal.normalize_or(Vec3::Y);
         let sheet = match surface {
             Surface::Ground => DecalSheet::Sand,
             Surface::Hard => DecalSheet::Concrete,

@@ -43,7 +43,10 @@ pub struct AuthoredFxPlugin;
 
 impl Plugin for AuthoredFxPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Library>().add_systems(Update, (fx_test, emit, simulate).chain()).add_systems(PostUpdate, draw.before(TransformSystems::Propagate));
+        app.init_resource::<Library>()
+            .init_resource::<BulletImpacts>()
+            .add_systems(Update, (fx_test, emit, simulate).chain())
+            .add_systems(PostUpdate, draw.before(TransformSystems::Propagate));
     }
 }
 
@@ -110,11 +113,62 @@ pub fn available(name: &str) -> bool {
 /// (the blasts'): its +Y (Dunia's) along the ground's normal, up. False
 /// when it isn't cached, for the caller's own stand-in.
 pub fn play(commands: &mut Commands, name: &'static str, at: Vec3) -> bool {
+    play_along(commands, name, at, Vec3::Y)
+}
+
+/// Plays an authored effect once as an impact on a surface with normal
+/// `normal` (its +Y along it). False when it isn't cached.
+pub fn play_along(commands: &mut Commands, name: &'static str, at: Vec3, normal: Vec3) -> bool {
     if !available(name) {
         return false;
     }
-    commands.spawn((Transform::from_translation(at).with_rotation(IMPACT_FRAME), AuthoredFx(name)));
+    let turn = if normal.y > 0.999 { IMPACT_FRAME } else { Quat::from_rotation_arc(Vec3::NEG_Z, normal.normalize_or(Vec3::Y)) };
+    commands.spawn((Transform::from_translation(at).with_rotation(turn), AuthoredFx(name), Once));
     true
+}
+
+/// Played once: what loops in it runs its time once (a splash's ring).
+#[derive(Component)]
+struct Once;
+
+/// The game's bullet impacts (`particle_effects::BULLET_IMPACTS_REL`): each
+/// logic material's effect, and by material name.
+#[derive(Resource)]
+pub struct BulletImpacts {
+    by_material: HashMap<u8, &'static str>,
+    by_name: HashMap<String, &'static str>,
+}
+
+impl FromWorld for BulletImpacts {
+    fn from_world(_: &mut World) -> Self {
+        let path = fc3_formats::cache::default_cache_root().join(fc3_formats::particle_effects::BULLET_IMPACTS_REL);
+        let impacts = std::fs::read_to_string(path).map(|t| fc3_formats::particle_effects::impacts_from_text(&t)).unwrap_or_default();
+        let mut by_material = HashMap::new();
+        let mut by_name = HashMap::new();
+        for i in impacts {
+            let effect: &'static str = Box::leak(i.effect.into_boxed_str());
+            by_material.insert(i.material, effect);
+            by_name.insert(i.name, effect);
+        }
+        BulletImpacts { by_material, by_name }
+    }
+}
+
+impl BulletImpacts {
+    /// A bullet's impact on what was hit.
+    pub fn of(&self, material: crate::surfaces::Material) -> Option<&'static str> {
+        use crate::surfaces::Material;
+        match material {
+            Material::Logic(id) => self.by_material.get(&id).copied().or_else(|| self.named("Base/Default")),
+            Material::Flesh => self.named("Base/Flesh_P"),
+            Material::Vehicle => self.named("Base/Metal_Vehicle"),
+        }
+    }
+
+    /// A bullet's impact on a logic material, by name (`Base/Water_P_Deep`).
+    pub fn named(&self, material: &str) -> Option<&'static str> {
+        self.by_name.get(material).copied()
+    }
 }
 
 /// An impact effect's frame: its +Y (Dunia's; Bevy's -Z) up.
@@ -453,7 +507,7 @@ fn emit(
     time: Res<Time>,
     mut library: ResMut<Library>,
     mut rng: ResMut<crate::weapons::Rng>,
-    mut effects: Query<(Entity, &AuthoredFx, &GlobalTransform, Option<&mut FxClock>)>,
+    mut effects: Query<(Entity, &AuthoredFx, &GlobalTransform, Option<&mut FxClock>, Has<Once>)>,
     mut lights: Query<&mut PointLight, With<FxLight>>,
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
     mut commands: Commands,
@@ -464,7 +518,7 @@ fn emit(
     }
     // (Shapes facing the camera: its right, its way back, its up.)
     let facing = cameras.single().map_or(Mat3::IDENTITY, |c| Mat3::from_cols(c.right().as_vec3(), c.back().as_vec3(), c.up().as_vec3()));
-    for (entity, fx, at, clock) in &mut effects {
+    for (entity, fx, at, clock, once) in &mut effects {
         let Some(ids) = library.effect(fx.0).cloned() else { continue };
         let Some(mut clock) = clock else {
             commands.entity(entity).insert(FxClock { carry: vec![0.0; ids.len()], burst: vec![false; ids.len()], lights: vec![None; ids.len()], ..default() });
@@ -472,7 +526,8 @@ fn emit(
         };
         clock.age += dt;
         // A one-off done: what it emitted lives out on its own.
-        if ids.iter().all(|&id| !library.emitters[id].looping && clock.age > library.emitters[id].delay + library.emitters[id].duration) {
+        let looping = |em: &Compiled| em.looping && !once;
+        if ids.iter().all(|&id| !looping(&library.emitters[id]) && clock.age > library.emitters[id].delay + library.emitters[id].duration) {
             commands.entity(entity).despawn();
             continue;
         }
@@ -484,8 +539,8 @@ fn emit(
                 if t < 0.0 {
                     continue;
                 }
-                let running = em.looping || t <= em.duration;
-                let phase = if em.looping { (t % em.duration) / em.duration } else { (t / em.duration).min(1.0) };
+                let running = looping(em) || t <= em.duration;
+                let phase = if looping(em) { (t % em.duration) / em.duration } else { (t / em.duration).min(1.0) };
                 let mut n = 0;
                 if !clock.burst[k] {
                     clock.burst[k] = true;

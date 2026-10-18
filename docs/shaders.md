@@ -353,6 +353,21 @@ impact effects: their frame's +Y (Dunia's) is the ground's normal, up. An
 effect none of whose emitters loop goes once the last has had its time; what it
 emitted lives out.
 
+Bullet impacts. `materialimpacts.lib` lists, for each kind of impact, the effect
+each logic material makes. A material's `disMatId` is its `disId` in
+`logicmaterials.lib`; the effect's name sits next to its `psParticlesSystem`, in
+field `31491B5F`. The converter writes the `Weapon/Bullet` kind to
+`particles/bullet-impacts.txt` (65 materials, 26 effects: dirt, grass, bark,
+metal, wood, sand, mud, water, flesh...) and caches each effect.
+
+A bullet's end asks the surface probe what it struck: the terrain's dominant
+layer, or a model's collision material at that point (`surfaces::material_at`).
+It plays that material's effect along the hit normal, with our bullet hole as
+the decal. Bodies take `Base/Flesh_P`, or `Base/Flesh_P_Head` for a headshot,
+facing back along the shot. Vehicles take `Base/Metal_Vehicle`, and a round
+through the sea takes `Base/Water_P_Deep`. Effects played once run their loops
+once (deep water's ring). Our dust and sparks stand in when nothing is cached.
+
 Each active emitter waits its `SpawnDelay`, then emits for its `EmitDuration`
 (again and again with `EmitLoop`). It gives a burst of `NbInitPart`, then its rate:
 `EmitRateKF`'s value, times its `RatioUI` curve over the emitter's time, give or

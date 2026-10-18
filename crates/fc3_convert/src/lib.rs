@@ -1466,7 +1466,8 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
 
     // ---- authored effects the game plays as the game did, with their textures
     if opts.only_sectors.is_none()
-        && fc3_formats::particle_effects::AUTHORED_EFFECTS.iter().any(|n| job.should_write(&fc3_formats::particle_effects::authored_rel(n)))
+        && (fc3_formats::particle_effects::AUTHORED_EFFECTS.iter().any(|n| job.should_write(&fc3_formats::particle_effects::authored_rel(n)))
+            || job.should_write(fc3_formats::particle_effects::BULLET_IMPACTS_REL))
     {
         if let Err(e) = convert_authored_effects(&job) {
             job.error(format!("authored effects: {e:#}"));
@@ -1931,12 +1932,28 @@ const SKY_CLOUDS: [&str; 5] = [
 
 const SKY_MOON: &str = r"graphics\__fc3_graphics\singleplayer\_textures\skybox\night\fc3_moon.xbt";
 
-/// The authored effects (`particle_effects::AUTHORED_EFFECTS`): each one's
-/// definition, and its emitters' diffuse textures.
+/// The authored effects (`particle_effects::AUTHORED_EFFECTS`, and each
+/// material's bullet impact from `materialimpacts.lib`, whose table is
+/// written too): each one's definition, and its emitters' diffuse textures.
 fn convert_authored_effects(job: &Job) -> Result<()> {
+    use fc3_formats::particle_effects as pe;
     let particles = job.vfs.read(fc3_formats::lights::PARTICLE_LIBRARY)?;
     let library = std::str::from_utf8(&particles)?;
-    for name in fc3_formats::particle_effects::AUTHORED_EFFECTS {
+    let mut names: Vec<String> = pe::AUTHORED_EFFECTS.iter().map(|n| n.to_string()).collect();
+    match job.vfs.read(pe::MATERIAL_IMPACTS).map_err(anyhow::Error::from).and_then(|lib| pe::material_impacts(&lib, pe::BULLET_IMPACT)) {
+        Ok(impacts) => {
+            for i in &impacts {
+                if !names.contains(&i.effect) {
+                    names.push(i.effect.clone());
+                }
+            }
+            if job.should_write(pe::BULLET_IMPACTS_REL) {
+                write_atomic(job.root(), pe::BULLET_IMPACTS_REL, pe::impacts_to_text(&impacts).as_bytes(), job.ctx)?;
+            }
+        }
+        Err(e) => job.error(format!("bullet impacts: {e:#}")),
+    }
+    for name in &names {
         let rel = fc3_formats::particle_effects::authored_rel(name);
         if !job.should_write(&rel) {
             continue;

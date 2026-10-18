@@ -76,6 +76,58 @@ pub mod blast {
     }
 }
 
+/// The game's impacts per material (`materialimpacts.lib`): for each kind
+/// of impact (`Weapon/Bullet`, `Weapon/MeleeSlash`, footsteps...), the
+/// effect each logic material makes.
+pub const MATERIAL_IMPACTS: &str = r"generated\databases\generic\materialimpacts.lib";
+/// The kind of impact a bullet makes.
+pub const BULLET_IMPACT: &str = "Weapon/Bullet";
+/// The bullets' impacts, cached: one `<material id>\t<material>\t<effect>`
+/// line each (the effects cached as authored effects).
+pub const BULLET_IMPACTS_REL: &str = "particles/bullet-impacts.txt";
+
+/// A logic material's effect for one kind of impact.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaterialImpact {
+    /// The logic material's id (`disMatId`, its `disId` in
+    /// `logicmaterials.lib`) and name (`Base/Dirt_NP`).
+    pub material: u8,
+    pub name: String,
+    pub effect: String,
+}
+
+/// One kind of impact's effects, per logic material (those with one).
+pub fn material_impacts(lib: &[u8], kind: &str) -> Result<Vec<MaterialImpact>> {
+    // (The effect's name sits next to its id, `psParticlesSystem`.)
+    const EFFECT_NAME: u32 = 0x3149_1B5F;
+    let start = lib.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+    let root = crate::fcb::parse(&lib[start..])?;
+    let entry = root.children.iter().find(|o| o.str("hidName").as_deref() == Some(kind)).with_context(|| format!("no impact kind {kind}"))?;
+    let systems = entry.child("ParticlesSystems").context("impact kind without effects")?;
+    Ok(systems
+        .children
+        .iter()
+        .filter_map(|p| {
+            let effect = p.str_h(EFFECT_NAME).map(|s| s.trim_end_matches('\0').to_string()).filter(|s| s.contains('.'))?;
+            Some(MaterialImpact { material: *p.field("disMatId")?.first()?, name: p.str("disName")?.trim_end_matches('\0').to_string(), effect })
+        })
+        .collect())
+}
+
+/// Impacts as cached ([`BULLET_IMPACTS_REL`]).
+pub fn impacts_to_text(impacts: &[MaterialImpact]) -> String {
+    impacts.iter().map(|i| format!("{}\t{}\t{}\n", i.material, i.name, i.effect)).collect()
+}
+
+pub fn impacts_from_text(text: &str) -> Vec<MaterialImpact> {
+    text.lines()
+        .filter_map(|l| {
+            let mut f = l.split('\t');
+            Some(MaterialImpact { material: f.next()?.parse().ok()?, name: f.next()?.to_string(), effect: f.next()?.to_string() })
+        })
+        .collect()
+}
+
 /// Where an authored effect is cached, by its name.
 pub fn authored_rel(name: &str) -> String {
     format!("particles/{}.xml", crate::cache::hash_name(&name.to_ascii_lowercase()))
@@ -206,6 +258,15 @@ mod tests {
         assert_eq!(effect_xml(xml, "PUFF").unwrap(), "<PartSys Name='puff'><Unknown a='1'/></PartSys>");
         assert!(effect_xml(xml, "puf").is_err());
         assert!(effect_xml("<PartSys Name='puff'>", "puff").is_err());
+    }
+
+    #[test]
+    fn cached_impacts_read_back() {
+        let impacts = vec![
+            MaterialImpact { material: 4, name: "Base/Dirt_NP".into(), effect: "fx.a.dirt".into() },
+            MaterialImpact { material: 45, name: "Base/Asphalt_NP".into(), effect: "fx.a.concrete".into() },
+        ];
+        assert_eq!(impacts_from_text(&impacts_to_text(&impacts)), impacts);
     }
 
     #[test]

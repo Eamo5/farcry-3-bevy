@@ -78,7 +78,12 @@ impl Surfaces {
 
     /// The painted layer that dominates the terrain at a Bevy position.
     fn terrain(&self, heights: &Heightfield, p: Vec3) -> u32 {
-        self.layer_at(heights, p).and_then(|i| self.layers.get(i as usize)).map_or(0, |&l| self.switch(l))
+        self.terrain_logic(heights, p).map_or(0, |l| self.switch(l))
+    }
+
+    /// The logic material of the terrain's dominant layer at a position.
+    fn terrain_logic(&self, heights: &Heightfield, p: Vec3) -> Option<u8> {
+        self.layer_at(heights, p).and_then(|i| self.layers.get(i as usize)).copied()
     }
 
     /// Index (into the layer table) of the painted layer that dominates the
@@ -106,8 +111,13 @@ impl Surfaces {
 
     /// A model's surface at a point on it (model space), facing `up`.
     fn model(&self, m: &ModelSurfaces, local: Vec3, up: bool) -> u32 {
+        self.switch(self.model_logic(m, local, up))
+    }
+
+    /// A model's logic material at a point on it (model space), facing `up`.
+    fn model_logic(&self, m: &ModelSurfaces, local: Vec3, up: bool) -> u8 {
         if !up {
-            return self.switch(m.wall);
+            return m.wall;
         }
         let mut best: Option<(f32, u8)> = None;
         for (tri, logic) in &m.patches {
@@ -118,7 +128,7 @@ impl Surfaces {
                 best = Some((off, *logic));
             }
         }
-        self.switch(best.map_or(m.walk, |b| b.1))
+        best.map_or(m.walk, |b| b.1)
     }
 }
 
@@ -151,6 +161,15 @@ fn load_surfaces(mut surfaces: ResMut<Surfaces>, info: Res<CacheInfo>) {
     surfaces.switch_values = table.switch_values;
     surfaces.layers = table.layers;
     surfaces.models = table.models.into_iter().map(|m| (m.model, m)).collect();
+}
+
+/// What something hit is made of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Material {
+    /// A logic material's id (`logicmaterials.lib`'s `disId`).
+    Logic(u8),
+    Flesh,
+    Vehicle,
 }
 
 /// Looks up what was hit or stepped on.
@@ -191,6 +210,27 @@ impl SurfaceProbe<'_, '_> {
             };
         }
         self.surfaces.terrain(&self.heights, point)
+    }
+
+    /// What `entity` is made of at `point` (world space), hit with surface
+    /// normal `normal`: a logic material (0, `Base/Default`, when unknown),
+    /// or flesh or a vehicle's metal.
+    pub fn material_at(&self, entity: Entity, point: Vec3, normal: Vec3) -> Material {
+        if self.flesh.contains(entity) {
+            return Material::Flesh;
+        }
+        if self.vehicles.contains(entity) {
+            return Material::Vehicle;
+        }
+        if let Ok((obj, gt)) = self.objects.get(entity) {
+            let model = self
+                .server
+                .get_path(obj.model.id())
+                .and_then(|p| p.path().file_stem()?.to_str().and_then(|s| u64::from_str_radix(s, 16).ok()))
+                .and_then(|h| self.surfaces.models.get(&h));
+            return Material::Logic(model.map_or(0, |m| self.surfaces.model_logic(m, gt.affine().inverse().transform_point3(point), normal.y > 0.6)));
+        }
+        Material::Logic(self.surfaces.terrain_logic(&self.heights, point).unwrap_or(0))
     }
 
     /// The terrain's surface at a position (ignoring anything on it).
