@@ -147,7 +147,9 @@ fn play_effects(
             let wanted = d < kind.range() && (kind != Kind::Fireflies || night > 0.0);
             let gone = d > kind.range() * 1.15 || (kind == Kind::Fireflies && night <= 0.0);
             if wanted && !playing.contains_key(&i) {
-                let e = commands.spawn((Transform::from_translation(at).with_rotation(turn), crate::authored_fx::AuthoredFx(name))).id();
+                let e = commands
+                    .spawn((Transform::from_translation(at).with_rotation(turn), crate::authored_fx::AuthoredFx(name), crate::authored_fx::NoLights))
+                    .id();
                 playing.insert(i, e);
             } else if gone {
                 if let Some(e) = playing.remove(&i) {

@@ -170,6 +170,11 @@ pub fn intern(name: &str) -> &'static str {
     n
 }
 
+/// Its emitters' lights left to others (the world's placed effects: the
+/// converter puts their lights among the world's).
+#[derive(Component)]
+pub struct NoLights;
+
 /// Played once: what loops in it runs its time once (a splash's ring).
 #[derive(Component)]
 struct Once;
@@ -339,6 +344,9 @@ struct Compiled {
     /// Its particles move with the effect (`LocalEmitterSpace`: a muzzle's
     /// flames go with the gun).
     local: bool,
+    /// Oriented in the effect's frame (`Orientation`): one that hardly moves
+    /// (a flame, a standing wisp) stands along the frame's Z (Dunia's).
+    oriented: bool,
     lit: bool,
     near: Option<(f32, f32)>,
     far: Option<(f32, f32)>,
@@ -460,6 +468,7 @@ impl Compiled {
             uniform: s.f32("UniformSize").is_none_or(|v| v != 0.0),
             pivot: Vec2::new(f("PartSizeOffsetX", 0.0), f("PartSizeOffsetY", 0.0)),
             local: s.child("Flags").is_some_and(|f| f.bool("LocalEmitterSpace") == Some(true)),
+            oriented: s.child("Flags").is_some_and(|f| f.bool("Orientation") == Some(true)),
             lit: on("SHLighting") && mode != 0,
             near: (f("NearClippingRate", 0.0) > 0.0 && f("NearClippingAlpha", 0.0) > 0.0).then(|| (f("NearClippingStart", 0.0), f("NearClippingEnd", 0.0))),
             far: (f("FarClippingRate", 0.0) > 0.0).then(|| (f("FarClippingStart", 0.0), f("FarClippingEnd", 0.0))),
@@ -542,6 +551,9 @@ struct Particle {
     /// heading and fall then in the effect's frame), followed while the
     /// effect lasts.
     space: Option<bevy::math::Affine3A>,
+    /// Its effect's Z (Dunia's; in the effect's frame for one in its own
+    /// space), what an oriented one stands along.
+    stand: Vec3,
     pos: Vec3,
     dir: Vec3,
     speed: f32,
@@ -574,7 +586,7 @@ fn emit(
     time: Res<Time>,
     mut library: ResMut<Library>,
     mut rng: ResMut<crate::weapons::Rng>,
-    mut effects: Query<(Entity, &AuthoredFx, &GlobalTransform, Option<&mut FxClock>, Has<Once>)>,
+    mut effects: Query<(Entity, &AuthoredFx, &GlobalTransform, Option<&mut FxClock>, Has<Once>, Has<NoLights>)>,
     mut lights: Query<&mut PointLight, With<FxLight>>,
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
     mut commands: Commands,
@@ -585,7 +597,7 @@ fn emit(
     }
     // (Shapes facing the camera: its right, its way back, its up.)
     let facing = cameras.single().map_or(Mat3::IDENTITY, |c| Mat3::from_cols(c.right().as_vec3(), c.back().as_vec3(), c.up().as_vec3()));
-    for (entity, fx, at, clock, once) in &mut effects {
+    for (entity, fx, at, clock, once, unlit) in &mut effects {
         let Some(ids) = library.effect(fx.0).cloned() else { continue };
         let Some(mut clock) = clock else {
             commands.entity(entity).insert(FxClock { carry: vec![0.0; ids.len()], burst: vec![false; ids.len()], lights: vec![None; ids.len()], ..default() });
@@ -627,7 +639,7 @@ fn emit(
             };
             // The emitter's light (the effect's child: it goes with it),
             // flickering as authored.
-            if let Some((colour, intensity, radius, freq, amp)) = light {
+            if let Some((colour, intensity, radius, freq, amp)) = light.filter(|_| !unlit) {
                 let flicker = 1.0 + amp * (clock.age * freq * std::f32::consts::TAU).sin() * rng.range(0.6, 1.0);
                 match clock.lights[k].and_then(|l| lights.get_mut(l).ok()) {
                     Some(mut l) => l.intensity = intensity * LIGHT_SCALE * flicker.max(0.0),
@@ -669,15 +681,18 @@ fn emit(
                 let frames = (em.frames[0] * em.frames[1]).max(1) as f32;
                 // (In its own space: kept in the effect's frame.)
                 let back = turn.inverse();
-                let (space, pos, dir, gravity) = if em.local {
-                    (Some(at.affine()), em.offset + back * born, back * dir, back * gravity)
+                // (Dunia's Z is Bevy's local +Y.)
+                let stand = em.axis * Vec3::Y;
+                let (space, pos, dir, gravity, stand) = if em.local {
+                    (Some(at.affine()), em.offset + back * born, back * dir, back * gravity, stand)
                 } else {
-                    (None, place + turn * em.offset + born, dir, gravity)
+                    (None, place + turn * em.offset + born, dir, gravity, turn * stand)
                 };
                 let p = Particle {
                     emitter: id,
                     owner: entity,
                     space,
+                    stand,
                     pos,
                     dir,
                     speed: em.speed.roll(&mut rng),
@@ -819,17 +834,24 @@ fn draw(
             let light = if em.lit { ambient } else { 1.0 };
             // (What glows: light added, and brightness as coverage.)
             let colour = colour * light * if batch.0.mode != 1 { em.brightness } else { 1.0 };
-            let half = (p.size * em.part_size.at(t) * 0.5).max(0.005);
+            // (A size is the particle's half-extent, its radius.)
+            let half = (p.size * em.part_size.at(t)).max(0.005);
             let mut centre = pos - origin;
             let (x, y) = if !em.uniform {
                 // Sized unevenly (sparks, streaks of smoke): its width
                 // across and its length (`PartSizeZKF`) along its heading as
                 // seen, hung from its point by its pivot.
                 let vel = p.world_vector(p.dir * p.speed * em.part_speed.at(t) + p.fall);
-                let heading = if vel.length_squared() > 1e-4 { vel } else { p.world_vector(p.dir) };
+                let heading = if em.oriented && vel.length_squared() < 0.25 {
+                    p.world_vector(p.stand)
+                } else if vel.length_squared() > 1e-4 {
+                    vel
+                } else {
+                    p.world_vector(p.dir)
+                };
                 let along = (heading - view * heading.dot(view)).normalize_or(up);
                 let side = view.cross(along).normalize_or(right);
-                let (width, length) = (half.max(0.003), (p.size * em.part_length.at(t) * 0.5).max(0.003));
+                let (width, length) = (half.max(0.003), (p.size * em.part_length.at(t)).max(0.003));
                 centre += side * (width * em.pivot.x) + along * (length * em.pivot.y);
                 (side * width, along * length)
             } else {

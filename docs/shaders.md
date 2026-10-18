@@ -413,17 +413,23 @@ follows the `PartColorKF` points times `InitColorKF`, or its evenly spaced
 `Key`s when it has no points. With `RandomColor`, one colour is picked at
 birth. The sheet is `FrameCount` by `FrameCountY` (0 is one image),
 shown at `FramePerSecond`. `BlendType` 1 adds; `RedAsAlpha` takes brightness as
-coverage; else the alpha blends. `UniformSize` 0 particles (sparks, streaks of smoke) are
-drawn along their heading as seen: `PartSizeKF` gives their width and
-`PartSizeZKF` their length (both times their size), hung from their point by
-`PartSizeOffsetX` (across) and `PartSizeOffsetY` (along). An emitter in its own
-space (`Flags` `LocalEmitterSpace`) keeps its particles in its effect's frame,
-following the effect while it lasts. `EmitterHDRMulKF` brightens what adds or takes
+coverage; else the alpha blends. A particle's size is its half-extent (its
+radius): read as a width, the camp fires' flames sat hidden in their logs and
+the blasts came out half the original's. `UniformSize` 0 particles (sparks,
+flames, streaks of smoke) are drawn along their heading as seen. `PartSizeKF`
+gives their width and `PartSizeZKF` their length (both times their size). They
+hang from their point by `PartSizeOffsetX` (across) and `PartSizeOffsetY`
+(along). One oriented in its effect's frame (`Flags` `Orientation`) that hardly
+moves (a flame, a standing wisp) stands along the frame's Z (Dunia's) instead.
+An emitter in its own space (`Flags` `LocalEmitterSpace`) keeps its particles in
+its effect's frame, following the effect while it lasts. `EmitterHDRMulKF` brightens what adds or takes
 brightness as coverage, compressed (1 + 1.5 log10 of it: our light isn't the
 engine's). `SHLighting` sheets darken
 with the daylight. The near and far fades apply. `LightActive` burns a point
 light with its colour, intensity and radius, flickering by
-`LightFlickeringFrequency` and `LightFlickeringAmplitude`. Not yet: soft
+`LightFlickeringFrequency` and `LightFlickeringAmplitude`. The world's placed
+effects burn none (`NoLights`), since the converter already puts their lights
+among the world's. Not yet: soft
 intersections, distortion (heat haze isn't drawn), mesh particles, child
 emitters, the plotted discs and sounds. Curves are joined linearly between
 knots. `FC3_AUTHORED_FX=<name>[,<metres>]` plays one as an impact, on the ground
