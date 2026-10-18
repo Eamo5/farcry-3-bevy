@@ -45,7 +45,7 @@ impl Plugin for ProgressionPlugin {
             .init_resource::<PauseMenu>()
             .add_systems(OnExit(GameState::Loading), (load_shop_catalog, load_loot_catalog))
             .add_systems(Update, find_shops)
-            .add_systems(Update, remind_skill_points.run_if(in_state(GameState::Playing)))
+            .add_systems(Update, (remind_skill_points, test_xp).run_if(in_state(GameState::Playing)))
             .add_systems(Startup, (setup_journal, setup_shop, setup_popups))
             .add_systems(
                 Update,
@@ -1225,7 +1225,7 @@ fn apply_xp(mut gains: MessageReader<XpGain>, skills: Res<Skills>, mut progress:
         while progress.xp >= xp_needed(progress.level + 1, &skills) {
             progress.level += 1;
             progress.skill_points += 1;
-            hud.notify(format!("LEVEL {} - skill point earned (Tab)", progress.level));
+            hud.notify_native(format!("LEVEL {} - skill point earned (Tab)", progress.level));
         }
     }
 }
@@ -2872,6 +2872,28 @@ pub struct ItemBought {
 #[derive(Resource, Default)]
 pub struct Shops(pub Vec<Vec3>);
 
+/// `FC3_XP=<amount>,<seconds>` (tests): that much XP, once, that long after
+/// the player is in the world (5 s without), for the level-up to be seen.
+fn test_xp(time: Res<Time>, players: Query<&Player>, mut xp: MessageWriter<XpGain>, mut since: Local<Option<f32>>, mut done: Local<bool>) {
+    if *done {
+        return;
+    }
+    let Some(v) = std::env::var("FC3_XP").ok() else {
+        *done = true;
+        return;
+    };
+    if players.single().is_ok_and(|p| !p.spawning) {
+        since.get_or_insert(time.elapsed_secs());
+    }
+    let mut parts = v.split(',').map(|p| p.trim().parse::<f32>().unwrap_or(0.0));
+    let (amount, after) = (parts.next().unwrap_or(0.0), parts.next().unwrap_or(5.0));
+    if since.is_some_and(|t| time.elapsed_secs() - t >= after) {
+        *done = true;
+        xp.write(XpGain { amount: amount.max(0.0) as u32, reason: "Bonus" });
+        info!("test: {amount} XP given");
+    }
+}
+
 /// Shopkeepers as their sectors load.
 /// Unspent skill points brought up now and then, as often as the game's
 /// HUD reminds of them.
@@ -2891,7 +2913,7 @@ fn remind_skill_points(
     if *waited >= every {
         *waited = 0.0;
         let n = progress.skill_points;
-        hud.notify(format!("{n} skill point{} to spend (Tab)", if n == 1 { "" } else { "s" }));
+        hud.notify_native(format!("{n} skill point{} to spend (Tab)", if n == 1 { "" } else { "s" }));
     }
 }
 

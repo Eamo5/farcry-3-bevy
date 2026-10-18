@@ -378,6 +378,11 @@ only what changed (and everything again until the movies have loaded):
   `XPBonusKickerText` the game's line for a takedown (by its `Takedown/...`
   reward: "DEATH FROM ABOVE", "CHAINED TAKEDOWN"...) or a headshot
   (`progression::kicker_line`, 162743 to 162756); other gains have none.
+  A level gained plays `XPLevelUp` (in from frame 2, out from 10 four
+  seconds on) with `XPLevelUpText` the game's "Skill Point Available"
+  (149414, or 149413 with more than one); our level-up notices stay ours.
+  `FC3_XP=20000,10` (tests) gives that much XP once, 10 s after the player
+  is in the world.
 * **Loot and cash**: each thing looted plays a line (`LootContainer<n>`
   from frame 2 with `LootItemText<n>`, the two lines in turn; it fades by
   itself and sends `LootAnimationFading`); a change of money shows the cash

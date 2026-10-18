@@ -2321,13 +2321,43 @@ const XP_TIERS: [(u32, u32, u32); 3] = [(2, 37, 0), (42, 87, 100), (95, 155, 500
 /// Seconds the kicker holds before it goes.
 const XP_HOLD: f32 = 2.5;
 
+/// The level-up line (`XPLevelUp`): in from frame 2, out from 10, held this
+/// long; its text the game's "Skill Point(s) Available".
+const LEVEL_UP_IN: u32 = 2;
+const LEVEL_UP_OUT: u32 = 10;
+const LEVEL_UP_HOLD: f32 = 4.0;
+const SKILL_POINT_AVAILABLE: u32 = 149414;
+const SKILL_POINTS_AVAILABLE: u32 = 149413;
+
 /// XP gains on the HUD: the kicker plays the tier the amount earns, with
-/// the amount and what it was for, holds, then goes.
-fn drive_xp(state: NonSend<Interface>, time: Res<Time>, mut gains: MessageReader<crate::progression::XpGain>, mut showing: Local<Option<(f32, u32)>>) {
+/// the amount and what it was for, holds, then goes. A level gained shows
+/// the level-up line a while.
+#[allow(clippy::type_complexity)]
+fn drive_xp(
+    state: NonSend<Interface>,
+    time: Res<Time>,
+    progress: Res<crate::progression::Progress>,
+    mut gains: MessageReader<crate::progression::XpGain>,
+    mut showing: Local<Option<(f32, u32)>>,
+    mut level: Local<(Option<u32>, Option<f32>)>,
+) {
     let Interface::Running(host) = &*state else {
         gains.clear();
         return;
     };
+    let (seen, level_until) = &mut *level;
+    if seen.is_some_and(|l| progress.level > l) {
+        let id = if progress.skill_points > 1 { SKILL_POINTS_AVAILABLE } else { SKILL_POINT_AVAILABLE };
+        host.dps_text("XPLevelUpText", &host.text(id));
+        host.dps_text("XPLevelUpTextInteractionText", "");
+        host.dps_play("XPLevelUp", fc3_ui::ExternalValue::Number(LEVEL_UP_IN as f64));
+        *level_until = Some(time.elapsed_secs() + LEVEL_UP_HOLD);
+    }
+    *seen = Some(progress.level);
+    if level_until.is_some_and(|t| time.elapsed_secs() >= t) {
+        host.dps_play("XPLevelUp", fc3_ui::ExternalValue::Number(LEVEL_UP_OUT as f64));
+        *level_until = None;
+    }
     let mut total = 0;
     let mut reason = "";
     for g in gains.read() {
