@@ -2052,7 +2052,7 @@ fn run_story(
                 info!("story: objective {:?}", text.as_deref().map(plain));
                 // (The original HUD's objective box announces it itself.)
                 if let Some(t) = text.as_ref().filter(|_| !original_hud.0) {
-                    hud.notify(format!("New objective: {}", plain(t)));
+                    hud.notify_native(format!("New objective: {}", plain(t)));
                 }
                 ui.objective = text.map(|t| plain(&t));
             }
@@ -2072,7 +2072,7 @@ fn run_story(
                 }
                 if money > 0 {
                     let got = progress.add_money(money);
-                    hud.notify(format!("+${got}"));
+                    hud.notify_native(format!("+${got}"));
                 }
             }
             Command::MissionFailed { text, reload } => {

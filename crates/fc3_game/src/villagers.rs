@@ -954,7 +954,7 @@ fn thank_player(
             // (For each of the encounter's civilians still alive.)
             let survivors = civilians.iter().filter(|(c, ch)| c.0 == g.group && !ch.dead).count().max(1) as u32;
             let paid = progress.add_money(g.cash * survivors);
-            hud.notify(format!("Rescued: ${paid}"));
+            hud.notify_native(format!("Rescued: ${paid}"));
             say("salutation", &mut rng, &mut sfx);
             commands.entity(e).remove::<Grateful>();
             v.state = State::Idle;

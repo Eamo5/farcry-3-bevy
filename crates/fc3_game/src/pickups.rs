@@ -162,8 +162,10 @@ pub(crate) fn loot_bodies(
         let mut note = if found.is_empty() { "Nothing useful".to_string() } else { format!("Found {}", found.join(", ")) };
         if full {
             note += " (rucksack full)";
+            hud.loot_notes.push(LOOT_RUCKSACK_FULL);
         }
-        hud.notify(note);
+        // (The original HUD shows the loot and the cash its own way.)
+        hud.notify_native(note);
         sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 0.6 });
         commands.entity(e).remove::<LootableBody>().insert(Searched);
         return;
@@ -196,7 +198,7 @@ pub(crate) fn loot_bodies(
         _ => None,
     };
     found.extend(extra.map(str::to_string));
-    hud.notify(if found.is_empty() { "Nothing useful".to_string() } else { format!("Found {}", found.join(", ")) });
+    hud.notify_native(if found.is_empty() { "Nothing useful".to_string() } else { format!("Found {}", found.join(", ")) });
     sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 0.6 });
     commands.entity(e).remove::<LootableBody>().insert(Searched);
 }
@@ -275,6 +277,8 @@ pub enum PickupKind {
 }
 
 /// How many of each collectible the island holds.
+/// The original HUD's loot line for a full rucksack ("Loot Rucksack Full").
+pub const LOOT_RUCKSACK_FULL: u32 = 172057;
 pub const RELICS: u32 = 120;
 pub const LETTERS: u32 = 20;
 pub const MEMORY_CARDS: u32 = 16;

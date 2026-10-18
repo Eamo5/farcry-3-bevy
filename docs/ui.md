@@ -411,7 +411,15 @@ only what changed (and everything again until the movies have loaded):
 
 While it runs, the game's own health, ammo, compass, crosshair, hit marker,
 prompt, objective, subtitles, banners and XP popups are hidden or left empty
-(`hud::ReplacedByOriginal`, `hud::OriginalHud`).
+(`hud::ReplacedByOriginal`, `hud::OriginalHud`). So are our notices of
+what it shows its own way (`HudState::notify_native`): what a body or a
+chest gave, skins, rescues' and missions' cash, a new objective. A loot
+line names its shop item (the rucksack's name for it), and a full rucksack
+plays the game's "Loot Rucksack Full" (172057) as a line
+(`HudState::loot_notes`). The original has no death screen in single
+player: our "YOU DIED" gives way to the view fading to black over 2.5 s of
+the respawn's wait, and the loading screen follows. `FC3_PLAYER_DIE=14`
+(tests) kills the player once, 14 s into play.
 
 **Pause menu** (`original_ui::drive_pause`): pausing loads
 `M_PauseMenu.feu` at level 10 over the HUD (which `SetVisible 0` hides,

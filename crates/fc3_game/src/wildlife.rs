@@ -2357,7 +2357,7 @@ fn skin_animals(
         looted.write(crate::progression::ItemLooted(crate::progression::LootKind::Skin(animal)));
         actions.consume(crate::controls::Action::Interact);
         let what = item(c.species).flatten().map_or_else(|| format!("{} skin", animal.name()), |i| i.name.clone());
-        hud.notify(format!("+{n} {what}"));
+        hud.notify_native(format!("+{n} {what}"));
         // The skinning plays out with the machete; the carcass stays.
         c.skinned = true;
         gestures.write(crate::fp::FpAction::Skin { large: SPECIES[c.species].size.0 >= 0.5 });

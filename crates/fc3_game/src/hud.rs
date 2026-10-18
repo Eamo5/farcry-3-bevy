@@ -87,6 +87,12 @@ pub struct HudState {
     pub show_help: bool,
     /// Transient centre-screen message (pickups, objectives).
     pub message: Option<(String, f32)>,
+    /// Whether the message is one the original HUD shows its own way (its
+    /// loot lines, cash counter, objective box): then only ours shows it.
+    pub message_native: bool,
+    /// Lines for the original HUD's loot feed, by string id (its "Loot
+    /// Rucksack Full"); `original_ui` plays them, and without it they go.
+    pub loot_notes: Vec<u32>,
     /// Interaction prompt, set every frame by whoever offers one.
     pub prompt: Option<String>,
     /// The prompt shown this frame (the original HUD's, `original_ui`,
@@ -99,6 +105,14 @@ pub struct HudState {
 impl HudState {
     pub fn notify(&mut self, text: impl Into<String>) {
         self.message = Some((text.into(), 3.0));
+        self.message_native = false;
+    }
+
+    /// A message for our HUD alone: the original's shows the same its own
+    /// way.
+    pub fn notify_native(&mut self, text: impl Into<String>) {
+        self.notify(text);
+        self.message_native = true;
     }
 }
 
@@ -134,6 +148,11 @@ struct GrenadeMarker(usize);
 struct DeathScreen;
 #[derive(Component)]
 struct DeathText;
+/// Our death screen's tint; under the original interface the view fades to
+/// black over `DEATH_FADE` seconds of the respawn's wait.
+const DEATH_TINT: Color = Color::srgba(0.12, 0.0, 0.0, 0.7);
+const DEATH_FADE: f32 = 2.5;
+const RESPAWN_SECS: f32 = crate::combat::RESPAWN_SECS;
 #[derive(Component)]
 struct HelpPanel;
 #[derive(Component)]
@@ -352,7 +371,7 @@ fn setup_hud(mut commands: Commands) {
     // Death screen.
     commands.spawn((
         full.clone(),
-        BackgroundColor(Color::srgba(0.12, 0.0, 0.0, 0.7)),
+        BackgroundColor(DEATH_TINT),
         Visibility::Hidden,
         DeathScreen,
         GlobalZIndex(3),
@@ -810,7 +829,7 @@ fn update_overlays(
     diagnostics: Res<DiagnosticsStore>,
     mut state: ResMut<HudState>,
     players: Query<(&Health, &PlayerStats)>,
-    mut death: Query<&mut Visibility, (With<DeathScreen>, Without<HelpPanel>, Without<ClickToPlay>)>,
+    mut death: Query<(&mut Visibility, &mut BackgroundColor), (With<DeathScreen>, Without<HelpPanel>, Without<ClickToPlay>)>,
     mut death_text: Query<&mut Text, (With<DeathText>, Without<MessageText>, Without<FpsText>, Without<PromptText>)>,
     mut help: Query<&mut Visibility, (With<HelpPanel>, Without<DeathScreen>, Without<ClickToPlay>)>,
     mut click: Query<&mut Visibility, (With<ClickToPlay>, Without<DeathScreen>, Without<HelpPanel>)>,
@@ -837,11 +856,14 @@ fn update_overlays(
         *v = if playing && !captured.0 && !args.automated() { Visibility::Inherited } else { Visibility::Hidden };
     }
     if let Ok((h, ps)) = players.single() {
-        if let Ok(mut v) = death.single_mut() {
+        // (Under the original interface, which has no death screen of its
+        // own, the view fades out instead, and its loading screen follows.)
+        if let Ok((mut v, mut bg)) = death.single_mut() {
             *v = if h.dead { Visibility::Inherited } else { Visibility::Hidden };
+            bg.0 = if original.0 { Color::srgba(0.0, 0.0, 0.0, ((RESPAWN_SECS - ps.respawn_timer) / DEATH_FADE).clamp(0.0, 1.0)) } else { DEATH_TINT };
         }
         if let Ok(mut t) = death_text.single_mut() {
-            t.0 = format!("YOU DIED\n\nRespawning in {:.0}", ps.respawn_timer.max(0.0).ceil());
+            t.0 = if original.0 { String::new() } else { format!("YOU DIED\n\nRespawning in {:.0}", ps.respawn_timer.max(0.0).ceil()) };
         }
     }
     if let Some((_, ttl)) = &mut state.message {
@@ -853,7 +875,11 @@ fn update_overlays(
     if let Ok(mut t) = message.single_mut() {
         // (In play only: a menu's clock is stopped, and it would stay over it.)
         let playing = *game_state.get() == crate::menu::GameState::Playing;
-        t.0 = state.message.as_ref().filter(|_| playing).map(|(m, _)| m.clone()).unwrap_or_default();
+        let shown = playing && !(original.0 && state.message_native);
+        t.0 = state.message.as_ref().filter(|_| shown).map(|(m, _)| m.clone()).unwrap_or_default();
+    }
+    if !original.0 {
+        state.loot_notes.clear();
     }
     if let Ok(mut t) = fps.single_mut() {
         if let Some(v) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS).and_then(|d| d.smoothed()) {

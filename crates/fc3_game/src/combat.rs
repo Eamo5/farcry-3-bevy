@@ -15,7 +15,7 @@ impl Plugin for CombatPlugin {
             .add_systems(OnExit(crate::menu::GameState::Loading), load_damage_table)
             .add_systems(Startup, add_player_health.after(crate::player::PlayerSpawn))
             .add_systems(Update, (attach_counters, apply_damage, player_regen, fall_damage, use_medkit, respawn_player).chain())
-            .add_systems(Update, die_on_spawn.before(apply_damage));
+            .add_systems(Update, (die_on_spawn, test_die).before(apply_damage));
     }
 }
 
@@ -56,6 +56,8 @@ pub const HEALTH_SEGMENT: f32 = 25.0;
 const REGEN_DELAY: f32 = 4.0;
 const REGEN_RATE: f32 = 6.0;
 const MEDKIT_HEAL: f32 = 50.0;
+/// Seconds from the player's death to the respawn.
+pub const RESPAWN_SECS: f32 = 5.0;
 
 /// Player-only stats.
 #[derive(Component)]
@@ -261,6 +263,34 @@ pub struct Died {
     pub entity: Entity,
     pub killer: Option<Entity>,
     pub kind: DamageKind,
+}
+
+/// `FC3_PLAYER_DIE=<seconds>` (tests): the player dies once, that long into
+/// play (the death and the respawn to be seen).
+fn test_die(
+    time: Res<Time>,
+    state: Res<State<crate::menu::GameState>>,
+    mut players: Query<(Entity, &mut Health), With<Player>>,
+    mut died: MessageWriter<Died>,
+    mut done: Local<bool>,
+) {
+    if *done || *state.get() != crate::menu::GameState::Playing {
+        return;
+    }
+    let Some(after) = std::env::var("FC3_PLAYER_DIE").ok().and_then(|v| v.parse::<f32>().ok()) else {
+        *done = true;
+        return;
+    };
+    if time.elapsed_secs() < after {
+        return;
+    }
+    *done = true;
+    if let Ok((e, mut h)) = players.single_mut() {
+        h.current = 0.0;
+        h.dead = true;
+        died.write(Died { entity: e, killer: None, kind: DamageKind::Bullet });
+        info!("test: the player dies");
+    }
 }
 
 /// Spawned dead (an encounter's bodies): it dies as it appears, by no one's
@@ -559,7 +589,7 @@ fn respawn_player(
     for (e, mut h, mut ps, mut t, mut p) in &mut q {
         if deaths.contains(&e) {
             ps.deaths += 1;
-            ps.respawn_timer = 5.0;
+            ps.respawn_timer = RESPAWN_SECS;
             p.velocity = Vec3::ZERO;
         }
         if h.dead {

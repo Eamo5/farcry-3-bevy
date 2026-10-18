@@ -2357,8 +2357,12 @@ const LOOT_IN: u32 = 2;
 /// Seconds the cash counter stays after a change.
 const CASH_HOLD: f32 = 3.0;
 
-/// What was looted, for its line.
-fn loot_name(kind: crate::progression::LootKind) -> String {
+/// What was looted, for its line: its shop item's name (the rucksack's),
+/// else ours.
+fn loot_name(kind: crate::progression::LootKind, catalog: Option<&crate::progression::LootCatalog>) -> String {
+    if let Some(item) = catalog.and_then(|c| c.item(kind)) {
+        return item.name.clone();
+    }
     match kind {
         crate::progression::LootKind::Skin(a) => format!("{} Skin", a.name()),
         crate::progression::LootKind::Plant(p) => p.name().to_string(),
@@ -2373,6 +2377,8 @@ fn drive_loot(
     state: NonSend<Interface>,
     time: Res<Time>,
     progress: Res<crate::progression::Progress>,
+    catalog: Option<Res<crate::progression::LootCatalog>>,
+    mut hud: ResMut<crate::hud::HudState>,
     mut looted: MessageReader<crate::progression::ItemLooted>,
     mut memory: Local<(Option<u32>, usize, usize, Option<f32>)>,
 ) {
@@ -2382,10 +2388,11 @@ fn drive_loot(
     };
     let num = |n: u32| fc3_ui::ExternalValue::Number(n as f64);
     let (last_money, loot_line, cash_line, cash_until) = &mut *memory;
-    for l in looted.read() {
+    let lines: Vec<String> = looted.read().map(|l| loot_name(l.0, catalog.as_deref())).chain(hud.loot_notes.drain(..).map(|id| host.text(id))).collect();
+    for line in lines {
         let n = *loot_line % 2;
         *loot_line += 1;
-        host.dps_text(&format!("LootItemText_{n}"), &loot_name(l.0));
+        host.dps_text(&format!("LootItemText_{n}"), &line);
         host.dps_play(&format!("LootContainer_{n}"), num(LOOT_IN));
     }
     let money = progress.money;
