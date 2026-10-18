@@ -137,6 +137,41 @@ _global.fire.utils.TweenEx = function(target, duration, props) {
 _global.fire.utils.TweenEx.prototype.stop = function() {
     this.stopped = true;
 };
+// The engine's tween of one property, fire.utils.Tween (the frontend's):
+// new Tween(clip, property, ease name, from, to, seconds, delay, -, loop,
+// event). An alpha given as a fraction (both ends at most 1) goes as a
+// percentage; a loop goes back and forth for ever; at its end the event,
+// if one is named, is heard on its channel (`onBulletinShowEnd`).
+_global.__fireEaseNames = {EaseNone: 0, EaseRegularIn: 1, EaseRegularOut: 2, EaseRegularInOut: 3, EaseStrongIn: 4, EaseStrongOut: 5, EaseStrongInOut: 6, EaseBackIn: 7, EaseBackOut: 8, EaseBackInOut: 9, EaseBounceIn: 10, EaseBounceOut: 11, EaseBounceInOut: 12};
+_global.fire.utils.Tween = function(target, prop, ease, from, to, duration, delay, unused, loop, eventName) {
+    var a = Number(from);
+    var b = Number(to);
+    if (prop == "_alpha" && Math.abs(a) <= 1 && Math.abs(b) <= 1) {
+        a = a * 100;
+        b = b * 100;
+    }
+    var props = new Object();
+    props[prop] = [a, b];
+    var e = _global.__fireEaseNames[String(ease)];
+    props.ease = e == undefined ? 0 : e;
+    if (Number(delay) > 0) {
+        props.delay = Number(delay);
+    }
+    if (loop == true) {
+        props.repeat = -1;
+        props.yoyo = true;
+    }
+    if (eventName != undefined && eventName != null && String(eventName) != "") {
+        var channel = String(eventName);
+        props.onComplete = function() {
+            _global.ExtendedEvents[channel].broadcastMessage("onEvent");
+        };
+    }
+    this.tween = new _global.fire.utils.TweenEx(target, duration, props);
+};
+_global.fire.utils.Tween.prototype.stop = function() {
+    this.tween.stop();
+};
 // fire.utils.EaseType: None, Regular (quadratic), Strong (quintic), Back,
 // Bounce, each In/Out/InOut from 1; Bezier (13) goes as None.
 _global.__fireBounce = function(t) {

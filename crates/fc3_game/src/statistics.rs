@@ -350,6 +350,11 @@ pub fn mission_done(p: &mut Progress, kind: &str, giver: bool) {
     add(p, stat, 1);
 }
 
+/// The main missions done.
+pub(crate) fn main_missions_done(p: &Progress) -> u32 {
+    missions_of(p, stat::MISSIONS)
+}
+
 /// A kind of mission's count: as counted, else (a save from before) by the
 /// missions' names.
 fn missions_of(p: &Progress, stat: u32) -> u32 {

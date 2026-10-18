@@ -373,7 +373,11 @@ fn update_menu(
     let can_continue = s == GameState::MainMenu && slot.existing.is_some();
     if let Ok(mut v) = root.single_mut() {
         // Hidden in play and under the options screen (so it can't take clicks).
-        *v = if matches!(s, GameState::Playing | GameState::Map | GameState::Journal | GameState::Shop) || options.0 || (original.0 && s == GameState::Paused) {
+        // (The original UI's pause menu and frontend are up in its place.)
+        *v = if matches!(s, GameState::Playing | GameState::Map | GameState::Journal | GameState::Shop)
+            || options.0
+            || (original.0 && matches!(s, GameState::Paused | GameState::MainMenu))
+        {
             Visibility::Hidden
         } else {
             Visibility::Inherited

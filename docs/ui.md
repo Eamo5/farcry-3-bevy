@@ -36,7 +36,11 @@ external image a `DefineBitsLossless2` (premultiplied ARGB, cropped from a
 power-of-two texture or resampled to the authored size), each external font a
 `DefineFont3` (below), tags 248 and 249 dropped, sprites rewritten the same
 way. The converter writes all of them to `ui/<archive path>.swf` in the cache
-(about 107 MB); `fc3tool feu-swf <archive .feu> <out.swf>` converts one.
+(about 107 MB); `fc3tool feu-swf <archive .feu> <out.swf>` converts one. The
+archives' name lists miss some movies others load (the frontend's
+`mpIgeRatingPopup.feu`, without which its pages never finish loading), so the
+converter also follows the `.feu` paths in each movie's bytes
+(`feu::movie_paths`) to whatever the archives hold.
 
 Many images are packed into shared textures, atlases
 (`UI\SuperTextures\<name>_0.png`: the radar's icons, the skill icons, the
@@ -179,6 +183,11 @@ jump targets labelled and a function's registers by name):
   camera's legend six. The shim defines it, asking the host
   (`ExternalInterface` `engineText`), which reads the string table the
   converter keeps (`story/strings.bin`, `fc3_formats::oasis`).
+* **Engine tweens**: the frontend tweens with `new fire.utils.Tween(clip,
+  property, ease name, from, to, seconds, delay, -, loop, event)`, also the
+  engine's; the shim makes it a `TweenEx` (an alpha given as a fraction, both
+  ends at most 1, goes as a percentage; a loop goes back and forth; at its
+  end the named event, `onBulletinShowEnd`, is heard on its channel).
 * **Tweens**: `new fire.utils.TweenEx(clip, seconds, {prop: to or
   [from, to], ease, delay, repeat, yoyo, onComplete, onCompleteParams})`,
   with `stop()`, is the engine's too (the movies define only
@@ -481,12 +490,43 @@ valuables; each has the list sent again and the money. A tutorial's shop
 out from the subcategories (`QuitMenu`). `--shop 0` (tests) opens it in
 play; `FC3_PAUSE_PAGE=0` from the pause menu.
 
+**Main menu** (`UI\Multiplayer\Menu\MultiMain.feu`, level 20;
+`original_ui::frontend`): the game's frontend in place of ours while the game
+is at its main menu (its own cursor; the HUD hidden). It loads its fifteen
+pages one by one (co-op and multiplayer's among them), then asks
+`RequestMultiMainState`; the answer (`FrontEnd` `RequestMultiMainStateResponse
+gameStart`, and `OnVersionNumber` with ours) opens its home list, which it
+asks for (`OnRequestMainMenu`): `MainMenuDataProvider`, the story (`iAction`
+1), the options (6) and quitting (41) by their string ids (`locTitle`);
+co-op, multiplayer, the map editor and the extras aren't offered. A choice
+asks `AllowFrontendAction <action>` (`FrontEnd` `AllowFrontendActionResponse
+<action> 1`); quitting is `QuitToDesktop`. The story: `OnRequestLoadGameFilePreview`
+is answered `InitStoryPage` ("1" with a save), and the campaign page
+(`singlePlayerMenu.feu`, its class in the frontend) lists Continue, Load
+Game and New Game. It asks which of its six slots hold a save
+(`GetSaveGamePresence`: autosave 1, save 1, autosave 2...; ours is autosave
+1) and, as a line is chosen, what is in one (`RequestSaveGameInfo <type>
+<slot>`: `SaveGameProvider` with `iType`, `iSlot`, `sSlotName`,
+`sCurrentChapter` "Chapter <n>", `sTimePlayed`, `sSaveLocation`,
+`sDifficultyLevel`, `sTimeSaved`; `iType` -1 for none). The chapter (its
+picture, 1 to 11) is ours: how far into the 38 main missions the save is.
+`LoadSaveGame` goes on from the save (`save::ContinueGame`); a new game's
+slot is taken (`ValidateNewGameSlot`, `NewGameSlotValidated`) and
+`InitNewGame <slot> <difficulty>` starts the story. The options page takes the
+pause menu's answers. Its background was a Bink loop the frontend loads into
+a clip (`Swan_30_Sec_loop.bik`), which isn't played yet: it stands on black.
+`--menu` keeps an automated run at it, `FC3_SAVE` gives it a save, and
+`FC3_FRONTEND_KEYS=Enter,Down,...` presses keys once its home list has been up
+two seconds.
+
 **Loading screen** (`Loading\GameModes\Singleplayer.feu`, level 60, over
 everything): while a jump keeps the player waiting for the world (the start
 of play, a checkpoint reloaded, fast travel, a story's teleport: the
 player's `spawning` for more than half a second) until the ground is under
-him and no terrain, objects or vegetation are still to come in, and at
-least two seconds (at most a minute). The movie plays itself: its shuffled
+him and no terrain, objects or vegetation are still to come in (for half a
+second; four for the one that starts play, as the story places the player
+at its checkpoint a few seconds in), and at least two seconds (at most a
+minute). The movie plays itself: its shuffled
 words, the game's tips (string ids of its own), and the spinner it loads
 (`Loading.feu`, which says `CommonResourcesLoaded`); it says
 `SinglePlayerLoadingLoaded` and asks `IsBootTitle` ("0"; "1" shows the boot

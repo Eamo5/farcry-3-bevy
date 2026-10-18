@@ -213,6 +213,12 @@ pub struct ContinueGame;
 pub struct SaveContinued(pub bool);
 
 impl SaveSlot {
+    /// When the save was written (its file's time), if there is one.
+    pub fn saved_at(&self) -> Option<std::time::SystemTime> {
+        self.existing.as_ref()?;
+        std::fs::metadata(self.path.as_ref()?).ok()?.modified().ok()
+    }
+
     /// Where the story's progress is kept, next to the save.
     pub fn story_path(&self) -> Option<PathBuf> {
         self.path.as_ref().filter(|_| self.enabled).map(|p| p.with_file_name("story.txt"))

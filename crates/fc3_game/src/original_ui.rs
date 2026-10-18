@@ -31,6 +31,7 @@ use bevy::ui_render::prelude::{MaterialNode, UiMaterial, UiMaterialPlugin};
 use bevy::window::PrimaryWindow;
 use fc3_ui::wgpu;
 
+mod frontend;
 mod shop;
 
 pub struct OriginalUiPlugin;
@@ -63,7 +64,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_potions,
                     drive_camera,
                     drive_credits,
-                    drive_loading,
+                    (drive_loading, frontend::drive_frontend),
                     drive_gallery,
                     drive_poker,
                     drive_knives,
@@ -3471,12 +3472,23 @@ const LOADING_AFTER: f32 = 0.5;
 const LOADING_LEAST: f32 = 2.0;
 /// The longest it stays, should something never settle.
 const LOADING_MOST: f32 = 60.0;
+/// How long the world stays settled before it goes; longer for the one that
+/// starts play (the story places the player at its checkpoint a few seconds
+/// in, which would bring it up again).
+const LOADING_CALM: f32 = 0.5;
+const LOADING_CALM_START: f32 = 4.0;
+const LOADING_START: f32 = 10.0;
 
 #[derive(Default)]
 struct LoadingShown {
     waiting: f32,
     since: Option<f32>,
     shot: bool,
+    calm: f32,
+    /// When play last began (from the menus or loading), and whether the
+    /// screen up came with it.
+    playing: Option<f32>,
+    starts_play: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3492,6 +3504,11 @@ fn drive_loading(
     let Interface::Running(host) = &*state else { return };
     let now = time.elapsed_secs();
     let spawning = players.single().is_ok_and(|p| p.spawning);
+    match game.get() {
+        crate::menu::GameState::MainMenu | crate::menu::GameState::Loading => shown.playing = None,
+        crate::menu::GameState::Playing if shown.playing.is_none() => shown.playing = Some(now),
+        _ => {}
+    }
     let Some(since) = shown.since else {
         if spawning && *game.get() == crate::menu::GameState::Playing {
             shown.waiting += time.delta_secs();
@@ -3504,6 +3521,8 @@ fn drive_loading(
             host.level_visible(HUD_LEVEL, false);
             shown.since = Some(now);
             shown.shot = false;
+            shown.calm = 0.0;
+            shown.starts_play = shown.playing.is_some_and(|t| now - t < LOADING_START);
             debug!("original UI: loading screen up");
         }
         return;
@@ -3515,7 +3534,9 @@ fn drive_loading(
         }
     }
     let settled = !spawning && terrain.pending_count() == 0 && objects.pending_count() == 0 && vegetation.pending_count() == 0;
-    if (settled && now - since > LOADING_LEAST) || now - since > LOADING_MOST {
+    shown.calm = if settled { shown.calm + time.delta_secs() } else { 0.0 };
+    let calm = if shown.starts_play { LOADING_CALM_START } else { LOADING_CALM };
+    if (shown.calm > calm && now - since > LOADING_LEAST) || now - since > LOADING_MOST {
         host.unload(LOADING_LEVEL);
         host.level_visible(HUD_LEVEL, *game.get() == crate::menu::GameState::Playing);
         shown.since = None;
