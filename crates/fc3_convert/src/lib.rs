@@ -1465,10 +1465,8 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     }
 
     // ---- authored effects the game plays as the game did, with their textures
-    if opts.only_sectors.is_none()
-        && (fc3_formats::particle_effects::AUTHORED_EFFECTS.iter().any(|n| job.should_write(&fc3_formats::particle_effects::authored_rel(n)))
-            || job.should_write(fc3_formats::particle_effects::BULLET_IMPACTS_REL))
-    {
+    // (after the weapons' handling, which names their muzzles')
+    if opts.only_sectors.is_none() {
         if let Err(e) = convert_authored_effects(&job) {
             job.error(format!("authored effects: {e:#}"));
         }
@@ -1932,14 +1930,25 @@ const SKY_CLOUDS: [&str; 5] = [
 
 const SKY_MOON: &str = r"graphics\__fc3_graphics\singleplayer\_textures\skybox\night\fc3_moon.xbt";
 
-/// The authored effects (`particle_effects::AUTHORED_EFFECTS`, and each
+/// The authored effects (`particle_effects::AUTHORED_EFFECTS`, each
 /// material's bullet impact from `materialimpacts.lib`, whose table is
-/// written too): each one's definition, and its emitters' diffuse textures.
+/// written too, and the weapons' muzzles from their cached handling): each
+/// one's definition, and its emitters' diffuse textures.
 fn convert_authored_effects(job: &Job) -> Result<()> {
     use fc3_formats::particle_effects as pe;
-    let particles = job.vfs.read(fc3_formats::lights::PARTICLE_LIBRARY)?;
-    let library = std::str::from_utf8(&particles)?;
     let mut names: Vec<String> = pe::AUTHORED_EFFECTS.iter().map(|n| n.to_string()).collect();
+    if let Ok(stats) =
+        std::fs::read_to_string(job.root().join(fc3_formats::weapons::STATS_REL)).map_err(anyhow::Error::from).and_then(|t| fc3_formats::weapons::from_text(&t))
+    {
+        for w in &stats {
+            let gadgets = w.gadgets.iter().map(|g| &g.muzzle);
+            for n in [&w.muzzle, &w.muzzle_3p, &w.barrel_smoke].into_iter().chain(gadgets) {
+                if !n.is_empty() && !names.contains(n) {
+                    names.push(n.clone());
+                }
+            }
+        }
+    }
     match job.vfs.read(pe::MATERIAL_IMPACTS).map_err(anyhow::Error::from).and_then(|lib| pe::material_impacts(&lib, pe::BULLET_IMPACT)) {
         Ok(impacts) => {
             for i in &impacts {
@@ -1953,6 +1962,12 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
         }
         Err(e) => job.error(format!("bullet impacts: {e:#}")),
     }
+    names.retain(|n| job.should_write(&pe::authored_rel(n)));
+    if names.is_empty() {
+        return Ok(());
+    }
+    let particles = job.vfs.read(fc3_formats::lights::PARTICLE_LIBRARY)?;
+    let library = std::str::from_utf8(&particles)?;
     for name in &names {
         let rel = fc3_formats::particle_effects::authored_rel(name);
         if !job.should_write(&rel) {

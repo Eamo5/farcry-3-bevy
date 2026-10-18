@@ -3338,7 +3338,9 @@ and converts those materials with the rest.
 * Test switches: `FC3_TEST_AMMO` keeps the player's spare ammunition full
   and `FC3_TEST_LOADOUT` adds weapons to a save's inventory (the replay
   chain's saves carry a machete and a 1911 with a magazine; the ambush
-  holds 55 m off, past a pistol's reach).
+  holds 55 m off, past a pistol's reach). With `FC3_TEST_HOLD` the first
+  of them is in hand. `--fire-test <s>` fires at a target that long, and
+  `FC3_FIRE_SHOTS=<dir>` captures 24 frames 40 ms apart, 15 s in.
 
 With them B50 (the drive, the truck under attack) completes, and B60's ambush is cleared;
 the truck then sets off on its last path.

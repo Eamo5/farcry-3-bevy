@@ -536,7 +536,7 @@ pub struct ShotFx<'w, 's> {
     /// What was hit is made of, and the game's impact for it.
     probe: crate::surfaces::SurfaceProbe<'w, 's>,
     impacts: Res<'w, crate::authored_fx::BulletImpacts>,
-    commands: Commands<'w, 's>,
+    pub commands: Commands<'w, 's>,
 }
 
 /// Guesses a prop's material from its entity name.

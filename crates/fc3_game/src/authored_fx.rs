@@ -127,6 +127,35 @@ pub fn play_along(commands: &mut Commands, name: &'static str, at: Vec3, normal:
     true
 }
 
+/// Plays a weapon's muzzle effect once on its muzzle (`muzzle`, the gun's
+/// muzzle node: its -Z down the barrel), moving with it: the effect's frame
+/// the muzzle bone's (Dunia's +Z down the barrel, its +Y to the right).
+/// False when it isn't cached.
+pub fn play_muzzle(commands: &mut Commands, name: &'static str, muzzle: Entity) -> bool {
+    if !available(name) {
+        return false;
+    }
+    commands.spawn((Transform::from_rotation(MUZZLE_FRAME), AuthoredFx(name), Once, ChildOf(muzzle)));
+    true
+}
+
+/// A muzzle effect's frame in its gun's: Bevy's local +Y (Dunia's +Z) down
+/// the barrel (-Z), local -Z (Dunia's +Y) to the right (+X).
+const MUZZLE_FRAME: Quat = Quat::from_xyzw(-0.5, -0.5, 0.5, 0.5);
+
+/// An effect's name kept for the program's life (the weapons' are read at
+/// load; each is kept once).
+pub fn intern(name: &str) -> &'static str {
+    static NAMES: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    let mut names = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(n) = names.iter().find(|n| **n == name) {
+        return n;
+    }
+    let n: &'static str = Box::leak(name.to_string().into_boxed_str());
+    names.push(n);
+    n
+}
+
 /// Played once: what loops in it runs its time once (a splash's ring).
 #[derive(Component)]
 struct Once;
@@ -290,6 +319,12 @@ struct Compiled {
     random_colour: bool,
     brightness: f32,
     uniform: bool,
+    /// Where a sized-unevenly particle's quad hangs from its point (across,
+    /// along: `PartSizeOffsetX`, `...Y`, in half its width and length).
+    pivot: Vec2,
+    /// Its particles move with the effect (`LocalEmitterSpace`: a muzzle's
+    /// flames go with the gun).
+    local: bool,
     lit: bool,
     near: Option<(f32, f32)>,
     far: Option<(f32, f32)>,
@@ -409,6 +444,8 @@ impl Compiled {
             // a few times as bright here, not a hundred.)
             brightness: 1.0 + hdr.max(1.0).log10() * 1.5,
             uniform: s.f32("UniformSize").is_none_or(|v| v != 0.0),
+            pivot: Vec2::new(f("PartSizeOffsetX", 0.0), f("PartSizeOffsetY", 0.0)),
+            local: s.child("Flags").is_some_and(|f| f.bool("LocalEmitterSpace") == Some(true)),
             lit: on("SHLighting") && mode != 0,
             near: (f("NearClippingRate", 0.0) > 0.0 && f("NearClippingAlpha", 0.0) > 0.0).then(|| (f("NearClippingStart", 0.0), f("NearClippingEnd", 0.0))),
             far: (f("FarClippingRate", 0.0) > 0.0).then(|| (f("FarClippingStart", 0.0), f("FarClippingEnd", 0.0))),
@@ -487,6 +524,10 @@ struct Particle {
     emitter: usize,
     /// The effect that emitted it (each emitter's cap is its own).
     owner: Entity,
+    /// For an emitter in its own space, where its effect is (its position,
+    /// heading and fall then in the effect's frame), followed while the
+    /// effect lasts.
+    space: Option<bevy::math::Affine3A>,
     pos: Vec3,
     dir: Vec3,
     speed: f32,
@@ -500,6 +541,18 @@ struct Particle {
     colour: Option<Vec3>,
     frame: f32,
     fps: f32,
+}
+
+impl Particle {
+    /// Where it is in the world (its effect's frame applied, in its own
+    /// space).
+    fn world_pos(&self) -> Vec3 {
+        self.space.map_or(self.pos, |f| f.transform_point3(self.pos))
+    }
+
+    fn world_vector(&self, v: Vec3) -> Vec3 {
+        self.space.map_or(v, |f| f.transform_vector3(v))
+    }
 }
 
 #[allow(clippy::type_complexity)]
@@ -532,6 +585,9 @@ fn emit(
             continue;
         }
         let (_, turn, place) = at.to_scale_rotation_translation();
+        for p in library.particles.iter_mut().filter(|p| p.owner == entity && p.space.is_some()) {
+            p.space = Some(at.affine());
+        }
         for (k, &id) in ids.iter().enumerate() {
             let (spawn, light) = {
                 let em = &library.emitters[id];
@@ -597,10 +653,18 @@ fn emit(
                 let dir = if em.from_surface && born.length_squared() > 1e-6 { born.normalize() } else { turn * em.axis * cone * Vec3::NEG_Z };
                 let gravity = if em.local_gravity { turn * em.gravity_dir } else { em.gravity_dir } * em.gravity.roll(&mut rng).max(0.0);
                 let frames = (em.frames[0] * em.frames[1]).max(1) as f32;
+                // (In its own space: kept in the effect's frame.)
+                let back = turn.inverse();
+                let (space, pos, dir, gravity) = if em.local {
+                    (Some(at.affine()), em.offset + back * born, back * dir, back * gravity)
+                } else {
+                    (None, place + turn * em.offset + born, dir, gravity)
+                };
                 let p = Particle {
                     emitter: id,
                     owner: entity,
-                    pos: place + turn * em.offset + born,
+                    space,
+                    pos,
                     dir,
                     speed: em.speed.roll(&mut rng),
                     fall: Vec3::ZERO,
@@ -705,15 +769,16 @@ fn draw(
     let ambient = 0.12 + 0.88 * daylight.0;
     for (batch, mesh, mut tr, mut vis) in &mut batches {
         tr.translation = origin;
-        let mut live: Vec<&Particle> = library.particles.iter().filter(|p| library.emitters[p.emitter].batch.as_ref() == Some(&batch.0)).collect();
+        let mut live: Vec<(&Particle, Vec3)> =
+            library.particles.iter().filter(|p| library.emitters[p.emitter].batch.as_ref() == Some(&batch.0)).map(|p| (p, p.world_pos())).collect();
         if batch.0.mode != 0 {
-            live.sort_by(|a, b| b.pos.distance_squared(origin).total_cmp(&a.pos.distance_squared(origin)));
+            live.sort_by(|a, b| b.1.distance_squared(origin).total_cmp(&a.1.distance_squared(origin)));
         }
         let mut quads = Quads::default();
-        for p in live {
+        for (p, pos) in live {
             let em = &library.emitters[p.emitter];
             let t = (p.age / p.life).clamp(0.0, 1.0);
-            let dist = p.pos.distance(origin);
+            let dist = pos.distance(origin);
             let mut alpha = em.alpha * em.part_alpha.at(t).clamp(0.0, 1.0);
             if let Some((a, b)) = em.near {
                 alpha *= crate::sky::smoothstep(a, b.max(a + 0.01), dist);
@@ -729,13 +794,18 @@ fn draw(
             // (What glows: light added, and brightness as coverage.)
             let colour = colour * light * if batch.0.mode != 1 { em.brightness } else { 1.0 };
             let half = (p.size * em.part_size.at(t) * 0.5).max(0.005);
+            let mut centre = pos - origin;
             let (x, y) = if !em.uniform {
-                // A streak along its motion as seen.
-                let vel = p.dir * p.speed * em.part_speed.at(t) + p.fall;
-                let along = (vel - view * vel.dot(view)).normalize_or(up);
+                // Sized unevenly (sparks, streaks of smoke): its width
+                // across and its length (`PartSizeZKF`) along its heading as
+                // seen, hung from its point by its pivot.
+                let vel = p.world_vector(p.dir * p.speed * em.part_speed.at(t) + p.fall);
+                let heading = if vel.length_squared() > 1e-4 { vel } else { p.world_vector(p.dir) };
+                let along = (heading - view * heading.dot(view)).normalize_or(up);
                 let side = view.cross(along).normalize_or(right);
-                let width = half.max(0.012);
-                (side * width, along * (width + vel.length() * 0.02 * em.part_length.at(t)))
+                let (width, length) = (half.max(0.003), (p.size * em.part_length.at(t) * 0.5).max(0.003));
+                centre += side * (width * em.pivot.x) + along * (length * em.pivot.y);
+                (side * width, along * length)
             } else {
                 let (s, c) = p.rot.sin_cos();
                 (right * (c * half) + up * (s * half), up * (c * half) - right * (s * half))
@@ -750,7 +820,7 @@ fn draw(
             } else {
                 (p.frame + p.age * p.fps) as u32 % n
             };
-            quads.push(p.pos - origin, x, y, frame_uv(frame, em.frames[0].max(1), em.frames[1].max(1)), -view, colour.extend(alpha));
+            quads.push(centre, x, y, frame_uv(frame, em.frames[0].max(1), em.frames[1].max(1)), -view, colour.extend(alpha));
         }
         let empty = quads.is_empty();
         let want = if empty { Visibility::Hidden } else { Visibility::Inherited };

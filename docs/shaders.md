@@ -368,6 +368,22 @@ facing back along the shot. Vehicles take `Base/Metal_Vehicle`, and a round
 through the sea takes `Base/Water_P_Deep`. Effects played once run their loops
 once (deep water's ring). Our dust and sparks stand in when nothing is cached.
 
+Muzzles. A weapon's `CWeaponProperties` `Particles` name its muzzle's effects:
+first person (`psMuzzleParticlesId`, name in `B171F78F`), third person
+(`4C222D81`) and the smoke after (`81F9EF25`). A suppressor gadget's modifiers
+name its own. The weapons' table keeps them (`weapons/stats.txt`, version 9;
+the placeholder effect counts as none), and the converter caches them. A shot
+plays the weapon's muzzle effect as a child of the gun's muzzle node, so it
+moves with the gun. The effect's frame is the muzzle bone's: Dunia's +Z down
+the barrel, its +Y to the right. One shot in three, the smoke after plays the
+same way. Our flash and smoke stand in when an effect isn't cached. Not yet:
+the third-person muzzles (the characters' guns).
+
+The muzzle node is the gun model's `FX_FIRE`, taken only where it lies at the
+front of the gun. The 870's chains to a pose off the gun, below and beside it,
+so it takes the front of its bounds. A world-space flash would be left behind
+by the shot's recoil kick, so the flash moves with the gun.
+
 Each active emitter waits its `SpawnDelay`, then emits for its `EmitDuration`
 (again and again with `EmitLoop`). It gives a burst of `NbInitPart`, then its rate:
 `EmitRateKF`'s value, times its `RatioUI` curve over the emitter's time, give or
@@ -384,8 +400,12 @@ follows the `PartColorKF` points times `InitColorKF`, or its evenly spaced
 `Key`s when it has no points. With `RandomColor`, one colour is picked at
 birth. The sheet is `FrameCount` by `FrameCountY` (0 is one image),
 shown at `FramePerSecond`. `BlendType` 1 adds; `RedAsAlpha` takes brightness as
-coverage; else the alpha blends. `UniformSize` 0 particles (sparks) are drawn as
-streaks along their motion. `EmitterHDRMulKF` brightens what adds or takes
+coverage; else the alpha blends. `UniformSize` 0 particles (sparks, streaks of smoke) are
+drawn along their heading as seen: `PartSizeKF` gives their width and
+`PartSizeZKF` their length (both times their size), hung from their point by
+`PartSizeOffsetX` (across) and `PartSizeOffsetY` (along). An emitter in its own
+space (`Flags` `LocalEmitterSpace`) keeps its particles in its effect's frame,
+following the effect while it lasts. `EmitterHDRMulKF` brightens what adds or takes
 brightness as coverage, compressed (1 + 1.5 log10 of it: our light isn't the
 engine's). `SHLighting` sheets darken
 with the daylight. The near and far fades apply. `LightActive` burns a point

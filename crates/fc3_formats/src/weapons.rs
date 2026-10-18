@@ -8,7 +8,9 @@
 //! A weapon that fires a projectile (the bow's arrow) takes the
 //! projectile's damage, and a weapon's damage falls off with range as its
 //! `RangeMultipliers` (the normal difficulty's) say. Its first-person
-//! `BulletSpread`s give how far shots stray, by stance.
+//! `BulletSpread`s give how far shots stray, by stance. Its `Particles`
+//! name its muzzle's effects (first and third person, and the smoke after),
+//! and a suppressor gadget its own muzzle.
 
 use std::collections::HashMap;
 
@@ -17,7 +19,7 @@ use anyhow::{bail, Result};
 use crate::fcb::Object;
 
 pub const STATS_REL: &str = "weapons/stats.txt";
-const MAGIC: &str = "fc3-weapons 8";
+const MAGIC: &str = "fc3-weapons 9";
 
 /// Whether a cached table is in this version's form.
 pub fn is_current(text: &str) -> bool {
@@ -71,6 +73,22 @@ pub struct WeaponStats {
     /// The attachments it takes, by the game's key ("acog", "reflexa",
     /// "silencerassault", "magupgrade"...).
     pub gadgets: Vec<Gadget>,
+    /// Its muzzle's effects (`psMuzzleParticlesId`, `..._3rd` and
+    /// `psBarrelSmokeMuzzleParticlesId`; empty when none).
+    pub muzzle: String,
+    pub muzzle_3p: String,
+    pub barrel_smoke: String,
+}
+
+/// The names of the effects a weapon's `Particles` give (beside their ids).
+const MUZZLE_NAME: u32 = 0xB171_F78F;
+const MUZZLE_3P_NAME: u32 = 0x4C22_2D81;
+const BARREL_SMOKE_NAME: u32 = 0x81F9_EF25;
+
+/// An effect's name from a field, if it names one (not the placeholder, an
+/// effect of nothing).
+fn effect_name(o: &Object, field: u32) -> String {
+    o.str_h(field).map(|s| s.trim_end_matches('\0').to_string()).filter(|s| s.contains('.') && !s.starts_with("fc3_placeholder")).unwrap_or_default()
 }
 
 /// An attachment as one weapon takes it: its key, the magazine it brings
@@ -90,20 +108,24 @@ pub struct Gadget {
     pub reload: f32,
     pub sight_time: f32,
     pub look: [f32; 3],
+    /// Its own muzzle effect (a suppressor's), if any.
+    pub muzzle: String,
 }
 
 impl Gadget {
     fn to_text(&self) -> String {
         let n = [self.fov, self.damage, self.noise, self.moving_spread, self.reload, self.sight_time, self.look[0], self.look[1], self.look[2]];
-        format!("{}:{}:{}", self.key, self.magazine, n.map(|v| v.to_string()).join(":"))
+        format!("{}:{}:{}:{}", self.key, self.magazine, n.map(|v| v.to_string()).join(":"), self.muzzle)
     }
 
     fn from_text(s: &str) -> Option<Gadget> {
-        let mut p = s.split(':');
-        let key = p.next()?.to_string();
-        let magazine = p.next()?.parse().ok()?;
-        let v: Vec<f32> = p.filter_map(|x| x.parse().ok()).collect();
+        let p: Vec<&str> = s.split(':').collect();
+        let key = p.first()?.to_string();
+        let magazine = p.get(1)?.parse().ok()?;
+        let v: Vec<f32> = p.get(2..11)?.iter().filter_map(|x| x.parse().ok()).collect();
+        let muzzle = p.get(11).map(|m| m.to_string()).unwrap_or_default();
         (v.len() == 9).then(|| Gadget {
+            muzzle,
             key,
             magazine,
             fov: v[0],
@@ -146,6 +168,7 @@ fn gadget_mods(component: &Object) -> Option<Gadget> {
             f(me, "fVerticalLookSpeedMultiplierIronsight", 1.0),
             f(me, "fLookSpeedMultiplierIronsightMouse", 1.0),
         ],
+        muzzle: effect_name(m, MUZZLE_NAME),
     })
 }
 
@@ -463,7 +486,21 @@ pub fn weapon_stats(library: &Object, shop_items: Option<&Object>) -> Vec<Weapon
             spread: spread(&p, fire.map(|f| f.as_ref())),
             aim: aim(&common),
             gadgets: Vec::new(),
+            muzzle: String::new(),
+            muzzle_3p: String::new(),
+            barrel_smoke: String::new(),
         });
+        let mut particles = None;
+        p.walk(&mut |c, _| {
+            if particles.is_none() && c.is("Particles") && c.field_h(MUZZLE_NAME).is_some() {
+                particles = Some(c);
+            }
+        });
+        if let (Some(w), Some(fx)) = (out.last_mut(), particles) {
+            w.muzzle = effect_name(fx, MUZZLE_NAME);
+            w.muzzle_3p = effect_name(fx, MUZZLE_3P_NAME);
+            w.barrel_smoke = effect_name(fx, BARREL_SMOKE_NAME);
+        }
         let mut found = gadgets(&common, &gadget_by_id);
         found.dedup_by(|a, b| a.key == b.key);
         if let Some(w) = out.last_mut() {
@@ -519,7 +556,7 @@ pub fn to_text(stats: &[WeaponStats]) -> String {
         let aim = w.aim.map(|a| a.to_text()).unwrap_or_default();
         let gadgets = w.gadgets.iter().map(|g| g.to_text()).collect::<Vec<_>>().join(";");
         s += &format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{attachments}\t{ranges}\t{spread}\t{aim}\t{gadgets}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{attachments}\t{ranges}\t{spread}\t{aim}\t{gadgets}\t{}\t{}\t{}\n",
             w.name,
             w.model,
             w.damage,
@@ -529,7 +566,10 @@ pub fn to_text(stats: &[WeaponStats]) -> String {
             w.draw,
             w.holster,
             w.pellets,
-            u8::from(w.silent)
+            u8::from(w.silent),
+            w.muzzle,
+            w.muzzle_3p,
+            w.barrel_smoke
         );
     }
     s
@@ -575,6 +615,9 @@ pub fn from_text(text: &str) -> Result<Vec<WeaponStats>> {
                 spread: f.get(12).and_then(|s| Spread::from_text(s)),
                 aim: f.get(13).and_then(|s| Aim::from_text(s)),
                 gadgets: f.get(14).map(|g| g.split(';').filter_map(Gadget::from_text).collect()).unwrap_or_default(),
+                muzzle: f.get(15).map(|s| s.to_string()).unwrap_or_default(),
+                muzzle_3p: f.get(16).map(|s| s.to_string()).unwrap_or_default(),
+                barrel_smoke: f.get(17).map(|s| s.to_string()).unwrap_or_default(),
                 ranges: f
                     .get(11)
                     .map(|r| {
@@ -648,8 +691,21 @@ mod tests {
                 lock_fade: (40.0, 40.1),
                 correction: [[3.0, 1.0, 15.0], [2.0, 0.75, 25.0]],
             }),
+            muzzle: "fx.ak.muzzle".into(),
+            muzzle_3p: "fx.ak.muzzle_3p".into(),
+            barrel_smoke: "fx.ak.after".into(),
             gadgets: vec![
                 Gadget { key: "acog".into(), fov: -30.0, damage: 1.0, noise: 1.0, moving_spread: 1.0, reload: 1.0, look: [1.0; 3], ..Default::default() },
+                Gadget {
+                    key: "silencerassault".into(),
+                    damage: 1.0,
+                    noise: 0.02,
+                    moving_spread: 1.0,
+                    reload: 1.0,
+                    look: [1.0; 3],
+                    muzzle: "fx.silencer.muzzle".into(),
+                    ..Default::default()
+                },
                 Gadget {
                     key: "magupgrade".into(),
                     magazine: 40,

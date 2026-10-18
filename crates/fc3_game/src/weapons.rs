@@ -111,6 +111,9 @@ pub struct WeaponDef {
     /// far a suppressed shot is heard (times the open one's).
     pub gadgets: Vec<fc3_formats::weapons::Gadget>,
     pub noise: f32,
+    /// The game's effects at its muzzle when it fires, and the smoke after.
+    pub muzzle: Option<&'static str>,
+    pub barrel_smoke: Option<&'static str>,
 }
 
 const MODEL_ROOT: &str = r"graphics\__fc3_graphics\_common\weapons\";
@@ -210,8 +213,26 @@ pub fn apply_stats(defs: &mut [WeaponDef], stats: &[fc3_formats::weapons::Weapon
             d.holster = s.holster;
         }
         d.silenced = s.silent;
+        let effect = |n: &str| (!n.is_empty()).then(|| crate::authored_fx::intern(n));
+        d.muzzle = effect(&s.muzzle);
+        d.barrel_smoke = effect(&s.barrel_smoke);
     }
     n
+}
+
+/// A shot's flash: the weapon's own muzzle effect on its muzzle, else ours
+/// (`scale` of it) where the muzzle is.
+fn muzzle_flash(shot_fx: &mut crate::particles::ShotFx, rng: &mut Rng, d: &WeaponDef, muzzle: Option<Entity>, at: Vec3, forward: Vec3, scale: f32) {
+    if !d.muzzle.zip(muzzle).is_some_and(|(m, e)| crate::authored_fx::play_muzzle(&mut shot_fx.commands, m, e)) {
+        crate::particles::fx::muzzle_flash(&mut shot_fx.particles, rng, at, forward, scale);
+    }
+}
+
+/// The smoke after a shot: the weapon's own, else ours.
+fn barrel_smoke(shot_fx: &mut crate::particles::ShotFx, rng: &mut Rng, d: &WeaponDef, muzzle: Option<Entity>, at: Vec3) {
+    if !d.barrel_smoke.zip(muzzle).is_some_and(|(m, e)| crate::authored_fx::play_muzzle(&mut shot_fx.commands, m, e)) {
+        crate::particles::fx::barrel_smoke(&mut shot_fx.particles, rng, at);
+    }
 }
 
 /// The weapons, with the game's handling once it is loaded.
@@ -249,6 +270,8 @@ fn base_weapon_defs() -> Vec<WeaponDef> {
         aim: None,
         gadgets: Vec::new(),
         noise: 1.0,
+        muzzle: None,
+        barrel_smoke: None,
     };
     // Hand positions by kind of weapon.
     let pistol = Vec3::new(0.16, -0.17, -0.42);
@@ -692,6 +715,9 @@ impl Attachment {
                 d.silenced = true;
                 d.damage *= g.damage;
                 d.noise = g.noise;
+                if !g.muzzle.is_empty() {
+                    d.muzzle = Some(crate::authored_fx::intern(&g.muzzle));
+                }
             }
             (Attachment::Suppressor, None) => {
                 d.silenced = true;
@@ -1259,6 +1285,7 @@ fn fire_test_setup(
 fn fire_test_log(
     args: Res<crate::Args>,
     time: Res<Time>,
+    (mut burst, mut commands): (Local<usize>, Commands),
     mut script: ResMut<TestScript>,
     players: Query<&Inventory>,
     targets: Query<&Health, With<FireTestTarget>>,
@@ -1271,6 +1298,15 @@ fn fire_test_log(
     }
     let Some(start) = script.start else { return };
     let now = time.elapsed_secs();
+    // `FC3_FIRE_SHOTS=<dir>`: the screen captured in a burst 15 s into the
+    // firing (the loading screen down), 24 frames 40 ms apart (a muzzle's
+    // flash is that short).
+    if let Ok(dir) = std::env::var("FC3_FIRE_SHOTS") {
+        if *burst < 24 && now - start >= 15.0 + *burst as f32 * 0.04 {
+            crate::camera::capture(&mut commands, format!("{dir}/fire_{}.png", *burst));
+            *burst += 1;
+        }
+    }
     if args.fire_secs <= 0.0 || now - start > args.fire_secs + 1.5 || now - script.last_log < 1.0 {
         return;
     }
@@ -1324,6 +1360,10 @@ fn test_ammo(mut players: Query<&mut Inventory, With<Player>>, unlimited: Res<Un
             if !inv.slots.iter().any(|s| s.def == def) {
                 let d = &inv.defs[def];
                 inv.slots.push(WeaponSlot { def, mag: d.magazine, reserve: d.max_reserve });
+            }
+            // `FC3_TEST_HOLD`: the first of them in hand.
+            if std::env::var_os("FC3_TEST_HOLD").is_some() && inv.slots.get(inv.current).is_none_or(|s| s.def != def) && names.starts_with(name) {
+                inv.current = inv.slots.iter().position(|s| s.def == def).unwrap_or(inv.current);
             }
         }
     }
@@ -1554,7 +1594,7 @@ fn fire(
     mut commands: Commands,
     mut players: Query<(Entity, &mut Inventory, &mut Player, &Health)>,
     camera: Query<&GlobalTransform, With<PlayerCamera>>,
-    muzzle: Query<&GlobalTransform, With<Muzzle>>,
+    muzzle: Query<(Entity, &GlobalTransform), With<Muzzle>>,
     healths: Query<&Health>,
     parents: Query<&ChildOf>,
     writers: (MessageWriter<DamageEvent>, MessageWriter<HitMarker>, MessageWriter<crate::npc::Noise>, MessageWriter<WorldHit>),
@@ -1680,7 +1720,8 @@ fn fire(
     // (Not the vehicle he's riding in: shots from a seat go past its sides.)
     let riding = driving.vehicle.and_then(|v| vehicles.get(v).ok().map(|vh| [v, vh.body()]));
     let filter = SpatialQueryFilter::from_excluded_entities(std::iter::once(player_e).chain(riding.into_iter().flatten()));
-    let muzzle_pos = muzzle.single().map(|m| m.translation()).unwrap_or(origin + forward * 0.6 - up * 0.1);
+    let muzzle_pos = muzzle.single().map(|(_, m)| m.translation()).unwrap_or(origin + forward * 0.6 - up * 0.1);
+    let muzzle_node = muzzle.single().ok().map(|(e, _)| e);
     // (The weapon held small near the eye in a seat: its flash too.)
     let flash = if player.armed_passenger { SEATED_VIEW_SCALE } else { 1.0 };
 
@@ -1705,7 +1746,7 @@ fn fire(
             ProjectileModel(fx.rocket.clone()),
         ));
         spawn_muzzle_light(&mut commands, muzzle_pos);
-        fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, 1.8 * flash);
+        muzzle_flash(&mut shot_fx, &mut rng, &d, muzzle_node, muzzle_pos, forward, 1.8 * flash);
         for _ in 0..4 {
             fx::barrel_smoke(&mut shot_fx.particles, &mut rng, muzzle_pos);
         }
@@ -1753,7 +1794,7 @@ fn fire(
         ));
         if !bow {
             spawn_muzzle_light(&mut commands, muzzle_pos);
-            fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, 1.3 * flash);
+            muzzle_flash(&mut shot_fx, &mut rng, &d, muzzle_node, muzzle_pos, forward, 1.3 * flash);
             crate::npc::player_noise(&mut noise, origin, 120.0, crate::npc::NoiseKind::Threatening);
         }
         player.pitch += d.recoil;
@@ -1910,7 +1951,7 @@ fn fire(
         // game's suppressor makes).
         let heard = if d.noise < 1.0 { 120.0 * d.noise } else { 18.0 };
         crate::npc::player_noise(&mut noise, origin, heard, crate::npc::NoiseKind::Threatening);
-        fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, 0.35 * flash);
+        muzzle_flash(&mut shot_fx, &mut rng, &d, muzzle_node, muzzle_pos, forward, 0.35 * flash);
         inv.spread_bloom = match d.spread_steps() {
             Some((step, _)) => (inv.spread_bloom + step).min(1.0),
             None => (inv.spread_bloom + 0.3).min(2.5),
@@ -1929,9 +1970,9 @@ fn fire(
             WeaponClass::Sniper | WeaponClass::Lmg => 1.3,
             _ => 1.0,
         };
-        fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, scale * flash);
+        muzzle_flash(&mut shot_fx, &mut rng, &d, muzzle_node, muzzle_pos, forward, scale * flash);
         if rng.f32() < 0.35 {
-            fx::barrel_smoke(&mut shot_fx.particles, &mut rng, muzzle_pos);
+            barrel_smoke(&mut shot_fx, &mut rng, &d, muzzle_node, muzzle_pos);
         }
         inv.spread_bloom = match d.spread_steps() {
             Some((step, _)) => (inv.spread_bloom + step).min(1.0),
@@ -2567,9 +2608,13 @@ fn spawn_view_model_parts(
             ));
         }
     }
-    // The model's muzzle-flash node, else the front of its bounds.
+    // The model's muzzle-flash node, else the front of its bounds. (Some
+    // models' nodes chain to poses off the gun, the 870's well below and
+    // beside it: a node is taken only at the front of the gun.)
     let (mn, mx) = (model.aabb_min, model.aabb_max);
-    let muzzle = node_pose(model, "FX_FIRE").map(|t| t.translation).unwrap_or(Vec3::new((mn.x + mx.x) * 0.5, mn.y + (mx.y - mn.y) * 0.62, mn.z));
+    let at_front = |p: &Vec3| p.cmpge(mn - Vec3::splat(0.05)).all() && p.cmple(mx + Vec3::splat(0.05)).all() && p.z < mn.z + (mx.z - mn.z) * 0.25;
+    let front = Vec3::new((mn.x + mx.x) * 0.5, mn.y + (mx.y - mn.y) * 0.62, mn.z);
+    let muzzle = node_pose(model, "FX_FIRE").map(|t| t.translation).filter(at_front).unwrap_or(front);
     commands.spawn((Muzzle, Transform::from_translation(muzzle), ChildOf(root)));
     v.shown = Some(def_index);
     v.shown_attachments = fitted;
