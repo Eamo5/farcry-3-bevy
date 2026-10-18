@@ -3101,12 +3101,21 @@ fn main() -> Result<()> {
         }
         "oasis" => {
             // Strings by id: oasis <id>...; or by text: oasis find <text>...;
-            // or those containing a text: oasis grep <text>...
+            // or those containing a text: oasis grep <text>...; or by symbolic
+            // name: oasis named <section> <name>...
             let root = fc3_formats::cache::default_cache_root();
             let strings = fc3_formats::oasis::Strings::from_bytes(&std::fs::read(root.join("story/strings.bin"))?)?;
             if args.get(1).map(String::as_str) == Some("find") {
                 for text in &args[2..] {
                     println!("{text:?}: {:?}", strings.find(text));
+                }
+                return Ok(());
+            }
+            if args.get(1).map(String::as_str) == Some("named") {
+                // By section and symbolic name: oasis named <section> <name>...
+                let section = args.get(2).context("usage: oasis named <section> <name>...")?;
+                for name in &args[3..] {
+                    println!("{section}/{name}: {:?} {:?}", strings.id_of(section, name), strings.named(section, name));
                 }
                 return Ok(());
             }

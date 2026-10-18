@@ -361,7 +361,11 @@ only what changed (and everything again until the movies have loaded):
   mission starts, `SetMissionTitle(text, status, succeeded)` as it is
   complete or failed (`story::MissionCard`). The status is the game's
   string for a failure (155587); the table has none for a mission
-  complete, so it is the handbook's "Complete" (158104) in capitals.
+  complete, so it is the handbook's "Complete" (158104) in capitals. A
+  mission ending without a title of its own (the scripts' text, else the
+  one it started with) shows that alone: the movie fades a card with no
+  text. `FC3_CARD_SHOT=<prefix>` (tests) captures each card 1.5 s in, to
+  `<prefix>_<n>.png`.
   (`fc3tool oasis grep <text>` lists the strings containing a text.) A
   liberated outpost and a radio tower take the same card
   (`MissionCard::Event`), all the game's strings: the outpost's by how it
@@ -462,7 +466,8 @@ line names its shop item (the rucksack's name for it), and a full rucksack
 plays the game's "Loot Rucksack Full" (172057) as a line
 (`HudState::loot_notes`). The original has no death screen in single
 player: our "YOU DIED" gives way to the view fading to black over 2.5 s of
-the respawn's wait, and the loading screen follows. `FC3_PLAYER_DIE=14`
+the respawn's wait, and the loading screen follows. Nor has it a panel for
+phone calls (they are its voices and subtitles): ours stands down. `FC3_PLAYER_DIE=14`
 (tests) kills the player once, 14 s into play.
 
 **Pause menu** (`original_ui::drive_pause`): pausing loads

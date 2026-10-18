@@ -2264,11 +2264,30 @@ fn drive_story(
         Option<Res<crate::races::Races>>,
         Option<Res<crate::trials::Trials>>,
     ),
+    (mut commands, time, mut card_shot): (Commands, Res<Time<Real>>, Local<(Option<f32>, u32)>),
 ) {
     let Interface::Running(host) = &*state else { return };
+    // FC3_CARD_SHOT=<prefix> (tests): each card captured a moment in, to
+    // <prefix>_<n>.png.
+    if let (Some(at), Ok(prefix)) = (card_shot.0, std::env::var("FC3_CARD_SHOT")) {
+        if time.elapsed_secs() >= at {
+            card_shot.1 += 1;
+            crate::camera::capture(&mut commands, format!("{prefix}_{}.png", card_shot.1));
+            card_shot.0 = None;
+        }
+    }
+    if !ui.cards.is_empty() && card_shot.0.is_none() {
+        card_shot.0 = Some(time.elapsed_secs() + 1.5);
+    }
     for card in std::mem::take(&mut ui.cards) {
+        debug!("original UI: mission card {card:?}");
         match card {
             crate::story::MissionCard::Start { title } => host.event("SetMissionStart", &[&title]),
+            // (Without a title, the status alone: the movie shows nothing
+            // with no text.)
+            crate::story::MissionCard::Complete { title } if title.is_empty() => {
+                host.event("SetMissionTitle", &[&host.text(MISSION_COMPLETE).to_uppercase(), "", "1"])
+            }
             crate::story::MissionCard::Complete { title } => host.event("SetMissionTitle", &[&title, &host.text(MISSION_COMPLETE).to_uppercase(), "1"]),
             crate::story::MissionCard::Failed { text } => host.event("SetMissionTitle", &[&text, &host.text(MISSION_FAILED), "0"]),
             crate::story::MissionCard::Event { text, count } => {

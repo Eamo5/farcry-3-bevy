@@ -2077,7 +2077,9 @@ fn run_story(
                 }
             }
             Command::MissionComplete { title, xp, money, .. } => {
-                let name = title.map(|t| plain(&t)).unwrap_or_default();
+                // (A mission without its own text for it is named as it
+                // started.)
+                let name = title.map(|t| plain(&t)).filter(|t| !t.is_empty()).or_else(|| ui.mission.clone()).unwrap_or_default();
                 ui.banner = Some((format!("{name}\nMission complete"), 6.0));
                 ui.cards.push(MissionCard::Complete { title: name.clone() });
                 if xp > 0 {
@@ -3347,7 +3349,9 @@ fn show_story_ui(
             ui.phone = None;
         }
     }
-    let phone = ui.phone.as_ref().map(|(who, incoming, age)| {
+    // (Not over the original HUD, which has none: the call is its voices
+    // and subtitles.)
+    let phone = ui.phone.as_ref().filter(|_| own).map(|(who, incoming, age)| {
         let state = if *age < 4.0 {
             if *incoming {
                 "INCOMING CALL".to_string()
