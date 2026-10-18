@@ -284,11 +284,13 @@ impl Ranged {
     }
 }
 
-/// What a batch draws: a texture, its grid and how it blends.
+/// What a batch draws: a texture, its grid, how it blends and how soft it
+/// is (`Soft`'s `SoftRange`, in cm; 0 hard).
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct BatchKey {
     texture: String,
     mode: u8,
+    soft: u16,
 }
 
 /// An emitter made ready to play.
@@ -394,7 +396,9 @@ impl Compiled {
         };
         // (Not drawn: heat haze, which bends the view, and meshes.)
         let drawn = !on("DistortionEnabled") && s.attr("Geometry").is_none_or(str::is_empty);
-        let batch = e.texture_path().ok().filter(|_| drawn && !e.texture.is_empty()).map(|t| BatchKey { texture: fc3_formats::cache::texture_rel(&t), mode });
+        let soft = if on("Soft") { (s.f32("SoftRange").unwrap_or(0.0).max(0.0) * 100.0).round() as u16 } else { 0 };
+        let batch =
+            e.texture_path().ok().filter(|_| drawn && !e.texture.is_empty()).map(|t| BatchKey { texture: fc3_formats::cache::texture_rel(&t), mode, soft });
         // The gradient's points (`Knot`s), else its even samples (`Key`s).
         let gradient = s.child("PartColorKF");
         let mut colours: Vec<(f32, Vec3)> = gradient
@@ -787,7 +791,7 @@ fn draw(
         if library.batches.contains_key(&key) {
             continue;
         }
-        let material = materials.add(ParticleMaterial::plain(key.mode as f32, load_sheet(&server, &key.texture)));
+        let material = materials.add(ParticleMaterial::plain(key.mode as f32, load_sheet(&server, &key.texture)).soft(key.soft as f32 / 100.0));
         let e = commands
             .spawn((
                 FxBatch(key.clone()),

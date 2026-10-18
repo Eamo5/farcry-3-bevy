@@ -465,8 +465,11 @@ with the daylight. The near and far fades apply. `LightActive` burns a point
 light with its colour, intensity and radius, flickering by
 `LightFlickeringFrequency` and `LightFlickeringAmplitude`. The world's placed
 effects burn none (`NoLights`), since the converter already puts their lights
-among the world's. Not yet: soft
-intersections, distortion (heat haze isn't drawn), mesh particles, child
+among the world's. A soft emitter (`Soft`) fades over its `SoftRange` (m) as
+it nears what's behind it, so smoke meets the ground without a hard line. That
+needs the camera's depth prepass, there at high effects and up (for SSAO); our
+stand-in smoke and dust fade over 0.5 m. Not yet: distortion (heat haze isn't
+drawn), mesh particles, child
 emitters, the plotted discs and sounds. Curves are joined linearly between
 knots. `FC3_AUTHORED_FX=<name>[,<metres>]` plays one as an impact, on the ground
 4 m (or that far) in front of the player, once he has stood 15 s.

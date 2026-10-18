@@ -264,17 +264,26 @@ pub struct ParticleMaterial {
     #[texture(1)]
     #[sampler(2)]
     sheet: Handle<Image>,
+    /// x: the depth (m) it fades over nearing what's behind (0: hard).
+    #[uniform(3)]
+    soft: Vec4,
 }
 
 impl ParticleMaterial {
     /// A plain sheet (its frames chosen by UV): 0 adds light, 1 blends by
     /// alpha, 2 takes brightness as coverage.
     pub(crate) fn plain(mode: f32, sheet: Handle<Image>) -> Self {
-        Self { mode: Vec4::new(mode, 0.0, 0.0, 0.0), sheet }
+        Self { mode: Vec4::new(mode, 0.0, 0.0, 0.0), sheet, soft: Vec4::ZERO }
     }
 
     pub(crate) fn alpha_sheet(sheet: Handle<Image>, frames: [u32; 2], interpolate: bool) -> Self {
-        Self { mode: Vec4::new(1.0, frames[0] as f32, frames[1] as f32, if interpolate { 1.0 } else { 0.0 }), sheet }
+        Self { mode: Vec4::new(1.0, frames[0] as f32, frames[1] as f32, if interpolate { 1.0 } else { 0.0 }), sheet, soft: Vec4::ZERO }
+    }
+
+    /// Fading over `range` (m) as it nears what's behind it.
+    pub(crate) fn soft(mut self, range: f32) -> Self {
+        self.soft.x = range;
+        self
     }
 }
 
@@ -339,6 +348,9 @@ fn load_fx(server: &AssetServer, stem: &str) -> Handle<Image> {
         .load(cache_path(&fx_rel(stem)))
 }
 
+/// How soft (m) our stand-in smoke and dust are.
+const STAND_IN_SOFT: f32 = 0.5;
+
 fn setup_batches(
     mut done: Local<bool>,
     server: Res<AssetServer>,
@@ -358,7 +370,9 @@ fn setup_batches(
             Blend::Alpha => 1.0,
             Blend::Luma => 2.0,
         };
-        let material = particle_materials.add(ParticleMaterial { mode: Vec4::new(mode, 0.0, 0.0, 0.0), sheet: load_fx(&server, d.stem) });
+        // (Smoke and dust soft where they meet the ground; sparks sharp.)
+        let soft = if d.blend == Blend::Add { 0.0 } else { STAND_IN_SOFT };
+        let material = particle_materials.add(ParticleMaterial::plain(mode, load_fx(&server, d.stem)).soft(soft));
         commands.spawn((Batch::Particles(*sheet), Mesh3d(meshes.add(empty_mesh())), MeshMaterial3d(material), common.clone(), Name::new("particles")));
     }
     for (sheet, stem, _) in &DECAL_SHEETS {
