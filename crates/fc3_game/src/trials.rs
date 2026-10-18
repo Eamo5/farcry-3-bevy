@@ -163,7 +163,7 @@ impl Trials {
 /// on).
 fn pause_page(mut trials: ResMut<Trials>, state: Res<State<crate::menu::GameState>>, mut was: Local<bool>) {
     let paused = *state.get() == crate::menu::GameState::Paused;
-    if paused && !*was && trials.page_wanted.is_none() && trials.run.as_ref().is_some_and(|r| r.phase == Phase::Running) {
+    if paused && !*was && trials.page_wanted.is_none() && trials.run.as_ref().is_some_and(|r| matches!(r.phase, Phase::Starting | Phase::Running)) {
         trials.page_wanted = Some(PAUSE_PAGE);
     }
     *was = paused;
@@ -217,6 +217,9 @@ struct Run {
     beeped: i32,
     /// The trial's time barrels standing (placed id -> what they take yet).
     timers: std::collections::HashMap<u64, f32>,
+    /// Where the player goes back to after (the stone's spawn point, Dunia,
+    /// and its heading), when the trial took the player away.
+    back: Option<([f32; 3], f32)>,
 }
 
 /// The stone's reach (m), and how near men brought in while a trial runs
@@ -226,6 +229,8 @@ const SPAWNED_NEAR: f32 = 800.0;
 /// Seconds after a trial that what it called in is still its own (a
 /// reinforcement on its way spawns late).
 const CLEAR_AFTER: f32 = 6.0;
+/// A spawn point this far from a trial's stone (m) is its start.
+const START_AWAY: f32 = 15.0;
 /// What a time barrel takes before it breaks (a couple of rounds).
 const TIMER_TOUGHNESS: f32 = 40.0;
 
@@ -236,9 +241,10 @@ fn text(host: &crate::story::StoryHost, id: u32) -> String {
 
 /// Seconds after the block comes in that the trial's event goes (its zone's
 /// script listening by then), and the longest its scripts may take to start
-/// the clock.
+/// the clock (C4_SC_15's waits for the player to drive its 4x4 to the
+/// start).
 const TELL_AT: f32 = 1.0;
-const START_WAIT: f32 = 30.0;
+const START_WAIT: f32 = 300.0;
 /// Seconds after the end before the result shows.
 const RESULT_AFTER: f32 = 2.0;
 
@@ -293,7 +299,7 @@ fn run(
     info: Option<Res<crate::CacheInfo>>,
     (mut actions, settings, original): (ResMut<crate::controls::ActionState>, Res<crate::settings::Settings>, Res<crate::hud::OriginalHud>),
     (mut progress, mut hud, mut next): (ResMut<crate::progression::Progress>, ResMut<crate::hud::HudState>, ResMut<NextState<crate::menu::GameState>>),
-    mut players: Query<(Entity, &Transform, &mut crate::weapons::Inventory, &mut crate::combat::PlayerStats, &crate::combat::Health), With<Player>>,
+    mut players: Query<(Entity, &mut Transform, &mut Player, &mut crate::weapons::Inventory, &mut crate::combat::PlayerStats, &crate::combat::Health)>,
     (npcs, added): (Query<&crate::npc::Npc>, Query<(Entity, &GlobalTransform), Or<(Added<crate::npc::Npc>, Added<crate::vehicles::Vehicle>)>>),
     (mut kills, mut died): (MessageReader<crate::progression::PlayerKilled>, MessageReader<crate::combat::Died>),
     (mut xp, mut sfx): (MessageWriter<crate::progression::XpGain>, MessageWriter<crate::sound::PlaySfx>),
@@ -337,7 +343,7 @@ fn run(
         trials.stones = Some(stones);
     }
     let dt = time.delta_secs();
-    let Ok((me, tf, mut inv, mut stats, health)) = players.single_mut() else { return };
+    let Ok((me, mut tf, mut pl, mut inv, mut stats, health)) = players.single_mut() else { return };
     let at = tf.translation;
     let unit = text(&host, table.manager.units[1]);
     if trials.units[1].is_empty() {
@@ -349,7 +355,7 @@ fn run(
         match choice {
             Choice::Start | Choice::Again if trials.run.is_none() => {
                 if let Some(i) = trials.last {
-                    trials.run = start(&mut host, table, i, &mut progress, &mut inv, &mut stats);
+                    trials.run = start(&mut host, table, i, &mut progress, (&mut inv, &mut stats), (&mut tf, &mut pl));
                 }
             }
             Choice::Abort => {
@@ -369,7 +375,7 @@ fn run(
             trials.tested = true;
             if let Some(i) = table.trials.iter().position(|t| t.block.eq_ignore_ascii_case(&want)) {
                 trials.last = Some(i);
-                trials.run = start(&mut host, table, i, &mut progress, &mut inv, &mut stats);
+                trials.run = start(&mut host, table, i, &mut progress, (&mut inv, &mut stats), (&mut tf, &mut pl));
             }
         }
     }
@@ -379,7 +385,7 @@ fn run(
         if let Some((near, until)) = trials.clearing {
             for (e, t) in &added {
                 if t.translation().distance(near) < SPAWNED_NEAR {
-                    commands.entity(e).despawn();
+                    commands.entity(e).try_despawn();
                 }
             }
             trials.clearing = (until > dt).then_some((near, until - dt));
@@ -417,7 +423,7 @@ fn run(
                     trials.page_wanted = Some(BOARD_PAGE);
                     next.set(crate::menu::GameState::Paused);
                 } else {
-                    trials.run = start(&mut host, table, stone.trial, &mut progress, &mut inv, &mut stats);
+                    trials.run = start(&mut host, table, stone.trial, &mut progress, (&mut inv, &mut stats), (&mut tf, &mut pl));
                 }
             }
         }
@@ -548,7 +554,8 @@ fn run(
             }
             let dead = health.dead || died.read().any(|d| d.entity == me);
             if called("NotifyChallengerFailure") || dead {
-                info!("trials: {} failed (score {})", trial.block, r.score);
+                let why = if dead { "the player died" } else { "its scripts failed it" };
+                info!("trials: {} failed (score {}): {why}, the player at {:.1?}", trial.block, r.score, crate::data::to_dunia(at));
                 r.phase = Phase::Over { success: false };
                 r.t = 0.0;
             } else if r.left <= 0.0 {
@@ -574,11 +581,12 @@ fn run(
         host.story.hold_script(zone, false);
     }
     for e in r.spawned {
-        if let Ok(mut c) = commands.get_entity(e) {
-            c.despawn();
-        }
+        commands.entity(e).try_despawn();
     }
     trials.clearing = Some((at, CLEAR_AFTER));
+    if let Some((pos, yaw)) = r.back {
+        crate::story::teleport(&mut tf, &mut pl, pos, yaw);
+    }
     if let Some(g) = r.gear {
         inv.slots = g.slots;
         inv.current = g.current.min(inv.slots.len().saturating_sub(1));
@@ -633,14 +641,40 @@ fn start(
     table: &Table,
     i: usize,
     progress: &mut crate::progression::Progress,
-    inv: &mut crate::weapons::Inventory,
-    stats: &mut crate::combat::PlayerStats,
+    (inv, stats): (&mut crate::weapons::Inventory, &mut crate::combat::PlayerStats),
+    (tf, pl): (&mut Transform, &mut Player),
 ) -> Option<Run> {
     let trial = &table.trials[i];
     let Some((block, zone)) = host.story.block_named(&trial.block) else {
         warn!("trials: no block {}", trial.block);
         return None;
     };
+    // To its start: of the trial's two spawn points the one away from its
+    // stone (`..._challenge`, `..._body`; the other is the stone's), and
+    // back to the stone's after (the engine did, under its loading screen:
+    // F3's arena is 500 m from its stone).
+    let data = host.story.data();
+    let prefix = trial.block.to_ascii_lowercase();
+    let stone = data
+        .entities
+        .values()
+        .find(|e| e.component("CFCXChallengeBoardComponent").is_some() && e.name.to_ascii_lowercase().starts_with(&prefix))
+        .map(|e| e.pos)
+        .unwrap_or(crate::data::to_dunia(tf.translation));
+    let from_stone = |p: [f32; 3]| ((p[0] - stone[0]).powi(2) + (p[1] - stone[1]).powi(2)).sqrt();
+    let points: Vec<_> = data.spawn_points.values().filter(|s| s.name.to_ascii_lowercase().starts_with(&prefix)).collect();
+    let far = points.iter().max_by(|a, b| from_stone(a.pos).total_cmp(&from_stone(b.pos))).filter(|s| from_stone(s.pos) > START_AWAY);
+    let back = far.map(|_| {
+        points
+            .iter()
+            .filter(|s| from_stone(s.pos) <= START_AWAY)
+            .min_by(|a, b| from_stone(a.pos).total_cmp(&from_stone(b.pos)))
+            .map_or(([stone[0] + 2.0, stone[1], stone[2] + 1.0], 0.0), |s| (s.pos, s.angles[2]))
+    });
+    if let Some(sp) = far {
+        info!("trials: {} starts at {} ({:.0} m from its stone)", trial.block, sp.name, from_stone(sp.pos));
+        crate::story::teleport(tf, pl, sp.pos, sp.angles[2]);
+    }
     info!("trials: {} ({}) begins", trial.block, trial.id);
     let gear = Gear {
         slots: std::mem::take(&mut inv.slots),
@@ -684,6 +718,7 @@ fn start(
         turns: [0; 5],
         beeped: 0,
         timers,
+        back,
     })
 }
 

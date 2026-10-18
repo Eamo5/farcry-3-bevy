@@ -42,6 +42,7 @@ impl Plugin for StoryPlugin {
             .add_systems(Update, apply_entity_poses.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, apply_entity_physics.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, draw_markers.after(StorySet))
+            .add_systems(Update, weapon_events.after(StorySet).run_if(in_state(GameState::Playing)))
             .add_systems(Update, (player_landings, autopilot_drop).after(StorySet).run_if(in_state(GameState::Playing)))
             .add_systems(Update, story_blasts.after(StorySet).before(crate::breakables::BreakablesSet))
             .add_systems(Update, (story_damage, story_searches).after(StorySet))
@@ -777,6 +778,14 @@ pub struct ScriptedPlayer {
     pub black_for: f32,
     /// The inventory a mission put aside (`BackupInventory`).
     backup: Option<InventoryBackup>,
+    /// A weapon the scripts give is drawn at once (`SetAutoDraw`: F3's
+    /// trial hands the player one weapon after another), and the last they
+    /// gave (drawn when they ask for that after giving it).
+    pub auto_draw: bool,
+    last_granted: Option<usize>,
+    /// The weapon in hand is drawn again for the scripts (the one they gave
+    /// was already in hand).
+    redraw: bool,
     /// Non-weapon inventory entries missions give and take (rock, camera).
     pub gadgets: std::collections::HashSet<String>,
     /// Weapons scripts gave by an archetype of their own (the Ink Monster
@@ -802,8 +811,16 @@ struct InventoryBackup {
 impl Default for ScriptedPlayer {
     fn default() -> Self {
         ScriptedPlayer {
-            ignored: Default::default(), movement: 1.0, god: false, hud_hidden: false,
-            fade: (0.0, 0.0, 0.0), black_for: 0.0, backup: None,
+            ignored: Default::default(),
+            movement: 1.0,
+            god: false,
+            hud_hidden: false,
+            fade: (0.0, 0.0, 0.0),
+            black_for: 0.0,
+            backup: None,
+            auto_draw: false,
+            last_granted: None,
+            redraw: false,
             gadgets: ["gadgets:FC3/Rock".into(), "gadgets:Equipped/Tablet".into()].into_iter().collect(),
             granted: HashMap::new(),
             animal_looting: true, plant_looting: true, camera_drawn: false, camera_up: false,
@@ -2158,6 +2175,8 @@ fn run_story(
             Command::Print(text) => debug!("story: {text}"),
             Command::Message(m) if m == "PhoneCallEnd" => ui.phone = None,
             Command::Native { name, args } => {
+                // (RUST_LOG=story_natives=debug: every native the host is asked.)
+                debug!(target: "story_natives", "{name} {args:?}");
                 let a = |i: usize| args.get(i).cloned().unwrap_or_default();
                 if name == "CreateSpecificGameplay" {
                     let params = args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect();
@@ -2502,6 +2521,15 @@ fn run_story(
                         scripted.camera_drawn = scripted.has_camera();
                     }
                     "CAPI_Pawn.Holster" | "CAPI_Pawn.ForceHolster" if a(0) == fc3_story::PLAYER.to_string() => scripted.camera_drawn = false,
+                    "CAPI_Pawn.SetAutoDraw" if a(0) == fc3_story::PLAYER.to_string() => {
+                        scripted.auto_draw = a(1) == "1" || a(1) == "true";
+                        if let (true, Some(def), Ok(mut inv)) = (scripted.auto_draw, scripted.last_granted.take(), inventory.single_mut()) {
+                            if let Some(i) = inv.slots.iter().position(|s| s.def == def) {
+                                inv.current = i;
+                            }
+                            scripted.redraw = true;
+                        }
+                    }
                     "CAPI_Player.AddArmor" if a(0) == fc3_story::PLAYER.to_string() => {
                         progress.armour = progress.armour.max(a(1).parse::<f32>().unwrap_or(0.0));
                     }
@@ -2571,6 +2599,12 @@ fn run_story(
                             if let Some(def) = host.weapon_def(&inv, &a(1)) {
                                 let wname = inv.defs[def].name;
                                 crate::weapons::grant_weapon(&mut inv, wname, 4);
+                                scripted.last_granted = Some(def);
+                                if scripted.auto_draw {
+                                    if let Some(i) = inv.slots.iter().position(|s| s.def == def) {
+                                        inv.current = i;
+                                    }
+                                }
                                 // (Known to the story by the script's name:
                                 // what waits for it to spawn hears it.)
                                 if a(1).contains('.') {
@@ -3410,6 +3444,39 @@ const CAR_CHASE: &str = "CExoticCarChase";
 fn shooting_gallery(name: &str) -> bool {
     name.starts_with("CShootingGallery") && !name.ends_with("EnticeSystem") && !name.ends_with("ResourceContainer")
 }
+/// The scripts hear the player's weapon drawn and put away
+/// (`CWeaponDrawFinishedEvent`, `CWeaponHolsteredEvent` on the player's
+/// groups: the wielder, the weapon's name id, its class, its ammo); F3's
+/// trial waits on each weapon it gives being drawn.
+fn weapon_events(
+    host: Option<NonSendMut<StoryHost>>,
+    players: Query<&crate::weapons::Inventory, With<crate::player::Player>>,
+    mut scripted: ResMut<ScriptedPlayer>,
+    mut last: Local<Option<(usize, bool)>>,
+) {
+    let (Some(mut host), Ok(inv)) = (host, players.single()) else { return };
+    let Some(slot) = inv.slots.get(inv.current) else { return };
+    if std::mem::take(&mut scripted.redraw) && *last == Some((slot.def, true)) {
+        *last = Some((slot.def, false));
+    }
+    let args = |def: usize, ammo: u32| {
+        let name = fc3_formats::hash::crc32(inv.defs[def].name.to_ascii_lowercase().as_bytes());
+        vec![Arg::id(fc3_story::PLAYER), Arg::Num(name as f64), Arg::Num(0.0), Arg::Num(ammo as f64)]
+    };
+    match *last {
+        Some((def, _)) if def == slot.def => {}
+        Some((def, _)) => {
+            host.story.group_event(fc3_story::PLAYER, "CWeaponHolsteredEvent", args(def, 0));
+            *last = Some((slot.def, false));
+        }
+        None => *last = Some((slot.def, false)),
+    }
+    if *last == Some((slot.def, false)) && inv.switching == 0.0 {
+        host.story.group_event(fc3_story::PLAYER, "CWeaponDrawFinishedEvent", args(slot.def, slot.mag + slot.reserve));
+        *last = Some((slot.def, true));
+    }
+}
+
 /// Seconds a specific gameplay the game doesn't play runs before it ends.
 const UNPLAYED_GRACE: f32 = 1.0;
 

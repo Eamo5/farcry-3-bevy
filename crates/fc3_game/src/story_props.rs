@@ -2,7 +2,8 @@
 //! a mission bomb's "ghost" spot, the charge, its remote): drawn with their
 //! archetype's model where the script put them, under the story's id, so
 //! the story's placements, hiding and removal reach them as they do any
-//! placed object.
+//! placed object. A vehicle archetype is made a vehicle, with its seats (F4's
+//! trial puts the player at the gun of the technical it spawns).
 
 use bevy::prelude::*;
 
@@ -38,11 +39,12 @@ fn spawn_props(
     models: Res<Assets<Fc3Model>>,
     info: Res<crate::data::CacheInfo>,
     mut pending: Local<Vec<(u64, Handle<Fc3Model>, Transform, Vec<Handle<StandardMaterial>>)>>,
+    mut vehicles: Local<Vec<(u64, Handle<Fc3Model>, Transform, usize, fc3_story::vehicles::Layout)>>,
     mut wearing: Local<Option<std::collections::HashMap<u64, Vec<String>>>>,
     mut commands: Commands,
 ) {
     let Some(mut host) = host else { return };
-    if host.spawned_props.is_empty() && pending.is_empty() {
+    if host.spawned_props.is_empty() && pending.is_empty() && vehicles.is_empty() {
         return;
     }
     // The materials archetypes put on their models' slots (the cache's table).
@@ -61,6 +63,14 @@ fn spawn_props(
             debug!("story prop {id}: {archetype} draws nothing");
             continue;
         };
+        if let Some(def) = crate::story_rides::vehicle_def(entry) {
+            let transform =
+                Transform { translation: to_bevy(at), rotation: Quat::from_array(fc3_formats::world::angles_to_bevy_quat(angles)), scale: Vec3::ONE };
+            let layout = crate::story_rides::layout_of(&data, entry);
+            info!("story prop {id}: {archetype} is a vehicle ({} seats)", layout.seats.len());
+            vehicles.push((id, crate::weapons::model_handle(&server, &path), transform, def, layout));
+            continue;
+        }
         let slots = wearing
             .get(&entry.id)
             .map(|rels| rels.iter().map(|m| server.load(crate::cache_assets::cache_path(&fc3_formats::cache::material_rel(m)))).collect())
@@ -72,6 +82,11 @@ fn spawn_props(
         let Some(model) = models.get(handle) else { return true };
         let e = crate::objects::spawn_model_wearing(&mut commands, handle, model, *transform, slots);
         commands.entity(e).insert(crate::objects::PlacedId(*id));
+        false
+    });
+    vehicles.retain(|(id, handle, transform, def, layout)| {
+        let Some(model) = models.get(handle) else { return true };
+        crate::vehicles::build_story_vehicle(&mut commands, *def, model, transform.translation, transform.rotation, *id, layout);
         false
     });
 }

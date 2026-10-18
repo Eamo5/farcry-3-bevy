@@ -4809,13 +4809,28 @@ cache as they are, and the challenge manager's template (the rewards: $250,
   on the board (quick launch 6): the trial, the player's best among the
   scores to beat, the rewards ticked once earned. Without the original
   interface the trial starts at once.
-* **The start.** The player's gear is put away (weapons, ammo, throwables,
-  medkits, armour), the block comes in (`Story::set_block_state`; its zone
+* **The start.** The player is taken to the trial's start (of its two
+  spawn points the one away from its stone: `..._challenge`, `..._body`;
+  F3's arena is 500 m from its stone, C4_SC_15's 840 m) and brought back to
+  the stone's after; the player's gear is put away (weapons, ammo,
+  throwables, medkits, armour), the block comes in (`Story::set_block_state`; its zone
   kept running however far the trial goes, `hold_script`) and, a second
   later, the player hears `CChallengeEvent` (0, the trial): its scripts
   give the trial's weapons (`SpawnWeapon` finds the game's by the shop's
   models now too: `weapons:FC3/STGW-90` is our STG-90), put up its dialog
-  and start the clock (`StartChallengeTimer`).
+  and start the clock (`StartChallengeTimer`; C4_SC_15's only once the
+  player has driven its 4x4 into its start, so a trial may wait up to five
+  minutes, and its pause page can give it up meanwhile).
+* **Weapons drawn.** A weapon the scripts give while they've asked for it
+  (`SetAutoDraw`) is taken in hand, and the scripts hear the player's
+  weapon drawn and put away (`CWeaponDrawFinishedEvent`,
+  `CWeaponHolsteredEvent`, to the player's groups: the wielder, the
+  weapon's name id, its class, its ammo; drawn again when the weapon given
+  was already in hand): F3's trial hands over one weapon after another,
+  each once the last has killed (seen: the 1911, the Skorpion, the 1887).
+* **Vehicles spawned.** A vehicle archetype the scripts spawn
+  (`SpawnEntityFromArchetype`, `story_props`) is made a vehicle with its
+  seats: F4's DShK technical, the player put at its gun.
 * **The score.** Each man the player kills scores by his kind (our roles
   as the game's classes: assaulter, berserker, defender, heavy gunner,
   rocket, molotov, beheader) with headshots, stealth kills and takedowns on
@@ -4841,10 +4856,13 @@ cache as they are, and the challenge manager's template (the rewards: $250,
   (`D4_SC_06`, from the stone: board, start, 90 s with the autopilot
   fighting: 695 points, the three rewards, the result page, the area clear
   and the gear back after).
-* **Not yet.** The helicopters G3's and C7's waves fly in (they land at their path's end), F3's weapon cycle
-  (it waits on the weapon drawn), the loading screen, and the other
-  natives the trials call that do nothing yet (`SwitchArmy`, tagging,
-  `DisplayCustomUIMsg`, `RefillWeaponAmmo`, `SelectThrowGadget`).
+* **Not yet.** F4's start, the technical's spot, is a bridge over the
+  river our world doesn't have (no model there, no collision: the
+  technical drops into the river and the trial fails as the player is
+  off its spot); the helicopters G3's and C7's waves fly in (they land at
+  their path's end), the loading screen, and the other natives the trials
+  call that do nothing yet (`SwitchArmy`, tagging, `DisplayCustomUIMsg`,
+  `RefillWeaponAmmo`, `SelectThrowGadget`).
 
 ### Races
 
