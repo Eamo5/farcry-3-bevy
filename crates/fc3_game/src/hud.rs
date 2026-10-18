@@ -31,12 +31,49 @@ fn ui_font(mut fonts: ResMut<Assets<Font>>) {
     }
 }
 
+/// The game's own strings (`story/strings.bin`) for the prompts and notices
+/// of systems outside the story and the interface: the HUD's prompts in the
+/// game's words where it has them, ours else.
+#[derive(Resource, Default)]
+pub struct GameText(Option<fc3_formats::oasis::Strings>);
+
+impl GameText {
+    pub fn get(&self, id: u32) -> Option<&str> {
+        self.0.as_ref()?.get(id).filter(|t| !t.is_empty())
+    }
+
+    /// A prompt, its `[Action]`s the keys bound to them.
+    pub fn prompt(&self, id: u32, actions: &crate::controls::ActionState, settings: &crate::settings::Settings) -> Option<String> {
+        self.get(id).map(|t| crate::story::prompt_text(t, actions, settings))
+    }
+}
+
+/// The HUD's prompts in the game's words (its strings): a zip line, a plant,
+/// a glider, a full rucksack, an empty magazine.
+pub mod prompt {
+    pub const ZIPLINE: u32 = 56342;
+    pub const GATHER_PLANT: u32 = 125973;
+    pub const BOARD_GLIDER: u32 = 112303;
+    pub const RUCKSACK_FULL: u32 = 98546;
+    pub const RELOAD: u32 = 56331;
+}
+
+fn load_game_text(info: Option<Res<crate::data::CacheInfo>>, mut text: ResMut<GameText>) {
+    let Some(info) = info else { return };
+    match std::fs::read(info.root.join("story/strings.bin")).map_err(anyhow::Error::from).and_then(|b| fc3_formats::oasis::Strings::from_bytes(&b)) {
+        Ok(strings) => text.0 = Some(strings),
+        Err(e) => warn!("the game's strings: {e}; the HUD's prompts stay ours"),
+    }
+}
+
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(FrameTimeDiagnosticsPlugin::default())
             .init_resource::<HudState>()
             .init_resource::<Minigame>()
             .init_resource::<OriginalHud>()
+            .init_resource::<GameText>()
+            .add_systems(OnExit(crate::menu::GameState::Loading), load_game_text)
             .add_systems(Startup, (ui_font, setup_hud))
             .add_systems(
                 Update,

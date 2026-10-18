@@ -2317,7 +2317,7 @@ fn animal_deaths(
 #[allow(clippy::too_many_arguments)]
 fn skin_animals(
     mut actions: ResMut<crate::controls::ActionState>,
-    settings: Res<crate::settings::Settings>,
+    (settings, text): (Res<crate::settings::Settings>, Option<Res<crate::hud::GameText>>),
     players: Query<(&Transform, &Health), With<Player>>,
     mut carcasses: Query<(Entity, &GlobalTransform, &mut Carcass)>,
     mut progress: ResMut<crate::progression::Progress>,
@@ -2343,8 +2343,14 @@ fn skin_animals(
     };
     let animal = SPECIES[c.species].animal;
     if crate::crafting::loot_count(&progress) >= crafting.as_ref().map_or(16, |c| c.loot_capacity(&progress)) {
-        hud.prompt = Some("Rucksack full - use or sell ingredients".into());
-        if actions.just_pressed(crate::controls::Action::Interact) { actions.consume(crate::controls::Action::Interact); }
+        hud.prompt = Some(
+            text.as_deref()
+                .and_then(|t| t.get(crate::hud::prompt::RUCKSACK_FULL))
+                .map_or_else(|| "Rucksack full - use or sell ingredients".into(), str::to_string),
+        );
+        if actions.just_pressed(crate::controls::Action::Interact) {
+            actions.consume(crate::controls::Action::Interact);
+        }
         return;
     }
     hud.prompt = Some(format!("{}  skin {}", actions.label(crate::controls::Action::Interact, &settings), animal.name().to_lowercase()));

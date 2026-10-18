@@ -2729,7 +2729,7 @@ fn enter_exit(
     mut repairing: ResMut<Repairing>,
     healths: Query<&Health, (With<Vehicle>, Without<Player>)>,
     mut actions: ResMut<ActionState>,
-    settings: Res<crate::settings::Settings>,
+    (settings, text): (Res<crate::settings::Settings>, Option<Res<crate::hud::GameText>>),
     mut driving: ResMut<Driving>,
     mut hud: ResMut<crate::hud::HudState>,
     heights: Res<crate::terrain::Heightfield>,
@@ -2830,7 +2830,9 @@ fn enter_exit(
         }
     } else {
         repairing.held = 0.0;
-        hud.prompt = Some(format!("{key}  {verb} {name}"));
+        let glider =
+            (DEFS[v.def].kind == Kind::Glider).then(|| text.as_deref().and_then(|t| t.prompt(crate::hud::prompt::BOARD_GLIDER, &actions, &settings))).flatten();
+        hud.prompt = Some(glider.unwrap_or_else(|| format!("{key}  {verb} {name}")));
         if !actions.just_pressed(Action::Interact) {
             return;
         }

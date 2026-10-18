@@ -405,7 +405,16 @@ only what changed (and everything again until the movies have loaded):
   without one.
 * **Subtitles**: `ShowSubTitle(text)` / `HideSubTitle()`.
 * **Interaction prompt**: `InteractionMC` shown with `InteractionText`
-  (the prompt the HUD showed this frame, `HudState::shown_prompt`).
+  (the prompt the HUD showed this frame, `HudState::shown_prompt`). Where
+  the game has the prompt and it is pressed as ours is, it is the game's
+  (`hud::GameText`, `hud::prompt`, its `[Action]`s the keys bound): a zip
+  line (56342, `[ZipAttach]` the interact key, `[ZipDetach]` jump), a
+  plant (125973), a glider (112303), a full rucksack (98546). Its "Hold"
+  prompts (an alarm, a heal) stay ours while ours are presses.
+* **Reload prompt**: `ReloadMC` with the game's "[Reload] Reload" (56331,
+  by `SetReloadText`) while the weapon in hand's magazine is empty with
+  more to load and no reload under way (rare: the game reloads by itself).
+  `FC3_EMPTY_MAG` (tests) empties it once the player is in the world.
 * **XP**: `XPKicker` plays a tier by the amount (from frame 2, 42 or 95; it
   holds at 37, 87 or 155 and runs on to its `off` label from the next
   frame), `XPKickerText` the amount (the movie adds the "+") and

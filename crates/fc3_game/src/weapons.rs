@@ -25,7 +25,7 @@ impl Plugin for WeaponsPlugin {
             .init_resource::<TestScript>()
             .init_resource::<ScopeSway>()
             .init_resource::<UnlimitedAmmo>()
-            .add_systems(Update, (fire_test_setup, fire_test_log, scope_sway, test_ammo))
+            .add_systems(Update, (fire_test_setup, fire_test_log, scope_sway, test_ammo, test_empty_magazine))
             .add_message::<Explosion>()
             .add_message::<HitMarker>()
             .add_message::<WorldHit>()
@@ -1270,6 +1270,23 @@ pub struct UnlimitedAmmo(pub bool);
 /// unlimited ammunition: the player's guns never run dry; their spare
 /// ammunition stays full. `FC3_TEST_LOADOUT` (weapon names, comma
 /// separated): he carries those too, whatever a save gave him.
+/// `FC3_EMPTY_MAG` (tests): the weapon in hand's magazine emptied once, as
+/// the player is in the world (the HUD's reload prompt to be seen).
+fn test_empty_magazine(mut players: Query<(&mut Inventory, &Player)>, mut done: Local<bool>) {
+    if *done || std::env::var_os("FC3_EMPTY_MAG").is_none() {
+        return;
+    }
+    let Ok((mut inv, p)) = players.single_mut() else { return };
+    if p.spawning {
+        return;
+    }
+    let current = inv.current;
+    if let Some(slot) = inv.slots.get_mut(current) {
+        slot.mag = 0;
+        *done = true;
+    }
+}
+
 fn test_ammo(mut players: Query<&mut Inventory, With<Player>>, unlimited: Res<UnlimitedAmmo>) {
     let Ok(mut inv) = players.single_mut() else { return };
     let inv = &mut *inv;

@@ -489,7 +489,7 @@ fn spin_weapon_pickups(time: Res<Time>, mut q: Query<&mut Transform, With<Spinni
 #[allow(clippy::too_many_arguments)]
 fn interact(
     mut actions: ResMut<crate::controls::ActionState>,
-    settings: Res<crate::settings::Settings>,
+    (settings, text): (Res<crate::settings::Settings>, Option<Res<crate::hud::GameText>>),
     mut world: ResMut<WorldState>,
     mut hud: ResMut<HudState>,
     mut progress: ResMut<crate::progression::Progress>,
@@ -528,11 +528,19 @@ fn interact(
     let Some((_, e)) = best else { return };
     let Ok((_, p, _)) = pickups.get(e) else { return };
     if matches!(p.kind, PickupKind::Plant(_)) && crate::crafting::loot_count(&progress) >= crafting.as_ref().map_or(16, |c| c.loot_capacity(&progress)) {
-        hud.prompt = Some("Rucksack full - use or sell ingredients".into());
-        if actions.just_pressed(crate::controls::Action::Interact) { actions.consume(crate::controls::Action::Interact); }
+        hud.prompt = Some(
+            text.as_deref()
+                .and_then(|t| t.get(crate::hud::prompt::RUCKSACK_FULL))
+                .map_or_else(|| "Rucksack full - use or sell ingredients".into(), str::to_string),
+        );
+        if actions.just_pressed(crate::controls::Action::Interact) {
+            actions.consume(crate::controls::Action::Interact);
+        }
         return;
     }
-    hud.prompt = Some(format!("{}  pick up {}", actions.label(crate::controls::Action::Interact, &settings), p.kind.label()));
+    let gather =
+        matches!(p.kind, PickupKind::Plant(_)).then(|| text.as_deref().and_then(|t| t.prompt(crate::hud::prompt::GATHER_PLANT, &actions, &settings))).flatten();
+    hud.prompt = Some(gather.unwrap_or_else(|| format!("{}  pick up {}", actions.label(crate::controls::Action::Interact, &settings), p.kind.label())));
     if !actions.just_pressed(crate::controls::Action::Interact) {
         return;
     }

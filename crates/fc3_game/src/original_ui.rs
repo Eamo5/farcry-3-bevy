@@ -57,7 +57,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_timer,
                     drive_xp,
                     (drive_loot, drive_saving),
-                    (drive_stealth, drive_indicators, drive_wheel),
+                    (drive_stealth, drive_indicators, drive_wheel, drive_reload),
                     drive_hits,
                     drive_grenades,
                     drive_radar,
@@ -2675,6 +2675,32 @@ fn drive_wheel(
         host.dps_set("WheelCurWeaponArrowMC_0", "_rotation", num(lit.unwrap_or(0.0)));
         *shown = Some(wheel.selected);
     }
+}
+
+/// The reload prompt (the interaction movie's `ReloadMC`, its text by
+/// `SetReloadText`): the game's "[Reload] Reload" while the weapon in hand
+/// has an empty magazine and more to load, and isn't being reloaded.
+fn drive_reload(
+    state: NonSend<Interface>,
+    players: Query<&crate::weapons::Inventory, With<crate::player::Player>>,
+    (text, actions, settings): (Res<crate::hud::GameText>, Res<crate::controls::ActionState>, Res<crate::settings::Settings>),
+    mut shown: Local<Option<bool>>,
+) {
+    let Interface::Running(host) = &*state else { return };
+    let Ok(inv) = players.single() else { return };
+    let empty = inv.mounted_from.is_none()
+        && inv.reloading <= 0.0
+        && inv.slots.get(inv.current).is_some_and(|s| inv.defs[s.def].magazine > 0 && s.mag == 0 && s.reserve > 0);
+    if *shown == Some(empty) {
+        return;
+    }
+    if empty {
+        if let Some(prompt) = text.prompt(crate::hud::prompt::RELOAD, &actions, &settings) {
+            host.event("SetReloadText", &[&prompt]);
+        }
+    }
+    host.dps_visible("ReloadMC", empty);
+    *shown = Some(empty);
 }
 
 /// The stealth indicators (`StealthIndicator<n>`, three): each turns round

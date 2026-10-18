@@ -312,6 +312,7 @@ fn load_ways(
 
 /// Offers the zip lines whose high end is in reach.
 fn zip_prompt(
+    text: Option<Res<crate::hud::GameText>>,
     mut actions: ResMut<ActionState>,
     settings: Res<crate::settings::Settings>,
     ways: Res<Ways>,
@@ -331,7 +332,7 @@ fn zip_prompt(
         d < 2.5 && (0.3..4.5).contains(&(start.y - feet))
     });
     let Some((i, _)) = near else { return };
-    hud.prompt = Some(format!("{}  ride the zip line", actions.label(Action::Interact, &settings)));
+    hud.prompt = Some(text.as_deref().and_then(|t| t.prompt(crate::hud::prompt::ZIPLINE, &actions, &settings)).unwrap_or_else(|| format!("{}  ride the zip line", actions.label(Action::Interact, &settings))));
     if actions.just_pressed(Action::Interact) {
         actions.consume(Action::Interact);
         *mount = Mount::Zip { cable: i, s: 0.0, speed: 4.0 };
