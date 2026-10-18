@@ -2925,7 +2925,17 @@ fn shoot(
         Role::Molotov => 0.8,
         _ => 1.1,
     };
-    crate::particles::fx::muzzle_flash(&mut shot_fx.particles, rng, muzzle, last_dir, flash);
+    // The role's weapon's own third-person flash (else ours).
+    let weapon = match npc.role {
+        Role::Shotgunner => "M133",
+        Role::Sniper => "SVD",
+        Role::Heavy => "PKM",
+        Role::Molotov => "6P9",
+        _ => "AK47",
+    };
+    if !crate::weapons::muzzle_3p(weapon).is_some_and(|m| crate::authored_fx::play_muzzle_at(&mut shot_fx.commands, m, muzzle, last_dir)) {
+        crate::particles::fx::muzzle_flash(&mut shot_fx.particles, rng, muzzle, last_dir, flash);
+    }
     noises.write(Noise { at: muzzle, radius: if npc.role == Role::Sniper { 150.0 } else { 90.0 }, kind: NoiseKind::Threatening, aside: !tgt.is_player });
     // The third-person sounds of each role's weapon (M133, SVD, 6P9, PKM, AK).
     match npc.role {

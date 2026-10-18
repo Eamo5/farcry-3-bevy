@@ -220,6 +220,13 @@ pub fn apply_stats(defs: &mut [WeaponDef], stats: &[fc3_formats::weapons::Weapon
     n
 }
 
+/// A weapon's third-person muzzle effect, by its name in the game's table
+/// (`AK47`, `PKM`...): what the characters' shots show.
+pub fn muzzle_3p(weapon: &str) -> Option<&'static str> {
+    let s = WEAPON_STATS.get()?.iter().find(|s| s.name.eq_ignore_ascii_case(weapon))?;
+    (!s.muzzle_3p.is_empty()).then(|| crate::authored_fx::intern(&s.muzzle_3p))
+}
+
 /// A shot's flash: the weapon's own muzzle effect on its muzzle, else ours
 /// (`scale` of it) where the muzzle is.
 fn muzzle_flash(shot_fx: &mut crate::particles::ShotFx, rng: &mut Rng, d: &WeaponDef, muzzle: Option<Entity>, at: Vec3, forward: Vec3, scale: f32) {

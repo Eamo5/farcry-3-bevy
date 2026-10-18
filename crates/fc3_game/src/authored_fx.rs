@@ -139,6 +139,20 @@ pub fn play_muzzle(commands: &mut Commands, name: &'static str, muzzle: Entity) 
     true
 }
 
+/// Plays a weapon's muzzle effect once where a shot leaves a gun that isn't
+/// drawn with its own muzzle node (the characters'), heading `forward`, its
+/// right level. False when it isn't cached.
+pub fn play_muzzle_at(commands: &mut Commands, name: &'static str, at: Vec3, forward: Vec3) -> bool {
+    if !available(name) {
+        return false;
+    }
+    let forward = forward.normalize_or(Vec3::NEG_Z);
+    let right = forward.cross(Vec3::Y).try_normalize().unwrap_or(Vec3::X);
+    let frame = Mat3::from_cols(right.cross(forward), forward, -right);
+    commands.spawn((Transform::from_translation(at).with_rotation(Quat::from_mat3(&frame)), AuthoredFx(name), Once));
+    true
+}
+
 /// A muzzle effect's frame in its gun's: Bevy's local +Y (Dunia's +Z) down
 /// the barrel (-Z), local -Z (Dunia's +Y) to the right (+X).
 const MUZZLE_FRAME: Quat = Quat::from_xyzw(-0.5, -0.5, 0.5, 0.5);

@@ -9,7 +9,7 @@ pub struct ScreenshotPlugin;
 
 impl Plugin for ScreenshotPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (auto_screenshot, capture_near, tour, perf_log));
+        app.add_systems(Update, (auto_screenshot, capture_near, tour, perf_log, burst));
         if std::env::var_os("FC3_VIEW_MESH_DEBUG").is_some() {
             app.add_systems(PostUpdate, view_mesh_debug.after(bevy::transform::TransformSystems::Propagate));
         }
@@ -436,6 +436,25 @@ fn perf_log(
 pub fn capture(commands: &mut Commands, path: String) {
     info!("capturing screenshot to {path}");
     commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
+}
+
+/// Test: `FC3_BURST=<dir>,<seconds>` captures 24 frames 40 ms apart from
+/// that long after start (real time): for what lasts a moment, a muzzle's
+/// flash (`burst_<n>.png`).
+fn burst(time: Res<Time<Real>>, mut taken: Local<usize>, mut commands: Commands) {
+    if *taken >= 24 {
+        return;
+    }
+    let Some((dir, at)) =
+        std::env::var("FC3_BURST").ok().and_then(|v| v.rsplit_once(',').and_then(|(d, t)| Some((d.to_string(), t.trim().parse::<f32>().ok()?))))
+    else {
+        *taken = 24;
+        return;
+    };
+    if time.elapsed_secs() >= at + *taken as f32 * 0.04 {
+        capture(&mut commands, format!("{dir}/burst_{}.png", *taken));
+        *taken += 1;
+    }
 }
 
 /// Test: `FC3_CAPTURE_NEAR=x,z,radius,path[|...]` captures the window once

@@ -376,8 +376,13 @@ the placeholder effect counts as none), and the converter caches them. A shot
 plays the weapon's muzzle effect as a child of the gun's muzzle node, so it
 moves with the gun. The effect's frame is the muzzle bone's: Dunia's +Z down
 the barrel, its +Y to the right. One shot in three, the smoke after plays the
-same way. Our flash and smoke stand in when an effect isn't cached. Not yet:
-the third-person muzzles (the characters' guns).
+same way. Our flash and smoke stand in when an effect isn't cached.
+
+The characters' shots play the third-person muzzle of their role's weapon:
+`AK47`, the shotgunner's `M133`, the sniper's `SVD`, the heavy's `PKM`, the
+molotov thrower's `6P9`. It plays where the shot leaves, heading along it with
+its right level. Turrets, helicopters and villagers keep ours. These were only
+seen in a fight at 30 m, too far to judge their look.
 
 The muzzle node is the gun model's `FX_FIRE`, taken only where it lies at the
 front of the gun. The 870's chains to a pose off the gun, below and beside it,
@@ -608,4 +613,5 @@ diagnostic system added was enough to bring it on every run).
 
 `FC3_CAPTURE_NEAR=x,z,radius,path[|...]` (game, tests) saves a frame when the
 player first comes within `radius` of each point, to look at a place along a
-scripted walk.
+scripted walk. `FC3_BURST=<dir>,<seconds>` captures 24 frames 40 ms apart from
+that long after start (real time), for what lasts a moment.
