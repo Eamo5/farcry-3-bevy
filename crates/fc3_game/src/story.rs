@@ -879,8 +879,10 @@ fn draw_markers(
     for e in &icons {
         commands.entity(e).despawn();
     }
-    // (A race's next gate with them.)
-    let all: Vec<Vec3> = markers.0.iter().copied().chain(races.and_then(|r| r.marker)).collect();
+    // (A race's next gate with them; while a race holds the player, the gate
+    // alone.)
+    let racing = races.as_ref().is_some_and(|r| r.holds_player());
+    let all: Vec<Vec3> = markers.0.iter().copied().filter(|_| !racing).chain(races.and_then(|r| r.marker)).collect();
     if all.is_empty() || scripted.hud_hidden || cinema.view.is_some() || minigame.is_some_and(|m| m.holds_player()) {
         if !markers.0.is_empty() {
             trace!("markers hidden: hud {} scene view {}", scripted.hud_hidden, cinema.view.is_some());

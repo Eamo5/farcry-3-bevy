@@ -4821,8 +4821,9 @@ are played now (`races`):
   first.
 * **The countdown and the clock.** Get ready, 3, 2, 1 (4.5 s), go, then
   the row's target time runs down, red and beeping in its last ten
-  seconds. Only the next gate counts (its marker shown, the next two's
-  flares burning on land): passed when the player, or the vehicle he
+  seconds. Only the next gate counts (its marker shown, alone: the
+  objective and the story's other markers are put away while the race
+  runs; the next two's flares burning on land): passed when the player, or the vehicle he
   drives, crosses the line between its flares (the model's bones, within
   the tolerance). The finish (the last gate) in time wins the wager back
   doubled; the clock out loses it. Escape asks first (the quit box: the

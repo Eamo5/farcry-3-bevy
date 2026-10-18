@@ -2064,7 +2064,7 @@ fn drive_story(
     hud: Res<crate::hud::HudState>,
     mut last: Local<Option<(Option<String>, Option<String>, Option<String>, Option<String>)>>,
     gallery: Option<Res<crate::shooting_gallery::Gallery>>,
-    (poker, minigame): (Option<Res<crate::poker::PokerTable>>, Option<Res<crate::hud::Minigame>>),
+    (poker, minigame, races): (Option<Res<crate::poker::PokerTable>>, Option<Res<crate::hud::Minigame>>, Option<Res<crate::races::Races>>),
 ) {
     let Interface::Running(host) = &*state else { return };
     for card in std::mem::take(&mut ui.cards) {
@@ -2075,11 +2075,14 @@ fn drive_story(
         }
     }
     let subtitle = ui.subtitle.as_ref().filter(|_| settings.subtitles).map(|s| s.0.clone());
-    // (Not while a shooting gallery runs: its count is where the box is.)
-    let objective = ui
-        .objective
-        .clone()
-        .filter(|_| !gallery.is_some_and(|g| g.holds_player()) && !poker.is_some_and(|p| p.holds_player()) && !minigame.is_some_and(|m| m.holds_player()));
+    // (Not while a shooting gallery runs: its count is where the box is; nor
+    // while a race does.)
+    let objective = ui.objective.clone().filter(|_| {
+        !gallery.is_some_and(|g| g.holds_player())
+            && !poker.is_some_and(|p| p.holds_player())
+            && !minigame.is_some_and(|m| m.holds_player())
+            && !races.is_some_and(|r| r.holds_player())
+    });
     let now = (objective, ui.mission.clone(), subtitle, hud.shown_prompt.clone());
     let first = last.is_none();
     let old = last.clone().unwrap_or_default();
@@ -3608,7 +3611,10 @@ fn drive_radar(
         Some(s) => s.iter().filter(|(k, _)| *k == map_icon::MISSION).map(|(_, p)| *p).collect(),
         None => objectives.0.clone(),
     };
-    // (A race's next gate.)
+    // (A race's next gate; while a race holds the player, the gate alone.)
+    if races.as_ref().is_some_and(|r| r.holds_player()) {
+        goals.clear();
+    }
     goals.extend(races.as_ref().and_then(|r| r.marker));
     for &goal in &goals {
         let l = local(goal);
