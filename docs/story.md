@@ -3381,7 +3381,9 @@ the truck then sets off on its last path.
   (`CDestroyEvent`) and see it in the world while it flies. Its rotors
   turn about their own nodes once the converter has given the rotor parts
   pivots (`ROTOR`, `TAILROTOR`; a model converted before shows them
-  still). No rotor sound yet: the Blackhawk names none.
+  still: delete its `.fcm` and run the converter). The log says how many
+  rotors each turns (`farcry3::story_helis=debug`: two, the main and the
+  tail; seen in G3). No rotor sound yet: the Blackhawk names none.
 * **Called-in characters left behind.** A called-in character beyond the
   despawn range was gone for good while the story still counted it; it
   now waits to come back where it was when the player returns.

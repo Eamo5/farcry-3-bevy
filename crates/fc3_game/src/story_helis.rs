@@ -271,6 +271,7 @@ fn spawn_parts(commands: &mut Commands, root: Entity, model: &Fc3Model) {
             ChildOf(parent),
         ));
     }
+    debug!("helicopter: {} turning rotor(s)", pivots.len());
 }
 
 /// Who last hurt each helicopter (whose kill it is when it comes down).
