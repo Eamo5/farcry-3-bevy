@@ -366,6 +366,12 @@ only what changed (and everything again until the movies have loaded):
   fell (154986 undetected, 154987 no alarms, 111340 else, each with its XP
   line) over "%d of 34" (156253), the tower's 156250 over "%d of 18"
   (156252). Their counts' icons (`<img>` in the text) aren't drawn.
+* **Saving**: the HUD and the pause menu each load `SaveGame\SaveGame.feu`,
+  a spinner; `ShowSaving 1 <text>` brings it in as a save is written
+  (`save::GameSaved`: the game's "Checkpoint reached", 159959, at a story
+  checkpoint, which now saves the game with it; else its "Saving...",
+  161640, for the minute's autosave and the pause menu's Save) and
+  `ShowSaving 0` takes it away two seconds on.
 * **Mission timer**: `ObjectiveTimer` shows the first of the story's
   timers in `ObjectiveTimerText` (as the game's own HUD writes it), hidden
   without one.
@@ -444,7 +450,8 @@ and save on; the last checkpoint while a mission runs; no restart, abandon
 or debug), `SetObjective` (the mission's title and objective, the money and
 its most, the rucksack's loot and its size) and `NewItems`. What is chosen
 comes back as `Resume`/`QuitMenu` (play on), `Quit` (to the main menu),
-`QuitToDesktop` (exit), `MissionOptionSelected` 0 (back to the last checkpoint), 6 and 7 and
+`QuitToDesktop` (exit), `MissionOptionSelected` 0 (back to the last checkpoint), 4 (save:
+`save::SaveRequest`), 6 and 7 and
 `RequestPageChange` 3 and 8 (our journal, until the skills and crafting
 pages are the original's). The keyboard and mouse go to Ruffle while it is
 up (`Host::input`: keys as Flash key codes, the mouse in the window's

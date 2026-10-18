@@ -56,7 +56,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_tutorial,
                     drive_timer,
                     drive_xp,
-                    drive_loot,
+                    (drive_loot, drive_saving),
                     drive_stealth,
                     drive_hits,
                     drive_grenades,
@@ -250,7 +250,7 @@ fn drive_pause(
         MessageReader<bevy::input::mouse::MouseButtonInput>,
     ),
     mut windows: Query<(&Window, &mut bevy::window::CursorOptions), With<PrimaryWindow>>,
-    (mut exit, mut back_to_menu): (MessageWriter<AppExit>, ResMut<crate::save::BackToMenu>),
+    (mut exit, mut back_to_menu, mut save_request): (MessageWriter<AppExit>, ResMut<crate::save::BackToMenu>, MessageWriter<crate::save::SaveRequest>),
     (mut open, mut mouse, mut paged, mut pressed): (Local<bool>, Local<Vec2>, Local<bool>, Local<(Option<std::time::Instant>, usize)>),
     (mut players, mut crafted, mut page, mut boosts): (
         Query<&mut crate::combat::PlayerStats, With<crate::player::Player>>,
@@ -509,6 +509,10 @@ fn drive_pause(
                     }
                     next.set(GameState::Playing);
                     return;
+                }
+                // (Saved as the menu opened too; this one is shown.)
+                "4" => {
+                    save_request.write(crate::save::SaveRequest);
                 }
                 "6" => open_page(host, "8"),
                 "7" => open_page(host, "3"),
@@ -2378,6 +2382,30 @@ fn drive_xp(
             host.dps_play("XPKicker", fc3_ui::ExternalValue::Number((hold + 1) as f64));
             *showing = None;
         }
+    }
+}
+
+/// The saving spinner (`SaveGame.feu`, which the HUD and the pause menu
+/// each load): `ShowSaving 1 <text>` as a save is written, the game's
+/// "Checkpoint reached" at a story checkpoint, else its "Saving...", and
+/// `ShowSaving 0` a moment on (on the real clock: the pause menu's runs
+/// with the game stopped).
+const SAVING: u32 = 161640;
+const CHECKPOINT_REACHED: u32 = 159959;
+const SAVING_HOLD: f32 = 2.0;
+
+fn drive_saving(state: NonSend<Interface>, time: Res<Time<Real>>, mut saved: MessageReader<crate::save::GameSaved>, mut until: Local<Option<f32>>) {
+    let Interface::Running(host) = &*state else {
+        saved.clear();
+        return;
+    };
+    if let Some(s) = saved.read().last() {
+        host.event("ShowSaving", &["1", &host.text(if s.checkpoint { CHECKPOINT_REACHED } else { SAVING })]);
+        *until = Some(time.elapsed_secs() + SAVING_HOLD);
+    }
+    if until.is_some_and(|t| time.elapsed_secs() >= t) {
+        host.event("ShowSaving", &["0", ""]);
+        *until = None;
     }
 }
 

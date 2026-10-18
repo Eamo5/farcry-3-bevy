@@ -746,6 +746,8 @@ pub struct StoryUi {
     pub subtitle: Option<(String, f32)>,
     /// A large centre banner (mission title, complete, failed).
     pub banner: Option<(String, f32)>,
+    /// A checkpoint the story has just reached (the game is saved with it).
+    pub checkpoint_reached: bool,
     /// Hint texts by id (tutorial boxes): title and text.
     pub hints: HashMap<u64, (String, String)>,
     /// Authored checklist rows, updated and hidden individually by missions.
@@ -2114,6 +2116,7 @@ fn run_story(
                 host.checkpoint = Some(save);
                 host.checkpoint_game_pending = true;
                 host.checkpoint_progress = Some(progress.clone());
+                ui.checkpoint_reached = true;
             }
             Command::MissionState { name, state, block } => {
                 info!("story: {name} {state}");

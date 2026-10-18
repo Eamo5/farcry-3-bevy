@@ -30,6 +30,8 @@ impl Plugin for SavePlugin {
             .init_resource::<SaveContinued>()
             .init_resource::<BackToMenu>()
             .add_message::<ContinueGame>()
+            .add_message::<GameSaved>()
+            .add_message::<SaveRequest>()
             .add_systems(OnExit(GameState::Loading), find_save)
             .add_systems(OnEnter(GameState::Playing), (mark_played, continue_from_args))
             .add_systems(OnEnter(GameState::Paused), save_now)
@@ -209,6 +211,17 @@ pub struct SaveSlot {
 #[derive(Message, Clone, Copy)]
 pub struct ContinueGame;
 
+/// A save written that the player is shown (the original HUD's spinner): at
+/// a story checkpoint, now and then, or asked for.
+#[derive(Message, Clone, Copy)]
+pub struct GameSaved {
+    pub checkpoint: bool,
+}
+
+/// A save asked for (the pause menu's "Save").
+#[derive(Message, Clone, Copy)]
+pub struct SaveRequest;
+
 /// Leaving for the main menu (the pause menu's "Quit"): nothing here unloads
 /// a session (the world, the story's machine), so, once saved, the game
 /// starts again at its menu (`BOOT_MENU`: no logo, no title) and this one
@@ -361,19 +374,24 @@ fn keep_story_checkpoint(world: &mut World) {
     }
 }
 
-fn write_save(slot: &mut SaveSlot, sources: &SaveSources) {
+/// Writes the save; whether it was.
+fn write_save(slot: &mut SaveSlot, sources: &SaveSources) -> bool {
     if !slot.enabled || !slot.played {
-        return;
+        return false;
     }
-    let (Some(path), Some(save)) = (slot.path.clone(), sources.snapshot()) else { return };
+    let (Some(path), Some(save)) = (slot.path.clone(), sources.snapshot()) else { return false };
     let tmp = path.with_extension("tmp");
     let result = std::fs::write(&tmp, save.to_text()).and_then(|_| std::fs::rename(&tmp, &path));
     match result {
         Ok(()) => {
             slot.since_save = 0.0;
             slot.existing = Some(save);
+            true
         }
-        Err(e) => warn!("could not save to {}: {e}", path.display()),
+        Err(e) => {
+            warn!("could not save to {}: {e}", path.display());
+            false
+        }
     }
 }
 
@@ -381,13 +399,32 @@ fn save_now(mut slot: ResMut<SaveSlot>, sources: SaveSources) {
     write_save(&mut slot, &sources);
 }
 
-fn autosave(time: Res<Time<Real>>, state: Res<State<GameState>>, mut slot: ResMut<SaveSlot>, sources: SaveSources) {
+/// Saves now and then in play, at each story checkpoint (the game as it
+/// stands with the story's) and when asked; each told (`GameSaved`).
+#[allow(clippy::too_many_arguments)]
+fn autosave(
+    time: Res<Time<Real>>,
+    state: Res<State<GameState>>,
+    mut slot: ResMut<SaveSlot>,
+    sources: SaveSources,
+    mut story: ResMut<crate::story::StoryUi>,
+    mut requests: MessageReader<SaveRequest>,
+    mut saved: MessageWriter<GameSaved>,
+) {
+    let asked = requests.read().count() > 0;
+    let checkpoint = std::mem::take(&mut story.checkpoint_reached);
+    if asked || checkpoint {
+        if write_save(&mut slot, &sources) {
+            saved.write(GameSaved { checkpoint });
+        }
+        return;
+    }
     if *state.get() != GameState::Playing {
         return;
     }
     slot.since_save += time.delta_secs();
-    if slot.since_save >= AUTOSAVE_SECS {
-        write_save(&mut slot, &sources);
+    if slot.since_save >= AUTOSAVE_SECS && write_save(&mut slot, &sources) {
+        saved.write(GameSaved { checkpoint: false });
     }
 }
 
