@@ -519,9 +519,16 @@ load with an empty movie (`ui/empty.swf`, written to the cache) so the clip
 empties, the loop plays as a backdrop under the interface (`video`, filling
 the window), and the black under the clip goes (`Host::set_path`,
 `_level20.bg.black._visible`).
-`--menu` keeps an automated run at it, `FC3_SAVE` gives it a save, and
-`FC3_FRONTEND_KEYS=Enter,Down,...` presses keys once its home list has been up
-two seconds.
+Before it, the first time, come the Ubisoft logo (`M_LogoUbi.feu`, which
+says `UbiLogoEvent 1` near its end) and the title (`PressStartScreen.feu`,
+over the loop). The title's text is the consoles' "PRESS START" on its
+timeline (`text.mc.Normal_txt` and its shadow's); its class's label and the
+`SetText` it listens for aren't in this build, so the PC's prompt (159971) is
+put in those fields while it shows, and a key or a click (`StartPressed`)
+brings the menu a moment later (the label that would say it has gone isn't
+there either). `--menu` keeps an automated run at it, `FC3_SAVE` gives it a
+save, and `FC3_FRONTEND_KEYS=Enter,Down,...` presses on from the title, then
+presses keys once the home list has been up two seconds.
 
 **Loading screen** (`Loading\GameModes\Singleplayer.feu`, level 60, over
 everything): while a jump keeps the player waiting for the world (the start

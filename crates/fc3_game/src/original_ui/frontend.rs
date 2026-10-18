@@ -23,6 +23,17 @@
 //! answers (`OnOptionLoaded`, `OnRequestOptions`, `SetOptions`).
 //! `FC3_FRONTEND_KEYS=Enter,Down,...` (tests) presses keys once the home
 //! list is up, 0.6 s apart.
+//!
+//! Before it, the first time, come the Ubisoft logo (`M_LogoUbi.feu`: it
+//! says `UbiLogoEvent 1` near its end) and the title, "Press any key."
+//! (`PressStartScreen.feu`: `ProcessInitialScreen PressStart begin`; a key
+//! or a click is its `StartPressed`, and it says `ProcessInitialScreen
+//! PressStart end` once it has gone). Its text is the consoles' "PRESS
+//! START" on its timeline (`text.mc.Normal_txt` and the shadow's `mcB`;
+//! the `SetText` its class listens for has no field here), so the PC's is
+//! put in it while it shows; nor has it the label that says it has gone, so
+//! the menu comes a moment after the key. A run with `FC3_FRONTEND_KEYS`
+//! presses there by itself.
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -31,6 +42,13 @@ use fc3_ui::ExternalValue as V;
 use super::Interface;
 
 const FRONTEND_MOVIE: &str = r"UI\Multiplayer\Menu\MultiMain.feu";
+const LOGO_MOVIE: &str = r"UI\Singleplayer\Menu\MainMenu\M_LogoUbi.feu";
+const PRESS_START_MOVIE: &str = r"UI\Singleplayer\Menu\PressStartScreen\PressStartScreen.feu";
+/// The title's text (PC's), and how long the logo and the title's way out
+/// may take before the menu comes anyway.
+const PRESS_ANY_KEY: u32 = 159971;
+const LOGO_MOST: f32 = 8.0;
+const PRESS_OUT_MOST: f32 = 0.8;
 /// The loop it plays behind (it loads it into a clip; the engine drew it).
 const FRONTEND_VIDEO: &str = r"UI\Singleplayer\Video\Swan_30_Sec_loop.bik";
 const FRONTEND_LEVEL: u32 = 20;
@@ -53,13 +71,38 @@ const CHAPTER: u32 = 158019;
 const MAIN_MISSIONS: u32 = 38;
 const CHAPTERS: u32 = 11;
 
+/// Where the boot has got to: the logo, the title, the menu.
+#[derive(Default, Clone, Copy, PartialEq, Debug)]
+enum Boot {
+    #[default]
+    Logo,
+    Title,
+    Menu,
+}
+
 #[derive(Default)]
 pub(super) struct FrontendShown {
     loaded: bool,
+    boot: Boot,
+    /// When the logo or title came up, and when the title was left.
+    since: Option<std::time::Instant>,
+    started: Option<std::time::Instant>,
     /// The home list is up (the test's keys go then), and when.
     home: Option<std::time::Instant>,
     pressed: usize,
     mouse: Vec2,
+}
+
+/// The menu's loop, under the interface.
+fn backdrop(videos: &mut crate::video::Videos) {
+    videos.requests.push(crate::video::VideoRequest {
+        path: FRONTEND_VIDEO.into(),
+        fullscreen: false,
+        looped: true,
+        volume: 1.0,
+        screen: None,
+        backdrop: true,
+    });
 }
 
 /// A save's chapter (1 to 11, as the page pictures them): how far into the
@@ -126,15 +169,14 @@ pub(super) fn drive_frontend(
             host.answer("VIEWPORT_WIDTH", &fc3_ui::STAGE.0.to_string());
             host.answer("VIEWPORT_HEIGHT", &fc3_ui::STAGE.1.to_string());
             host.level_visible(super::HUD_LEVEL, false);
-            host.load(FRONTEND_MOVIE, FRONTEND_LEVEL);
-            videos.requests.push(crate::video::VideoRequest {
-                path: FRONTEND_VIDEO.into(),
-                fullscreen: false,
-                looped: true,
-                volume: 1.0,
-                screen: None,
-                backdrop: true,
-            });
+            if shown.boot == Boot::Logo {
+                host.load(LOGO_MOVIE, FRONTEND_LEVEL);
+                shown.since = Some(std::time::Instant::now());
+            } else {
+                shown.boot = Boot::Menu;
+                host.load(FRONTEND_MOVIE, FRONTEND_LEVEL);
+                backdrop(&mut videos);
+            }
             // (It draws its own cursor.)
             if let Ok((_, mut cursor)) = windows.single_mut() {
                 cursor.visible = false;
@@ -152,9 +194,25 @@ pub(super) fn drive_frontend(
         return;
     }
     let save = slot.existing.as_ref();
+    // The boot's own steps, and their fallbacks.
+    let waited = shown.since.map_or(0.0, |t| t.elapsed().as_secs_f32());
+    let logo_done = calls.0.iter().any(|c| c.args.first().is_some_and(|a| a == "UbiLogoEvent") && c.args.get(1).is_some_and(|a| a == "1"));
+    if shown.boot == Boot::Logo && (logo_done || waited > LOGO_MOST) {
+        shown.boot = Boot::Title;
+        shown.since = Some(std::time::Instant::now());
+        shown.started = None;
+        host.load(PRESS_START_MOVIE, FRONTEND_LEVEL);
+        backdrop(&mut videos);
+    }
+    let title_done = calls.0.iter().any(|c| c.args.first().is_some_and(|a| a == "ProcessInitialScreen") && c.args.get(2).is_some_and(|a| a == "end"));
+    if shown.boot == Boot::Title && (title_done || shown.started.is_some_and(|t| t.elapsed().as_secs_f32() > PRESS_OUT_MOST)) {
+        shown.boot = Boot::Menu;
+        host.load(FRONTEND_MOVIE, FRONTEND_LEVEL);
+    }
     for call in calls.0.iter().filter(|c| c.command.eq_ignore_ascii_case("Send")) {
         let arg = |i: usize| call.args.get(i).map(String::as_str).unwrap_or("");
         match arg(0) {
+            "UbiLogoEvent" | "ProcessInitialScreen" => {}
             "RequestMultiMainState" => {
                 // (Its loop plays under the interface: the black the engine
                 // drew it over goes.)
@@ -228,7 +286,9 @@ pub(super) fn drive_frontend(
         shown.mouse = m.position;
         host.input(PlayerEvent::MouseMove { x: m.position.x as f64 * scale, y: m.position.y as f64 * scale });
     }
+    let mut clicked = false;
     for b in buttons.read() {
+        clicked |= b.state.is_pressed();
         let button = match b.button {
             bevy::input::mouse::MouseButton::Left => MouseButton::Left,
             bevy::input::mouse::MouseButton::Right => MouseButton::Right,
@@ -238,9 +298,26 @@ pub(super) fn drive_frontend(
         let (x, y) = (shown.mouse.x as f64 * scale, shown.mouse.y as f64 * scale);
         host.input(if b.state.is_pressed() { PlayerEvent::MouseDown { x, y, button, index: None } } else { PlayerEvent::MouseUp { x, y, button } });
     }
+    let mut pressed_any = false;
     for k in keys.read() {
+        pressed_any |= k.state.is_pressed();
         let Some(key) = super::movie_key(k.key_code) else { continue };
         host.input(if k.state.is_pressed() { PlayerEvent::KeyDown { key } } else { PlayerEvent::KeyUp { key } });
+    }
+    // (The PC's text, kept in its fields as its timeline plays.)
+    if shown.boot == Boot::Title {
+        let text = host.text(PRESS_ANY_KEY).to_uppercase();
+        for clip in ["mc", "mcB"] {
+            host.set_path(&format!("_level{FRONTEND_LEVEL}.text.{clip}.Normal_txt.text"), V::String(text.clone()));
+        }
+    }
+    // The title goes with any key or click (or by itself in a test).
+    if shown.boot == Boot::Title && shown.started.is_none() {
+        let test = std::env::var_os("FC3_FRONTEND_KEYS").is_some() && waited > 2.0;
+        if pressed_any || clicked || test {
+            host.event("StartPressed", &[]);
+            shown.started = Some(std::time::Instant::now());
+        }
     }
     // FC3_FRONTEND_KEYS (tests): keys pressed one by one once the home list
     // has been up two seconds.
