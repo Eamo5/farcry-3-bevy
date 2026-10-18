@@ -1253,7 +1253,7 @@ fn run_story(
         ResMut<EntityPlacements>,
         Res<crate::hud::OriginalHud>,
     ),
-    (actions, mut markers, heights, mut voices, driving, vehicle_views, mut seat_requests, mut vehicle_paths, mut drive, guns): (
+    (actions, mut markers, heights, mut voices, driving, vehicle_views, mut seat_requests, mut vehicle_paths, mut drive, guns, helis): (
         Res<crate::controls::ActionState>,
         ResMut<ObjectiveMarkers>,
         Res<crate::terrain::Heightfield>,
@@ -1264,6 +1264,7 @@ fn run_story(
         ResMut<crate::vehicle_paths::StoryVehiclePaths>,
         ResMut<crate::vehicles::AutopilotDrive>,
         Query<&crate::turrets::Turret>,
+        Query<(&crate::story_helis::Heli, &Transform, &crate::combat::Health), Without<Player>>,
     ),
     (info, slot, fov, mut bought, mut towers, ways, mut looted, loot_catalog, mut crafted, mut crafting): (
         Res<CacheInfo>,
@@ -1478,6 +1479,10 @@ fn run_story(
     view.player_state.skills = progress.skills.iter().map(|s| s.to_ascii_lowercase()).chain(perks.plans.iter().cloned()).collect();
     view.player_state.on_zipline = matches!(*mount, crate::traversal::Mount::Zip { .. });
     view.player_state.look_angles = [p.pitch.to_degrees(), 0.0, -p.yaw.to_degrees()];
+    // (Story helicopters too: G3's trial's, flying in.)
+    for (heli, at, health) in &helis {
+        view.spawned.insert(heli.vehicle, fc3_story::Live { pos: to_dunia(at.translation), alive: !health.dead, health: health.current, ai_state: 0 });
+    }
     for (entity, vehicle, at, health) in &vehicle_views {
         view.spawned.insert(vehicle.story_id(), fc3_story::Live { pos: to_dunia(at.translation), alive: health.is_none_or(|h| !h.dead),
             health: health.map_or(1.0, |h| h.current), ai_state: 0 });

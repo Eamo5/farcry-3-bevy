@@ -115,7 +115,7 @@ impl Ride {
 pub struct Rides(pub Vec<Ride>);
 
 /// The model an entity is drawn with (its graphic's first `.xbg`).
-fn model_of(entry: &fc3_story::data::Entry) -> Option<String> {
+pub(crate) fn model_of(entry: &fc3_story::data::Entry) -> Option<String> {
     let mut model = None;
     entry.component("CGraphicComponent")?.walk(&mut |o, _| {
         if model.is_none() {

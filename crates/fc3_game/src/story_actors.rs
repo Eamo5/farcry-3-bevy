@@ -123,7 +123,7 @@ fn land_reinforcements(
     host: Option<NonSendMut<StoryHost>>,
     heights: Res<crate::terrain::Heightfield>,
     mut arrivals: ResMut<Arrivals>,
-    mut rides: ResMut<crate::story_rides::Rides>,
+    (mut rides, mut flights, server): (ResMut<crate::story_rides::Rides>, ResMut<crate::story_helis::Flights>, Res<AssetServer>),
     players: Query<&Transform, With<Player>>,
 ) {
     let Some(mut host) = host else { return };
@@ -144,6 +144,27 @@ fn land_reinforcements(
         let path_id = rp.and_then(|rp| rp.u64("entVehiclePathId").or_else(|| rp.u64("entPathId")).filter(|&p| p != u64::MAX));
         let points = path_id.and_then(|p| data.entities.get(&p)).and_then(|p| shape_points(&p.fields)).unwrap_or_default();
         let field = order.battlefield.and_then(|b| data.entities.get(&b)).map(|b| to_bevy(b.pos));
+        // Flying in: the whole of its way, the crew aboard from its start.
+        let heli = order.vehicle.and_then(|(_, ark)| data.archetypes.get(&ark)).and_then(crate::story_helis::heli_data);
+        if let (Some((vehicle, _)), Some(heli), true) = (order.vehicle, heli, points.len() >= 2) {
+            let speed = rp.and_then(|rp| rp.f32("VehicleMaxSpeed")).filter(|s| *s > 0.0).unwrap_or(15.0);
+            let land = rp.and_then(|rp| rp.bool("bVehicleLandOnArrival")).unwrap_or(false);
+            let mut crew = Vec::new();
+            for (id, ark) in &order.mercs {
+                let Some(archetype) = data.archetypes.get(ark) else {
+                    warn!("story: reinforcement archetype {ark:016x} isn't in the cache (reconvert)");
+                    continue;
+                };
+                let mut e = archetype.clone();
+                e.id = *id;
+                e.pos = crate::data::to_dunia(points[0]);
+                arrivals.0.push((e, None));
+                crew.push(*id);
+            }
+            debug!("story: reinforcement helicopter {vehicle} flies in along {path_id:?}, {} aboard", crew.len());
+            flights.0.push(crate::story_helis::Flight::new(&server, vehicle, heli, points.clone(), speed, land, crew, field));
+            continue;
+        }
         // Riding in: from where its way comes into reach of the player (the
         // crew are only in the world that near), the crew beside the vehicle.
         let def = order.vehicle.and_then(|(_, ark)| data.archetypes.get(&ark)).and_then(crate::story_rides::vehicle_def);
@@ -600,6 +621,10 @@ fn spawn_actors(
             }
         }
         commands.entity(root).insert(StoryActor::new(e.id, rig, fighter.is_some()));
+        // What killing him scores in a trial (his kind's bonus).
+        if let Some(kind) = e.component("CFCXChallengeBonusComponent").and_then(|c| c.u32("selIncrementType")).filter(|k| *k != 0) {
+            commands.entity(root).insert(crate::trials::ChallengeBonus(kind));
+        }
         if e.component("CAnimalNetworkComponent").is_some()
             || e.component("CFCXCountersComponentAnimal").is_some()
             || e.component("CAIDogNetworkComponent").is_some()

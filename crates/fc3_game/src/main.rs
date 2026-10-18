@@ -96,6 +96,7 @@ mod story;
 mod story_actors;
 mod story_alarms;
 mod story_props;
+mod story_helis;
 mod story_rides;
 mod surfaces;
 mod syringes;
@@ -472,6 +473,7 @@ fn main() {
         .add_plugins(story_alarms::StoryAlarmsPlugin)
         .add_plugins(story_props::StoryPropsPlugin)
         .add_plugins(story_rides::StoryRidesPlugin)
+        .add_plugins(story_helis::StoryHelisPlugin)
         .add_plugins(tree_growth::TreeGrowthPlugin)
         .add_plugins(overlays::OverlaysPlugin)
         .add_plugins(encounter_talk::EncounterTalkPlugin)

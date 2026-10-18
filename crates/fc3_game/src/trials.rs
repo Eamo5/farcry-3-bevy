@@ -259,6 +259,11 @@ fn load_table(root: &std::path::Path) -> anyhow::Result<Table> {
 
 /// A man's kind, as the score rules count kills (the game's classes by
 /// our roles).
+/// What killing a story character scores in a trial: his archetype's
+/// bonus kind (`CFCXChallengeBonusComponent`'s `selIncrementType`).
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChallengeBonus(pub u32);
+
 fn kind_of(role: crate::npc::Role) -> u32 {
     use crate::npc::Role::*;
     match role {
@@ -300,7 +305,11 @@ fn run(
     (mut actions, settings, original): (ResMut<crate::controls::ActionState>, Res<crate::settings::Settings>, Res<crate::hud::OriginalHud>),
     (mut progress, mut hud, mut next): (ResMut<crate::progression::Progress>, ResMut<crate::hud::HudState>, ResMut<NextState<crate::menu::GameState>>),
     mut players: Query<(Entity, &mut Transform, &mut Player, &mut crate::weapons::Inventory, &mut crate::combat::PlayerStats, &crate::combat::Health)>,
-    (npcs, added): (Query<&crate::npc::Npc>, Query<(Entity, &GlobalTransform), Or<(Added<crate::npc::Npc>, Added<crate::vehicles::Vehicle>)>>),
+    (npcs, added, bonuses): (
+        Query<&crate::npc::Npc>,
+        Query<(Entity, &GlobalTransform), Or<(Added<crate::npc::Npc>, Added<crate::vehicles::Vehicle>, Added<crate::story_helis::Heli>)>>,
+        Query<&ChallengeBonus>,
+    ),
     (mut kills, mut died): (MessageReader<crate::progression::PlayerKilled>, MessageReader<crate::combat::Died>),
     (mut xp, mut sfx): (MessageWriter<crate::progression::XpGain>, MessageWriter<crate::sound::PlaySfx>),
     (mut world_hits, mut blasts, placed, parents): (
@@ -474,10 +483,20 @@ fn run(
             }
             // The kills, by kind and how.
             for k in kills.read() {
-                let Ok(npc) = npcs.get(k.victim) else { continue };
+                let Ok(npc) = npcs.get(k.victim) else {
+                    debug!("trials: a kill ({:?}) that wasn't a man's", k.victim);
+                    continue;
+                };
+                // By his own kind where he has one (a helicopter's crew are
+                // defenders), else by his role.
+                let kind = bonuses.get(k.victim).map_or_else(|_| kind_of(npc.role), |b| b.0);
+                debug!(
+                    "trials: killed {:?} ({:?}, kind {kind:#x}, headshot {}, unaware {}, takedown {})",
+                    k.victim, npc.role, k.headshot, k.unaware, k.takedown
+                );
                 let rule = |bit: u32| table.rules.iter().find(|x| x.bonus == bit && !x.time);
                 let mut scored = Vec::new();
-                if let Some(rule) = rule(kind_of(npc.role)) {
+                if let Some(rule) = rule(kind) {
                     scored.push((0, rule));
                 }
                 for (on, bit, kind) in [(k.headshot, bonus::HEADSHOT, 1), (k.unaware && !k.takedown, bonus::STEALTH, 2), (k.takedown, bonus::TAKEDOWN, 3)] {

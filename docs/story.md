@@ -3355,6 +3355,24 @@ the truck then sets off on its last path.
   `SeatsInfo` where a vehicle is placed), so a ride takes them from a
   placed vehicle drawn with the same model. In DEN_020 B30 the pirates'
   two boats and then the rebels' come in that way and the block completes.
+* **Reinforcements by helicopter.** A point whose vehicle is a helicopter
+  (`CVehicleHelicopterPhysComponent`: the Blackhawk) has it fly
+  (`story_helis`): made at its way's start, it flies the whole way at
+  `VehicleMaxSpeed`, its crew aboard (hidden in their seats, the pilot
+  first, then the belly gunner), holding a few metres over the ground.
+  At the end it hovers facing the player, the gunner firing bursts while
+  he can see him (`TURRET_BELLY`), or, where the point says
+  (`bVehicleLandOnArrival`), it sets down and the crew get out to search.
+  Its own data gives its health and what rounds and rockets do to it
+  (`fMaxHealth` 200, `fPierceDamageMultiplier` 0.1,
+  `fExplosionRPGDamageMultiplier` 10: one rocket brings it down). Brought
+  down (or its pilot killed) it falls spinning and burning, its crew
+  killed with it by whoever brought it down, crashes in a blast, and
+  leaves the Blackhawk's wreck model; the scripts hear it destroyed
+  (`CDestroyEvent`) and see it in the world while it flies. Its rotors
+  turn about their own nodes once the converter has given the rotor parts
+  pivots (`ROTOR`, `TAILROTOR`; a model converted before shows them
+  still). No rotor sound yet: the Blackhawk names none.
 * **Called-in characters left behind.** A called-in character beyond the
   despawn range was gone for good while the story still counted it; it
   now waits to come back where it was when the player returns.
@@ -4828,6 +4846,16 @@ cache as they are, and the challenge manager's template (the rewards: $250,
   weapon's name id, its class, its ammo; drawn again when the weapon given
   was already in hand): F3's trial hands over one weapon after another,
   each once the last has killed (seen: the 1911, the Skorpion, the 1887).
+* **Helicopters.** G3's trial is the player's rocket launcher against
+  wave on wave of Blackhawks (fifteen in its 90 s), each with two
+  defenders aboard; they fly in and hover round the bunker, their gunners
+  firing (see the reinforcements above). A kill scores by the man's own
+  kind (`CFCXChallengeBonusComponent`'s `selIncrementType`, kept on the
+  character as `trials::ChallengeBonus`), else by his role: a helicopter's
+  crew are defenders, 10 each. `FC3_HELI_DOWN=<s>` (tests) has the player
+  bring down each helicopter hovering that long, `FC3_HELI_LOOK` turns the
+  view onto the nearest, `FC3_HELI_SHOTS=<dir>` captures one hovering,
+  falling and wrecked. Seen: G3 with them, 200 points, done.
 * **Vehicles spawned.** A vehicle archetype the scripts spawn
   (`SpawnEntityFromArchetype`, `story_props`) is made a vehicle with its
   seats: F4's DShK technical, the player put at its gun.
@@ -4864,8 +4892,7 @@ cache as they are, and the challenge manager's template (the rewards: $250,
   entity puts anything there, the sector collision (`sectcol*.hkx`) has
   nothing at that height, and the road splines stop at the banks
   (`fc3tool entities-near ... --meta`, `nav-near`, `hkx-file`,
-  `preload`); the helicopters G3's and C7's waves fly in (they land at
-  their path's end), the loading screen, and the other natives the trials
+  `preload`); the loading screen, and the other natives the trials
   call that do nothing yet (`SwitchArmy`, tagging, `DisplayCustomUIMsg`,
   `RefillWeaponAmmo`, `SelectThrowGadget`).
 
