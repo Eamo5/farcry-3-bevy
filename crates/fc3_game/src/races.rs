@@ -58,6 +58,8 @@ pub struct Entice {
     pub id: u64,
     pub keeper: u64,
     pub set: usize,
+    /// A shooting gallery's keeper (his lines are the galleries').
+    pub gallery: bool,
 }
 
 /// The races the story asks for, the gates registered, the keepers
@@ -259,6 +261,7 @@ const RESULT_WAIT: f32 = 6.0;
 const ROWS: usize = 4;
 /// How near (m) a keeper calls the player over, and how often (s).
 const ENTICE_REACH: f32 = 15.0;
+pub const GALLERY_ENTICE: &str = "CShootingGalleryEnticeSystem";
 const ENTICE_EVERY: [f32; 2] = [10.0, 20.0];
 
 /// A race's gameplay (not its entice system or its resources).
@@ -266,9 +269,9 @@ pub fn race_gameplay(name: &str) -> bool {
     name.starts_with("CRacingMiniGame_")
 }
 
-/// A keeper's entice system.
+/// A keeper's entice system (a race's or a shooting gallery's).
 pub fn entice_gameplay(name: &str) -> bool {
-    name == "CRacingMiniGameEnticeSystem"
+    name == "CRacingMiniGameEnticeSystem" || name == GALLERY_ENTICE
 }
 
 /// A marker on the vehicles a race made.
@@ -740,26 +743,30 @@ fn run(
 }
 
 /// The keepers calling the player over (their entice lines, now and then,
-/// while he's near and no race runs).
+/// while he's near and no race or gallery runs).
+#[allow(clippy::too_many_arguments)]
 fn entice(
     races: Res<Races>,
+    gallery: Res<crate::shooting_gallery::Gallery>,
     host: Option<NonSend<crate::story::StoryHost>>,
     info: Option<Res<crate::CacheInfo>>,
     players: Query<&Transform, With<Player>>,
     time: Res<Time>,
-    mut sounds: Local<Option<RaceResources>>,
+    mut sounds: Local<Option<(Vec<[Vec<u32>; 4]>, Vec<[Vec<u32>; 4]>)>>,
     mut next: Local<HashMap<u64, f32>>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
 ) {
     let (Some(host), Ok(pt)) = (host, players.single()) else { return };
-    if races.entices.is_empty() || races.run.is_some() {
+    if races.entices.is_empty() || races.run.is_some() || gallery.screen.is_some() {
         return;
     }
     if sounds.is_none() {
         let bytes = info.as_ref().and_then(|i| std::fs::read(i.root.join(fc3_formats::gsf::CACHE_REL)).ok()).unwrap_or_default();
-        *sounds = Some(RaceResources::parse(&bytes).unwrap_or_default());
+        let races = RaceResources::parse(&bytes).unwrap_or_default().keepers;
+        let galleries = fc3_formats::gsf::ShootingGalleryResources::parse(&bytes).map(|g| g.keepers).unwrap_or_default();
+        *sounds = Some((races, galleries));
     }
-    let Some(sounds) = sounds.as_ref() else { return };
+    let Some((race_keepers, gallery_keepers)) = sounds.as_ref() else { return };
     let now = time.elapsed_secs();
     let data = host.story.data();
     for e in &races.entices {
@@ -771,7 +778,8 @@ fn entice(
         if now < *due {
             continue;
         }
-        let lines = sounds.keepers.get(e.set).or(sounds.keepers.first()).map(|k| k[0].as_slice()).unwrap_or_default();
+        let keepers = if e.gallery { gallery_keepers } else { race_keepers };
+        let lines = keepers.get(e.set).or(keepers.first()).map(|k| k[0].as_slice()).unwrap_or_default();
         if let Some(&line) = lines.get((now * 13.0) as usize % lines.len().max(1)) {
             sfx.write(crate::sound::PlaySfx { event: line, at: Some(at + Vec3::Y * 1.6), volume: 1.0 });
         }

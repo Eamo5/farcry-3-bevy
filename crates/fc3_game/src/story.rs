@@ -2319,7 +2319,7 @@ fn run_story(
                         name: a(1),
                         params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                     }),
-                    // A race's keeper calling the player over.
+                    // A race's (or a gallery's) keeper calling the player over.
                     "CreateSpecificGameplay" if crate::races::entice_gameplay(&a(1)) => {
                         let param = |k: &str| args.iter().skip(2).find_map(|p| p.strip_prefix(k).and_then(|v| v.strip_prefix('=')));
                         if let Some(keeper) = param("EnticeSystemSettings/hidChallengeKeeper/EntityID").and_then(|v| v.parse().ok()) {
@@ -2328,6 +2328,7 @@ fn run_story(
                                 id: a(0).parse().unwrap_or(0),
                                 keeper,
                                 set: param("hidAIDialogIndex").and_then(|v| v.parse().ok()).unwrap_or(0),
+                                gallery: a(1) == crate::races::GALLERY_ENTICE,
                             });
                         }
                     }

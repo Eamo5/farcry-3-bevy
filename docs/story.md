@@ -4703,6 +4703,11 @@ galleries' resources (`gsf::ShootingGallerySettings`,
   gallery's winnings; the last wave over without it, it's lost. Enter
   plays again (the difficulty box), Escape leaves: the finish or fail
   message goes to the keeper.
+* **The keeper calls the player over** (`CShootingGalleryEnticeSystem`,
+  which ended unplayed a second in): as a race's keeper does, with the
+  galleries' own lines (the resources' four `AIDialogSettings` sets, by the
+  keeper's `hidAIDialogIndex`), now and then while the player is near and
+  no gallery or race runs.
 * **The autopilot** leaves the player at a gallery (as at the sniping
   challenge); with `FC3_GALLERY_TEST=<row>` that row is chosen and the
   birds are shot through the sights, and `FC3_GALLERY_SHOTS=<dir>`

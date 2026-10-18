@@ -511,7 +511,8 @@ impl ShootingGallerySettings {
 }
 
 /// The galleries' shared resources (`CShootingGalleryResourceContainer`): the
-/// weapons and birds they pick by index, and the countdown's sounds.
+/// weapons and birds they pick by index, the countdown's sounds, and the
+/// keepers' four sets of lines (as the races' keepers have them).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ShootingGalleryResources {
     /// A weapon archetype (`weapons:FC3/KW1911`), and whether it's mounted.
@@ -519,6 +520,19 @@ pub struct ShootingGalleryResources {
     pub animals: Vec<GalleryAnimal>,
     pub countdown_sound: u32,
     pub ready_sound: u32,
+    pub keepers: Vec<[Vec<u32>; 4]>,
+}
+
+/// A keepers' dialog sets (`AIDialogSettings`): each one's lines enticing,
+/// quitting, the player failing and the player winning.
+fn keeper_lines(audio: &Object) -> Vec<[Vec<u32>; 4]> {
+    let gear = |list: Option<&std::sync::Arc<Object>>| -> Vec<u32> {
+        list.map(|l| l.children.iter().map(|g| sound_id(g, "GearString")).filter(|&i| i != 0).collect()).unwrap_or_default()
+    };
+    audio
+        .child("AIDialogSettings")
+        .map(|d| d.children.iter().map(|k| ["AIEnticeSound", "AIQuitSound", "AIFailureSound", "AISuccessSound"].map(|n| gear(k.child(n)))).collect())
+        .unwrap_or_default()
 }
 
 /// A gallery's bird: its archetype, its flight, death and impact clips, and
@@ -577,6 +591,7 @@ impl ShootingGalleryResources {
             animals,
             countdown_sound: audio.map_or(0, |a| sound_id(a, "CountDownEachSecond")),
             ready_sound: audio.map_or(0, |a| sound_id(a, "GetReadySound")),
+            keepers: audio.map(|a| keeper_lines(a)).unwrap_or_default(),
         };
         ensure!(!s.weapons.is_empty() && !s.animals.is_empty(), "shooting gallery resources without weapons or birds");
         Ok(s)
@@ -740,15 +755,9 @@ impl RaceResources {
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         let o = entry(bytes, RACE_RESOURCES)?;
         let audio = o.child("AudioSettings").context("race resources without their audio")?;
-        let gear = |list: Option<&std::sync::Arc<Object>>| -> Vec<u32> {
-            list.map(|l| l.children.iter().map(|g| sound_id(g, "GearString")).filter(|&i| i != 0).collect()).unwrap_or_default()
-        };
         let player = audio.child("PlayerDialogSettings");
         let line = |n: &str| player.map_or(0, |p| sound_id(p, n));
-        let keepers = audio
-            .child("AIDialogSettings")
-            .map(|d| d.children.iter().map(|k| ["AIEnticeSound", "AIQuitSound", "AIFailureSound", "AISuccessSound"].map(|n| gear(k.child(n)))).collect())
-            .unwrap_or_default();
+        let keepers = keeper_lines(audio);
         let waypoint = audio.child("WaypoingSettings");
         Ok(Self {
             out_of_time: sound_id(audio, "sndOutOfTimeSound"),
@@ -974,6 +983,7 @@ mod tests {
         assert!(r.animals[1].fly.ends_with("seagull_fulb_flycycle_+000fw_nowep.mab"), "{}", r.animals[1].fly);
         assert!(r.animals[0].death.contains("shootinggallery") && r.animals[0].release_sound != 0);
         assert!(r.countdown_sound != 0 && r.ready_sound != 0);
+        assert!(r.keepers.len() == 4 && r.keepers.iter().all(|k| k[0].len() == 4), "{:?}", r.keepers);
     }
 
     #[test]
