@@ -420,6 +420,9 @@ pub struct Progress {
     pub towers: std::collections::BTreeSet<u32>,
     /// Treasure maps bought (their shop ids: `treasure_maps`).
     pub maps: std::collections::BTreeSet<u32>,
+    /// Guns bought (by name): owned whether carried or not, the shop's equip
+    /// wheel puts them back in a holster for nothing.
+    pub owned: std::collections::BTreeSet<String>,
     /// Collectibles found: relics, lost letters, memory cards.
     pub relics: u32,
     pub letters: u32,
@@ -470,6 +473,7 @@ impl Default for Progress {
             outposts: 0,
             towers: Default::default(),
             maps: Default::default(),
+            owned: Default::default(),
             relics: 0,
             letters: 0,
             cards: 0,
@@ -575,6 +579,9 @@ impl Progress {
         for m in &self.maps {
             s += &format!("map {m}\n");
         }
+        for w in &self.owned {
+            s += &format!("owned {w}\n");
+        }
         s += &format!("collectibles {} {} {}\n", self.relics, self.letters, self.cards);
         let list = |v: &[u32]| v.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(" ");
         s += &format!("plants {}\n", list(&self.plants));
@@ -636,6 +643,9 @@ impl Progress {
                 if let Ok(id) = rest.trim().parse() {
                     self.maps.insert(id);
                 }
+            }
+            "owned" => {
+                self.owned.insert(rest.trim().to_string());
             }
             "upgrade" => {
                 if let (Some(k), Some(v)) = (it.next(), it.next().and_then(|v| v.parse().ok())) {
@@ -2682,11 +2692,31 @@ fn purchase_weapon(inv: &mut Inventory, progress: &mut Progress, perks: &Perks, 
     match granted {
         crate::weapons::Granted::New | crate::weapons::Granted::Swapped(_) => {
             progress.spend(price);
+            progress.owned.insert(name.to_string());
             info!("shop: purchased {name} for ${price}, balance ${}", progress.money);
             Some((ItemBought { model: Some(inv.defs[def].model_path()) }, granted))
         }
         crate::weapons::Granted::Ammo => None,
     }
+}
+
+/// Whether every holster has a gun in it.
+pub(crate) fn holsters_full(inv: &Inventory, perks: &Perks) -> bool {
+    inv.slots.iter().filter(|s| inv.defs[s.def].class != crate::weapons::WeaponClass::Melee).count() >= perks.weapon_slots.max(1)
+}
+
+/// A gun bought with every holster full: paid for and owned, for the shop's
+/// equip wheel to put in one.
+pub(crate) fn buy_to_own(inv: &Inventory, progress: &mut Progress, catalog: &ShopCatalog, def: usize) -> Option<ItemBought> {
+    let d = inv.defs.get(def)?;
+    let price = ShopItem::Weapon(def).price(inv, progress.towers.len(), catalog);
+    if progress.money < price || progress.owned.contains(d.name) || inv.slots.iter().any(|s| s.def == def) {
+        return None;
+    }
+    progress.spend(price);
+    progress.owned.insert(d.name.to_string());
+    info!("shop: purchased {} for ${price} (to equip), balance ${}", d.name, progress.money);
+    Some(ItemBought { model: Some(d.model_path()) })
 }
 
 fn shop_tab(class: crate::weapons::WeaponClass) -> usize {
@@ -3863,6 +3893,32 @@ mod shop_tests {
             }]),
             def,
         )
+    }
+
+    #[test]
+    fn a_gun_bought_with_full_holsters_is_owned_and_the_equip_wheel_puts_it_in_one() {
+        let mut inv = inventory();
+        let def = |inv: &Inventory, name: &str| inv.defs.iter().position(|d| d.name == name).unwrap();
+        let (mp5, ak, svd) = (def(&inv, "MP5 SMG"), def(&inv, "AK-74M Rifle"), def(&inv, "SVD"));
+        inv.slots.extend([crate::weapons::WeaponSlot { def: mp5, mag: 0, reserve: 0 }, crate::weapons::WeaponSlot { def: ak, mag: 0, reserve: 0 }]);
+        let perks = Perks { weapon_slots: 2, ..Default::default() };
+        assert!(holsters_full(&inv, &perks));
+        let mut progress = Progress { money: 10_000, ..Default::default() };
+        assert!(buy_to_own(&inv, &mut progress, &ShopCatalog::default(), svd).is_some());
+        assert!(progress.owned.contains("SVD") && !inv.slots.iter().any(|s| s.def == svd));
+        // (Owned: not bought twice.)
+        assert!(buy_to_own(&inv, &mut progress, &ShopCatalog::default(), svd).is_none());
+        // The second holster: the rifle there is put by.
+        assert!(crate::weapons::equip_gun(&mut inv, svd, 1, perks.weapon_slots));
+        assert!(inv.slots.iter().any(|s| s.def == svd) && !inv.slots.iter().any(|s| s.def == ak));
+        // A holster the player hasn't the room for stays shut.
+        assert!(!crate::weapons::equip_gun(&mut inv, ak, 3, perks.weapon_slots));
+        let mut back = Progress::default();
+        for line in progress.to_lines().lines() {
+            let (key, rest) = line.split_once(' ').unwrap_or((line, ""));
+            back.read_line(key, rest);
+        }
+        assert!(back.owned.contains("SVD"));
     }
 
     #[test]

@@ -1164,6 +1164,30 @@ pub fn grant_weapon(inv: &mut Inventory, name: &str, max_guns: usize) -> Granted
     result
 }
 
+/// Puts a gun in a place of the shop's equip wheel (the holsters: the guns
+/// carried, in order), taking the place of the one there, or a free place
+/// while the holsters have room. It comes as bought: a full magazine and
+/// two more.
+pub fn equip_gun(inv: &mut Inventory, def: usize, place: usize, max_guns: usize) -> bool {
+    if inv.defs.get(def).is_none_or(|d| d.class == WeaponClass::Melee) || inv.slots.iter().any(|s| s.def == def) {
+        return false;
+    }
+    let guns: Vec<usize> = (0..inv.slots.len()).filter(|&i| inv.defs[inv.slots[i].def].class != WeaponClass::Melee).collect();
+    let d = &inv.defs[def];
+    let slot = WeaponSlot { def, mag: d.magazine, reserve: d.magazine * 2 };
+    if let Some(&i) = guns.get(place) {
+        inv.slots[i] = slot;
+    } else if place < max_guns.max(1) && guns.len() < max_guns.max(1) {
+        inv.slots.push(slot);
+    } else {
+        return false;
+    }
+    settle_unarmed(inv);
+    inv.slots.sort_by_key(|s| s.def);
+    inv.current = inv.slots.iter().position(|s| s.def == def).unwrap_or(0);
+    true
+}
+
 /// Clock and state for the scripted `--fire-test` run.
 #[derive(Resource, Default)]
 pub struct TestScript {

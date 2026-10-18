@@ -53,6 +53,9 @@ pub(super) struct ShopPage {
     tried: bool,
     /// A tutorial's weapon to open on, once the subcategories are in.
     override_pending: bool,
+    /// The gun the equip wheel is putting in a holster.
+    equipping: Option<usize>,
+    equip_tested: bool,
 }
 
 /// A button's kind (`C_ButtonShop.C_TYPE_*`).
@@ -187,8 +190,41 @@ impl Stock<'_> {
             .collect()
     }
 
-    fn owned(&self, def: usize) -> bool {
+    fn in_holster(&self, def: usize) -> bool {
         self.inv.slots.iter().any(|s| s.def == def)
+    }
+
+    /// Carried, or bought and put by.
+    fn owned(&self, def: usize) -> bool {
+        self.in_holster(def) || self.progress.owned.contains(self.inv.defs[def].name)
+    }
+
+    /// The equip wheel (`DataEquip`): the four holsters (the guns carried,
+    /// in order; a place without one open while the holsters have room,
+    /// locked beyond), and the gun to put in one.
+    fn equip(&self, def: usize) -> Vec<Row> {
+        let shown = |d: usize| match self.catalog.weapon(self.inv, d) {
+            Some(w) => (self.text(w.name_id, self.inv.defs[d].name), w.icon.clone()),
+            None => (self.inv.defs[d].name.to_string(), String::new()),
+        };
+        let guns: Vec<usize> = self.inv.slots.iter().map(|s| s.def).filter(|&d| self.inv.defs[d].class != crate::weapons::WeaponClass::Melee).collect();
+        let mut rows: Vec<Row> = (0..crate::weapon_wheel::PLACES)
+            .map(|p| {
+                let gun = guns.get(p).copied();
+                let (name, image) = gun.map(shown).unwrap_or_default();
+                let state = if p >= self.perks.weapon_slots.max(1) {
+                    LOCK
+                } else if gun.is_some() {
+                    BOUGHT
+                } else {
+                    AVAILABLE
+                };
+                row(vec![("sName", V::String(name)), ("sImage", V::String(image)), ("iStateID", n(state)), ("iObjectID", n(p as f64))])
+            })
+            .collect();
+        let (name, image) = shown(def);
+        rows.push(row(vec![("sName", V::String(name)), ("sImage", V::String(image)), ("iStateID", n(BOUGHT))]));
+        rows
     }
 
     /// A gun owned that takes an attachment or a paint.
@@ -218,8 +254,8 @@ impl Stock<'_> {
             ("iHandling", n(bar(w.stats[4]))),
             ("fRating", n(w.rating)),
             ("bCustomizable", V::Bool(custom)),
-            // (A melee weapon owned is the one in hand.)
-            ("bEquip", V::Bool(owned && kind == MELEE)),
+            // (In a holster; a melee weapon owned is the one in hand.)
+            ("bEquip", V::Bool(self.in_holster(def))),
             ("bNew", V::Bool(false)),
             ("bChallenge", V::Bool(false)),
         ])
@@ -451,6 +487,7 @@ pub(super) fn drive_shop_page(
             }
         };
     }
+    let mut equip_test = false;
     for call in calls {
         let arg = |i: usize| call.args.get(i).map(String::as_str).unwrap_or("");
         let number = |i: usize| arg(i).parse::<f64>().map_or(-1, |v| v as i64);
@@ -507,12 +544,40 @@ pub(super) fn drive_shop_page(
                         .into_iter()
                         .find(|l| matches!(l, ShopItem::Supply(s, _) if i64::from(*s) == id))
                 };
-                if let Some(item) = item {
+                // (A gun with every holster full is bought to own, and the
+                // equip wheel opens for it.)
+                if let Some(ShopItem::Weapon(def)) = item.filter(|_| kind == WEAPON && crate::progression::holsters_full(&inv, &perks)) {
+                    if let Some(b) = crate::progression::buy_to_own(&inv, &mut progress, &catalog, def) {
+                        bought.write(b);
+                        page.equipping = Some(def);
+                        let s = stock!();
+                        host.set_data("DataEquip", s.equip(def));
+                    }
+                    (resend, changed) = (true, true);
+                } else if let Some(item) = item {
                     if let Some(b) = crate::progression::trade(item, &mut inv, &mut stats, &mut progress, &perks, &catalog, crafting, &mut hud) {
                         bought.write(b);
                     }
                     (resend, changed) = (true, true);
                 }
+            }
+            // A gun owned to put in a holster: the equip wheel.
+            "OnEquipRequest" => {
+                let s = stock!();
+                if let Some(def) = s.weapon_def(number(1)).filter(|&d| s.owned(d) && !s.in_holster(d)) {
+                    host.set_data("DataEquip", s.equip(def));
+                    page.equipping = Some(def);
+                }
+            }
+            // The holster chosen: the gun goes in it (the one there put by).
+            "OnWeaponEquip" => {
+                let Some(def) = page.equipping.take() else { continue };
+                let place = usize::try_from(number(1)).unwrap_or(usize::MAX);
+                if crate::weapons::equip_gun(&mut inv, def, place, perks.weapon_slots) {
+                    info!("shop: equipped {} in holster {place}", inv.defs[def].name);
+                }
+                host.event("HideEquip", &[]);
+                (resend, changed) = (true, true);
             }
             // A sight bought before back on, or a paint taken off (or put on).
             "EquipAttachment" => {
@@ -549,15 +614,7 @@ pub(super) fn drive_shop_page(
                 crate::progression::trade(ShopItem::SellAll, &mut inv, &mut stats, &mut progress, &perks, &catalog, crafting, &mut hud);
                 (resend, changed) = (true, true);
             }
-            "SortSell"
-            | "OnWeaponEquip"
-            | "OnEquipRequest"
-            | "OnMeleeEquip"
-            | "onSeen"
-            | "onRequestWeapon3D"
-            | "onRequestItem3D"
-            | "onRequestAttachment3D"
-            | "onRequestCategory3D" => {}
+            "SortSell" | "OnMeleeEquip" | "onSeen" | "onRequestWeapon3D" | "onRequestItem3D" | "onRequestAttachment3D" | "onRequestCategory3D" => {}
             other => debug!("original UI: shop page {other} {:?} not handled yet", call.args.get(1..)),
         }
         let s = stock!();
@@ -585,6 +642,7 @@ pub(super) fn drive_shop_page(
                 _ => Vec::new(),
             };
             host.set_data(&list, rows);
+            equip_test |= list == "DataSub1Category";
             // A tutorial's weapon, once the page has its subcategories.
             if list == "DataSub1Category" && page.override_pending {
                 page.override_pending = false;
@@ -596,6 +654,17 @@ pub(super) fn drive_shop_page(
         if changed {
             s.prepare(page.sub);
             host.event("SetMoney", &[&progress.money.to_string(), &progress.money_cap().to_string()]);
+        }
+    }
+    // FC3_SHOP_EQUIP=<gun> (tests): that gun owned and the equip wheel open
+    // for it, once the page has its subcategories.
+    if let Some(name) = std::env::var("FC3_SHOP_EQUIP").ok().filter(|_| equip_test && !page.equip_tested) {
+        page.equip_tested = true;
+        if let Some(def) = inv.defs.iter().position(|d| d.name.eq_ignore_ascii_case(&name)) {
+            progress.owned.insert(inv.defs[def].name.to_string());
+            let s = stock!();
+            host.set_data("DataEquip", s.equip(def));
+            page.equipping = Some(def);
         }
     }
     page.tree = tree.take();

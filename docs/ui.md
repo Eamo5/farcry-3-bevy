@@ -572,6 +572,19 @@ valuables; each has the list sent again and the money. A tutorial's shop
 out from the subcategories (`QuitMenu`). `--shop 0` (tests) opens it in
 play; `FC3_PAUSE_PAGE=0` from the pause menu.
 
+Guns bought stay owned (`Progress::owned`, saved), carried or not. An owned
+gun not in a holster takes the legend's Equip (`OnEquipRequest <weapon>
+<from>`): the game sends `DataEquip`, five rows (`sName`, `sImage`, the
+shop's icon, `iStateID`): the four holsters, the guns carried in order (a
+place without one open while the holsters have room, locked beyond), then
+the gun. The page shows its "Assign To Slot" wheel; a holster chosen
+(`OnWeaponEquip <place>`) takes the gun, the one there put by
+(`weapons::equip_gun`), and `HideEquip` closes the wheel. A gun bought with
+every holster full is owned and the wheel opens for it
+(`progression::buy_to_own`), rather than the gun in hand being swapped.
+`FC3_SHOP_EQUIP=<gun>` (tests) owns that gun and opens the wheel for it
+once the page has its subcategories.
+
 **Main menu** (`UI\Multiplayer\Menu\MultiMain.feu`, level 20;
 `original_ui::frontend`): the game's frontend in place of ours while the game
 is at its main menu (its own cursor; the HUD hidden). It loads its fifteen
