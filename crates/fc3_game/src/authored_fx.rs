@@ -37,6 +37,7 @@ use fc3_formats::xml::Element;
 
 use crate::particles::{empty_mesh, frame_uv, ParticleMaterial, Quads};
 use crate::player::PlayerCamera;
+pub use fc3_formats::particle_effects::blast;
 
 pub struct AuthoredFxPlugin;
 
@@ -46,25 +47,51 @@ impl Plugin for AuthoredFxPlugin {
     }
 }
 
-/// `FC3_AUTHORED_FX=<name>` (tests): that effect played on the ground four
-/// metres before the player, once the player is in the world.
-fn fx_test(players: Query<(&Transform, &crate::player::Player)>, mut done: Local<bool>, mut commands: Commands) {
+/// `FC3_AUTHORED_FX=<name>[,<metres>]` (tests): that effect played as an
+/// impact's on the ground that far (4 m) before the player, once he has
+/// stood a while (the loading screen down); with
+/// `FC3_AUTHORED_FX_SHOTS=<dir>`, the screen captured through it.
+fn fx_test(
+    time: Res<Time>,
+    heights: Res<crate::terrain::Heightfield>,
+    players: Query<(&Transform, &crate::player::Player)>,
+    mut state: Local<(bool, f32, Option<f32>, usize)>,
+    mut commands: Commands,
+) {
+    const WAIT: f32 = 15.0;
+    const SHOTS: [f32; 6] = [0.05, 0.2, 0.5, 1.0, 2.0, 4.0];
+    let (done, stood, fired, shot) = &mut *state;
     if *done {
         return;
     }
-    let Ok(name) = std::env::var("FC3_AUTHORED_FX") else {
+    let Ok(spec) = std::env::var("FC3_AUTHORED_FX") else {
         *done = true;
         return;
     };
-    let Ok((t, p)) = players.single() else { return };
-    if p.spawning {
+    if let Some(at) = *fired {
+        let dir = std::env::var("FC3_AUTHORED_FX_SHOTS").ok();
+        match (dir, SHOTS.get(*shot)) {
+            (Some(dir), Some(&when)) if time.elapsed_secs() - at >= when => {
+                crate::camera::capture(&mut commands, format!("{dir}/fx_{when:.2}.png"));
+                *shot += 1;
+            }
+            (Some(_), Some(_)) => {}
+            _ => *done = true,
+        }
         return;
     }
-    *done = true;
-    let ahead = Quat::from_rotation_y(p.yaw) * Vec3::NEG_Z * 4.0;
-    let at = t.translation + ahead - Vec3::Y * crate::player::HALF_HEIGHT;
-    let name: &'static str = Box::leak(name.into_boxed_str());
-    commands.spawn((Transform::from_translation(at), AuthoredFx(name)));
+    let Ok((t, p)) = players.single() else { return };
+    *stood = if p.spawning { 0.0 } else { *stood + time.delta_secs() };
+    if *stood < WAIT {
+        return;
+    }
+    let (name, far) = spec.split_once(',').map_or((spec.as_str(), 4.0), |(n, m)| (n, m.trim().parse().unwrap_or(4.0)));
+    let ahead = Quat::from_rotation_y(p.yaw) * Vec3::NEG_Z * far;
+    let mut at = t.translation + ahead - Vec3::Y * crate::player::HALF_HEIGHT;
+    at.y = heights.height_at(at).unwrap_or(at.y);
+    let name: &'static str = Box::leak(name.to_string().into_boxed_str());
+    commands.spawn((Transform::from_translation(at).with_rotation(IMPACT_FRAME), AuthoredFx(name)));
+    *fired = Some(time.elapsed_secs());
     info!("authored fx test: {name} at {at:.1?}");
 }
 
@@ -79,10 +106,26 @@ pub fn available(name: &str) -> bool {
         .or_insert_with(|| fc3_formats::cache::default_cache_root().join(fc3_formats::particle_effects::authored_rel(name)).exists())
 }
 
+/// Plays an authored effect once where it's asked for, as an impact's
+/// (the blasts'): its +Y (Dunia's) along the ground's normal, up. False
+/// when it isn't cached, for the caller's own stand-in.
+pub fn play(commands: &mut Commands, name: &'static str, at: Vec3) -> bool {
+    if !available(name) {
+        return false;
+    }
+    commands.spawn((Transform::from_translation(at).with_rotation(IMPACT_FRAME), AuthoredFx(name)));
+    true
+}
+
+/// An impact effect's frame: its +Y (Dunia's; Bevy's -Z) up.
+const IMPACT_FRAME: Quat = Quat::from_xyzw(std::f32::consts::FRAC_1_SQRT_2, 0.0, 0.0, std::f32::consts::FRAC_1_SQRT_2);
+
 /// Plays an authored effect (by its name) where the entity stands, turned
 /// as it is; taken off (or despawned), it stops emitting and what it has
-/// emitted lives out.
+/// emitted lives out. An effect none of whose emitters loop goes when the
+/// last has had its time.
 #[derive(Component, Clone)]
+#[require(Transform, Visibility)]
 pub struct AuthoredFx(pub &'static str);
 
 /// An effect's emitters' clocks.
@@ -161,8 +204,17 @@ struct Compiled {
     offset: Vec3,
     /// The emitter's axis (Bevy space, the effect's own frame).
     axis: Quat,
+    /// The heading's base angles and spreads (`EmitDir...`, radians).
+    axis_angle: f32,
     axis_spread: f32,
+    plane_angle: f32,
     plane_spread: f32,
+    /// Where particles are born about the emitter (`EmitVol...`), its
+    /// shape facing the camera (`ShapeTowardCamera`), and whether they head
+    /// out from it (`DirFromVolumeSurface`).
+    volume: Volume,
+    toward_camera: bool,
+    from_surface: bool,
     rate: Ranged,
     rate_ratio: Lut,
     life: Ranged,
@@ -229,14 +281,23 @@ impl Compiled {
         } else {
             1
         };
-        let batch = e.texture_path().ok().filter(|_| !e.texture.is_empty()).map(|t| BatchKey { texture: fc3_formats::cache::texture_rel(&t), mode });
-        let colours: Vec<(f32, Vec3)> = s
-            .child("PartColorKF")
+        // (Not drawn: heat haze, which bends the view, and meshes.)
+        let drawn = !on("DistortionEnabled") && s.attr("Geometry").is_none_or(str::is_empty);
+        let batch = e.texture_path().ok().filter(|_| drawn && !e.texture.is_empty()).map(|t| BatchKey { texture: fc3_formats::cache::texture_rel(&t), mode });
+        // The gradient's points (`Knot`s), else its even samples (`Key`s).
+        let gradient = s.child("PartColorKF");
+        let mut colours: Vec<(f32, Vec3)> = gradient
             .into_iter()
             .flat_map(|c| &c.children)
             .filter(|k| k.name == "Knot")
             .filter_map(|k| Some((k.f32("Position")?, dunia_colour(k.attr("Color")?)?)))
             .collect();
+        if colours.is_empty() {
+            let keys: Vec<Vec3> =
+                gradient.into_iter().flat_map(|c| &c.children).filter(|k| k.name == "Key").filter_map(|k| dunia_colour(k.attr("Value")?)).collect();
+            let last = keys.len().saturating_sub(1).max(1) as f32;
+            colours = keys.into_iter().enumerate().map(|(i, c)| (i as f32 / last, c)).collect();
+        }
         let initial = s.child("InitColorKF").and_then(|c| c.child("Key")).and_then(|k| k.attr("Value")).and_then(dunia_colour).unwrap_or(Vec3::ONE);
         let colours = if colours.is_empty() { vec![(0.0, initial)] } else { colours.into_iter().map(|(p, c)| (p, c * initial)).collect() };
         let hdr = crate::vine_puff::curve(s, "EmitterHDRMulKF", 0.0, 1.0).max(0.0);
@@ -254,8 +315,22 @@ impl Compiled {
             max: (f("StaticSize", 50.0) as usize).clamp(1, 400),
             offset: crate::data::to_bevy(e.offset),
             axis,
+            axis_angle: f("EmitDirAxisAngle", 0.0).to_radians(),
             axis_spread: f("EmitDirAxisSpread", 0.0).to_radians(),
+            plane_angle: f("EmitDirPlaneAngle", 0.0).to_radians(),
             plane_spread: f("EmitDirPlaneSpread", 0.0).to_radians(),
+            volume: if f("EmitVolRadius", 0.0) > 0.0 {
+                Volume::Sphere(f("EmitVolRadius", 0.0))
+            } else {
+                let half = Vec3::new(f("EmitVolHalfSizeX", 0.0), f("EmitVolHalfSizeY", 0.0), f("EmitVolHalfSizeZ", 0.0));
+                if half.max_element() > 0.0 {
+                    Volume::Box(half)
+                } else {
+                    Volume::Point
+                }
+            },
+            toward_camera: s.child("EmitFlag").is_some_and(|e| e.bool("ShapeTowardCamera") == Some(true)),
+            from_surface: s.child("EmitFlag").is_some_and(|e| e.bool("DirFromVolumeSurface") == Some(true)),
             rate: Ranged::of(e, "EmitRateKF"),
             rate_ratio,
             life: Ranged::of(e, "InitLifeTimeKF"),
@@ -287,6 +362,29 @@ impl Compiled {
                 let colour = dunia_colour(s.attr("LightColor").unwrap_or("1,1,1")).unwrap_or(Vec3::ONE);
                 (colour, f("LightIntensity", 1.0), f("LightOuterRadius", 2.0), f("LightFlickeringFrequency", 0.0), f("LightFlickeringAmplitude", 0.0))
             }),
+        }
+    }
+}
+
+/// An emitter's volume (Dunia axes, metres).
+#[derive(Clone, Copy)]
+enum Volume {
+    Point,
+    Sphere(f32),
+    Box(Vec3),
+}
+
+impl Volume {
+    /// A point in it, Dunia axes, and on its surface for a sphere whose
+    /// particles head out from it.
+    fn sample(self, rng: &mut crate::weapons::Rng, surface: bool) -> Vec3 {
+        match self {
+            Volume::Point => Vec3::ZERO,
+            Volume::Sphere(r) => {
+                let dir = Vec3::new(rng.range(-1.0, 1.0), rng.range(-1.0, 1.0), rng.range(-1.0, 1.0)).normalize_or(Vec3::Z);
+                dir * if surface { r } else { r * rng.f32().cbrt() }
+            }
+            Volume::Box(h) => Vec3::new(rng.range(-h.x, h.x), rng.range(-h.y, h.y), rng.range(-h.z, h.z)),
         }
     }
 }
@@ -357,12 +455,15 @@ fn emit(
     mut rng: ResMut<crate::weapons::Rng>,
     mut effects: Query<(Entity, &AuthoredFx, &GlobalTransform, Option<&mut FxClock>)>,
     mut lights: Query<&mut PointLight, With<FxLight>>,
+    cameras: Query<&GlobalTransform, With<PlayerCamera>>,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {
         return;
     }
+    // (Shapes facing the camera: its right, its way back, its up.)
+    let facing = cameras.single().map_or(Mat3::IDENTITY, |c| Mat3::from_cols(c.right().as_vec3(), c.back().as_vec3(), c.up().as_vec3()));
     for (entity, fx, at, clock) in &mut effects {
         let Some(ids) = library.effect(fx.0).cloned() else { continue };
         let Some(mut clock) = clock else {
@@ -370,6 +471,11 @@ fn emit(
             continue;
         };
         clock.age += dt;
+        // A one-off done: what it emitted lives out on its own.
+        if ids.iter().all(|&id| !library.emitters[id].looping && clock.age > library.emitters[id].delay + library.emitters[id].duration) {
+            commands.entity(entity).despawn();
+            continue;
+        }
         let (_, turn, place) = at.to_scale_rotation_translation();
         for (k, &id) in ids.iter().enumerate() {
             let (spawn, light) = {
@@ -428,17 +534,20 @@ fn emit(
             for _ in 0..(spawn as usize).min(room) {
                 let em = &library.emitters[id];
                 // A heading within the spreads, about the emitter's axis
-                // (Dunia +Y, Bevy -Z).
-                let cone = Quat::from_rotation_y(rng.range(-1.0, 1.0) * em.axis_spread) * Quat::from_rotation_x(rng.range(-1.0, 1.0) * em.plane_spread);
-                let dir = turn * em.axis * cone * Vec3::NEG_Z;
+                // (Dunia +Y, Bevy -Z), or out from its volume.
+                let cone = Quat::from_rotation_y(em.axis_angle + rng.range(-1.0, 1.0) * em.axis_spread)
+                    * Quat::from_rotation_x(em.plane_angle + rng.range(-1.0, 1.0) * em.plane_spread);
+                let v = em.volume.sample(&mut rng, em.from_surface);
+                let born = if em.toward_camera { facing * v } else { turn * em.axis * Vec3::new(v.x, v.z, -v.y) };
+                let dir = if em.from_surface && born.length_squared() > 1e-6 { born.normalize() } else { turn * em.axis * cone * Vec3::NEG_Z };
                 let gravity = if em.local_gravity { turn * em.gravity_dir } else { em.gravity_dir } * em.gravity.roll(&mut rng).max(0.0);
                 let frames = (em.frames[0] * em.frames[1]).max(1) as f32;
                 let p = Particle {
                     emitter: id,
                     owner: entity,
-                    pos: place + turn * em.offset,
+                    pos: place + turn * em.offset + born,
                     dir,
-                    speed: em.speed.roll(&mut rng).max(0.0),
+                    speed: em.speed.roll(&mut rng),
                     fall: Vec3::ZERO,
                     gravity,
                     life: em.life.roll(&mut rng).max(0.02),
@@ -562,7 +671,8 @@ fn draw(
             }
             let colour = p.colour.unwrap_or_else(|| gradient(&em.colours, t));
             let light = if em.lit { ambient } else { 1.0 };
-            let colour = colour * light * if batch.0.mode == 0 { em.brightness } else { 1.0 };
+            // (What glows: light added, and brightness as coverage.)
+            let colour = colour * light * if batch.0.mode != 1 { em.brightness } else { 1.0 };
             let half = (p.size * em.part_size.at(t) * 0.5).max(0.005);
             let (x, y) = if !em.uniform {
                 // A streak along its motion as seen.

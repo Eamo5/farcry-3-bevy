@@ -95,7 +95,13 @@ fn use_explosives(
         *held += dt;
         if *held >= DETONATE_HOLD && *held - dt < DETONATE_HOLD && !charges.is_empty() {
             for (e, gt) in &charges {
-                explosions.write(Explosion { at: gt.translation(), radius: C4.0, damage: C4.1, instigator: Some(pe) });
+                explosions.write(Explosion {
+                    at: gt.translation(),
+                    radius: C4.0,
+                    damage: C4.1,
+                    instigator: Some(pe),
+                    effect: Some(crate::authored_fx::blast::C4),
+                });
                 commands.entity(e).despawn();
             }
             fp.gesture = Some(if inv.c4 > 0 { r"special\ied|detonate" } else { r"special\ied|detonate_empty" });
@@ -197,7 +203,13 @@ fn trip_mines(
         let near = |p: Vec3| Vec2::new(p.x - at.x, p.z - at.z).length() < MINE_TRIP && (p.y - at.y).abs() < 2.5;
         let tripped = walkers.iter().any(|(w, h)| !h.dead && near(w.translation())) || vehicles.iter().any(|v| near(v.translation()));
         if tripped {
-            explosions.write(Explosion { at: at + Vec3::Y * 0.2, radius: MINE.0, damage: MINE.1, instigator: Some(m.owner) });
+            explosions.write(Explosion {
+                at: at + Vec3::Y * 0.2,
+                radius: MINE.0,
+                damage: MINE.1,
+                instigator: Some(m.owner),
+                effect: Some(crate::authored_fx::blast::MINE),
+            });
             commands.entity(e).despawn();
         }
     }

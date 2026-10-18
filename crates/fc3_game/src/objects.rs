@@ -242,8 +242,9 @@ fn spawn_objects(
             let obj = spawn_placement(&mut commands, root, sector, p, handle, model);
             commands.entity(obj).insert(PlacedId(entity_id));
             placed.insert(p.entity, obj);
-            if let Some(Classified::Explosive) = sector.entities.get(p.entity as usize).and_then(|e| classify(&e.name)) {
-                commands.entity(obj).insert((Explosive { id: entity_id }, crate::combat::Health::new(25.0)));
+            if let Some(e) = sector.entities.get(p.entity as usize).filter(|e| matches!(classify(&e.name), Some(Classified::Explosive))) {
+                let effect = crate::authored_fx::blast::of_prop(&e.name);
+                commands.entity(obj).insert((Explosive { id: entity_id, effect }, crate::combat::Health::new(25.0)));
             }
             // Animal cages' doors give way to gunfire or a blast.
             if sector.entities.get(p.entity as usize).is_some_and(|e| e.name.to_ascii_lowercase().starts_with("animalcagedoor")) {

@@ -875,7 +875,13 @@ fn live_grenades(
         if let Some(ground) = heights.height_at(at) {
             at.y = at.y.max(ground + 0.3);
         }
-        explosions.write(crate::weapons::Explosion { at, radius: 8.0, damage: 200.0, instigator: Some(g.owner) });
+        explosions.write(crate::weapons::Explosion {
+            at,
+            radius: 8.0,
+            damage: 200.0,
+            instigator: Some(g.owner),
+            effect: Some(crate::authored_fx::blast::FRAG),
+        });
         info!("grenade takedown: it went off at {at:.1?}");
         commands.entity(e).despawn();
     }

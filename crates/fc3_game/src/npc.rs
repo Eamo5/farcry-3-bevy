@@ -2595,6 +2595,7 @@ fn throw(
             owner: me,
             age: 0.0,
             travelled: 0.0,
+            effect: Some(if molotov { crate::authored_fx::blast::MOLOTOV } else { crate::authored_fx::blast::FRAG }),
         },
         Transform::from_translation(hand),
         Visibility::Visible,
@@ -2749,6 +2750,7 @@ fn shoot(
                     owner: me,
                     age: 0.0,
                     travelled: 0.0,
+                    effect: Some(crate::authored_fx::blast::ROCKET),
                 },
                 Transform::from_translation(muzzle + Vec3::Y * 0.25).looking_to(dir, Vec3::Y),
                 Visibility::Visible,
@@ -3029,7 +3031,13 @@ fn react_to_death(
         }
         // A flamer's fuel tank goes up when he falls.
         if npc.role == Role::Flamer {
-            explosions.write(crate::weapons::Explosion { at: t.translation, radius: 4.5, damage: 60.0, instigator: d.killer });
+            explosions.write(crate::weapons::Explosion {
+                at: t.translation,
+                radius: 4.5,
+                damage: 60.0,
+                instigator: d.killer,
+                effect: Some(crate::authored_fx::blast::BURNING_CHEST),
+            });
         }
     }
 }
@@ -3547,6 +3555,7 @@ fn npc_test_stealth(
                 owner,
                 age: 0.0,
                 travelled: 0.0,
+                effect: Some(crate::authored_fx::blast::FRAG),
             },
             Transform::from_translation(at),
             Visibility::Visible,

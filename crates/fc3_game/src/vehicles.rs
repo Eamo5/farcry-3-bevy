@@ -3884,7 +3884,12 @@ fn vehicle_damage(
         // It goes up: the blast, then a burnt-out shell.
         let centre = t.transform_point((v.min + v.max) * 0.5);
         info!("vehicle: {} ({}) wrecked at {centre:.0?}", DEFS[v.def].name, v.spawn_id);
-        explosions.write(crate::weapons::Explosion { at: centre, radius: 9.0, damage: 220.0, instigator: None });
+        let effect = match DEFS[v.def].kind {
+            Kind::Car => Some(crate::authored_fx::blast::CAR),
+            Kind::Boat => Some(crate::authored_fx::blast::BOAT),
+            Kind::Glider => None,
+        };
+        explosions.write(crate::weapons::Explosion { at: centre, radius: 9.0, damage: 220.0, instigator: None, effect });
         sfx.write(crate::sound::PlaySfx { event: snd::EXPLOSION, at: Some(centre), volume: 1.0 });
         w.wrecked = true;
         h.current = 0.0;
@@ -4095,6 +4100,12 @@ fn wreck_rocket(
         return;
     }
     *fired = true;
-    explosions.write(crate::weapons::Explosion { at: v.translation + Vec3::Y * 0.5, radius: 7.0, damage: 260.0, instigator: None });
+    explosions.write(crate::weapons::Explosion {
+        at: v.translation + Vec3::Y * 0.5,
+        radius: 7.0,
+        damage: 260.0,
+        instigator: None,
+        effect: Some(crate::authored_fx::blast::ROCKET),
+    });
     info!("wreck-test: a rocket hits at {:.0?}", v.translation);
 }

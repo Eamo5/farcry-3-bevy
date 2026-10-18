@@ -3015,7 +3015,7 @@ fn story_blasts(
         let Some(at) = host.story.pose(id).map(|p| p.position) else { continue };
         info!("story: explosive {id} detonated");
         let (radius, damage) = crate::explosives::C4;
-        explosions.p0().write(crate::weapons::Explosion { at: to_bevy(at), radius, damage, instigator: None });
+        explosions.p0().write(crate::weapons::Explosion { at: to_bevy(at), radius, damage, instigator: None, effect: Some(crate::authored_fx::blast::C4) });
     }
     let watched = host.story.watched_destructibles();
     for x in explosions.p1().read() {

@@ -995,6 +995,8 @@ pub struct Explosion {
     pub radius: f32,
     pub damage: f32,
     pub instigator: Option<Entity>,
+    /// The game's own effect for it (`authored_fx::blast`), if it has one.
+    pub effect: Option<&'static str>,
 }
 
 /// A hit this far below the head's centre is in the legs (m).
@@ -1020,6 +1022,8 @@ pub struct Projectile {
     pub age: f32,
     /// Distance flown so far (launched rounds arm after a few metres).
     pub travelled: f32,
+    /// The game's own effect for its blast or burst (`authored_fx::blast`).
+    pub effect: Option<&'static str>,
 }
 
 // --------------------------------------------------------------- systems ---
@@ -1694,6 +1698,7 @@ fn fire(
                 owner: player_e,
                 age: 0.0,
                 travelled: 0.0,
+                effect: Some(crate::authored_fx::blast::ROCKET),
             },
             Transform::from_translation(muzzle_pos).looking_to(forward, Vec3::Y),
             Visibility::Visible,
@@ -1734,6 +1739,13 @@ fn fire(
                 owner: player_e,
                 age: 0.0,
                 travelled: 0.0,
+                effect: if !bow {
+                    Some(crate::authored_fx::blast::FRAG)
+                } else if kind == 2 {
+                    Some(crate::authored_fx::blast::ARROW)
+                } else {
+                    None
+                },
             },
             Transform::from_translation(if bow { origin + dir * 0.3 } else { muzzle_pos }).looking_to(dir, Vec3::Y),
             Visibility::Visible,
@@ -2067,6 +2079,7 @@ fn throw_grenade(
                 owner: e,
                 age: 0.0,
                 travelled: 0.0,
+                effect: Some(crate::authored_fx::blast::MOLOTOV),
             },
             Transform::from_translation(cam.translation() + f * 0.5),
             Visibility::Visible,
@@ -2114,6 +2127,7 @@ fn throw_grenade(
             owner: e,
             age: 0.0,
             travelled: 0.0,
+            effect: Some(crate::authored_fx::blast::FRAG),
         },
         Transform::from_translation(cam.translation() + f * 0.5),
         Visibility::Visible,
@@ -2177,7 +2191,13 @@ fn update_projectiles(
                         crate::particles::fx::fire_burst(&mut particles, &mut rng, point);
                         sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::IMPACT, at: Some(point), volume: 0.6 });
                     } else {
-                        explosions.write(Explosion { at: point, radius: EXPLOSIVE_ARROW_RADIUS, damage: EXPLOSIVE_ARROW_DAMAGE, instigator: Some(p.owner) });
+                        explosions.write(Explosion {
+                            at: point,
+                            radius: EXPLOSIVE_ARROW_RADIUS,
+                            damage: EXPLOSIVE_ARROW_DAMAGE,
+                            instigator: Some(p.owner),
+                            effect: Some(crate::authored_fx::blast::ARROW),
+                        });
                     }
                     commands.entity(e).despawn();
                     continue;
@@ -2205,14 +2225,17 @@ fn update_projectiles(
                 }
                 if p.incendiary {
                     ignite.write(crate::fire::Ignite { at: point, radius: p.radius, instigator: Some(p.owner) });
-                    crate::particles::fx::fire_burst(&mut particles, &mut rng, point);
+                    // The bottle's own burst (else ours).
+                    if !p.effect.is_some_and(|fx| crate::authored_fx::play(&mut commands, fx, point)) {
+                        crate::particles::fx::fire_burst(&mut particles, &mut rng, point);
+                    }
                     sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::IMPACT, at: Some(point), volume: 0.8 });
                     exploded = true;
                 } else if p.explode_on_impact && p.travelled + hit.distance > ARMING_DISTANCE {
                     if std::env::var("FC3_FIRE_DEBUG").is_ok() {
                         info!("projectile hit {:?} at {point:?} after {:.2}s (from {:?})", hit.entity, p.age, t.translation);
                     }
-                    explosions.write(Explosion { at: point, radius: p.radius, damage: p.damage, instigator: Some(p.owner) });
+                    explosions.write(Explosion { at: point, radius: p.radius, damage: p.damage, instigator: Some(p.owner), effect: p.effect });
                     exploded = true;
                 } else {
                     // A launched round that strikes before arming is a dud.
@@ -2246,7 +2269,7 @@ fn update_projectiles(
         }
         if let Some(fuse) = p.fuse {
             if p.age >= fuse {
-                explosions.write(Explosion { at: t.translation, radius: p.radius, damage: p.damage, instigator: Some(p.owner) });
+                explosions.write(Explosion { at: t.translation, radius: p.radius, damage: p.damage, instigator: Some(p.owner), effect: p.effect });
                 exploded = true;
             }
         }
@@ -2279,11 +2302,17 @@ fn explode(
         let blast = if ex.radius > 7.5 { crate::sound::ev::GRENADE_BLAST } else { crate::sound::ev::ROCKET_BLAST };
         sfx.write(crate::sound::PlaySfx { event: blast, at: Some(ex.at), volume: 1.0 });
         // Visual: fireball, smoke, sparks, a scorch mark and a brief light.
+        // (The game's own effects where it has them, else ours.)
         let water = crate::water::surface_at(ex.at, &heights);
         if ex.at.y < water + 0.5 && ex.at.y > water - 3.0 {
-            crate::particles::fx::splash(&mut particles, &mut rng, Vec3::new(ex.at.x, water, ex.at.z), 4.0);
+            let surface = Vec3::new(ex.at.x, water, ex.at.z);
+            if ex.effect.is_none() || !crate::authored_fx::play(&mut commands, crate::authored_fx::blast::UNDERWATER, surface) {
+                crate::particles::fx::splash(&mut particles, &mut rng, surface, 4.0);
+            }
         } else {
-            crate::particles::fx::explosion(&mut particles, &mut rng, ex.at, ex.radius);
+            if !ex.effect.is_some_and(|fx| crate::authored_fx::play(&mut commands, fx, ex.at)) {
+                crate::particles::fx::explosion(&mut particles, &mut rng, ex.at, ex.radius);
+            }
             // Blasts set the grass around them alight.
             ignite.write(crate::fire::Ignite { at: ex.at, radius: ex.radius * 0.4, instigator: ex.instigator });
             if let Some(h) = spatial.cast_ray(ex.at + Vec3::Y * 0.5, Dir3::NEG_Y, 2.5, true, &SpatialQueryFilter::default()) {

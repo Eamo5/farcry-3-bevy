@@ -53,7 +53,7 @@ fn shake_test(
         }
         *wait = 3.0;
         *peak = 0.0;
-        explosions.write(Explosion { at: at.translation() + at.forward().as_vec3() * 6.0, radius: 0.1, damage: 0.0, instigator: None });
+        explosions.write(Explosion { at: at.translation() + at.forward().as_vec3() * 6.0, radius: 0.1, damage: 0.0, instigator: None, effect: None });
     }
 }
 

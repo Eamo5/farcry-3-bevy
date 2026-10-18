@@ -323,32 +323,65 @@ lamp glows (the lamps draw their own), interiors, and the rest.
 
 Authored effects. Some effects are played as their definitions have them
 (`authored_fx`), not as flipbook stand-ins. `particle_effects::AUTHORED_EFFECTS`
-names them (so far the race gates' `waypointflare` and `finishflare`). The
-converter caches each one's `PartSys` record whole, under the hash of its name
-(`particle_effects::authored_rel`), with its active emitters' diffuse textures.
-`fc3tool particle-effect <name>` prints a definition.
+names them: the race gates' `waypointflare` and `finishflare`, and the blasts
+(`particle_effects::blast`). The converter caches each one's `PartSys` record
+whole, under the hash of its name (`particle_effects::authored_rel`), with its
+active emitters' diffuse textures (not heat haze's). `fc3tool particle-effect
+<name>` prints a definition.
+
+Blasts. An `Explosion` carries its effect, and `weapons::explode` plays it (our
+fireball and smoke stand in when it isn't cached). Each blast's effect is its
+source's `psExplosion` in the entity library (a weapon's or explosive's
+`Particles`):
+
+- frag grenades, thrown or launched, and the grenade takedown: `grenade_frag_core`;
+- explosive arrows: `grenade_arrow_core`;
+- rockets: `rpg7_core`;
+- C4 and the story's detonations: `exp_ied_core`;
+- mines: `exp_proximitymine_core`;
+- molotovs bursting: `molotov_explosion`;
+- a flamer's tank: the molotov pirates' `molotov_chestexplosion`;
+- cars: `engine_explosion_newversion`, the 4x4's;
+- boats: the patrol boat's;
+- helicopters crashing: `choper_explosion`;
+- explosive props, by name: `barrel_explosion`, `barrel_directional_explosion`,
+  `propanetank01_explosion`, `liquidpropanetank_explosion` and
+  `oxygentank_explosion`.
+
+At the water's surface, `generic_underwater_explosion` plays instead. These are
+impact effects: their frame's +Y (Dunia's) is the ground's normal, up. An
+effect none of whose emitters loop goes once the last has had its time; what it
+emitted lives out.
 
 Each active emitter waits its `SpawnDelay`, then emits for its `EmitDuration`
 (again and again with `EmitLoop`). It gives a burst of `NbInitPart`, then its rate:
 `EmitRateKF`'s value, times its `RatioUI` curve over the emitter's time, give or
 take its `VariantKF`. `StaticSize` caps an emitter's live particles. A particle
 is born with each `Init...KF` (life, speed, size, gravity, angle, spin), its value
-give or take its variant. It heads along the emitter's axis: Dunia's +Y turned
-by `RotOffset` (X -90 is straight up), within `EmitDirAxisSpread` and
-`EmitDirPlaneSpread`. Over its life it follows the `Part...KF` curves: speed,
-size, `SizeZ` (a streak's length), alpha, spin and gravity. Its colour follows
-the `PartColorKF` knots times `InitColorKF`; with `RandomColor`, one point is
-picked at birth. The sheet is `FrameCount` by `FrameCountY` (0 is one image),
+give or take its variant. It is born in the emitter's volume: in a sphere of
+`EmitVolRadius`, or a box of `EmitVolHalfSize...`, facing the camera with
+`ShapeTowardCamera`. It heads along the emitter's axis: Dunia's +Y turned by
+`RotOffset` (X -90 is straight up), at `EmitDirAxisAngle` and
+`EmitDirPlaneAngle` within their spreads. With `DirFromVolumeSurface`, it heads
+out from the volume instead. Over its life it follows the `Part...KF` curves:
+speed, size, `SizeZ` (a streak's length), alpha, spin and gravity. Its colour
+follows the `PartColorKF` points times `InitColorKF`, or its evenly spaced
+`Key`s when it has no points. With `RandomColor`, one colour is picked at
+birth. The sheet is `FrameCount` by `FrameCountY` (0 is one image),
 shown at `FramePerSecond`. `BlendType` 1 adds; `RedAsAlpha` takes brightness as
 coverage; else the alpha blends. `UniformSize` 0 particles (sparks) are drawn as
-streaks along their motion. `EmitterHDRMulKF` brightens what adds, compressed
-(1 + 1.5 log10 of it: our light isn't the engine's). `SHLighting` sheets darken
+streaks along their motion. `EmitterHDRMulKF` brightens what adds or takes
+brightness as coverage, compressed (1 + 1.5 log10 of it: our light isn't the
+engine's). `SHLighting` sheets darken
 with the daylight. The near and far fades apply. `LightActive` burns a point
 light with its colour, intensity and radius, flickering by
 `LightFlickeringFrequency` and `LightFlickeringAmplitude`. Not yet: soft
-intersections, distortion, child emitters, emission volumes and sounds. Curves
-are joined linearly between knots. `FC3_AUTHORED_FX=<name>` plays one 4 m in
-front of the player.
+intersections, distortion (heat haze isn't drawn), mesh particles, child
+emitters, the plotted discs and sounds. Curves are joined linearly between
+knots. `FC3_AUTHORED_FX=<name>[,<metres>]` plays one as an impact, on the ground
+4 m (or that far) in front of the player, once he has stood 15 s.
+`FC3_AUTHORED_FX_SHOTS=<dir>` then captures the screen 0.05, 0.2, 0.5, 1, 2
+and 4 s in.
 
 Lit effects (`EffectLit`: the foam sheets of waterfalls and rapids) stay on standard
 materials. They are drawn additively and unlit, since their maps are DXT1 with no alpha.

@@ -434,6 +434,8 @@ fn glint(
 #[derive(Component)]
 pub struct Explosive {
     pub id: u64,
+    /// Its blast (`authored_fx::blast::of_prop`).
+    pub effect: &'static str,
 }
 
 /// Weapon pickups have no world mesh in the data; show the weapon's model.
@@ -720,7 +722,7 @@ fn detonate_explosives(
     for d in died.read() {
         let Ok((ex, gt, obj)) = q.get(d.entity) else { continue };
         world.removed.insert(ex.id);
-        explosions.write(Explosion { at: gt.translation() + Vec3::Y * 0.5, radius: 9.0, damage: 220.0, instigator: d.killer });
+        explosions.write(Explosion { at: gt.translation() + Vec3::Y * 0.5, radius: 9.0, damage: 220.0, instigator: d.killer, effect: Some(ex.effect) });
         if obj.and_then(|o| models.get(&o.model)).is_some_and(crate::breakables::has_broken_state) {
             breaks.break_now(ex.id);
             commands.entity(d.entity).remove::<(Explosive, crate::combat::Health)>();

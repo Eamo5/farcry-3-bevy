@@ -676,7 +676,13 @@ fn crash(
 ) {
     let centre = f.pos + Vec3::Y * 1.5;
     info!("story heli {}: crashed at {:.0}", f.vehicle, f.pos);
-    explosions.write(crate::weapons::Explosion { at: centre, radius: CRASH.0, damage: CRASH.1, instigator: None });
+    explosions.write(crate::weapons::Explosion {
+        at: centre,
+        radius: CRASH.0,
+        damage: CRASH.1,
+        instigator: None,
+        effect: Some(crate::authored_fx::blast::HELI),
+    });
     sfx.write(crate::sound::PlaySfx { event: EXPLOSION_SFX, at: Some(centre), volume: 1.0 });
     commands.entity(root).despawn_related::<Children>();
     if let Some(wreck) = models.get(&f.wreck) {

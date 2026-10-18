@@ -1944,7 +1944,8 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
         let result = (|| -> Result<()> {
             let xml = fc3_formats::particle_effects::effect_xml(library, name)?;
             let effect = fc3_formats::particle_effects::Effect::parse(xml)?;
-            for emitter in effect.emitters.iter().filter(|e| e.active && !e.texture.is_empty()) {
+            // (Heat haze isn't drawn.)
+            for emitter in effect.emitters.iter().filter(|e| e.active && !e.texture.is_empty() && e.source.attr("DistortionEnabled") != Some("1")) {
                 let path = emitter.texture_path()?;
                 let tex = cache::texture_rel(&path);
                 if job.should_write(&tex) {

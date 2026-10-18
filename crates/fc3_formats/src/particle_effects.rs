@@ -10,8 +10,71 @@ pub const VINE_CACHE_REL: &str = "particles/vine-puff.xml";
 pub const SCREEN_DROPLETS_REL: &str = "particles/screen-droplets.xml";
 
 /// Authored effects the game plays as the game did (`fc3_game::authored_fx`),
-/// each cached whole with its textures: the race gates' flares.
-pub const AUTHORED_EFFECTS: &[&str] = &["fc3_gameplay_exotic.racing_challenge.waypointflare", "fc3_gameplay_exotic.racing_challenge.finishflare"];
+/// each cached whole with its textures: the race gates' flares and the
+/// blasts.
+pub const AUTHORED_EFFECTS: &[&str] = &[
+    "fc3_gameplay_exotic.racing_challenge.waypointflare",
+    "fc3_gameplay_exotic.racing_challenge.finishflare",
+    blast::FRAG,
+    blast::ARROW,
+    blast::ROCKET,
+    blast::C4,
+    blast::MINE,
+    blast::MOLOTOV,
+    blast::BURNING_CHEST,
+    blast::UNDERWATER,
+    blast::CAR,
+    blast::BOAT,
+    blast::HELI,
+    blast::BARREL,
+    blast::BARREL_DIRECTIONAL,
+    blast::PROPANE,
+    blast::LIQUID_PROPANE,
+    blast::OXYGEN,
+];
+
+/// The blasts' effects: the weapons' and explosives' `psExplosion` (their
+/// archetypes' `Particles`), the vehicles' engine explosions, the
+/// helicopters' and the explosive props'.
+pub mod blast {
+    /// Frag grenades, thrown or launched (`Frag_Grenade`, `40mmGrenade`).
+    pub const FRAG: &str = "fc3_grenade_impact.grenade_frag.grenade_frag_core";
+    pub const ARROW: &str = "fc3_grenade_impact.grenade_arrow.grenade_arrow_core";
+    pub const ROCKET: &str = "fc3_bullet_impact_rpg.bimp_rpg7.rpg7_core";
+    /// C4 (`IED`).
+    pub const C4: &str = "fc3_ied_impact.ied_explosion.exp_ied_core";
+    pub const MINE: &str = "fc3_proximitymine_impact.proximitymine_explosion.exp_proximitymine_core";
+    pub const MOLOTOV: &str = "fc3_weaponfire_generic.molotov.molotov_explosion";
+    /// A burning man's chest going up (the molotov pirates' `CBurnComponent`).
+    pub const BURNING_CHEST: &str = "fc3_weaponfire_generic.molotov.molotov_chestexplosion";
+    /// Any of them in the water.
+    pub const UNDERWATER: &str = "fc3_explosion_generic.exp_generic.generic_underwater_explosion";
+    pub const CAR: &str = "fc3_gameplay_vehicule_land.land_vehicule_4x4.engine_explosion_newversion";
+    pub const BOAT: &str = "fc3_gameplay_vehicule_sea.sea_vehicule_patrolboat.engine_explosion_newversion";
+    pub const HELI: &str = "fc3_destruction_generic_props.explosion.choper_explosion";
+    pub const BARREL: &str = "fc3_explosion_generic.exp_objects.barrel_explosion";
+    pub const BARREL_DIRECTIONAL: &str = "fc3_explosion_generic.exp_objects.barrel_directional_explosion";
+    pub const PROPANE: &str = "fc3_explosion_generic.exp_objects.propanetank01_explosion";
+    pub const LIQUID_PROPANE: &str = "fc3_explosion_generic.exp_objects.liquidpropanetank_explosion";
+    pub const OXYGEN: &str = "fc3_explosion_generic.exp_objects.oxygentank_explosion";
+
+    /// An explosive prop's blast, by its entity name (`Explosives/...`, as
+    /// its archetype has it).
+    pub fn of_prop(name: &str) -> &'static str {
+        let n = name.to_ascii_lowercase();
+        if n.contains("oxygen") {
+            OXYGEN
+        } else if n.contains("liquidpropane") {
+            LIQUID_PROPANE
+        } else if n.contains("propane") {
+            PROPANE
+        } else if n.contains("directional") {
+            BARREL_DIRECTIONAL
+        } else {
+            BARREL
+        }
+    }
+}
 
 /// Where an authored effect is cached, by its name.
 pub fn authored_rel(name: &str) -> String {
@@ -143,6 +206,18 @@ mod tests {
         assert_eq!(effect_xml(xml, "PUFF").unwrap(), "<PartSys Name='puff'><Unknown a='1'/></PartSys>");
         assert!(effect_xml(xml, "puf").is_err());
         assert!(effect_xml("<PartSys Name='puff'>", "puff").is_err());
+    }
+
+    #[test]
+    fn explosive_props_name_their_cached_blasts() {
+        assert_eq!(blast::of_prop("Explosives/Oxygen_Tank_01.TankA_0"), blast::OXYGEN);
+        assert_eq!(blast::of_prop("Explosives/LiquidPropaneTank02_1"), blast::LIQUID_PROPANE);
+        assert_eq!(blast::of_prop("Explosives/PropaneTank01_Propelled_9"), blast::PROPANE);
+        assert_eq!(blast::of_prop("Explosives/BarrelDirectional_FC3_3"), blast::BARREL_DIRECTIONAL);
+        assert_eq!(blast::of_prop("Explosives/ExplosiveBarrel_FC3_0"), blast::BARREL);
+        for name in ["Explosives/Oxygen_Tank_01", "Explosives/LiquidPropaneTank02", "Explosives/PropaneTank02", "Explosives/BarrelDirectional", "x"] {
+            assert!(AUTHORED_EFFECTS.contains(&blast::of_prop(name)));
+        }
     }
 
     #[test]
