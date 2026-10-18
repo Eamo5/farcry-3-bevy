@@ -2,6 +2,7 @@
 
 mod birds;
 mod bloom;
+mod burning;
 mod cache_assets;
 mod camera;
 mod characters;
@@ -499,6 +500,7 @@ fn main() {
         ))
         .add_plugins(vine_puff::VinePuffPlugin)
         .add_plugins(authored_fx::AuthoredFxPlugin)
+        .add_plugins(burning::BurningPlugin)
         .add_plugins(OriginalUi)
         .insert_resource(original_shaders::OriginalShaders { enabled: args.original_shaders })
         .add_systems(Startup, setup);

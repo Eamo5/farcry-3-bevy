@@ -399,6 +399,16 @@ front of the gun. The 870's chains to a pose off the gun, below and beside it,
 so it takes the front of its bounds. A world-space flash would be left behind
 by the shot's recoil kick, so the flash moves with the gun.
 
+Burning. Fire's harm sets people and animals alight (`burning`): flames
+underfoot, a molotov, the flamethrower. The mercs' `CBurnComponent` names the
+human torch they wear (`psFireSpineParticles`: `fire_humantorch`) and the
+steam when water puts one out (`psFireWaterSmokeParticles`: `water_smoke`). It
+also names the start and stop sounds (`001B0477`, `001B0479`). The torch burns
+on a person's chest (the `Spine2` bone; an animal's at its body's middle) and
+stays upright as they move and fall. The component holds no numbers, so the
+6 s burn and its 30 harm a second are ours. Not yet: the burning panic
+(running about, screaming).
+
 Each active emitter waits its `SpawnDelay`, then emits for its `EmitDuration`
 (again and again with `EmitLoop`). It gives a burst of `NbInitPart`, then its rate:
 `EmitRateKF`'s value, times its `RatioUI` curve over the emitter's time, give or

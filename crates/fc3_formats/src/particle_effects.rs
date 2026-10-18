@@ -11,8 +11,8 @@ pub const SCREEN_DROPLETS_REL: &str = "particles/screen-droplets.xml";
 
 /// Authored effects the game plays as the game did (`fc3_game::authored_fx`),
 /// each cached whole with its textures: the race gates' flares, the blasts
-/// and the vehicles' engine fires (their archetypes' `EngineFire`: the
-/// smoking stage and the burning one).
+/// the vehicles' engine fires (their archetypes' `EngineFire`: the smoking
+/// stage and the burning one) and burning people's.
 pub const AUTHORED_EFFECTS: &[&str] = &[
     "fc3_gameplay_exotic.racing_challenge.waypointflare",
     "fc3_gameplay_exotic.racing_challenge.finishflare",
@@ -45,6 +45,8 @@ pub const AUTHORED_EFFECTS: &[&str] = &[
     "fc3_gameplay_vehicule_sea.sea_vehicule_zodiac.engine_fire",
     "fc3_gameplay_vehicule_sea.sea_vehicule_jetski.engine_fire",
     "fc3_gameplay_vehicule_sea.sea_vehicule_patrolboat.engine_fire",
+    "fc3_gameplay_fire.fc3_gameplay_pawnfire.fire_humantorch",
+    "fc3_gameplay_fire.fc3_gameplay_pawnfire.water_smoke",
 ];
 
 /// The blasts' effects: the weapons' and explosives' `psExplosion` (their
