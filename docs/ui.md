@@ -357,7 +357,10 @@ only what changed (and everything again until the movies have loaded):
   `ObjectiveIsValidated`, from 155 it fades and sends `ObjectiveHasFaded`).
 * **Mission cards**: the objective movie's `SetMissionStart(title)` as a
   mission starts, `SetMissionTitle(text, status, succeeded)` as it is
-  complete or failed (`story::MissionCard`).
+  complete or failed (`story::MissionCard`). The status is the game's
+  string for a failure (155587); the table has none for a mission
+  complete, so it is the handbook's "Complete" (158104) in capitals.
+  (`fc3tool oasis grep <text>` lists the strings containing a text.)
 * **Mission timer**: `ObjectiveTimer` shows the first of the story's
   timers in `ObjectiveTimerText` (as the game's own HUD writes it), hidden
   without one.

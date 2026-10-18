@@ -88,6 +88,14 @@ impl Strings {
         ids
     }
 
+    /// The ids of the strings that contain `text` (in any case), lowest first.
+    pub fn containing(&self, text: &str) -> Vec<u32> {
+        let text = text.to_lowercase();
+        let mut ids: Vec<u32> = self.by_id.iter().filter(|(_, t)| t.to_lowercase().contains(&text)).map(|(id, _)| *id).collect();
+        ids.sort_unstable();
+        ids
+    }
+
     /// A string's id by section and symbolic name.
     pub fn id_of(&self, section: &str, name: &str) -> Option<u32> {
         self.by_name.get(&(crc32(section.as_bytes()), crc32(name.as_bytes()))).copied()

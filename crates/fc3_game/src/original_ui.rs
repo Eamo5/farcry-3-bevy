@@ -2235,6 +2235,10 @@ fn drive_hud(
 const OBJECTIVE_BOX_OPEN: u32 = 8;
 /// `ObjTextBox` plays a new objective in from here (it stops shown).
 const OBJECTIVE_IN: u32 = 2;
+/// The mission cards' status lines: the game's "MISSION FAILED", and its
+/// "Complete" (the handbook's) in capitals, as the table has no mission's.
+const MISSION_FAILED: u32 = 155587;
+const MISSION_COMPLETE: u32 = 158104;
 
 /// The story's texts on the HUD: the objective in its box (with the
 /// mission's name over it; a new one plays in), subtitles, the interaction
@@ -2259,8 +2263,8 @@ fn drive_story(
     for card in std::mem::take(&mut ui.cards) {
         match card {
             crate::story::MissionCard::Start { title } => host.event("SetMissionStart", &[&title]),
-            crate::story::MissionCard::Complete { title } => host.event("SetMissionTitle", &[&title, "MISSION COMPLETE", "1"]),
-            crate::story::MissionCard::Failed { text } => host.event("SetMissionTitle", &[&text, "MISSION FAILED", "0"]),
+            crate::story::MissionCard::Complete { title } => host.event("SetMissionTitle", &[&title, &host.text(MISSION_COMPLETE).to_uppercase(), "1"]),
+            crate::story::MissionCard::Failed { text } => host.event("SetMissionTitle", &[&text, &host.text(MISSION_FAILED), "0"]),
         }
     }
     let subtitle = ui.subtitle.as_ref().filter(|_| settings.subtitles).map(|s| s.0.clone());
