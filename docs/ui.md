@@ -481,6 +481,20 @@ valuables; each has the list sent again and the money. A tutorial's shop
 out from the subcategories (`QuitMenu`). `--shop 0` (tests) opens it in
 play; `FC3_PAUSE_PAGE=0` from the pause menu.
 
+**Loading screen** (`Loading\GameModes\Singleplayer.feu`, level 60, over
+everything): while a jump keeps the player waiting for the world (the start
+of play, a checkpoint reloaded, fast travel, a story's teleport: the
+player's `spawning` for more than half a second) until the ground is under
+him and no terrain, objects or vegetation are still to come in, and at
+least two seconds (at most a minute). The movie plays itself: its shuffled
+words, the game's tips (string ids of its own), and the spinner it loads
+(`Loading.feu`, which says `CommonResourcesLoaded`); it says
+`SinglePlayerLoadingLoaded` and asks `IsBootTitle` ("0"; "1" shows the boot
+title's guns instead). The HUD hides under it. The trials' own
+(`SocialChallenge\(SC)Singleplayer.feu`) carries the challenge's pause page
+as well, and isn't used yet. `FC3_LOADING_SHOT=<file>` (tests) captures it
+two seconds in.
+
 **Skills** (`M_Skills.feu`, quick launch 3): on `PlayerSkillsLoaded` the
 game sends `InitChapter` (each of the three trees' name, description and a
 blank), `InitCollectibles` (the tattoo's collectibles: relics, then 1, 0,

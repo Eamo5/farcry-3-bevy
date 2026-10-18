@@ -63,6 +63,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_potions,
                     drive_camera,
                     drive_credits,
+                    drive_loading,
                     drive_gallery,
                     drive_poker,
                     drive_knives,
@@ -3451,6 +3452,75 @@ fn drive_credits(
     if credits.skipped.is_some() && !roll.skipped {
         roll.skipped = true;
         host.call_function(&format!("_level{CREDITS_LEVEL}.ec.m_credits.quitBeforeEnd"), Vec::new());
+    }
+}
+
+/// The loading screen (`Loading\GameModes\Singleplayer.feu`): the game's
+/// own, over everything, while a jump keeps the player waiting for the
+/// world (the start of play, a checkpoint reloaded, fast travel, a story's
+/// teleport into ground not yet in: `Player::spawning` for more than
+/// `LOADING_AFTER`), until the world around him has settled (the ground
+/// under him, and no terrain, objects or vegetation still to come in) and
+/// it has been up `LOADING_LEAST`. The movie plays itself (its words, the
+/// game's tips, the spinner it loads, `Loading.feu`); it asks only
+/// `IsBootTitle` ("1" is the boot title's guns instead). The HUD hides
+/// under it. `FC3_LOADING_SHOT=<file>` (tests) captures it two seconds in.
+const LOADING_MOVIE: &str = r"UI\Singleplayer\Menu\Loading\GameModes\Singleplayer.feu";
+const LOADING_LEVEL: u32 = 60;
+const LOADING_AFTER: f32 = 0.5;
+const LOADING_LEAST: f32 = 2.0;
+/// The longest it stays, should something never settle.
+const LOADING_MOST: f32 = 60.0;
+
+#[derive(Default)]
+struct LoadingShown {
+    waiting: f32,
+    since: Option<f32>,
+    shot: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drive_loading(
+    state: NonSend<Interface>,
+    time: Res<Time<Real>>,
+    game: Res<State<crate::menu::GameState>>,
+    players: Query<&crate::player::Player>,
+    (terrain, objects, vegetation): (Res<crate::terrain::TerrainStreamer>, Res<crate::objects::ObjectStreamer>, Res<crate::vegetation::VegStreamer>),
+    mut shown: Local<LoadingShown>,
+    mut commands: Commands,
+) {
+    let Interface::Running(host) = &*state else { return };
+    let now = time.elapsed_secs();
+    let spawning = players.single().is_ok_and(|p| p.spawning);
+    let Some(since) = shown.since else {
+        if spawning && *game.get() == crate::menu::GameState::Playing {
+            shown.waiting += time.delta_secs();
+        } else {
+            shown.waiting = 0.0;
+        }
+        if shown.waiting > LOADING_AFTER {
+            host.answer("IsBootTitle", "0");
+            host.load(LOADING_MOVIE, LOADING_LEVEL);
+            host.level_visible(HUD_LEVEL, false);
+            shown.since = Some(now);
+            shown.shot = false;
+            debug!("original UI: loading screen up");
+        }
+        return;
+    };
+    if !shown.shot && now - since > 2.0 {
+        shown.shot = true;
+        if let Ok(path) = std::env::var("FC3_LOADING_SHOT") {
+            crate::camera::capture(&mut commands, path);
+        }
+    }
+    let settled = !spawning && terrain.pending_count() == 0 && objects.pending_count() == 0 && vegetation.pending_count() == 0;
+    if (settled && now - since > LOADING_LEAST) || now - since > LOADING_MOST {
+        host.unload(LOADING_LEVEL);
+        host.level_visible(HUD_LEVEL, *game.get() == crate::menu::GameState::Playing);
+        shown.since = None;
+        shown.waiting = 0.0;
+        debug!("original UI: loading screen down after {:.1} s", now - since);
     }
 }
 
