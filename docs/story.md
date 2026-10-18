@@ -42,6 +42,13 @@ converter packs the scripts and the world data they need into the cache.
 * `story/shop_items.txt`: the shop's weapons as scripts know them (model,
   library archetype, the string id of the shop name), from the entity
   library.
+* `story/shopcategory.lib`, `story/shopsubcategory1.lib`: the shop page's
+  tree as the game has it (buy and sell, and their subcategories: what each
+  lists, by weapon family or item type), read by
+  `fc3_formats::shop::tree_from_libs`. `story/shop_weapons.txt` gives each
+  weapon its icon, description and the shop's bars and stars
+  (`WeaponStatistics`) as well, and `weapons/stats.txt` each attachment
+  offer its name, description and icon (both rewritten when out of date).
 * `cinema/*.seq`: every cinematic sequence as a timeline, its facial tracks
   included, and its player-camera clips' head look (`HeadLook`: speed,
   return delay and speed, least and most pitch/roll/yaw). While a scene
@@ -385,6 +392,8 @@ is the story's own:
   one-weapon-per-tower list. The first tower frees the 1911, 6P9 and STG-90;
   the reward notification lists every supported weapon freed by that tower.
   Free stock still has to be collected from a shop; it is not granted on unlock.
+  With the original UI the shop is the game's own page (`shop.feu`, see
+  docs/ui.md), on the same stock and trades (`progression::trade`).
 * **Ingredient loot**: skinning and plant gathering raise `CPawnLootItemEvent`
   (item key, `Name`, localized item id) after the live inventory snapshot updates.
   Events survive paused tutorial/menu frames and are delivered once. The

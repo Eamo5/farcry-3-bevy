@@ -31,6 +31,8 @@ use bevy::ui_render::prelude::{MaterialNode, UiMaterial, UiMaterialPlugin};
 use bevy::window::PrimaryWindow;
 use fc3_ui::wgpu;
 
+mod shop;
+
 pub struct OriginalUiPlugin;
 
 impl Plugin for OriginalUiPlugin {
@@ -43,6 +45,7 @@ impl Plugin for OriginalUiPlugin {
             .insert_non_send(Interface::Waiting)
             .init_resource::<UiCalls>()
             .init_resource::<MapPage>()
+            .init_resource::<shop::ShopPage>()
             .add_systems(Startup, make_canvas)
             .add_systems(
                 Update,
@@ -64,8 +67,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_poker,
                     drive_knives,
                     (drive_races, drive_trials).chain(),
-                    drive_pause,
-                    drive_map_page,
+                    (drive_pause, drive_map_page, shop::drive_shop_page).chain(),
                     run_interface,
                 )
                     .chain()
@@ -254,13 +256,19 @@ fn drive_pause(
         Local<CraftPage>,
         Option<ResMut<crate::syringes::Boosts>>,
     ),
-    (mut map_page, outposts, mut trials): (ResMut<MapPage>, Res<crate::outposts::Outposts>, ResMut<crate::trials::Trials>),
+    (mut map_page, outposts, mut trials, mut shop_page): (
+        ResMut<MapPage>,
+        Res<crate::outposts::Outposts>,
+        ResMut<crate::trials::Trials>,
+        ResMut<shop::ShopPage>,
+    ),
 ) {
     use crate::menu::GameState;
     use fc3_ui::input::{MouseButton, PlayerEvent};
     let Interface::Running(host) = &mut *state else { return };
-    // (The map key opens it at its world map page, as the game did.)
-    let paused = matches!(game.get(), GameState::Paused | GameState::Map);
+    // (The map key opens it at its world map page, as the game did, and a
+    // shop at the shop page.)
+    let paused = matches!(game.get(), GameState::Paused | GameState::Map | GameState::Shop);
     if paused != *open {
         *open = paused;
         original.0 = paused;
@@ -272,6 +280,7 @@ fn drive_pause(
         calls.0.clear();
         map_page.open = false;
         map_page.calls.clear();
+        shop_page.calls.clear();
         if paused {
             host.answer("ShowGamePadInterface", "0");
             host.answer("IsSplitscreen", "0");
@@ -302,7 +311,11 @@ fn drive_pause(
             "RequestPageToLoad" => {
                 // (A trial's page takes FC3_PAUSE_KEYS too, for tests.)
                 *paged |= trials.page_wanted.is_some();
-                let page = trials.page_wanted.take().unwrap_or(if *game.get() == GameState::Map { "2" } else { "-1" });
+                let page = trials.page_wanted.take().unwrap_or(match game.get() {
+                    GameState::Map => "2",
+                    GameState::Shop => "0",
+                    _ => "-1",
+                });
                 open_page(host, page);
             }
             "ChallengeBoardPageLoaded" | "ChallengeResultPageLoaded" => {
@@ -332,6 +345,22 @@ fn drive_pause(
             "ChallengeShowGamerCard" => {}
             // The world map page's (`drive_map_page`).
             "MapLoaded" | "IconsLoaded" | "SetupMarker" | "onFastTravel" => map_page.calls.push(call.clone()),
+            // The shop page's (`shop::drive_shop_page`).
+            "ShopManagerLoaded"
+            | "onRequestedMenu"
+            | "OnBuy"
+            | "SellLoot"
+            | "OnSellAll"
+            | "SortSell"
+            | "OnWeaponEquip"
+            | "OnEquipRequest"
+            | "EquipAttachment"
+            | "OnMeleeEquip"
+            | "onSeen"
+            | "onRequestWeapon3D"
+            | "onRequestItem3D"
+            | "onRequestAttachment3D"
+            | "onRequestCategory3D" => shop_page.calls.push(call.clone()),
             "OnSwitchMode"
             | "LoadSoundTutorial"
             | "OnEnterTransitionEnd"
@@ -1101,6 +1130,7 @@ fn test_key(name: &str) -> Option<KeyCode> {
         "Left" => KeyCode::ArrowLeft,
         "Right" => KeyCode::ArrowRight,
         "Space" => KeyCode::Space,
+        "Tab" => KeyCode::Tab,
         _ => return None,
     })
 }
@@ -1116,6 +1146,19 @@ fn send_rucksack(
     loot: Option<&crate::progression::LootCatalog>,
     perks: &crate::progression::Perks,
 ) {
+    host.set_data("DataLootInventory", rucksack_tiles(progress, crafting, loot, perks));
+    host.event("SetMoney", &[&progress.money.to_string()]);
+    host.event("SortText", &["0"]);
+}
+
+/// The rucksack's tiles: one for each thing carried (the shop's sell page
+/// shows them too).
+fn rucksack_tiles(
+    progress: &crate::progression::Progress,
+    crafting: Option<&crate::crafting::CraftCatalog>,
+    loot: Option<&crate::progression::LootCatalog>,
+    perks: &crate::progression::Perks,
+) -> Vec<std::collections::BTreeMap<String, fc3_ui::ExternalValue>> {
     use crate::progression::{Animal, LootKind};
     use fc3_ui::ExternalValue as V;
     let mut held: Vec<(LootKind, u32, &'static str)> = Vec::new();
@@ -1147,9 +1190,7 @@ fn send_rucksack(
         .collect();
         items.extend(std::iter::repeat_n(fields, n as usize));
     }
-    host.set_data("DataLootInventory", items);
-    host.event("SetMoney", &[&progress.money.to_string()]);
-    host.event("SortText", &["0"]);
+    items
 }
 
 /// A tile's state the rucksack shows as one to sell or drop

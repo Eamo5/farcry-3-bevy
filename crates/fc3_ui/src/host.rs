@@ -319,6 +319,16 @@ impl Host {
         self.call("setData", vec![ExternalValue::String(name.to_string()), ExternalValue::List(list)]);
     }
 
+    /// A list ready for a page's request (`onRequestedMenu <id> <list>`,
+    /// keyed `<list>:<id>`): the page gets it as it asks, at once, as the
+    /// engine answered; the request still comes, its last argument
+    /// `prepared`. A blank key forgets them all.
+    pub fn prepare_data(&self, key: &str, items: Vec<std::collections::BTreeMap<String, ExternalValue>>) {
+        let blank = |v: ExternalValue| if matches!(&v, ExternalValue::String(s) if s.is_empty()) { ExternalValue::Null } else { v };
+        let list = items.into_iter().map(|item| ExternalValue::Object(item.into_iter().map(|(k, v)| (k, blank(v))).collect())).collect();
+        self.call("prepareData", vec![ExternalValue::String(key.to_string()), ExternalValue::List(list)]);
+    }
+
     /// What is at a path (`_level1.mcBack`, `_global.isInverted`), as text:
     /// a clip's state at a glance, else the value (tools).
     pub fn path_info(&self, path: &str) -> String {

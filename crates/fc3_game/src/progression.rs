@@ -2341,8 +2341,8 @@ fn count_stats(mut gains: MessageReader<StatGain>, mut crafted: MessageReader<cr
 
 // ------------------------------------------------------------------ shop ---
 
-#[derive(Clone, Copy)]
-enum ShopItem {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ShopItem {
     AmmoRefill,
     Medkit,
     Grenade,
@@ -2412,7 +2412,7 @@ pub(crate) fn supply(item: &fc3_formats::progression::Item) -> Option<Supply> {
 }
 
 /// The loot carried that sells, most valuable first, after selling it all.
-fn sell_items(progress: &Progress, crafting: &crate::crafting::CraftCatalog) -> Vec<ShopItem> {
+pub(crate) fn sell_items(progress: &Progress, crafting: &crate::crafting::CraftCatalog) -> Vec<ShopItem> {
     let mut held: Vec<(u32, u32)> = progress.loot.iter().filter(|(id, n)| **n > 0 && crafting.item(**id).is_some_and(|i| i.cost > 0)).map(|(id, n)| (*id, *n)).collect();
     held.sort_by_key(|(id, n)| std::cmp::Reverse(crafting.item(*id).map_or(0, |i| i.cost) * n));
     let mut list = vec![ShopItem::SellAll];
@@ -2422,7 +2422,7 @@ fn sell_items(progress: &Progress, crafting: &crate::crafting::CraftCatalog) -> 
 }
 
 /// What selling a line pays.
-fn sale_value(item: ShopItem, progress: &Progress, crafting: &crate::crafting::CraftCatalog, perks: &Perks) -> u32 {
+pub(crate) fn sale_value(item: ShopItem, progress: &Progress, crafting: &crate::crafting::CraftCatalog, perks: &Perks) -> u32 {
     let stack = |id: u32| crafting.sale_price(id, perks) * progress.loot.get(&id).copied().unwrap_or(0);
     match item {
         ShopItem::SellAll => progress.loot.keys().map(|&id| stack(id)).sum(),
@@ -2463,7 +2463,7 @@ pub(crate) fn give_supply(
 
 /// The supplies the shop sells: consumables, then ammunition, each in the
 /// database's order; ammunition only for the guns carried.
-fn supply_items(inv: &Inventory, supplies: &[fc3_formats::progression::Item], progress: &Progress) -> Vec<ShopItem> {
+pub(crate) fn supply_items(inv: &Inventory, supplies: &[fc3_formats::progression::Item], progress: &Progress) -> Vec<ShopItem> {
     use fc3_formats::progression::{SHOP_AMMO, SHOP_CONSUMABLES};
     let mut list: Vec<&fc3_formats::progression::Item> = supplies
         .iter()
@@ -2499,7 +2499,7 @@ fn supply_price(inv: &Inventory, supplies: &[fc3_formats::progression::Item], it
 
 impl ShopItem {
     /// Price, with the weapons freed by `towers` radio towers costing nothing.
-    fn price(self, inv: &Inventory, towers: usize, catalog: &ShopCatalog) -> u32 {
+    pub(crate) fn price(self, inv: &Inventory, towers: usize, catalog: &ShopCatalog) -> u32 {
         if let ShopItem::Weapon(d) = self {
             if let Some(weapon) = catalog.weapon(inv, d) {
                 return if weapon.tower_requirement().is_some_and(|n| towers >= n) { 0 } else { weapon.cost };
@@ -2605,7 +2605,7 @@ impl ShopCatalog {
             .collect()
     }
 
-    fn weapon(&self, inv: &Inventory, def: usize) -> Option<&fc3_formats::shop::Weapon> {
+    pub(crate) fn weapon(&self, inv: &Inventory, def: usize) -> Option<&fc3_formats::shop::Weapon> {
         let model = inv.defs.get(def)?.model_path();
         self.0.iter().find(|w| w.is_base() && w.model.eq_ignore_ascii_case(&model))
     }
@@ -2900,14 +2900,17 @@ fn shop_prompt(
     catalog: Res<ShopCatalog>,
     restriction: Res<ShopOverride>,
 ) {
-    if *state.get() != GameState::Playing || hud.prompt.is_some() {
+    if *state.get() != GameState::Playing {
         return;
     }
-    // --shop <tab> (tests): open once in play.
+    // --shop <tab> (tests): open once in play (whatever else is at hand).
     if let (Some(t), false) = (args.open_shop, *opened) {
         *opened = true;
         tab.0 = t.min(SHOP_TABS.len() - 1);
         next.set(GameState::Shop);
+        return;
+    }
+    if hud.prompt.is_some() {
         return;
     }
     let Ok((t, h, inv)) = players.single() else { return };
@@ -2931,6 +2934,7 @@ fn shop_prompt(
 #[allow(clippy::type_complexity)]
 fn shop_buttons(
     state: Res<State<GameState>>,
+    original: Res<crate::menu::OriginalPause>,
     mut next: ResMut<NextState<GameState>>,
     mut buttons: Query<(&Interaction, &ShopButton, &mut BackgroundColor), Changed<Interaction>>,
     mut progress: ResMut<Progress>,
@@ -2942,7 +2946,8 @@ fn shop_buttons(
     mut bought_items: MessageWriter<ItemBought>,
     (catalog, restriction, crafting, maps): (Res<ShopCatalog>, Res<ShopOverride>, Res<crate::crafting::CraftCatalog>, Res<crate::treasure_maps::TreasureMaps>),
 ) {
-    if *state.get() != GameState::Shop {
+    // (The original UI's shop page is up in its place: `original_ui::shop`.)
+    if *state.get() != GameState::Shop || original.0 {
         return;
     }
     let Ok((mut inv, mut stats)) = players.single_mut() else { return };
@@ -2967,159 +2972,8 @@ fn shop_buttons(
                     }
                 };
                 let Some(&item) = items.get(i) else { continue };
-                if matches!(item, ShopItem::SellAll | ShopItem::Sell(_)) {
-                    let value = sale_value(item, &progress, &crafting, &perks);
-                    let sold: Vec<u32> = match item {
-                        ShopItem::Sell(id) => vec![id],
-                        _ => progress.loot.keys().copied().filter(|&id| crafting.sale_price(id, &perks) > 0).collect(),
-                    };
-                    if sold.is_empty() || value == 0 {
-                        hud.notify("Nothing to sell");
-                        continue;
-                    }
-                    for id in sold {
-                        progress.loot.remove(&id);
-                    }
-                    let paid = progress.add_money(value);
-                    hud.notify(&if paid < value { format!("Sold for ${value} (wallet full: ${paid} kept)") } else { format!("Sold for ${value}") });
-                    continue;
-                }
-                let price = item.price(&inv, progress.towers.len(), &catalog);
-                if progress.money < price {
-                    hud.notify("Not enough money");
-                    continue;
-                }
-                if let ShopItem::Weapon(def) = item {
-                    if let Some((bought, granted)) = purchase_weapon(&mut inv, &mut progress, &perks, &catalog, def) {
-                        if let crate::weapons::Granted::Swapped(old) = granted {
-                            hud.notify(&format!("Swapped the {old} for the {}", inv.defs[def].name));
-                        }
-                        bought_items.write(bought);
-                    } else {
-                        hud.notify("Already owned");
-                    }
-                    continue;
-                }
-                let bought = match item {
-                    ShopItem::AmmoRefill => {
-                        let mut any = false;
-                        let scale = inv.reserve_scale;
-                        let defs = inv.defs.clone();
-                        for s in &mut inv.slots {
-                            let cap = (defs[s.def].max_reserve as f32 * scale) as u32;
-                            if s.reserve < cap {
-                                s.reserve = cap;
-                                any = true;
-                            }
-                        }
-                        any
-                    }
-                    ShopItem::Medkit if stats.medkits < perks.medkit_cap => {
-                        stats.medkits += 1;
-                        true
-                    }
-                    ShopItem::Grenade if inv.grenades < perks.grenade_cap => {
-                        inv.grenades += 1;
-                        true
-                    }
-                    ShopItem::Molotov if inv.molotovs < crate::weapons::MOLOTOV_CAP => {
-                        inv.molotovs += 1;
-                        true
-                    }
-                    ShopItem::Rockets => inv.add_ammo(crate::weapons::WeaponClass::Launcher, 3) > 0,
-                    ShopItem::C4 if inv.c4 < perks.explosive_cap => {
-                        inv.c4 += 1;
-                        true
-                    }
-                    ShopItem::Mine if inv.mines < perks.explosive_cap => {
-                        inv.mines += 1;
-                        true
-                    }
-                    ShopItem::Attachment(d, a) => inv.attach(d, a),
-                    ShopItem::Arrows(k) if inv.special_arrows[k as usize - 1] < perks.arrow_cap => {
-                        let n = &mut inv.special_arrows[k as usize - 1];
-                        *n = (*n + 5).min(perks.arrow_cap);
-                        true
-                    }
-                    ShopItem::Paint(d, p) => {
-                        let fresh = inv.paints.get(d).copied().flatten() != Some(p);
-                        if fresh {
-                            if inv.paints.len() <= d {
-                                inv.paints.resize(d + 1, None);
-                            }
-                            inv.paints[d] = Some(p);
-                        }
-                        fresh
-                    }
-                    ShopItem::Map(id, _) => {
-                        let fresh = progress.maps.insert(id);
-                        if fresh {
-                            hud.notify("Map bought: its finds are on the world map");
-                        }
-                        fresh
-                    }
-                    ShopItem::Gear(id) if progress.upgrade(id) == 0 => {
-                        progress.upgrades.insert(id.to_string(), 1);
-                        true
-                    }
-                    ShopItem::Supply(id, _) => {
-                        let item = crafting.items.iter().find(|i| i.id == id);
-                        match item.and_then(supply) {
-                            Some(Supply::RefillAll) => {
-                                let scale = inv.reserve_scale;
-                                let defs = inv.defs.clone();
-                                let mut any = false;
-                                for s in &mut inv.slots {
-                                    let cap = (defs[s.def].max_reserve as f32 * scale) as u32;
-                                    any |= s.reserve < cap;
-                                    s.reserve = s.reserve.max(cap);
-                                }
-                                any
-                            }
-                            Some(Supply::Ammo(class)) => inv.add_ammo(class, item.map_or(0, |i| i.amount)) > 0,
-                            Some(Supply::Grenade) if inv.grenades < perks.grenade_cap => {
-                                inv.grenades += 1;
-                                true
-                            }
-                            Some(Supply::Molotov) if inv.molotovs < crate::weapons::MOLOTOV_CAP => {
-                                inv.molotovs += 1;
-                                true
-                            }
-                            Some(Supply::C4) if inv.c4 < perks.explosive_cap => {
-                                inv.c4 += 1;
-                                true
-                            }
-                            Some(Supply::Mine) if inv.mines < perks.explosive_cap => {
-                                inv.mines += 1;
-                                true
-                            }
-                            Some(Supply::Medkit) if stats.medkits < perks.medkit_cap => {
-                                stats.medkits += 1;
-                                true
-                            }
-                            // Fresh armour, counted for the skill tree.
-                            Some(Supply::Armour(value)) if progress.armour < value => {
-                                progress.armour = value;
-                                *progress.stats.entry(stat::ARMOR_BOUGHT).or_insert(0) += 1;
-                                true
-                            }
-                            _ => false,
-                        }
-                    }
-                    _ => false,
-                };
-                if bought {
-                    progress.spend(price);
-                    if let ShopItem::Attachment(..) = item {
-                        *progress.stats.entry(stat::ATTACHMENTS_BOUGHT).or_insert(0) += 1;
-                    }
-                    let model = match item {
-                        ShopItem::Weapon(d) => Some(inv.defs[d].model_path()),
-                        _ => None,
-                    };
-                    bought_items.write(ItemBought { model });
-                } else {
-                    hud.notify("Already full");
+                if let Some(bought) = trade(item, &mut inv, &mut stats, &mut progress, &perks, &catalog, &crafting, &mut hud) {
+                    bought_items.write(bought);
                 }
             }
             Interaction::Hovered => bg.0 = HOVER,
@@ -3128,9 +2982,179 @@ fn shop_buttons(
     }
 }
 
+/// Buys a line, or sells one: pays for it and gives it, or says why not (on
+/// the HUD). What's bought is the story's to hear of.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn trade(
+    item: ShopItem,
+    inv: &mut Inventory,
+    stats: &mut PlayerStats,
+    progress: &mut Progress,
+    perks: &Perks,
+    catalog: &ShopCatalog,
+    crafting: &crate::crafting::CraftCatalog,
+    hud: &mut HudState,
+) -> Option<ItemBought> {
+    if matches!(item, ShopItem::SellAll | ShopItem::Sell(_)) {
+        let value = sale_value(item, progress, crafting, perks);
+        let sold: Vec<u32> = match item {
+            ShopItem::Sell(id) => vec![id],
+            _ => progress.loot.keys().copied().filter(|&id| crafting.sale_price(id, perks) > 0).collect(),
+        };
+        if sold.is_empty() || value == 0 {
+            hud.notify("Nothing to sell");
+            return None;
+        }
+        for id in sold {
+            progress.loot.remove(&id);
+        }
+        let paid = progress.add_money(value);
+        hud.notify(&if paid < value { format!("Sold for ${value} (wallet full: ${paid} kept)") } else { format!("Sold for ${value}") });
+        return None;
+    }
+    let price = item.price(inv, progress.towers.len(), catalog);
+    if progress.money < price {
+        hud.notify("Not enough money");
+        return None;
+    }
+    if let ShopItem::Weapon(def) = item {
+        let Some((bought, granted)) = purchase_weapon(inv, progress, perks, catalog, def) else {
+            hud.notify("Already owned");
+            return None;
+        };
+        if let crate::weapons::Granted::Swapped(old) = granted {
+            hud.notify(&format!("Swapped the {old} for the {}", inv.defs[def].name));
+        }
+        return Some(bought);
+    }
+    let bought = match item {
+        ShopItem::AmmoRefill => {
+            let mut any = false;
+            let scale = inv.reserve_scale;
+            let defs = inv.defs.clone();
+            for s in &mut inv.slots {
+                let cap = (defs[s.def].max_reserve as f32 * scale) as u32;
+                if s.reserve < cap {
+                    s.reserve = cap;
+                    any = true;
+                }
+            }
+            any
+        }
+        ShopItem::Medkit if stats.medkits < perks.medkit_cap => {
+            stats.medkits += 1;
+            true
+        }
+        ShopItem::Grenade if inv.grenades < perks.grenade_cap => {
+            inv.grenades += 1;
+            true
+        }
+        ShopItem::Molotov if inv.molotovs < crate::weapons::MOLOTOV_CAP => {
+            inv.molotovs += 1;
+            true
+        }
+        ShopItem::Rockets => inv.add_ammo(crate::weapons::WeaponClass::Launcher, 3) > 0,
+        ShopItem::C4 if inv.c4 < perks.explosive_cap => {
+            inv.c4 += 1;
+            true
+        }
+        ShopItem::Mine if inv.mines < perks.explosive_cap => {
+            inv.mines += 1;
+            true
+        }
+        ShopItem::Attachment(d, a) => inv.attach(d, a),
+        ShopItem::Arrows(k) if inv.special_arrows[k as usize - 1] < perks.arrow_cap => {
+            let n = &mut inv.special_arrows[k as usize - 1];
+            *n = (*n + 5).min(perks.arrow_cap);
+            true
+        }
+        ShopItem::Paint(d, p) => {
+            let fresh = inv.paints.get(d).copied().flatten() != Some(p);
+            if fresh {
+                if inv.paints.len() <= d {
+                    inv.paints.resize(d + 1, None);
+                }
+                inv.paints[d] = Some(p);
+            }
+            fresh
+        }
+        ShopItem::Map(id, _) => {
+            let fresh = progress.maps.insert(id);
+            if fresh {
+                hud.notify("Map bought: its finds are on the world map");
+            }
+            fresh
+        }
+        ShopItem::Gear(id) if progress.upgrade(id) == 0 => {
+            progress.upgrades.insert(id.to_string(), 1);
+            true
+        }
+        ShopItem::Supply(id, _) => {
+            let item = crafting.items.iter().find(|i| i.id == id);
+            match item.and_then(supply) {
+                Some(Supply::RefillAll) => {
+                    let scale = inv.reserve_scale;
+                    let defs = inv.defs.clone();
+                    let mut any = false;
+                    for s in &mut inv.slots {
+                        let cap = (defs[s.def].max_reserve as f32 * scale) as u32;
+                        any |= s.reserve < cap;
+                        s.reserve = s.reserve.max(cap);
+                    }
+                    any
+                }
+                Some(Supply::Ammo(class)) => inv.add_ammo(class, item.map_or(0, |i| i.amount)) > 0,
+                Some(Supply::Grenade) if inv.grenades < perks.grenade_cap => {
+                    inv.grenades += 1;
+                    true
+                }
+                Some(Supply::Molotov) if inv.molotovs < crate::weapons::MOLOTOV_CAP => {
+                    inv.molotovs += 1;
+                    true
+                }
+                Some(Supply::C4) if inv.c4 < perks.explosive_cap => {
+                    inv.c4 += 1;
+                    true
+                }
+                Some(Supply::Mine) if inv.mines < perks.explosive_cap => {
+                    inv.mines += 1;
+                    true
+                }
+                Some(Supply::Medkit) if stats.medkits < perks.medkit_cap => {
+                    stats.medkits += 1;
+                    true
+                }
+                // Fresh armour, counted for the skill tree.
+                Some(Supply::Armour(value)) if progress.armour < value => {
+                    progress.armour = value;
+                    *progress.stats.entry(stat::ARMOR_BOUGHT).or_insert(0) += 1;
+                    true
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    };
+    if bought {
+        progress.spend(price);
+        if let ShopItem::Attachment(..) = item {
+            *progress.stats.entry(stat::ATTACHMENTS_BOUGHT).or_insert(0) += 1;
+        }
+        let model = match item {
+            ShopItem::Weapon(d) => Some(inv.defs[d].model_path()),
+            _ => None,
+        };
+        Some(ItemBought { model })
+    } else {
+        hud.notify("Already full");
+        None
+    }
+}
+
 #[allow(clippy::type_complexity)]
 fn refresh_shop(
     state: Res<State<GameState>>,
+    original: Res<crate::menu::OriginalPause>,
     progress: Res<Progress>,
     players: Query<&Inventory, With<Player>>,
     mut root: Query<&mut Visibility, With<ShopRoot>>,
@@ -3143,7 +3167,7 @@ fn refresh_shop(
     perks: Res<Perks>,
     (catalog, restriction, crafting, maps): (Res<ShopCatalog>, Res<ShopOverride>, Res<crate::crafting::CraftCatalog>, Res<crate::treasure_maps::TreasureMaps>),
 ) {
-    let open = *state.get() == GameState::Shop;
+    let open = *state.get() == GameState::Shop && !original.0;
     if let Ok(mut v) = root.single_mut() {
         *v = if open { Visibility::Inherited } else { Visibility::Hidden };
     }
@@ -3949,6 +3973,7 @@ mod shop_tests {
         app.add_plugins(MinimalPlugins)
             .insert_resource(State::new(GameState::Shop))
             .init_resource::<NextState<GameState>>()
+            .init_resource::<crate::menu::OriginalPause>()
             .init_resource::<Progress>()
             .init_resource::<Perks>()
             .init_resource::<HudState>()

@@ -606,8 +606,8 @@ impl Attachment {
         // The shop's own price for this weapon's attachment of the kind, where
         // the game sells one: a suppressor, the larger magazine, or the sight
         // this one shows as (a sniper's scope, a rifle's ACOG, a reflex).
-        if let Some(cost) = WEAPON_STATS.get().and_then(|stats| self.offered(d, stats)) {
-            return cost;
+        if let Some(offer) = self.offer(d) {
+            return offer.cost;
         }
         match (self, d.class) {
             (Attachment::Suppressor, WeaponClass::Sniper) => 450,
@@ -618,11 +618,17 @@ impl Attachment {
         }
     }
 
-    fn offered(self, d: &WeaponDef, stats: &[fc3_formats::weapons::WeaponStats]) -> Option<u32> {
+    /// The game's shop's offer of it for a weapon (its price, name and
+    /// icon), where the game sells one.
+    pub fn offer(self, d: &WeaponDef) -> Option<&'static fc3_formats::weapons::AttachmentOffer> {
+        WEAPON_STATS.get().and_then(|stats| self.offered(d, stats))
+    }
+
+    fn offered<'a>(self, d: &WeaponDef, stats: &'a [fc3_formats::weapons::WeaponStats]) -> Option<&'a fc3_formats::weapons::AttachmentOffer> {
         use fc3_formats::weapons::{ATTACH_BARREL, ATTACH_MAGAZINE, ATTACH_SCOPE, ATTACH_SIGHT};
         let key = fc3_formats::weapons::model_key(&d.model_path());
         let offers = &stats.iter().find(|s| fc3_formats::weapons::model_key(&s.model) == key)?.attachments;
-        let named = |kind: u32, word: &str| offers.iter().filter(|o| o.kind == kind && o.name.to_ascii_lowercase().contains(word)).map(|o| o.cost).min();
+        let named = |kind: u32, word: &str| offers.iter().filter(|o| o.kind == kind && o.name.to_ascii_lowercase().contains(word)).min_by_key(|o| o.cost);
         match self {
             Attachment::Suppressor => named(ATTACH_BARREL, "suppress"),
             Attachment::Barrel => named(ATTACH_BARREL, "barrel"),

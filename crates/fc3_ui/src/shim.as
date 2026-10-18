@@ -40,7 +40,12 @@ _global.__fireSetPath = function(path, value) {
 };
 
 // A movie's call on the engine: the host gets the command and its
-// arguments; "Get" and "GetPlatform" put its answer where they say.
+// arguments; "Get" and "GetPlatform" put its answer where they say. A list
+// the host has ready for a page's request (`prepareData`) goes to the page
+// at once, as the engine answered (the shop page reads what it showed as it
+// hears of the answer, before it goes on); the host still hears of the
+// request, marked "prepared".
+_global.__firePrepared = new Object();
 _global.__fireEngineCall = function(command) {
     var args = new Array();
     var i = 1;
@@ -48,11 +53,21 @@ _global.__fireEngineCall = function(command) {
         args.push(arguments[i]);
         i++;
     }
+    var prepared = undefined;
+    if (command == "Send" && args[0] == "onRequestedMenu") {
+        prepared = _global.__firePrepared[String(args[2]) + ":" + String(args[1])];
+        if (prepared != undefined) {
+            args.push("prepared");
+        }
+    }
     var result = flash.external.ExternalInterface.call("engineCall", command, args);
     if (command == "Get") {
         _global.__fireSetPath(args[1], result);
     } else if (command == "GetPlatform") {
         _global.__fireSetPath(args[0], result);
+    }
+    if (prepared != undefined) {
+        _global.__fireDeliver(String(args[2]), prepared);
     }
     return result;
 };
@@ -354,22 +369,51 @@ _global.fire.utils.DataProvider.prototype.request = function(index, count) {
 _global.fire.utils.DataProvider.prototype.onDataReceived = function(result) {
     return true;
 };
-api.addCallback("setData", null, function(name, items) {
-    // (A blank string comes from the host as null; bound to a text field it
-    // would read "null".)
+// A list's items as the host sends them, made ready for the page. (A blank
+// string comes from the host as null; bound to a text field it would read
+// "null".) A button's state binds after its other fields, as the engine's
+// lists had it (a shop button's state reads its price): fields go in
+// reverse of their making, so it's made first, the others after in their
+// order.
+_global.__fireRows = function(items) {
     for (var n = 0; n < items.length; n++) {
-        for (var f in items[n]) {
-            if (items[n][f] === null) {
-                items[n][f] = "";
+        var src = items[n];
+        var names = new Array();
+        for (var f in src) {
+            names.push(f);
+        }
+        var item = new Object();
+        if (src.iStateID !== undefined) {
+            item.iStateID = src.iStateID === null ? "" : src.iStateID;
+        }
+        for (var k = names.length - 1; k >= 0; k--) {
+            if (names[k] != "iStateID") {
+                item[names[k]] = src[names[k]] === null ? "" : src[names[k]];
             }
         }
+        items[n] = item;
     }
+    return items;
+};
+// A list in place of the last of its name, the pages showing it told.
+_global.__fireDeliver = function(name, items) {
     _global.__fireData[name] = items;
     var list = _global.__fireProviders[name];
     var i = 0;
     while (list != undefined && i < list.length) {
         list[i].onDataReceived(_global.__fireResult(2, items));
         i++;
+    }
+};
+api.addCallback("setData", null, function(name, items) {
+    _global.__fireDeliver(name, _global.__fireRows(items));
+});
+// A list ready for a request ("<list>:<id>"); a blank key forgets them all.
+api.addCallback("prepareData", null, function(key, items) {
+    if (key == null || key == "") {
+        _global.__firePrepared = new Object();
+    } else {
+        _global.__firePrepared[key] = _global.__fireRows(items);
     }
 });
 api.addCallback("dpsList", null, function() {

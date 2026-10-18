@@ -241,8 +241,9 @@ fn pause_toggle(
     }
     let pad = |b: B| gamepads.iter().any(|g| g.just_pressed(b));
     // (A shooting gallery's boxes back out with it: `shooting_gallery`.)
+    // (The original pause menu and shop page go back a step with it.)
     let esc = keys.just_pressed(KeyCode::Escape)
-        && !(original.0 && *state.get() == GameState::Paused)
+        && !(original.0 && matches!(state.get(), GameState::Paused | GameState::Shop))
         && !(gallery.is_some_and(|g| g.claims_escape()) && *state.get() == GameState::Playing)
         && !(poker.is_some_and(|p| p.claims_escape()) && *state.get() == GameState::Playing)
         && !(minigame.is_some_and(|m| m.holds_player()) && *state.get() == GameState::Playing)

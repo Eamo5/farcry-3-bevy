@@ -204,7 +204,19 @@ jump targets labelled and a function's registers by name):
   `sName`, `sInfo`, `sSubCategory` (loot, animal, plant), `iPrice` and
   `bRare`. The shim keeps the lists by name (`Host::set_data`);
   `FC3UI_DATA="DataLootInventory=sName:...,iStateID:2;..."` sets them in
-  `fc3ui hud` after its events.
+  `fc3ui hud` after its events. The binder goes through an item's fields
+  in reverse of their making, and a button's state binds after its other
+  fields, as the engine's lists had it (the shop's button reads its price
+  as its state is set, to show it `$375`), so the shim makes `iStateID`
+  first and the others after in their order.
+* **Answers at once**: the engine answered a page's request for a list
+  (`onRequestedMenu`) before the call returned, and the shop page counts on
+  it: as it hears of a weapon's customising lists it reads which weapon
+  from where it stood before the request (its breadcrumb and stats name the
+  weapon). Ours come a frame later, so the game makes ready the lists a
+  page may ask for next (`Host::prepare_data`, keyed `<list>:<id>`) and the
+  shim hands one over as it's asked; the host still hears of the request,
+  its last argument `prepared`.
 
 `crates/fc3_ui/src/shim.as` is the engine's side, compiled at start with
 `rascal` (the AS2 compiler Ruffle's build uses) and played at level 0:
@@ -407,7 +419,7 @@ so its menus animate with the game paused. `--pause` (tests) pauses three
 seconds into play, `FC3_PAUSE_PAGE=13` goes on to a page from there
 (`10,5` with launch arguments: the handbook's guide tab), and
 `FC3_PAUSE_KEYS=Enter,Down,Enter` then presses keys on it, 0.6 s apart
-(Enter, Escape, Space and the arrows). The game opens a page with
+(Enter, Escape, Space, Tab and the arrows). The game opens a page with
 `SetPageToLoad <page> -1 -1 -1`: a page takes the further arguments as
 where to open it (the crafting page's tab, a group, an entry), and without
 them the crafting page read a blank as its tab.
@@ -427,6 +439,47 @@ page is `RequestPageChange -1`, the pause page. Each page says
 it reloads the page for ever). The main pause page makes a widget
 (`A_Widget`, `attachMovie("mcWidget")`) it doesn't import, so that one
 attaches nothing.
+
+**Shop** (`shop.feu`, quick launch 0; `original_ui::shop`): at a shop
+(`GameState::Shop`) the pause menu opens on it, in place of ours. On its
+own it asks `onRequestedMenu 0 DataCategory` and says `ShopManagerLoaded`
+(the game hides the weapon's 3D views, the engine's drawing, and sends
+`SetMoney <money> <most>`); then it asks for one list at a time, each
+answered from the game's own tree (`shopcategory.lib` and
+`shopsubcategory1.lib`, `fc3_formats::shop::tree_from_libs`) and our stock:
+
+* `DataCategory`: buy and sell (`sName`, `iObjectID`, `sImage` the widget's
+  icon, `TX_Buy`). It opens buy: `DataSub1Category 11`, its subcategories
+  in their order, those with anything of ours in them, each with what it
+  opens (`iTypeID`: 0 guns, 5 melee weapons, 4 ammunition, 2 other things).
+* `DataWeapon <subcategory>`: its guns, the shop's that are ours (by
+  model): name and description (string ids), `sImage` (the shop's icon, a
+  frame of `MC_WeaponIconsRightAlign`), `iStateID` 2 to buy or 3 owned,
+  `iPrice` (free once its towers are taken), the shop's bars
+  (`WeaponStatistics` out of 5, as fractions: the bars run 0 to 1) and stars
+  (`fRating`), and `bCustomizable`.
+* `DataItem <subcategory>`: its ammunition and supplies (the database's,
+  `progression::supply_items`), with how many are carried
+  (`iCurrentCount` of `iMaxCount`; body armour as a percentage), its maps
+  (`treasure_maps`), or its melee weapons.
+* An owned gun's `DataWidgetCustom <weapon>`: its two lists (attachments,
+  `TX_Attachment`, and paints, `TX_Skin`), each with an id of its own
+  (`custom_id`), then `DataCustomization <list>`: the attachments it takes,
+  by the shop's offers (name, description, icon and price: `iStateID` 3
+  once bought, `bEquip` fitted), or the paints its model takes (ours).
+* Sell: `DataSell`, the rucksack's tiles (as the rucksack page's) and one
+  for each room left in it (`iStateID` 0, "empty"); the page counts them
+  (`9/16`).
+
+`OnBuy <type> <id>` buys (`progression::trade`, the same as our shop's
+buttons), `EquipAttachment <id>` puts a sight bought before back on (or a
+paint on or off), `SellLoot <id>` sells one of a thing (double-clicked, or
+twice within a quarter second) and `OnSellAll` (Quick Sell) the
+valuables; each has the list sent again and the money. A tutorial's shop
+(`ShopOverride`) opens on its weapon (`OverrideShopMenu <subcategory>
+<weapon>`, once the subcategories are in). Escape goes back a list, and
+out from the subcategories (`QuitMenu`). `--shop 0` (tests) opens it in
+play; `FC3_PAUSE_PAGE=0` from the pause menu.
 
 **Skills** (`M_Skills.feu`, quick launch 3): on `PlayerSkillsLoaded` the
 game sends `InitChapter` (each of the three trees' name, description and a
