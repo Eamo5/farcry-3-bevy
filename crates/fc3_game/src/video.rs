@@ -8,7 +8,8 @@
 //!
 //! The story hears a video start at once and end when it has played out (or
 //! was skipped or stopped). Full-screen ones skip with the skip keys and
-//! hold the player still.
+//! hold the player still. A backdrop (the main menu's loop) fills the window
+//! under the interface, and neither the story nor the skip keys see it.
 
 use std::sync::Arc;
 
@@ -38,6 +39,8 @@ pub struct VideoRequest {
     /// The screen in the world it plays on: an entity id and the name of
     /// the material showing it.
     pub screen: Option<(u64, String)>,
+    /// Under the interface, filling the window (the main menu's).
+    pub backdrop: bool,
 }
 
 #[derive(Resource, Default)]
@@ -54,6 +57,14 @@ impl Videos {
         self.playing.iter().any(|p| p.fullscreen)
     }
 
+    /// Ends the backdrop.
+    pub fn stop_backdrop(&mut self) {
+        for p in self.playing.iter_mut().filter(|p| p.backdrop) {
+            p.looped = false;
+            p.t = f32::MAX;
+        }
+    }
+
     /// Drops every video (a reload).
     pub fn reset(&mut self) {
         self.requests.clear();
@@ -65,6 +76,7 @@ impl Videos {
 struct Playing {
     path: String,
     fullscreen: bool,
+    backdrop: bool,
     looped: bool,
     bink: fc3_bink::Bink,
     image: Handle<Image>,
@@ -148,7 +160,9 @@ fn play_videos(
     };
     let videos = &mut *videos;
     for r in std::mem::take(&mut videos.requests) {
-        event(&r.path, false, r.fullscreen);
+        if !r.backdrop {
+            event(&r.path, false, r.fullscreen);
+        }
         let file = video_file(&info.root, &r.path);
         let bink = std::fs::read(&file).map_err(anyhow::Error::from).and_then(|b| fc3_bink::Bink::new(Arc::from(b)));
         let bink = match bink {
@@ -156,7 +170,9 @@ fn play_videos(
             Err(e) => {
                 // Not converted (or unreadable): it ends at once.
                 warn!("video {}: {e:#}", r.path);
-                event(&r.path, true, r.fullscreen);
+                if !r.backdrop {
+                    event(&r.path, true, r.fullscreen);
+                }
                 continue;
             }
         };
@@ -176,7 +192,29 @@ fn play_videos(
             RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
         ));
         let aspect = w as f32 / h.max(1) as f32;
-        let ui = if r.fullscreen {
+        let ui = if r.backdrop {
+            // (Filling the window, cut to fit, under the interface's canvas.)
+            commands
+                .spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        width: Val::Percent(100.0),
+                        height: Val::Percent(100.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                    BackgroundColor(Color::BLACK),
+                    GlobalZIndex(20),
+                    VideoPanel,
+                    children![(
+                        Node { min_width: Val::Percent(100.0), min_height: Val::Percent(100.0), aspect_ratio: Some(aspect), ..default() },
+                        ImageNode::new(image.clone())
+                    )],
+                ))
+                .id()
+        } else if r.fullscreen {
             commands
                 .spawn((
                     Node {
@@ -229,6 +267,7 @@ fn play_videos(
         videos.playing.push(Playing {
             path: r.path,
             fullscreen: r.fullscreen,
+            backdrop: r.backdrop,
             looped: r.looped,
             bink,
             image,
@@ -292,7 +331,9 @@ fn play_videos(
             commands.entity(s).try_despawn();
         }
         images.remove(&p.image);
-        event(&p.path, true, p.fullscreen);
+        if !p.backdrop {
+            event(&p.path, true, p.fullscreen);
+        }
     }
 }
 
@@ -425,7 +466,7 @@ fn screen_test(
         Some((d, id, name)) => {
             *done = true;
             info!("screen-test: playing on {id} ({name}) {d:.1} m away");
-            videos.requests.push(VideoRequest { path: video, fullscreen: false, looped: true, volume: 1.0, screen: Some((id, name)) });
+            videos.requests.push(VideoRequest { path: video, fullscreen: false, looped: true, volume: 1.0, screen: Some((id, name)), backdrop: false });
         }
         None if time.elapsed_secs() > 60.0 => {
             *done = true;

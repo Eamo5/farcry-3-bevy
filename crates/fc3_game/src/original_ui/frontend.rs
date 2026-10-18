@@ -31,6 +31,8 @@ use fc3_ui::ExternalValue as V;
 use super::Interface;
 
 const FRONTEND_MOVIE: &str = r"UI\Multiplayer\Menu\MultiMain.feu";
+/// The loop it plays behind (it loads it into a clip; the engine drew it).
+const FRONTEND_VIDEO: &str = r"UI\Singleplayer\Video\Swan_30_Sec_loop.bik";
 const FRONTEND_LEVEL: u32 = 20;
 
 /// The home list's entries: their names (string ids) and actions.
@@ -104,6 +106,7 @@ pub(super) fn drive_frontend(
         MessageReader<bevy::input::mouse::MouseButtonInput>,
     ),
     mut windows: Query<(&Window, &mut bevy::window::CursorOptions), With<PrimaryWindow>>,
+    mut videos: ResMut<crate::video::Videos>,
     mut shown: Local<FrontendShown>,
 ) {
     use crate::menu::GameState;
@@ -124,6 +127,14 @@ pub(super) fn drive_frontend(
             host.answer("VIEWPORT_HEIGHT", &fc3_ui::STAGE.1.to_string());
             host.level_visible(super::HUD_LEVEL, false);
             host.load(FRONTEND_MOVIE, FRONTEND_LEVEL);
+            videos.requests.push(crate::video::VideoRequest {
+                path: FRONTEND_VIDEO.into(),
+                fullscreen: false,
+                looped: true,
+                volume: 1.0,
+                screen: None,
+                backdrop: true,
+            });
             // (It draws its own cursor.)
             if let Ok((_, mut cursor)) = windows.single_mut() {
                 cursor.visible = false;
@@ -132,6 +143,7 @@ pub(super) fn drive_frontend(
             shown.pressed = 0;
         } else {
             host.unload(FRONTEND_LEVEL);
+            videos.stop_backdrop();
             host.level_visible(super::HUD_LEVEL, true);
         }
         return;
@@ -144,6 +156,9 @@ pub(super) fn drive_frontend(
         let arg = |i: usize| call.args.get(i).map(String::as_str).unwrap_or("");
         match arg(0) {
             "RequestMultiMainState" => {
+                // (Its loop plays under the interface: the black the engine
+                // drew it over goes.)
+                host.set_path(&format!("_level{FRONTEND_LEVEL}.bg.black._visible"), V::Bool(false));
                 host.event("FrontEnd", &["RequestMultiMainStateResponse", "gameStart", "0", "0", "0", "0", "0"]);
                 host.event("FrontEnd", &["OnVersionNumber", env!("CARGO_PKG_VERSION")]);
             }

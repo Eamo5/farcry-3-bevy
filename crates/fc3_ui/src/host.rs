@@ -101,16 +101,26 @@ impl ExternalInterfaceProvider for Provider {
 
 /// Fetches from the cache: a movie names another (`ImportAssets`,
 /// `loadMovie`) by its archive path (`UI\Common\lib.feu`), which
-/// `fc3_formats::feu::movie_rel` maps to the cached SWF.
+/// `fc3_formats::feu::movie_rel` maps to the cached SWF. A Bink video loaded
+/// into a clip (the frontend's backdrop; the engine drew it there) loads an
+/// empty movie (`EMPTY_REL`), so the clip's stand-in goes and what the game
+/// shows under the interface shows through.
 struct CacheNavigator {
     inner: NullNavigatorBackend,
     root: PathBuf,
 }
 
+/// An empty movie (SWF 8, no stage, one frame), kept in the cache.
+const EMPTY_REL: &str = "ui/empty.swf";
+const EMPTY_SWF: [u8; 17] = [b'F', b'W', b'S', 8, 17, 0, 0, 0, 0, 0, 24, 1, 0, 0x40, 0, 0, 0];
+
 impl CacheNavigator {
     fn map(&self, url: &str) -> Option<Url> {
         if Url::parse(url).is_ok() {
             return None;
+        }
+        if url.to_ascii_lowercase().ends_with(".bik") {
+            return Url::from_file_path(self.root.join(EMPTY_REL)).ok();
         }
         Url::from_file_path(self.root.join(fc3_formats::feu::movie_rel(url))).ok()
     }
@@ -195,6 +205,11 @@ impl Host {
         let executor = NullExecutor::new();
         let inner = NullNavigatorBackend::with_base_path(cache_root, &executor)?;
         let navigator = CacheNavigator { inner, root: cache_root.to_path_buf() };
+        if !cache_root.join(EMPTY_REL).exists() {
+            if let Err(e) = std::fs::write(cache_root.join(EMPTY_REL), EMPTY_SWF) {
+                tracing::warn!("interface: no empty movie ({e})");
+            }
+        }
         // (Without the table the movies' texts read empty.)
         let strings = std::fs::read(cache_root.join(STRINGS_REL))
             .map_err(anyhow::Error::from)
@@ -327,6 +342,12 @@ impl Host {
         let blank = |v: ExternalValue| if matches!(&v, ExternalValue::String(s) if s.is_empty()) { ExternalValue::Null } else { v };
         let list = items.into_iter().map(|item| ExternalValue::Object(item.into_iter().map(|(k, v)| (k, blank(v))).collect())).collect();
         self.call("prepareData", vec![ExternalValue::String(key.to_string()), ExternalValue::List(list)]);
+    }
+
+    /// Sets a property at a path (`_level20.bg.black._visible`); false if the
+    /// path isn't there.
+    pub fn set_path(&self, path: &str, value: ExternalValue) -> bool {
+        matches!(self.call("setPath", vec![ExternalValue::String(path.to_string()), value]), ExternalValue::Bool(true))
     }
 
     /// What is at a path (`_level1.mcBack`, `_global.isInverted`), as text:

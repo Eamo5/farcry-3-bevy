@@ -513,8 +513,12 @@ picture, 1 to 11) is ours: how far into the 38 main missions the save is.
 `LoadSaveGame` goes on from the save (`save::ContinueGame`); a new game's
 slot is taken (`ValidateNewGameSlot`, `NewGameSlotValidated`) and
 `InitNewGame <slot> <difficulty>` starts the story. The options page takes the
-pause menu's answers. Its background was a Bink loop the frontend loads into
-a clip (`Swan_30_Sec_loop.bik`), which isn't played yet: it stands on black.
+pause menu's answers. Behind it plays its Bink loop (`Swan_30_Sec_loop.bik`),
+which it loads into a clip the engine drew over: the host answers a `.bik`
+load with an empty movie (`ui/empty.swf`, written to the cache) so the clip
+empties, the loop plays as a backdrop under the interface (`video`, filling
+the window), and the black under the clip goes (`Host::set_path`,
+`_level20.bg.black._visible`).
 `--menu` keeps an automated run at it, `FC3_SAVE` gives it a save, and
 `FC3_FRONTEND_KEYS=Enter,Down,...` presses keys once its home list has been up
 two seconds.

@@ -2292,6 +2292,7 @@ fn run_story(
                         volume: a(3).parse().unwrap_or(1.0),
                         // The screen it plays on: an entity and its material.
                         screen: a(1).parse::<u64>().ok().filter(|&id| id != fc3_story::PLAYER).map(|id| (id, a(2))),
+                        backdrop: false,
                     }),
                     // Specific gameplays own their playback and completion.
                     // (A gameplay of its own name playing a QTE move is one

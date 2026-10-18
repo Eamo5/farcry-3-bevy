@@ -337,6 +337,28 @@ api.addCallback("event", null, function(name, args) {
     }
     channel.broadcastMessage.apply(channel, ["onEvent"].concat(args));
 });
+// A property at a path set (`_level20.bg.black._visible`: a clip the
+// engine drew over); false if the path isn't there.
+api.addCallback("setPath", null, function(path, value) {
+    var parts = String(path).split(".");
+    var o = _global;
+    var i = 0;
+    if (parts[0] == "_global") {
+        i = 1;
+    } else if (parts[0].substr(0, 6) == "_level" || parts[0] == "_root") {
+        o = eval(parts[0]);
+        i = 1;
+    }
+    while (i < parts.length - 1) {
+        o = o[parts[i]];
+        if (o == undefined) {
+            return false;
+        }
+        i++;
+    }
+    o[parts[parts.length - 1]] = value;
+    return true;
+});
 // A function a movie defines (on its timeline or globally), by path.
 api.addCallback("call", null, function(path, args) {
     var parts = String(path).split(".");
