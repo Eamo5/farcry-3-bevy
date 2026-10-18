@@ -328,7 +328,9 @@ only what changed (and everything again until the movies have loaded):
   the enemies the game's own minimap shows (tagged, or on to the player,
   `enemy`) and vehicles free to take (`vehicle`, `boat`, `glider`);
   `LocMarker_<n>` (16) places: outposts (`OutpostLocked` while held,
-  `FastTravel` once taken), their working alarm boxes (`Alarm`, `AlarmOn`
+  `FastTravel` once taken, unless their own safehouse stands for them), the
+  story's safehouses (`FastTravel` open, `SafehouseLocked` not yet), their
+  working alarm boxes (`Alarm`, `AlarmOn`
   while ringing), radio towers (`TowerLocked` until climbed, then `Tower`)
   collectibles within the game's radius (`Relic`, `Letter`, `Sdcard`) and
   plants within it by their colour (`plant_red`... as the plant's pickups
@@ -342,7 +344,7 @@ only what changed (and everything again until the movies have loaded):
   disc, `Outside` held on its rim, `Up` or `Down` when well above or
   below). `NorthMarkerMC` turns about the centre to the north
   (`_rotation`). The labels the movie has and the game doesn't use yet:
-  `companion`, `BeerPong`, safehouses, photo spots, ammo, encounters. `fc3tool swf-script <movie> labels [text]`
+  `companion`, `BeerPong`, photo spots, ammo, encounters. `fc3tool swf-script <movie> labels [text]`
   lists a movie's sprites' frame labels.
   The game's own minimap icons stand down meanwhile.
 
@@ -372,6 +374,14 @@ only what changed (and everything again until the movies have loaded):
   checkpoint, which now saves the game with it; else its "Saving...",
   161640, for the minute's autosave and the pause menu's Save) and
   `ShowSaving 0` takes it away two seconds on.
+* **Objective indicators**: `UI\Common\Hud\ObjectiveIndicator.feu` (the
+  HUD loads it) has ten `ObjectiveIndicator_<n>`: each objective in the
+  world (`story::ObjectiveMarkers`, a race's next gate) goes where it is on
+  the stage ("ObjectiveMarker", frame 2), or, off screen, on a frame 70
+  pixels in from the edges toward it, turned that way ("ObjectiveArrow",
+  frame 1, its art pointing up); `PlayerMarkerIndicator` is the waypoint
+  ("Inside" 1, "Outside" 2). The movie shows no distances; our diamonds
+  and distances stand down.
 * **Mission timer**: `ObjectiveTimer` shows the first of the story's
   timers in `ObjectiveTimerText` (as the game's own HUD writes it), hidden
   without one.

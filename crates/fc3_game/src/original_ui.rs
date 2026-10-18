@@ -57,7 +57,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_timer,
                     drive_xp,
                     (drive_loot, drive_saving),
-                    drive_stealth,
+                    (drive_stealth, drive_indicators),
                     drive_hits,
                     drive_grenades,
                     drive_radar,
@@ -793,6 +793,8 @@ fn radar_label(icon: f64) -> Option<&'static str> {
         map_icon::ULC_QUEST => "ULCLostExpeditions",
         map_icon::CHALLENGES => "ChallengeBoard",
         map_icon::SHOP => "Shop",
+        map_icon::SAFEHOUSE => "FastTravel",
+        map_icon::SAFEHOUSE_LOCKED => "SafehouseLocked",
         map_icon::POKER => "Poker",
         map_icon::KNIFE => "KnifeThrowing",
         map_icon::SHOOTING => "ShootingChallenge",
@@ -2483,6 +2485,96 @@ fn drive_loot(
     }
 }
 
+/// The objectives in the world on screen (`UI\Common\Hud\ObjectiveIndicator.feu`,
+/// which the HUD loads): up to ten `ObjectiveIndicator_<n>` each where its
+/// objective is on the stage ("ObjectiveMarker", frame 2), or, off screen,
+/// on a frame round the middle toward it, turned that way
+/// ("ObjectiveArrow", frame 1); the waypoint is `PlayerMarkerIndicator`
+/// ("Inside" 1, "Outside" 2). No distances: the movie has none.
+const INDICATORS: usize = 10;
+const INDICATOR_ARROW: u32 = 1;
+const INDICATOR_MARKER: u32 = 2;
+const WAYPOINT_INSIDE: u32 = 1;
+const WAYPOINT_OUTSIDE: u32 = 2;
+/// The frame (stage pixels in from each edge) the off-screen arrows sit
+/// on, and the way the arrow's art points (degrees, clockwise from right).
+const INDICATOR_INSET: f32 = 70.0;
+const ARROW_ART: f32 = -90.0;
+
+#[allow(clippy::type_complexity)]
+fn drive_indicators(
+    state: NonSend<Interface>,
+    markers: Res<crate::story::ObjectiveMarkers>,
+    waypoint: Res<crate::map::Waypoint>,
+    cameras: Query<(&Camera, &GlobalTransform), With<crate::player::PlayerCamera>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    (minigame, races, trials): (Option<Res<crate::hud::Minigame>>, Option<Res<crate::races::Races>>, Option<Res<crate::trials::Trials>>),
+    mut last: Local<Vec<Option<(i32, i32, i32, u32)>>>,
+) {
+    let Interface::Running(host) = &*state else { return };
+    let (Ok((cam, cam_t)), Ok(window)) = (cameras.single(), windows.single()) else { return };
+    // (A race's next gate with them; while a race or a trial holds the
+    // player, the gate alone; while a minigame does, none.)
+    let racing = races.as_ref().is_some_and(|r| r.holds_player()) || trials.is_some_and(|t| t.holds_player());
+    let mut goals: Vec<Vec3> = markers.0.iter().copied().filter(|_| !racing).chain(races.and_then(|r| r.marker)).collect();
+    if minigame.is_some_and(|m| m.holds_player()) {
+        goals.clear();
+    }
+    let (sw, sh) = (fc3_ui::STAGE.0 as f32, fc3_ui::STAGE.1 as f32);
+    let scale = (window.width() / sw).min(window.height() / sh).max(0.01);
+    let offset = Vec2::new(window.width() - sw * scale, window.height() - sh * scale) / 2.0;
+    let (lo, hi) = (Vec2::splat(INDICATOR_INSET), Vec2::new(sw, sh) - INDICATOR_INSET);
+    let mid = (lo + hi) * 0.5;
+    let view = cam_t.affine().inverse();
+    // Where on the stage, and whether there (else held on the frame, turned).
+    let place = |at: Vec3| -> (Vec2, Option<f32>) {
+        let local = view.transform_point3(at);
+        let seen = cam.world_to_viewport(cam_t, at).ok().map(|p| (p - offset) / scale).filter(|p| local.z < 0.0 && p.cmpge(lo).all() && p.cmple(hi).all());
+        if let Some(p) = seen {
+            return (p, None);
+        }
+        let mut d = Vec2::new(local.x, -local.y);
+        if local.z > 0.0 {
+            d.y = d.y.max(0.0);
+        }
+        if d.length_squared() < 1e-6 {
+            d = Vec2::Y;
+        }
+        let half = (hi - lo) * 0.5;
+        let k = (half.x / d.x.abs().max(1e-6)).min(half.y / d.y.abs().max(1e-6));
+        (mid + d * k, Some(d.y.atan2(d.x).to_degrees() - ARROW_ART))
+    };
+    let mut now: Vec<Option<(i32, i32, i32, u32)>> = Vec::with_capacity(INDICATORS + 1);
+    for i in 0..INDICATORS {
+        now.push(goals.get(i).map(|g| {
+            let (p, turn) = place(*g);
+            (p.x.round() as i32, p.y.round() as i32, turn.map_or(0, |t| t.round() as i32), if turn.is_some() { INDICATOR_ARROW } else { INDICATOR_MARKER })
+        }));
+    }
+    now.push(waypoint.0.map(|w| {
+        let (p, turn) = place(w);
+        (p.x.round() as i32, p.y.round() as i32, turn.map_or(0, |t| t.round() as i32), if turn.is_some() { WAYPOINT_OUTSIDE } else { WAYPOINT_INSIDE })
+    }));
+    if *last == now {
+        return;
+    }
+    let num = |n: f64| fc3_ui::ExternalValue::Number(n);
+    for (i, slot) in now.iter().enumerate() {
+        if last.get(i) == Some(slot) {
+            continue;
+        }
+        let id = if i < INDICATORS { format!("ObjectiveIndicator_{i}") } else { "PlayerMarkerIndicator".to_string() };
+        host.dps_visible(&id, slot.is_some());
+        if let Some((x, y, turn, frame)) = *slot {
+            host.dps_frame(&id, num(frame as f64));
+            host.dps_set(&id, "_x", num(x as f64));
+            host.dps_set(&id, "_y", num(y as f64));
+            host.dps_set(&id, "_rotation", num(turn as f64));
+        }
+    }
+    *last = now;
+}
+
 /// The stealth indicators (`StealthIndicator<n>`, three): each turns round
 /// the screen's centre toward an enemy noticing the player, its
 /// `StealthIndicatorAnim<n>` filling over 100 frames as the enemy's
@@ -3868,8 +3960,13 @@ fn drive_radar(
     let Ok((at, player)) = players.single() else { return };
     // The story's markers: the standing ones looked over once a second.
     let now_secs = time.elapsed_secs();
+    // (With the safehouses the story opens, to travel to or not yet.)
     if let Some(h) = story.as_ref().filter(|_| now_secs >= standing.0) {
-        *standing = (now_secs + 1.0, standing_markers(h));
+        let mut markers = standing_markers(h);
+        let safehouses = h.story.travel_destinations();
+        markers
+            .extend(safehouses.iter().map(|d| (if d.unlocked { map_icon::SAFEHOUSE } else { map_icon::SAFEHOUSE_LOCKED }, crate::data::to_bevy(d.position))));
+        *standing = (now_secs + 1.0, markers);
     }
     let scripted = story.as_ref().map(|h| scripted_markers(h));
     // The map turns with the player (heading clockwise from north).
@@ -3922,7 +4019,9 @@ fn drive_radar(
     let mut places = Vec::new();
     for o in &outposts.list {
         let l = local(o.centre);
-        if on_disc(l) {
+        // (A liberated outpost's own safehouse stands for it.)
+        let own = o.liberated && standing.1.iter().any(|(k, p)| *k == map_icon::SAFEHOUSE && o.contains(*p));
+        if on_disc(l) && !own {
             places.push((l.length(), marker(l, if o.liberated { "FastTravel" } else { "OutpostLocked" })));
         }
         if !o.liberated {

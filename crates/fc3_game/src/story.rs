@@ -900,9 +900,14 @@ fn draw_markers(
     icons: Query<Entity, With<MarkerIcon>>,
     mut commands: Commands,
     (scale, minigame, races, trials): (Res<UiScale>, Option<Res<crate::hud::Minigame>>, Option<Res<crate::races::Races>>, Option<Res<crate::trials::Trials>>),
+    original: Res<crate::hud::OriginalHud>,
 ) {
     for e in &icons {
         commands.entity(e).despawn();
+    }
+    // (The original HUD shows them its own way: `original_ui::drive_indicators`.)
+    if original.0 {
+        return;
     }
     // (A race's next gate with them; while a race holds the player, the gate
     // alone.)
