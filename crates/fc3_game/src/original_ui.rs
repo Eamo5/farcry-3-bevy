@@ -1956,6 +1956,8 @@ fn start_hud(host: &mut fc3_ui::Host, (_w, h): (u32, u32)) {
 struct Hud {
     bars: usize,
     slots: [u32; 10],
+    /// The health bar's alpha (percent): blinking when low.
+    health_alpha: u32,
     potions: u32,
     /// The ammo strip shown, its background and foreground frames and
     /// whether rounds are left (a row each for the machine gun's), and the
@@ -2028,6 +2030,12 @@ fn strip_frames(total: u32, capacity: u32, rounds: u32) -> (u32, u32, bool) {
     (frame(capacity), frame(rounds), rounds > 0)
 }
 
+/// The health below which the bar blinks (`fHealthBarBlinkingThreshold`),
+/// a blink's length (s) and how faint it goes (percent).
+const HEALTH_BLINK_BELOW: f32 = 50.0;
+const HEALTH_BLINK_PERIOD: f32 = 0.8;
+const HEALTH_BLINK_LOW: f32 = 25.0;
+
 /// Sends the game's state to the HUD's clips.
 fn drive_hud(
     state: NonSend<Interface>,
@@ -2048,7 +2056,7 @@ fn drive_hud(
     mut placement: ResMut<crate::map::MinimapPlacement>,
     ui_scale: Res<UiScale>,
     (progress, mut armour_full): (Res<crate::progression::Progress>, Local<f32>),
-    (actions, mut thrown): (Res<crate::controls::ActionState>, Local<Option<crate::controls::Action>>),
+    (actions, mut thrown, time): (Res<crate::controls::ActionState>, Local<Option<crate::controls::Action>>, Res<Time>),
 ) {
     let Interface::Running(host) = &*state else { return };
     if !original.0 {
@@ -2065,6 +2073,14 @@ fn drive_hud(
         let fill = ((health.current - i as f32 * per) / per).clamp(0.0, 1.0);
         hud.slots[i] = if i < bars { 1 + (fill * 29.0).round() as u32 } else { 0 };
     }
+    // Below the player's threshold the bar blinks (`CFCXPawnHudComponent`'s
+    // `fHealthBarBlinkingThreshold`).
+    hud.health_alpha = if health.current > 0.0 && health.current < HEALTH_BLINK_BELOW {
+        let wave = 0.5 + 0.5 * (time.elapsed_secs() * std::f32::consts::TAU / HEALTH_BLINK_PERIOD).cos();
+        (HEALTH_BLINK_LOW + (100.0 - HEALTH_BLINK_LOW) * wave).round() as u32 / 5 * 5
+    } else {
+        100
+    };
     hud.potions = stats.medkits;
     // Armour: what is left of the most worn since it was put on.
     *armour_full = if progress.armour > 0.0 { armour_full.max(progress.armour) } else { 0.0 };
@@ -2163,6 +2179,9 @@ fn drive_hud(
     }
     if first || old.potions != hud.potions {
         ok &= host.dps_text("PotionCount", &hud.potions.to_string());
+    }
+    if first || old.health_alpha != hud.health_alpha {
+        ok &= host.dps_set("HealthOverall", "_alpha", num(hud.health_alpha));
     }
     if first {
         // (The radar's placeholder gives way to the minimap, under the

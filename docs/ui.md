@@ -300,7 +300,11 @@ only what changed (and everything again until the movies have loaded):
 * **Health**: `HealthBarSlot0`..`9` sit round the radar, one per health
   segment (`HEALTH_SEGMENT`), each filling over its 30 frames (1 empty, 30
   full); `HealthBarBG` and `HealthBarOutline` go to the frame of the number
-  of segments; `PotionCount` is the medkits carried. Armour worn shows
+  of segments; `PotionCount` is the medkits carried. Below 50 health
+  (`CFCXPawnHudComponent`'s `fHealthBarBlinkingThreshold`) the slots
+  (`HealthOverall`) blink, their alpha pulsing down to a quarter every
+  0.8 s. `FC3_PLAYER_HURT=<seconds>,<health>` holds the player at that
+  health (tests). Armour worn shows
   as the arc round them (`ArmorBar` over `ArmorBarBG`, frames 1 empty to
   61 full: what is left of the most worn since it was put on); without
   armour both hide.

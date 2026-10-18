@@ -268,7 +268,8 @@ pub struct Died {
 }
 
 /// `FC3_PLAYER_DIE=<seconds>` (tests): the player dies once, that long into
-/// play (the death and the respawn to be seen).
+/// play (the death and the respawn to be seen); `FC3_PLAYER_HURT=<seconds>,
+/// <health>` leaves him that health then instead (and holds it there).
 fn test_die(
     time: Res<Time>,
     state: Res<State<crate::menu::GameState>>,
@@ -277,6 +278,19 @@ fn test_die(
     mut done: Local<bool>,
 ) {
     if *done || *state.get() != crate::menu::GameState::Playing {
+        return;
+    }
+    let hurt = std::env::var("FC3_PLAYER_HURT").ok().and_then(|v| {
+        let (a, b) = v.split_once(',')?;
+        Some((a.trim().parse::<f32>().ok()?, b.trim().parse::<f32>().ok()?))
+    });
+    if let Some((after, left)) = hurt {
+        if time.elapsed_secs() >= after {
+            if let Ok((_, mut h)) = players.single_mut() {
+                h.current = left;
+                h.since_damage = 0.0;
+            }
+        }
         return;
     }
     let Some(after) = std::env::var("FC3_PLAYER_DIE").ok().and_then(|v| v.parse::<f32>().ok()) else {
