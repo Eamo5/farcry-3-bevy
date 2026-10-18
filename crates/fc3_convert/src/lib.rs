@@ -2674,7 +2674,21 @@ const CINEMA_STAMP: &str = "cinema/stamp-named-movement.txt";
 /// from the game's font files traced (`fc3_formats::ffd`).
 fn convert_movies(job: &Job) -> Result<()> {
     use fc3_formats::{feu, ffd, texture};
-    let paths: Vec<String> = job.vfs.names.values().filter(|n| n.ends_with(".feu")).cloned().collect();
+    let mut paths: Vec<String> = job.vfs.names.values().filter(|n| n.ends_with(".feu")).cloned().collect();
+    // And the movies these load or import that the archives' lists don't
+    // name (the frontend's `mpIgeRatingPopup.feu`: without it its pages
+    // never finish loading), as far as they lead.
+    let mut seen: HashSet<String> = paths.iter().cloned().collect();
+    let mut queue = paths.clone();
+    while let Some(path) = queue.pop() {
+        let Ok(bytes) = job.vfs.read(&path) else { continue };
+        for found in feu::movie_paths(&bytes) {
+            if job.vfs.exists(&found) && seen.insert(found.clone()) {
+                paths.push(found.clone());
+                queue.push(found);
+            }
+        }
+    }
     let refresh = !exists(job.root(), feu::MOVIES_STAMP_REL);
     let pixels = |path: &str| job.vfs.read(path).ok().and_then(|x| texture::parse(&x).ok().and_then(|t| texture::decode_rgba(t.dds)));
     // The fonts the movies take, each traced once.

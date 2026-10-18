@@ -104,6 +104,34 @@ pub fn movie_rel(path: &str) -> String {
     }
 }
 
+/// The movies a movie names (`loadMovie`, `ImportAssets`), as archive
+/// paths (lower case, backslashes): the texts in its bytes ending `.feu`.
+/// The archives' name lists miss some (the frontend's rating popup), which
+/// are found this way.
+pub fn movie_paths(data: &[u8]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let path_byte = |b: u8| b.is_ascii_alphanumeric() || b"\\/_-().".contains(&b);
+    let mut i = 0;
+    while i + 4 <= data.len() {
+        if !data[i..i + 4].eq_ignore_ascii_case(b".feu") {
+            i += 1;
+            continue;
+        }
+        let mut start = i;
+        while start > 0 && path_byte(data[start - 1]) {
+            start -= 1;
+        }
+        let text = String::from_utf8_lossy(&data[start..i + 4]).to_string();
+        let parts: Vec<&str> = text.trim().split(['\\', '/']).filter(|p| !p.is_empty()).collect();
+        let path = parts.join("\\").to_ascii_lowercase();
+        if parts.len() > 1 && !out.contains(&path) {
+            out.push(path);
+        }
+        i += 4;
+    }
+    out
+}
+
 /// Where the tags start (after the header's frame rectangle, rate and count).
 fn tags_start(data: &[u8]) -> Result<usize> {
     if data.len() < 9 {
@@ -808,6 +836,19 @@ pub fn to_swf(
     let len = out.len() as u32;
     out[4..8].copy_from_slice(&len.to_le_bytes());
     Ok(out)
+}
+
+#[cfg(test)]
+mod movie_path_tests {
+    use super::*;
+
+    /// The paths a movie's bytes hold, in any case and with either slash,
+    /// come out as archive paths; a bare name doesn't.
+    #[test]
+    fn a_movie_names_the_movies_it_loads() {
+        let bytes = b"\x00\x96UI\\Multiplayer\\Menu\\mpIgeRatingPopup.feu\x00Ui//Common//ButtonLib.FEU\x00lib.feu\x00";
+        assert_eq!(movie_paths(bytes), vec!["ui\\multiplayer\\menu\\mpigeratingpopup.feu".to_string(), "ui\\common\\buttonlib.feu".to_string()]);
+    }
 }
 
 #[cfg(test)]
