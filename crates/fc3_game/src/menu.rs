@@ -225,12 +225,13 @@ fn pause_toggle(
     mut next: ResMut<NextState<GameState>>,
     mut journal: ResMut<crate::progression::PauseMenu>,
     original: Res<OriginalPause>,
-    (credits, gallery, poker, minigame, races): (
+    (credits, gallery, poker, minigame, races, drinking): (
         Option<Res<crate::credits::EndCredits>>,
         Option<Res<crate::shooting_gallery::Gallery>>,
         Option<Res<crate::poker::PokerTable>>,
         Option<Res<crate::hud::Minigame>>,
         Option<Res<crate::races::Races>>,
+        Option<Res<crate::drinking::Drinking>>,
     ),
 ) {
     use bevy::input::gamepad::GamepadButton as B;
@@ -245,7 +246,8 @@ fn pause_toggle(
         && !(gallery.is_some_and(|g| g.claims_escape()) && *state.get() == GameState::Playing)
         && !(poker.is_some_and(|p| p.claims_escape()) && *state.get() == GameState::Playing)
         && !(minigame.is_some_and(|m| m.holds_player()) && *state.get() == GameState::Playing)
-        && !(races.is_some_and(|r| r.claims_escape()) && *state.get() == GameState::Playing);
+        && !(races.is_some_and(|r| r.claims_escape()) && *state.get() == GameState::Playing)
+        && !(drinking.is_some_and(|d| d.claims_escape()) && *state.get() == GameState::Playing);
     if options.0 {
         if (esc && !crate::options::binding_key(&rebinding)) || pad(B::East) || pad(B::Start) {
             options.0 = false;

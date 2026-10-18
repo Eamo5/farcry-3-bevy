@@ -72,7 +72,7 @@ const SCENE: &str = "pawn_anim";
 
 /// A move's clip for the player: a first-person one (`1st...`), its
 /// `Default` state's when that is one.
-fn player_clip(states: &MoveStates) -> Option<&str> {
+pub(crate) fn player_clip(states: &MoveStates) -> Option<&str> {
     // (Or an exotic one's, `ex_1st...`: the mushroom's cough.)
     let first_person = |c: &str| {
         c.rsplit('\\').next().is_some_and(|f| {

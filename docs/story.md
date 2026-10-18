@@ -4088,9 +4088,9 @@ hands over the pistol; JAS_150 B20's chopper fight, `CChopperFightE3`).
 Such a gameplay now ends a second after it starts (`UNPLAYED_GRACE`), for
 anyone. The ones played are QTEs, the sniping challenge, poker, the Ink
 Monster, being intoxicated, button prompts, the chopper ride, JAS_130's
-climb to the front seat, the shooting galleries, knife throwing, the races
-and their keepers' entice systems, and the vines under their test switch
-(`played_gameplay`).
+climb to the front seat, the shooting galleries and their keepers' entice
+systems, knife throwing, the races and theirs, the drinking game, and the
+vines under their test switch (`played_gameplay`).
 
 **JAS_150's chopper ride** (`CChopperFightE3`, `chopper_fight`): B30C's
 scene carries the player through the ride and starts and stops the
@@ -4101,6 +4101,30 @@ aims from the scene's view: the cinema's `free_aim` lets the head turn
 from where the scene looks within the reticle's reach, keeps the weapon
 shown and lets it fire, and the original HUD stays up.
 `FC3_CHOPPER_SHOT=<png>` takes a screenshot three seconds in.
+
+**The drinking game** (`CDrinkingMiniGame`, `drinking`). Only BNG_010's
+bar block (B30) starts it (`CDrinkingMiniGame_Bangkok`, once the bar's
+trigger is used), and nothing starts B30: BNG_010's mission script goes
+from B20C to B90, so B30 and B40C are cut. The game is the engine's all
+the same (`gsf::DrinkingSettings`: a drink's price, how many, what each
+does to him, the levels at which he's drunk and passes out, the moves by
+stage and the bartender's lines). The player takes his place at the bar
+and waits there, the bartender before him (both playing the game's moves
+from the scene's anchor, as built scenes); the scripts hear
+`DisplayDrinkingHUD` each time he waits, and put up their drink and leave
+prompts (`CGSFInputManager`, cleared as he drinks or leaves: nothing else
+stops it). Interact buys a drink, if he has the money (the bartender says
+so if not); Escape leaves, as do the drinks there are, all drunk. Drunk
+(`drinkIntoxicationLevelForDrunk`), the bartender says so, and once he has
+left the view sways (`intoxication`, at the library's values) for
+`drunkEffectMinimumActivationTime` times how drunk; drunker still he
+passes out, the screen goes black, and he wakes up at the game's wake-up
+spot. `FC3_DRINK_BLOCK=bng_010_b30,-bng_010_b10` (tests) makes the bar's
+block active (and the club's first one not) ten seconds in,
+`FC3_DRINK_TEST=<drinks>` uses the bar's trigger and has him drink that
+many, and `FC3_DRINK_SHOTS=<dir>` captures each scene. Seen from the
+club's checkpoint: seated, three drinks (free there), drunk, out of the
+bar, ten seconds swaying, and sober.
 
 **JAS_130's climb to the front seat** (`CExoticCarChase`, `car_chase`).
 B60 has the player ride in the 4x4's bed with the grenade launcher, then

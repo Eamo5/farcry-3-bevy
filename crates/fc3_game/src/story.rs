@@ -3496,6 +3496,7 @@ fn played_gameplay(host: &StoryHost, id: u64, name: &str) -> bool {
         || sniping_challenge(name)
         || crate::poker::poker_gameplay(name)
         || crate::knives::knives_gameplay(name)
+        || crate::drinking::drinking_gameplay(name)
         || name == BOSS_FIGHT
         || name == INTOXICATED
         || name == INPUT_PROMPTS

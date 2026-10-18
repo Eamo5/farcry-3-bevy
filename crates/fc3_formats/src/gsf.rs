@@ -775,6 +775,110 @@ impl RaceResources {
     }
 }
 
+/// The drinking game (`CDrinkingMiniGame`; BNG_010's bar plays
+/// `CDrinkingMiniGame_Bangkok`): a drink's price and how many there are
+/// (none: no limit), what each does (`drinkIntoxicationAmount`) and the
+/// levels at which the player is drunk and passes out, how long being drunk
+/// lasts at the least, the player's and the bartender's moves by stage, and
+/// the bartender's lines.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DrinkingSettings {
+    pub cost: u32,
+    pub limit: Option<u32>,
+    pub per_drink: f32,
+    pub drunk: f32,
+    pub passing_out: f32,
+    pub drunk_time: f32,
+    pub player: DrinkingMoves,
+    pub bartender: DrinkingMoves,
+    pub lines: DrinkingLines,
+}
+
+/// One side's moves by stage of the game (move names: the move table has
+/// their clips).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DrinkingMoves {
+    /// Taking a place at the bar, then waiting there before the first drink.
+    pub start: String,
+    pub start_wait: String,
+    /// The first drink, the next ones, and waiting between them.
+    pub first_drink: String,
+    pub drink: String,
+    pub wait: String,
+    /// Leaving before a drink, after some, and passing out.
+    pub start_exit: String,
+    pub exit: String,
+    pub drunk_exit: String,
+    /// Waking up (the player's).
+    pub wake_up: String,
+}
+
+/// The bartender's lines (sound ids): greeting, no money, the glass empty,
+/// the player drunk, passing out, and leaving.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DrinkingLines {
+    pub salutation: Vec<u32>,
+    pub no_money: Vec<u32>,
+    pub empty_glass: Vec<u32>,
+    pub drunk: Vec<u32>,
+    pub passing_out: Vec<u32>,
+    pub leaving: Vec<u32>,
+}
+
+pub const DRINKING: &str = "CDrinkingMiniGame";
+
+impl DrinkingSettings {
+    /// A drinking game's settings by its name (`CDrinkingMiniGame_Bangkok`).
+    pub fn parse(bytes: &[u8], name: &str) -> Result<Self> {
+        let o = entry(bytes, name)?;
+        // (The move names are the hashed fields' companions.)
+        let mv = |h: u32| o.str_h(h).filter(|s| !s.is_empty()).unwrap_or_default();
+        let lines = |n: &str| -> Vec<u32> {
+            o.child(n).map(|l| l.children.iter().map(|g| sound_id(g, "GearString")).filter(|&i| i != 0).collect()).unwrap_or_default()
+        };
+        let s = Self {
+            cost: o.u32("Drink_Cost").unwrap_or(0),
+            limit: o.u32("Drink_limit").filter(|&l| l != u32::MAX),
+            per_drink: o.f32("drinkIntoxicationAmount").unwrap_or(30.0),
+            drunk: o.f32("drinkIntoxicationLevelForDrunk").unwrap_or(90.0),
+            passing_out: o.f32("drinkIntoxicationLevelForPassingOut").unwrap_or(180.0),
+            drunk_time: o.f32("drunkEffectMinimumActivationTime").unwrap_or(10.0),
+            player: DrinkingMoves {
+                start: mv(0x60CC_81DF),
+                start_wait: mv(0xE615_ED0F),
+                first_drink: mv(0x0375_45C7),
+                drink: mv(0x9A7C_147D),
+                wait: mv(0x7F1C_BCB5),
+                start_exit: mv(0xF586_413C),
+                exit: mv(0x6C8F_1086),
+                drunk_exit: mv(0x71BD_E6B2),
+                wake_up: mv(0x82B4_C02F),
+            },
+            bartender: DrinkingMoves {
+                start: mv(0x82D2_4A5B),
+                start_wait: mv(0x040B_268B),
+                first_drink: mv(0xCDA2_90A9),
+                drink: mv(0x54AB_C113),
+                wait: mv(0x9D02_7731),
+                start_exit: mv(0x43B7_B04B),
+                exit: mv(0xDABE_E1F1),
+                drunk_exit: mv(0x4580_66EA),
+                wake_up: String::new(),
+            },
+            lines: DrinkingLines {
+                salutation: lines("snd_Bartender_Salutation"),
+                no_money: lines("snd_Bartender_NoMoney"),
+                empty_glass: lines("snd_Bartender_EmptyGlass"),
+                drunk: lines("snd_Bartender_DrunkComment"),
+                passing_out: lines("snd_Bartender_PassingOut"),
+                leaving: lines("snd_Bartender_Leaving"),
+            },
+        };
+        ensure!(!s.player.drink.is_empty() && !s.player.wait.is_empty(), "drinking game {name} without its moves");
+        Ok(s)
+    }
+}
+
 pub const KNIVES: &str = "CKnivesMiniGame";
 
 /// The knife throwing game (`CKnivesMiniGame`; the scripts start the base
@@ -984,6 +1088,19 @@ mod tests {
         assert!(r.animals[0].death.contains("shootinggallery") && r.animals[0].release_sound != 0);
         assert!(r.countdown_sound != 0 && r.ready_sound != 0);
         assert!(r.keepers.len() == 4 && r.keepers.iter().all(|k| k[0].len() == 4), "{:?}", r.keepers);
+    }
+
+    #[test]
+    #[ignore = "requires locally installed Far Cry 3 archives"]
+    fn installed_drinking_settings() {
+        let vfs = crate::Vfs::open_install(&crate::find_install().expect("installed Far Cry 3"), None).unwrap();
+        let bytes = vfs.read(LIBRARY).unwrap();
+        let s = DrinkingSettings::parse(&bytes, "CDrinkingMiniGame_Bangkok").unwrap();
+        assert_eq!((s.cost, s.limit, s.per_drink, s.drunk, s.passing_out, s.drunk_time), (5, Some(3), 30.0, 90.0, 180.0, 10.0));
+        assert_eq!((s.player.first_drink.as_str(), s.bartender.wait.as_str()), ("ex_drinking_firstdrink_player", "ex_drinking_wait_bartend"));
+        assert_eq!((s.player.wake_up.as_str(), s.bartender.drunk_exit.as_str()), ("ex_drinking_wakeup_player", "ex_drinking_drunkexit_bartend"));
+        assert_eq!((s.lines.salutation.len(), s.lines.empty_glass.len(), s.lines.leaving.len()), (3, 4, 1));
+        assert_eq!(DrinkingSettings::parse(&bytes, DRINKING).unwrap().limit, None);
     }
 
     #[test]
