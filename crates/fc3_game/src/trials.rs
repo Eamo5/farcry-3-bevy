@@ -215,6 +215,8 @@ struct Run {
     turns: [usize; 5],
     /// The last whole seconds the clock's end beeped at.
     beeped: i32,
+    /// The trial's time barrels standing (placed id -> what they take yet).
+    timers: std::collections::HashMap<u64, f32>,
 }
 
 /// The stone's reach (m), and how near men brought in while a trial runs
@@ -224,6 +226,8 @@ const SPAWNED_NEAR: f32 = 800.0;
 /// Seconds after a trial that what it called in is still its own (a
 /// reinforcement on its way spawns late).
 const CLEAR_AFTER: f32 = 6.0;
+/// What a time barrel takes before it breaks (a couple of rounds).
+const TIMER_TOUGHNESS: f32 = 40.0;
 
 /// A string of the game's, as shown.
 fn text(host: &crate::story::StoryHost, id: u32) -> String {
@@ -293,6 +297,12 @@ fn run(
     (npcs, added): (Query<&crate::npc::Npc>, Query<(Entity, &GlobalTransform), Or<(Added<crate::npc::Npc>, Added<crate::vehicles::Vehicle>)>>),
     (mut kills, mut died): (MessageReader<crate::progression::PlayerKilled>, MessageReader<crate::combat::Died>),
     (mut xp, mut sfx): (MessageWriter<crate::progression::XpGain>, MessageWriter<crate::sound::PlaySfx>),
+    (mut world_hits, mut blasts, placed, parents): (
+        MessageReader<crate::weapons::WorldHit>,
+        MessageReader<crate::weapons::Explosion>,
+        Query<(Entity, &crate::objects::PlacedId, &GlobalTransform)>,
+        Query<&ChildOf>,
+    ),
     mut commands: Commands,
 ) {
     let Some(mut host) = host else { return };
@@ -452,6 +462,10 @@ fn run(
                 }
             }
             r.left -= dt;
+            // (C6's grenades never run out.)
+            if trial.infinite_grenades {
+                inv.grenades = inv.grenades.max(1);
+            }
             // The kills, by kind and how.
             for k in kills.read() {
                 let Ok(npc) = npcs.get(k.victim) else { continue };
@@ -471,6 +485,60 @@ fn run(
                     trials.pulse = true;
                 }
                 sfx.write(crate::sound::PlaySfx { event: table.manager.sounds.kill, at: None, volume: 1.0 });
+            }
+            // The time barrels: shot through or blown up, each gives its
+            // seconds.
+            let mut broken = Vec::new();
+            for h in world_hits.read() {
+                let mut e = h.entity;
+                let id = loop {
+                    if let Ok((_, id, _)) = placed.get(e) {
+                        break Some(id.0);
+                    }
+                    match parents.get(e) {
+                        Ok(p) => e = p.parent(),
+                        Err(_) => break None,
+                    }
+                };
+                if let Some(left) = id.and_then(|id| r.timers.get_mut(&id)) {
+                    *left -= h.amount;
+                    if *left <= 0.0 {
+                        broken.push(id.unwrap());
+                    }
+                }
+            }
+            // FC3_TRIAL_BARREL (tests): the nearest time barrel broken 5 s in.
+            if r.t >= 5.0 && r.t - dt < 5.0 {
+                let standing = placed.iter().filter(|(_, id, _)| r.timers.contains_key(&id.0)).count();
+                debug!("trials: {} time barrels, {standing} in the world", r.timers.len());
+                if std::env::var("FC3_TRIAL_BARREL").is_ok() {
+                    let near = placed
+                        .iter()
+                        .filter(|(_, id, _)| r.timers.contains_key(&id.0))
+                        .min_by(|a, b| a.2.translation().distance(at).total_cmp(&b.2.translation().distance(at)));
+                    broken.extend(near.map(|(_, id, _)| id.0));
+                }
+            }
+            for x in blasts.read().filter(|x| x.damage > 0.0) {
+                for (_, id, at) in &placed {
+                    if r.timers.contains_key(&id.0) && at.translation().distance(x.at) < x.radius {
+                        broken.push(id.0);
+                    }
+                }
+            }
+            for id in broken {
+                if r.timers.remove(&id).is_none() {
+                    continue;
+                }
+                for (e, _, _) in placed.iter().filter(|(_, p, _)| p.0 == id) {
+                    commands.entity(e).despawn();
+                }
+                if let Some(rule) = table.rules.iter().find(|x| x.time) {
+                    r.left += rule.score as f32;
+                    trials.popups.push(Popup { kind: 4, name: rule.name, value: format!("+{} {}", rule.score, trials.units[0]) });
+                    info!("trials: a time barrel: +{} s", rule.score);
+                }
+                sfx.write(crate::sound::PlaySfx { event: table.manager.sounds.time_bonus, at: None, volume: 1.0 });
             }
             // The clock's last ten seconds beep.
             let whole = r.left.ceil() as i32;
@@ -589,6 +657,15 @@ fn start(
     inv.mounted_from = None;
     crate::weapons::settle_unarmed(inv);
     progress.trials.entry(trial.id).or_insert((0, 0));
+    // Its time barrels (`..ChallengeBonus_Timer_<n>` on its layers).
+    let data = host.story.data();
+    let layers = data.blocks.get(&block).map(|b| b.layers.clone()).unwrap_or_default();
+    let timers = data
+        .entities
+        .values()
+        .filter(|e| layers.contains(&e.layer) && e.name.to_ascii_lowercase().contains("challengebonus_timer"))
+        .map(|e| (e.id, TIMER_TOUGHNESS))
+        .collect();
     if let Some(zone) = zone {
         host.story.hold_script(zone, true);
     }
@@ -606,6 +683,7 @@ fn start(
         spawned: Vec::new(),
         turns: [0; 5],
         beeped: 0,
+        timers,
     })
 }
 

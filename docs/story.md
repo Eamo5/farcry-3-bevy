@@ -4820,7 +4820,11 @@ cache as they are, and the challenge manager's template (the rewards: $250,
   as the game's classes: assaulter, berserker, defender, heavy gunner,
   rocket, molotov, beheader) with headshots, stealth kills and takedowns on
   top (`PlayerKilled`, from the kill awards); each shows its popup, and the
-  clock beeps through its last ten seconds.
+  clock beeps through its last ten seconds. The trial's time barrels (its
+  layers' `ChallengeBonus_Timer`s) give their 10 s when shot through (a
+  couple of rounds: `weapons::WorldHit`, a shot striking what has no health)
+  or caught in a blast. A throwable the scripts give is a full stack of it,
+  and C6's grenades never run out.
 * **The end.** The clock run out (done if the first reward's score is
   reached), the scripts failing it (`NotifyChallengerFailure`: off the zone
   too long), the player dying, or giving up from the trial's pause page
@@ -4832,12 +4836,12 @@ cache as they are, and the challenge manager's template (the rewards: $250,
   handbook's progress page.
 * **Tests.** `FC3_TRIAL_TEST=<block>` starts a trial at once (its boxes
   accepted), `FC3_TRIAL_USE` uses the stone the player stands by,
-  `FC3_TRIAL_SHOTS=<dir>` captures it at 20 and 60 s. Seen at D4's
+  `FC3_TRIAL_SHOTS=<dir>` captures it at 20 and 60 s, `FC3_TRIAL_BARREL`
+  breaks the nearest time barrel 5 s in (D4's 18 all found standing). Seen at D4's
   (`D4_SC_06`, from the stone: board, start, 90 s with the autopilot
   fighting: 695 points, the three rewards, the result page, the area clear
   and the gear back after).
-* **Not yet.** The trial's time barrels (+10 s each), the helicopters G3's
-  and C7's waves fly in (they land at their path's end), F3's weapon cycle
+* **Not yet.** The helicopters G3's and C7's waves fly in (they land at their path's end), F3's weapon cycle
   (it waits on the weapon drawn), the loading screen, and the other
   natives the trials call that do nothing yet (`SwitchArmy`, tagging,
   `DisplayCustomUIMsg`, `RefillWeaponAmmo`, `SelectThrowGadget`).

@@ -28,6 +28,7 @@ impl Plugin for WeaponsPlugin {
             .add_systems(Update, (fire_test_setup, fire_test_log, scope_sway, test_ammo))
             .add_message::<Explosion>()
             .add_message::<HitMarker>()
+            .add_message::<WorldHit>()
             .add_systems(Startup, load_weapon_stats)
             .add_systems(OnExit(crate::menu::GameState::Loading), (setup_effects, give_player_loadout).chain())
             .add_systems(
@@ -966,6 +967,15 @@ pub struct Effect {
     pub light: bool,
 }
 
+/// A shot that struck something with no health of its own (a placed
+/// object, the ground): what it struck, where, and the damage it carried.
+#[derive(Message, Clone, Copy)]
+pub struct WorldHit {
+    pub entity: Entity,
+    pub at: Vec3,
+    pub amount: f32,
+}
+
 /// Damage ping for the HUD hit marker.
 #[derive(Message, Clone, Copy)]
 pub struct HitMarker {
@@ -1496,7 +1506,7 @@ fn fire(
     muzzle: Query<&GlobalTransform, With<Muzzle>>,
     healths: Query<&Health>,
     parents: Query<&ChildOf>,
-    writers: (MessageWriter<DamageEvent>, MessageWriter<HitMarker>, MessageWriter<crate::npc::Noise>),
+    writers: (MessageWriter<DamageEvent>, MessageWriter<HitMarker>, MessageWriter<crate::npc::Noise>, MessageWriter<WorldHit>),
     sounds: (MessageWriter<crate::sound::PlaySfx>, MessageWriter<crate::sound::LoopSfx>, crate::surfaces::SurfaceProbe),
     (mut shot_fx, boosts, mount, driving, vehicles, riders, cinema): (
         crate::particles::ShotFx,
@@ -1517,7 +1527,7 @@ fn fire(
     let (bino, actions, captured, perks, busy, heads, wheel, assist) = inputs;
     // (The steady-aim syringe: far less kick.)
     let steady = if boosts.as_ref().is_some_and(|b| b.active(crate::syringes::Syringe::Steady)) { 0.3 } else { 1.0 };
-    let (mut damage, mut markers, mut noise) = writers;
+    let (mut damage, mut markers, mut noise, mut world_hits) = writers;
     let (mut sfx, mut loops, probe) = sounds;
     let Some(fx) = fx else { return };
     let Ok((player_e, mut inv, mut player, health)) = players.single_mut() else { return };
@@ -1822,6 +1832,7 @@ fn fire(
                 }
             }
         } else {
+            world_hits.write(WorldHit { entity: h.entity, at: point, amount: d.damage });
             if d.class != WeaponClass::Melee {
                 shot_fx.bullet_end(&mut rng, origin, dir, d.range, Some((h.entity, h.distance, h.normal)));
             }

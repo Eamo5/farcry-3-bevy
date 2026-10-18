@@ -2652,7 +2652,18 @@ fn run_story(
                         }
                     }
                     "CAPI_Player.AddGadget" if a(0) == fc3_story::PLAYER.to_string() => {
-                        scripted.gadgets.insert(host.story.item_name(&a(1)));
+                        let item = host.story.item_name(&a(1));
+                        // (A throwable given is a full stack of it: a trial's
+                        // grenades.)
+                        if let Ok(mut inv) = inventory.single_mut() {
+                            let lower = item.to_ascii_lowercase();
+                            if lower.contains("frag_grenade") {
+                                inv.grenades = inv.grenades.max(perks.grenade_cap);
+                            } else if lower.contains("molotov") {
+                                inv.molotovs = inv.molotovs.max(crate::weapons::MOLOTOV_CAP);
+                            }
+                        }
+                        scripted.gadgets.insert(item);
                     }
                     "CAPI_Player.EnableAnimalLooting" if a(0) == fc3_story::PLAYER.to_string() => {
                         scripted.animal_looting = a(1) != "false" && a(1) != "0";
