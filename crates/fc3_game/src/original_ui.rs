@@ -57,7 +57,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_timer,
                     drive_xp,
                     (drive_loot, drive_saving),
-                    (drive_stealth, drive_indicators),
+                    (drive_stealth, drive_indicators, drive_wheel),
                     drive_hits,
                     drive_grenades,
                     drive_radar,
@@ -2573,6 +2573,87 @@ fn drive_indicators(
         }
     }
     *last = now;
+}
+
+/// The weapon wheel (`H_Inventory.feu`'s `Wheel`, which the HUD loads)
+/// while ours is open (`weapon_wheel`: it picks): in from frame 2 and out
+/// from 12, its four places' weapons (`ItemIcon<n>`, top, right, bottom,
+/// left, at the weapon's label in `WeaponAndGadgetLib`'s icons: its
+/// archetype's name, `weapons:FC3/<name>`; one without is left empty), the
+/// throwables carried (`WheelGadgetTextSlot<n>`: grenades, C4, mines,
+/// molotovs, the movie's own order), the weapon under the cursor (else in
+/// hand) named (`ItemName`), and the arrows on the inner ring
+/// (`WheelCurWeaponArrowMC_<n>`, turned about the wheel's centre: at 0 they
+/// point right) to the place under the cursor (0, lit) and the weapon in
+/// hand (2).
+const WHEEL_IN: u32 = 2;
+const WHEEL_OUT: u32 = 12;
+
+/// A weapon's icon label in the game's weapon icons.
+fn weapon_icon(inv: &crate::weapons::Inventory, def: usize, catalog: &crate::progression::ShopCatalog) -> String {
+    if let Some(w) = catalog.weapon(inv, def) {
+        if let Some((_, name)) = w.archetype.rsplit_once('/') {
+            return name.to_string();
+        }
+    }
+    match inv.defs.get(def).map(|d| d.class) {
+        Some(crate::weapons::WeaponClass::Melee) => "Machete".into(),
+        _ => String::new(),
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn drive_wheel(
+    state: NonSend<Interface>,
+    wheel: Res<crate::weapon_wheel::WeaponWheel>,
+    players: Query<&crate::weapons::Inventory, With<crate::player::Player>>,
+    catalog: Res<crate::progression::ShopCatalog>,
+    mut shown: Local<Option<Option<usize>>>,
+) {
+    let Interface::Running(host) = &*state else { return };
+    let Ok(inv) = players.single() else { return };
+    let num = |n: f64| fc3_ui::ExternalValue::Number(n);
+    if !wheel.open {
+        if shown.take().is_some() {
+            host.dps_play("Wheel", num(WHEEL_OUT as f64));
+        }
+        return;
+    }
+    let places = crate::weapon_wheel::wheel_slots(inv);
+    let turn = |slot: usize| places.iter().position(|&s| s == slot).map(|p| (p as f64 - 1.0) * 90.0);
+    if shown.is_none() {
+        for p in 0..crate::weapon_wheel::PLACES {
+            let id = format!("ItemIcon{p}");
+            let label = places.get(p).map(|&s| weapon_icon(inv, inv.slots[s].def, &catalog)).unwrap_or_default();
+            host.dps_visible(&id, !label.is_empty());
+            if !label.is_empty() {
+                host.dps_frame(&id, fc3_ui::ExternalValue::String(label));
+            }
+        }
+        for (i, n) in [inv.grenades, inv.c4, inv.mines, inv.molotovs].into_iter().enumerate() {
+            host.dps_text(&format!("WheelGadgetTextSlot{i}"), &n.to_string());
+        }
+        for i in 0..4 {
+            host.dps_text(&format!("KeyTextField{i}"), "");
+        }
+        host.dps_play("Wheel", num(WHEEL_IN as f64));
+        host.dps_visible("WheelCurWeaponArrowMC_1", false);
+        let current = turn(inv.current);
+        host.dps_visible("WheelCurWeaponArrowMC_2", current.is_some());
+        host.dps_set("WheelCurWeaponArrowMC_2", "_rotation", num(current.unwrap_or(0.0)));
+    }
+    if *shown != Some(wheel.selected) {
+        let at = wheel.selected.unwrap_or(inv.current);
+        let name = inv.slots.get(at).map(|s| {
+            let def = s.def;
+            catalog.weapon(inv, def).map(|w| host.text(w.name_id)).filter(|t| !t.is_empty()).unwrap_or_else(|| inv.defs[def].name.to_string())
+        });
+        host.dps_text("ItemName", &name.unwrap_or_default());
+        let lit = wheel.selected.and_then(turn);
+        host.dps_visible("WheelCurWeaponArrowMC_0", lit.is_some());
+        host.dps_set("WheelCurWeaponArrowMC_0", "_rotation", num(lit.unwrap_or(0.0)));
+        *shown = Some(wheel.selected);
+    }
 }
 
 /// The stealth indicators (`StealthIndicator<n>`, three): each turns round

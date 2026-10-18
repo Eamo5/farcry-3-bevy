@@ -1,6 +1,8 @@
 //! The weapon wheel: holding the next-weapon input (Y on a gamepad, X on the
-//! keyboard) opens a ring of the weapons carried, slows the world down, and
-//! the look input picks one; letting go takes it out. A short tap still just
+//! keyboard) opens the game's four places of weapons carried (the guns, then
+//! the machete if one is left), slows the world down, and the look input
+//! picks one; letting go takes it out. Under the original HUD its own wheel
+//! shows (`original_ui::drive_wheel`). A short tap still just
 //! returns to the previous weapon (on release), as in the game.
 
 use bevy::prelude::*;
@@ -42,7 +44,21 @@ pub struct WeaponWheel {
     pub previous: Option<usize>,
     held: f32,
     cursor: Vec2,
-    selected: Option<usize>,
+    /// The slot under the cursor (the original HUD's wheel lights it too).
+    pub selected: Option<usize>,
+}
+
+/// The wheel's places, the game's four: top, right, bottom, left.
+pub const PLACES: usize = 4;
+
+/// The slots on the wheel, by place: the guns carried first, then the
+/// machete if a place is left (its own input swings it anyway).
+pub fn wheel_slots(inv: &Inventory) -> Vec<usize> {
+    let melee = |i: &usize| inv.defs[inv.slots[*i].def].class == crate::weapons::WeaponClass::Melee;
+    let (mut places, rest): (Vec<usize>, Vec<usize>) = (0..inv.slots.len()).partition(|i| !melee(i));
+    places.extend(rest);
+    places.truncate(PLACES);
+    places
 }
 
 impl WeaponWheel {
@@ -125,12 +141,14 @@ fn wheel_input(
     }
     // The look input steers a cursor round the ring.
     wheel.cursor = (wheel.cursor + Vec2::new(-actions.look.x, actions.look.y) * CURSOR_GAIN).clamp_length_max(1.0);
-    let n = inv.slots.len().max(1);
-    wheel.selected = (wheel.cursor.length() > 0.35).then(|| {
-        // Slot 0 at the top, going clockwise.
-        let angle = wheel.cursor.x.atan2(wheel.cursor.y).rem_euclid(std::f32::consts::TAU);
-        ((angle / std::f32::consts::TAU * n as f32 + 0.5) as usize) % n
-    });
+    let places = wheel_slots(inv);
+    wheel.selected = (wheel.cursor.length() > 0.35)
+        .then(|| {
+            // The first place at the top, going clockwise.
+            let angle = wheel.cursor.x.atan2(wheel.cursor.y).rem_euclid(std::f32::consts::TAU);
+            ((angle / std::f32::consts::TAU * PLACES as f32 + 0.5) as usize) % PLACES
+        })
+        .and_then(|p| places.get(p).copied());
 }
 
 /// The ring of weapon names, the one under the cursor lit.
@@ -140,9 +158,11 @@ fn draw_wheel(
     mut roots: Query<(Entity, &mut Visibility, Option<&Children>), With<WheelRoot>>,
     mut labels: Query<(&WheelLabel, &mut TextColor)>,
     mut commands: Commands,
+    original: Res<crate::hud::OriginalHud>,
 ) {
     let (Ok((root, mut vis, children)), Ok(inv)) = (roots.single_mut(), players.single()) else { return };
-    if !wheel.open {
+    // (The original HUD shows its own: `original_ui::drive_wheel`.)
+    if !wheel.open || original.0 {
         if *vis != Visibility::Hidden {
             *vis = Visibility::Hidden;
             if let Some(c) = children {
@@ -155,9 +175,9 @@ fn draw_wheel(
     }
     if *vis == Visibility::Hidden {
         *vis = Visibility::Inherited;
-        let n = inv.slots.len().max(1);
-        for (i, slot) in inv.slots.iter().enumerate() {
-            let a = i as f32 / n as f32 * std::f32::consts::TAU;
+        for (p, &i) in wheel_slots(inv).iter().enumerate() {
+            let slot = &inv.slots[i];
+            let a = p as f32 / PLACES as f32 * std::f32::consts::TAU;
             let (x, y) = (50.0 + 26.0 * a.sin(), 50.0 - 30.0 * a.cos());
             let name = inv.defs[slot.def].name.to_uppercase();
             let ammo = if slot.mag + slot.reserve > 0 { format!("\n{} / {}", slot.mag, slot.reserve) } else { String::new() };

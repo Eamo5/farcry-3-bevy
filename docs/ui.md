@@ -382,6 +382,18 @@ only what changed (and everything again until the movies have loaded):
   frame 1, its art pointing up); `PlayerMarkerIndicator` is the waypoint
   ("Inside" 1, "Outside" 2). The movie shows no distances; our diamonds
   and distances stand down.
+* **Weapon wheel**: `H_Inventory.feu`'s `Wheel` while ours is open (in from
+  frame 2, out from 12): its four places (top, right, bottom, left:
+  `weapon_wheel::wheel_slots`, the guns first, the machete in a place
+  left) each `ItemIcon<n>` at the weapon's label in
+  `WeaponAndGadgetLib.feu`'s icons (the name in its shop archetype,
+  `weapons:FC3/<name>`; a weapon without one leaves its place empty), the
+  throwables carried in `WheelGadgetTextSlot<n>` (grenades, C4, mines,
+  molotovs), `ItemName` the weapon under the cursor (else in hand) by
+  its shop name, and two of the inner ring's arrows, which turn about
+  the wheel's centre and point right at 0: `WheelCurWeaponArrowMC_0` to
+  the place under the cursor, `_2` to the weapon in hand. Ours stands
+  down; it still picks, and slows the world.
 * **Mission timer**: `ObjectiveTimer` shows the first of the story's
   timers in `ObjectiveTimerText` (as the game's own HUD writes it), hidden
   without one.
