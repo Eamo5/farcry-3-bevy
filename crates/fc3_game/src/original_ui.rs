@@ -47,12 +47,13 @@ impl Plugin for OriginalUiPlugin {
             .init_resource::<UiCalls>()
             .init_resource::<MapPage>()
             .init_resource::<shop::ShopPage>()
+            .init_resource::<LoadingUp>()
             .add_systems(Startup, make_canvas)
             .add_systems(
                 Update,
                 (
                     drive_hud,
-                    drive_story,
+                    (drive_story, drive_objective),
                     drive_tutorial,
                     drive_timer,
                     drive_xp,
@@ -2237,33 +2238,119 @@ fn drive_hud(
     }
 }
 
-/// `ObjContainer`'s frame with the box open (1 is closed).
-const OBJECTIVE_BOX_OPEN: u32 = 8;
-/// `ObjTextBox` plays a new objective in from here (it stops shown).
+/// The objective box: `ObjContainer` fades in from frame 2 (it stops open)
+/// and out from 10, and `ObjTextBox`, the text, in from 2 (it stops shown)
+/// and out from 155. An objective shows a while as it comes, then fades;
+/// the one standing is brought back now and then (the player's
+/// `CFCXPawnHudComponent`, `fObjectiveReminderTimer`: 90 s). Neither clock
+/// runs while the loading screen is up.
+const OBJECTIVE_BOX_IN: u32 = 2;
+const OBJECTIVE_BOX_OUT: u32 = 10;
 const OBJECTIVE_IN: u32 = 2;
+const OBJECTIVE_OUT: u32 = 155;
+const OBJECTIVE_SHOW: f32 = 8.0;
+const OBJECTIVE_REMIND: f32 = 90.0;
+
+#[derive(Default)]
+struct ObjectiveShown {
+    started: bool,
+    text: Option<String>,
+    mission: Option<String>,
+    /// While shown, until when; else when it comes back.
+    until: Option<f32>,
+    remind_at: f32,
+    clock: f32,
+}
+
+#[allow(clippy::type_complexity)]
+fn drive_objective(
+    state: NonSend<Interface>,
+    ui: Res<crate::story::StoryUi>,
+    time: Res<Time>,
+    loading: Res<LoadingUp>,
+    (gallery, poker, minigame, races, trials): (
+        Option<Res<crate::shooting_gallery::Gallery>>,
+        Option<Res<crate::poker::PokerTable>>,
+        Option<Res<crate::hud::Minigame>>,
+        Option<Res<crate::races::Races>>,
+        Option<Res<crate::trials::Trials>>,
+    ),
+    mut shown: Local<ObjectiveShown>,
+) {
+    let Interface::Running(host) = &*state else { return };
+    let num = |n: u32| fc3_ui::ExternalValue::Number(n as f64);
+    // (Not while a shooting gallery runs: its count is where the box is; nor
+    // while a race, a trial or a minigame does.)
+    let objective = ui.objective.clone().filter(|_| {
+        !gallery.is_some_and(|g| g.holds_player())
+            && !poker.is_some_and(|p| p.holds_player())
+            && !minigame.is_some_and(|m| m.holds_player())
+            && !races.is_some_and(|r| r.holds_player())
+            && !trials.is_some_and(|t| t.holds_player())
+    });
+    if !loading.0 {
+        shown.clock += time.delta_secs();
+    }
+    let now = shown.clock;
+    let show = |text: &str, mission: &Option<String>| {
+        host.dps_play("ObjContainer", num(OBJECTIVE_BOX_IN));
+        host.dps_text("ObjText", text);
+        host.dps_text("MissionName", mission.as_deref().unwrap_or(""));
+        host.dps_play("ObjTextBox", num(OBJECTIVE_IN));
+    };
+    let hide = || {
+        host.dps_play("ObjTextBox", num(OBJECTIVE_OUT));
+        host.dps_play("ObjContainer", num(OBJECTIVE_BOX_OUT));
+    };
+    if !shown.started || objective != shown.text || ui.mission != shown.mission {
+        match &objective {
+            Some(text) => {
+                show(text, &ui.mission);
+                shown.until = Some(now + OBJECTIVE_SHOW);
+            }
+            None if shown.text.is_some() => {
+                hide();
+                shown.until = None;
+            }
+            None => {
+                host.dps_frame("ObjContainer", num(1));
+            }
+        }
+        shown.started = true;
+        shown.text = objective;
+        shown.mission = ui.mission.clone();
+        return;
+    }
+    match shown.until {
+        Some(until) if now >= until => {
+            hide();
+            shown.until = None;
+            shown.remind_at = now + OBJECTIVE_REMIND;
+        }
+        None if now >= shown.remind_at && shown.text.is_some() => {
+            let text = shown.text.clone().unwrap_or_default();
+            show(&text, &shown.mission);
+            shown.until = Some(now + OBJECTIVE_SHOW);
+        }
+        _ => {}
+    }
+}
 /// The mission cards' status lines: the game's "MISSION FAILED", and its
 /// "Complete" (the handbook's) in capitals, as the table has no mission's.
 const MISSION_FAILED: u32 = 155587;
 const MISSION_COMPLETE: u32 = 158104;
 
-/// The story's texts on the HUD: the objective in its box (with the
-/// mission's name over it; a new one plays in), subtitles, the interaction
-/// prompt, and the mission cards (its title as it starts, complete, failed:
-/// the objective movie's `SetMissionStart` and `SetMissionTitle`).
+/// The story's texts on the HUD: subtitles, the interaction prompt, and the
+/// mission cards (its title as it starts, complete, failed: the objective
+/// movie's `SetMissionStart` and `SetMissionTitle`). The objective's box is
+/// `drive_objective`'s.
 #[allow(clippy::type_complexity)]
 fn drive_story(
     state: NonSend<Interface>,
     mut ui: ResMut<crate::story::StoryUi>,
     settings: Res<crate::settings::Settings>,
     hud: Res<crate::hud::HudState>,
-    mut last: Local<Option<(Option<String>, Option<String>, Option<String>, Option<String>)>>,
-    gallery: Option<Res<crate::shooting_gallery::Gallery>>,
-    (poker, minigame, races, trials): (
-        Option<Res<crate::poker::PokerTable>>,
-        Option<Res<crate::hud::Minigame>>,
-        Option<Res<crate::races::Races>>,
-        Option<Res<crate::trials::Trials>>,
-    ),
+    mut last: Local<Option<(Option<String>, Option<String>)>>,
     (mut commands, time, mut card_shot): (Commands, Res<Time<Real>>, Local<(Option<f32>, u32)>),
 ) {
     let Interface::Running(host) = &*state else { return };
@@ -2297,39 +2384,19 @@ fn drive_story(
         }
     }
     let subtitle = ui.subtitle.as_ref().filter(|_| settings.subtitles).map(|s| s.0.clone());
-    // (Not while a shooting gallery runs: its count is where the box is; nor
-    // while a race or a trial does.)
-    let objective = ui.objective.clone().filter(|_| {
-        !gallery.is_some_and(|g| g.holds_player())
-            && !poker.is_some_and(|p| p.holds_player())
-            && !minigame.is_some_and(|m| m.holds_player())
-            && !races.is_some_and(|r| r.holds_player())
-            && !trials.is_some_and(|t| t.holds_player())
-    });
-    let now = (objective, ui.mission.clone(), subtitle, hud.shown_prompt.clone());
+    let now = (subtitle, hud.shown_prompt.clone());
     let first = last.is_none();
     let old = last.clone().unwrap_or_default();
     if !first && old == now {
         return;
     }
     let mut ok = true;
-    if first || old.0 != now.0 || old.1 != now.1 {
-        let frame = if now.0.is_some() { OBJECTIVE_BOX_OPEN } else { 1 };
-        ok &= host.dps_frame("ObjContainer", fc3_ui::ExternalValue::Number(frame as f64));
-        if let Some(text) = &now.0 {
-            ok &= host.dps_text("ObjText", text);
-            ok &= host.dps_text("MissionName", now.1.as_deref().unwrap_or(""));
-            if old.0 != now.0 {
-                ok &= host.dps_play("ObjTextBox", fc3_ui::ExternalValue::Number(OBJECTIVE_IN as f64));
-            }
-        }
+    if first || old.1 != now.1 {
+        ok &= host.dps_visible("InteractionMC", now.1.is_some());
+        ok &= host.dps_text("InteractionText", now.1.as_deref().unwrap_or(""));
     }
-    if first || old.3 != now.3 {
-        ok &= host.dps_visible("InteractionMC", now.3.is_some());
-        ok &= host.dps_text("InteractionText", now.3.as_deref().unwrap_or(""));
-    }
-    if first || old.2 != now.2 {
-        match &now.2 {
+    if first || old.0 != now.0 {
+        match &now.0 {
             Some(text) => host.event("ShowSubTitle", &[text]),
             None => host.event("HideSubTitle", &[]),
         }
@@ -3779,6 +3846,10 @@ const LOADING_CALM: f32 = 0.5;
 const LOADING_CALM_START: f32 = 4.0;
 const LOADING_START: f32 = 10.0;
 
+/// Whether the loading screen is up (the HUD under it, its timers held).
+#[derive(Resource, Default)]
+pub(crate) struct LoadingUp(pub bool);
+
 #[derive(Default)]
 struct LoadingShown {
     waiting: f32,
@@ -3800,8 +3871,10 @@ fn drive_loading(
     (terrain, objects, vegetation): (Res<crate::terrain::TerrainStreamer>, Res<crate::objects::ObjectStreamer>, Res<crate::vegetation::VegStreamer>),
     mut shown: Local<LoadingShown>,
     mut commands: Commands,
+    mut up: ResMut<LoadingUp>,
 ) {
     let Interface::Running(host) = &*state else { return };
+    up.0 = shown.since.is_some();
     let now = time.elapsed_secs();
     let spawning = players.single().is_ok_and(|p| p.spawning);
     match game.get() {

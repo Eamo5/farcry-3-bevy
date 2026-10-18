@@ -352,11 +352,19 @@ only what changed (and everything again until the movies have loaded):
   as the game's crosshair opens (`hud::crosshair_gap`, its UI pixels at 1080
   lines turned to the stage's 720, from a rest of 18), hidden when it would
   be; `reticuleHitEnemy` is the hit marker.
-* **Objective**: `ObjContainer` goes to frame 8 (the box open; 1 is shut),
-  `ObjText` takes the objective and `MissionName` the mission's title, and a
-  new objective plays `ObjTextBox` from frame 2 (it comes in with its sound
-  and stops at 90; from 91 it ticks off and stops at 154 sending
-  `ObjectiveIsValidated`, from 155 it fades and sends `ObjectiveHasFaded`).
+* **Objective** (`original_ui::drive_objective`): `ObjContainer` fades in
+  from frame 2 (it stops open at 9) and out from 10, `ObjText` takes the
+  objective and `MissionName` the mission's title, and `ObjTextBox` plays
+  the text in from frame 2 (it comes in with its sound and stops at 90;
+  from 91 it ticks off and stops at 154 sending `ObjectiveIsValidated`,
+  from 155 it fades and sends `ObjectiveHasFaded`). As in the game, it
+  isn't always up: a new objective shows eight seconds, then fades, and
+  the one standing comes back every 90 (the player's
+  `CFCXPawnHudComponent`, `PopupReminder`'s `fObjectiveReminderTimer`);
+  neither clock runs under the loading screen (`LoadingUp`). The pause menu
+  shows it too. The same component sets the radar's reach (40 m on foot,
+  100 in a vehicle or glider), encounters on it within 40 m, collectibles
+  within 30, and the skill-point reminder (600 s).
 * **Mission cards**: the objective movie's `SetMissionStart(title)` as a
   mission starts, `SetMissionTitle(text, status, succeeded)` as it is
   complete or failed (`story::MissionCard`). The status is the game's
