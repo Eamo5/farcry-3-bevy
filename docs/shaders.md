@@ -318,8 +318,16 @@ them, written to `world/effects.txt`:
 - glowing flies (875);
 - candles (170) and torches (90).
 
-`world_fx` plays them with the particle flipbooks. Left out: quest and cinematic effects,
-lamp glows (the lamps draw their own), interiors, and the rest.
+The list keeps each one's rotation and effect name too (`kind x y z qx qy qz qw
+name`, after the `# fc3-world-fx 2` header; an older list is written again). The
+converter caches each named effect (109 of them; one the library lacks is
+skipped). `world_fx` plays each as authored (`authored_fx`), turned as placed,
+when it comes within its kind's reach, and takes it away a little past that.
+Fireflies play only after dark. Where an effect isn't cached, the particle
+flipbooks stand in. A waterfall's splashes fade out past 30 to 40 m by their own
+far clipping. Left out: quest and cinematic effects, lamp glows (the lamps draw
+their own), interiors, and the rest. `FC3_FX_DEBUG` logs how many effects play
+and how many particles live, every 2 s.
 
 Authored effects. Some effects are played as their definitions have them
 (`authored_fx`), not as flipbook stand-ins. `particle_effects::AUTHORED_EFFECTS`

@@ -1459,9 +1459,13 @@ pub fn guard_spot_kind(name: &str) -> Option<&'static str> {
         .or_else(|| ["lookdowncliff", "validaterisk", "standandwatch"].iter().any(|k| what.starts_with(k)).then_some("cautious"))
 }
 
-/// The world's placed effects the game plays, one per line: `kind x y z`
-/// (see `world_fx_kind`; Bevy-space position).
+/// The world's placed effects the game plays, one per line after the header
+/// ([`WORLD_FX_HEADER`]): `kind x y z qx qy qz qw name` (see `world_fx_kind`;
+/// Bevy-space position and rotation, the effect's library name).
 pub const WORLD_FX_REL: &str = "world/effects.txt";
+/// The first line of a [`WORLD_FX_REL`] in this form (older lists lack the
+/// rotation and name, and are written again).
+pub const WORLD_FX_HEADER: &str = "# fc3-world-fx 2";
 
 /// What a placed effect is, by its library name, for the ones the game plays:
 /// a waterfall's spray where it lands or its mist, low drifting mist,

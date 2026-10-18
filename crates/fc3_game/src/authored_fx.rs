@@ -701,7 +701,19 @@ fn emit(
 /// An authored light's intensity (the engine's units) in ours.
 const LIGHT_SCALE: f32 = 2.0e4;
 
-fn simulate(time: Res<Time>, mut library: ResMut<Library>) {
+fn simulate(time: Res<Time>, mut library: ResMut<Library>, effects: Query<&AuthoredFx>, mut last: Local<f32>) {
+    // `FC3_FX_DEBUG`: how many effects play and particles live, each 2 s.
+    if std::env::var_os("FC3_FX_DEBUG").is_some() && time.elapsed_secs() - *last > 2.0 {
+        *last = time.elapsed_secs();
+        let mut by: HashMap<&str, usize> = HashMap::new();
+        for p in &library.particles {
+            *by.entry(library.effects.iter().find(|(_, ids)| ids.as_ref().is_some_and(|i| i.contains(&p.emitter))).map_or("?", |(n, _)| *n)).or_default() += 1;
+        }
+        let mut top: Vec<_> = by.into_iter().collect();
+        top.sort_by(|a, b| b.1.cmp(&a.1));
+        top.truncate(6);
+        info!("authored fx: {} playing, {} particles, most {:?}", effects.iter().count(), library.particles.len(), top);
+    }
     let dt = time.delta_secs();
     if dt <= 0.0 {
         return;

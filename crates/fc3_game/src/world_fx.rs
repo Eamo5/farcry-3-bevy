@@ -1,8 +1,12 @@
-//! The world's placed effects, played near the player with the game's own
-//! flipbooks: spray where waterfalls land and mist rolling off them, low mist
-//! drifting through the valleys, fireflies after dark, candle and torch
-//! flames, camp fires burning and dying down to embers. The converter keeps
-//! the kinds it knows (`cache::world_fx_kind`).
+//! The world's placed effects, played near the player: spray where
+//! waterfalls land and mist rolling off them, low mist drifting through the
+//! valleys, fireflies after dark, candle and torch flames, camp fires
+//! burning and dying down to embers. The converter keeps the kinds it knows
+//! (`cache::world_fx_kind`), each with its effect, which plays as authored
+//! (`authored_fx`, turned as placed) where it's cached; else our flipbooks
+//! stand in.
+
+use std::collections::HashMap;
 
 use bevy::prelude::*;
 use fc3_formats::cache;
@@ -63,7 +67,8 @@ impl Kind {
 
 #[derive(Resource, Default)]
 struct WorldEffects {
-    list: Vec<(Kind, Vec3)>,
+    /// Each one's kind and place, and its turn and effect (the placed ones).
+    list: Vec<(Kind, Vec3, Option<(Quat, &'static str)>)>,
 }
 
 /// A fire set down with something (an encounter's camp fire): its flames
@@ -84,15 +89,15 @@ fn place_fires(mut fires: MessageReader<PlaceFire>, effects: Option<ResMut<World
             info!("fire set down: {} at {:.1} (light {})", f.kind, f.at, f.light.is_some());
         }
         let Some(kind) = Kind::parse(&f.kind) else { continue };
-        if !effects.list.iter().any(|(k, at)| *k == kind && at.distance(f.at) < 0.5) {
-            effects.list.push((kind, f.at));
+        if !effects.list.iter().any(|(k, at, _)| *k == kind && at.distance(f.at) < 0.5) {
+            effects.list.push((kind, f.at, None));
         }
     }
 }
 
 fn load_effects(mut commands: Commands, info: Res<CacheInfo>) {
     let text = std::fs::read_to_string(info.root.join(cache::WORLD_FX_REL)).unwrap_or_default();
-    let list: Vec<(Kind, Vec3)> = text
+    let list: Vec<(Kind, Vec3, Option<(Quat, &'static str)>)> = text
         .lines()
         .filter_map(|l| {
             let mut it = l.split_whitespace();
@@ -101,7 +106,10 @@ fn load_effects(mut commands: Commands, info: Res<CacheInfo>) {
             for c in &mut v {
                 *c = it.next()?.parse().ok()?;
             }
-            Some((kind, Vec3::from_array(v)))
+            let q: Vec<f32> = it.by_ref().take(4).filter_map(|x| x.parse().ok()).collect();
+            let placed =
+                (q.len() == 4).then(|| it.next()).flatten().map(|name| (Quat::from_xyzw(q[0], q[1], q[2], q[3]).normalize(), crate::authored_fx::intern(name)));
+            Some((kind, Vec3::from_array(v), placed))
         })
         .collect();
     info!("{} placed effects", list.len());
@@ -112,7 +120,10 @@ fn jitter(rng: &mut Rng, r: f32) -> Vec3 {
     Vec3::new(rng.range(-r, r), rng.range(-r, r), rng.range(-r, r))
 }
 
-/// Emits each nearby effect's particles for this frame.
+/// Plays each nearby effect: the game's own, put down as it comes in reach
+/// and taken away as it goes (fireflies only after dark), or ours for this
+/// frame.
+#[allow(clippy::too_many_arguments)]
 fn play_effects(
     time: Res<Time>,
     effects: Option<Res<WorldEffects>>,
@@ -120,14 +131,31 @@ fn play_effects(
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
     mut particles: ResMut<Particles>,
     mut rng: ResMut<Rng>,
+    mut playing: Local<HashMap<usize, Entity>>,
+    mut commands: Commands,
 ) {
     let (Some(effects), Ok(cam)) = (effects, cameras.single()) else { return };
     let eye = cam.translation();
     let dt = time.delta_secs();
     let night = 1.0 - (daylight.0 / 0.3).clamp(0.0, 1.0);
     let chance = |rate: f32, rng: &mut Rng| rng.f32() < rate * dt;
-    for &(kind, at) in &effects.list {
+    for (i, &(kind, at, placed)) in effects.list.iter().enumerate() {
         let d = at.distance(eye);
+        if let Some((turn, name)) = placed.filter(|(_, n)| crate::authored_fx::available(n)) {
+            // (A little past its reach before it goes, so it doesn't flicker
+            // at the edge.)
+            let wanted = d < kind.range() && (kind != Kind::Fireflies || night > 0.0);
+            let gone = d > kind.range() * 1.15 || (kind == Kind::Fireflies && night <= 0.0);
+            if wanted && !playing.contains_key(&i) {
+                let e = commands.spawn((Transform::from_translation(at).with_rotation(turn), crate::authored_fx::AuthoredFx(name))).id();
+                playing.insert(i, e);
+            } else if gone {
+                if let Some(e) = playing.remove(&i) {
+                    commands.entity(e).despawn();
+                }
+            }
+            continue;
+        }
         if d > kind.range() {
             continue;
         }

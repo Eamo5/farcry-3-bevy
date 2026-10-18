@@ -583,7 +583,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     let mut anchors = Vec::new();
     let mut traversal = fc3_formats::traversal::Traversal::default();
     let mut sound_points: Vec<(u32, [f32; 3])> = Vec::new();
-    let mut effects: Vec<(&'static str, [f32; 3])> = Vec::new();
+    let mut effects: Vec<(&'static str, [f32; 3], [f32; 4], String)> = Vec::new();
     let mut guard_spots: Vec<(String, [f32; 3], [f32; 4])> = Vec::new();
     let mut world_moves: BTreeSet<String> = BTreeSet::new();
     let mut villager_spots: Vec<(&'static str, [f32; 3], [f32; 4])> = Vec::new();
@@ -597,7 +597,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         world_moves.extend(r.stp_moves.iter().cloned());
         villager_spots.extend(r.villager_spots.iter().copied());
         sound_points.extend(r.sound_points.iter().copied());
-        effects.extend(r.effects.iter().copied());
+        effects.extend(r.effects.iter().cloned());
         object_ids.push(r.id);
         model_paths.extend(r.models);
         material_paths.extend(r.override_materials);
@@ -676,9 +676,12 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             job.error(format!("villager spots: {e:#}"));
         }
     }
-    if opts.only_sectors.is_none() && job.should_write(cache::WORLD_FX_REL) {
-        effects.retain(|(_, p)| !fc3_formats::worldmap::in_test_area(p[0], -p[2]));
-        let text: String = effects.iter().map(|(k, p)| format!("{k} {} {} {}\n", p[0], p[1], p[2])).collect();
+    let fx_current = std::fs::read_to_string(job.root().join(cache::WORLD_FX_REL)).is_ok_and(|t| t.starts_with(cache::WORLD_FX_HEADER));
+    if opts.only_sectors.is_none() && (job.should_write(cache::WORLD_FX_REL) || !fx_current) {
+        effects.retain(|(_, p, _, _)| !fc3_formats::worldmap::in_test_area(p[0], -p[2]));
+        let lines: String =
+            effects.iter().map(|(k, p, q, name)| format!("{k} {} {} {} {} {} {} {} {name}\n", p[0], p[1], p[2], q[0], q[1], q[2], q[3])).collect();
+        let text = format!("{}\n{lines}", cache::WORLD_FX_HEADER);
         if let Err(e) = write_atomic(job.root(), cache::WORLD_FX_REL, text.as_bytes(), job.ctx) {
             job.error(format!("effects: {e:#}"));
         }
@@ -1937,6 +1940,17 @@ const SKY_MOON: &str = r"graphics\__fc3_graphics\singleplayer\_textures\skybox\n
 fn convert_authored_effects(job: &Job) -> Result<()> {
     use fc3_formats::particle_effects as pe;
     let mut names: Vec<String> = pe::AUTHORED_EFFECTS.iter().map(|n| n.to_string()).collect();
+    // (The world's placed effects, by the names its list keeps; one the
+    // library lacks plays our stand-in, no error.)
+    let mut placed: Vec<String> = Vec::new();
+    if let Ok(list) = std::fs::read_to_string(job.root().join(cache::WORLD_FX_REL)) {
+        for name in list.lines().filter(|l| !l.starts_with('#')).filter_map(|l| l.split_whitespace().nth(8)) {
+            if !names.iter().any(|n| n == name) {
+                names.push(name.to_string());
+                placed.push(name.to_string());
+            }
+        }
+    }
     if let Ok(stats) =
         std::fs::read_to_string(job.root().join(fc3_formats::weapons::STATS_REL)).map_err(anyhow::Error::from).and_then(|t| fc3_formats::weapons::from_text(&t))
     {
@@ -1987,7 +2001,9 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
             write_atomic(job.root(), &rel, xml.as_bytes(), job.ctx)
         })();
         if let Err(e) = result {
-            job.error(format!("authored effect {name}: {e:#}"));
+            if !(placed.contains(name) && format!("{e}").contains("not found")) {
+                job.error(format!("authored effect {name}: {e:#}"));
+            }
         }
     }
     Ok(())
@@ -2959,8 +2975,8 @@ struct SectorResult {
     climbs: Vec<fc3_formats::traversal::Climb>,
     /// Sound points: event and position (Bevy space).
     sound_points: Vec<(u32, [f32; 3])>,
-    /// Placed effects the game plays: kind and position.
-    effects: Vec<(&'static str, [f32; 3])>,
+    /// Placed effects the game plays: kind, position, rotation and name.
+    effects: Vec<(&'static str, [f32; 3], [f32; 4], String)>,
     /// Guard spots: kind, position and orientation.
     guard_spots: Vec<(String, [f32; 3], [f32; 4])>,
     villager_spots: Vec<(&'static str, [f32; 3], [f32; 4])>,
@@ -3039,8 +3055,8 @@ fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool, reorder: bool) ->
             if let Some(event) = e.sound_event.filter(|_| cache::sound_point_kept(&e.name)) {
                 sound_points.push((event, translation));
             }
-            if let Some(kind) = e.effect.as_deref().and_then(cache::world_fx_kind) {
-                effects.push((kind, translation));
+            if let Some((kind, name)) = e.effect.as_deref().and_then(|n| Some((cache::world_fx_kind(n)?, n))) {
+                effects.push((kind, translation, rotation, name.to_ascii_lowercase()));
             }
             if let Some(kind) = cache::guard_spot_kind(&e.name) {
                 guard_spots.push((kind.to_string(), translation, rotation));
@@ -3076,7 +3092,7 @@ fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool, reorder: bool) ->
                 if !bone.is_empty() {
                     if let Some(kind) = cache::world_fx_kind(name) {
                         let w = quat_rotate(rotation, at);
-                        effects.push((kind, [translation[0] + w[0], translation[1] + w[1], translation[2] + w[2]]));
+                        effects.push((kind, [translation[0] + w[0], translation[1] + w[1], translation[2] + w[2]], rotation, name.to_ascii_lowercase()));
                     }
                 }
                 let Some(effect_lights) = job.effect_lights().get(name) else {
