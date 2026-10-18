@@ -1,8 +1,8 @@
 //! What the enemies say (`fc3_formats::barks`): each enemy gets one of his
 //! faction's voices, and speaks that voice's barks as his situation
 //! changes: spotting the player, losing him, giving up the search,
-//! reloading, throwing a grenade, running for the alarm, getting hurt and
-//! dying, with battle yells, search mutters and idle chatter in between. A
+//! reloading, throwing a grenade, running for the alarm, getting hurt,
+//! burning and dying, with battle yells, search mutters and idle chatter in between. A
 //! bark plays where he stands, and his face (if near) mouths it.
 
 use std::collections::HashMap;
@@ -124,7 +124,7 @@ fn bark(
     time: Res<Time>,
     table: Res<BarkTable>,
     mut rng: ResMut<crate::weapons::Rng>,
-    mut npcs: Query<(Entity, &Npc, &Transform, &Health, &mut Voice)>,
+    mut npcs: Query<(Entity, &Npc, &Transform, &Health, &mut Voice, Has<crate::burning::Aflame>)>,
     mut hits: MessageReader<DamageEvent>,
     mut died: MessageReader<Died>,
     listener: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
@@ -142,8 +142,15 @@ fn bark(
     for d in died.read() {
         want.push((d.entity, "reflex_death_ono", true));
     }
-    for (e, npc, _, health, mut voice) in &mut npcs {
+    for (e, npc, _, health, mut voice, aflame) in &mut npcs {
         if health.dead {
+            continue;
+        }
+        // Alight: screaming, one cry after another.
+        if aflame {
+            if now >= voice.busy_until {
+                want.push((e, "reflex_flames", true));
+            }
             continue;
         }
         // What changed.
@@ -187,7 +194,11 @@ fn bark(
     }
     let mut library = library;
     for (e, stimulus, urgent) in want {
-        let Ok((_, npc, t, health, mut voice)) = npcs.get_mut(e) else { continue };
+        let Ok((_, npc, t, health, mut voice, aflame)) = npcs.get_mut(e) else { continue };
+        // (Alight, the scream is the hurt.)
+        if aflame && stimulus == "reflex_wounded_ono" {
+            continue;
+        }
         // (The dead say only their last.)
         if health.dead && stimulus != "reflex_death_ono" {
             continue;

@@ -406,8 +406,16 @@ steam when water puts one out (`psFireWaterSmokeParticles`: `water_smoke`). It
 also names the start and stop sounds (`001B0477`, `001B0479`). The torch burns
 on a person's chest (the `Spine2` bone; an animal's at its body's middle) and
 stays upright as they move and fall. The component holds no numbers, so the
-6 s burn and its 30 harm a second are ours. Not yet: the burning panic
-(running about, screaming).
+6 s burn and its 30 harm a second are ours.
+
+A person alight panics. They drop the fight and run blind, 5 to 10 m this way
+and that, on the game's burning move (`pawn_generic_burn`: the
+`reactonfire_runloop` it has armed, its `reactonfire_idleloop` on the spot).
+They scream their voice's `reflex_flames` barks one after another, in place of
+the wounded grunts. A death by fire falls with one of the three
+`reactonfire` `idle_diebyfire` clips. Put out alive, they take up their own
+moves again. `FC3_BURN_TEST=<s>` sets everyone within 40 m alight that long
+after the start; `--npc-test guards` gives two who run, `idle` one who stays.
 
 Each active emitter waits its `SpawnDelay`, then emits for its `EmitDuration`
 (again and again with `EmitLoop`). It gives a burst of `NbInitPart`, then its rate:
