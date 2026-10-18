@@ -586,6 +586,10 @@ fn play_knives(
                     if paid > 0 {
                         progress.add_money(paid);
                     }
+                    if panel == "won" {
+                        crate::statistics::add(&mut progress, crate::statistics::stat::KNIVES_WON, 1);
+                        crate::statistics::add(&mut progress, crate::statistics::stat::KNIVES_WINNINGS, paid);
+                    }
                     let (line, sound) = match panel {
                         "won" => ("NPC_Lose", game.settings.win),
                         "lost" => ("NPC_Win", game.settings.fail),

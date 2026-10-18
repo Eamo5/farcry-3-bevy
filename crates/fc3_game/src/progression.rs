@@ -510,7 +510,9 @@ impl Progress {
     pub fn add_money(&mut self, amount: u32) -> u32 {
         let before = self.money;
         self.money = (self.money + amount).min(self.money_cap());
-        self.money - before
+        let added = self.money - before;
+        crate::statistics::add(self, crate::statistics::stat::CASH_EARNED, added);
+        added
     }
 
     /// Save-file lines.
@@ -1075,6 +1077,7 @@ fn award_kills(
     animals: Query<&crate::wildlife::WildAnimal>,
     kits: Query<&crate::characters::KitId>,
     (skills, crafting, mut takedowns): (Res<Skills>, Option<Res<crate::crafting::CraftCatalog>>, ResMut<TakedownRewards>),
+    driving: Res<crate::vehicles::Driving>,
     mut headshots: Local<HashMap<Entity, bool>>,
     mut xp: MessageWriter<XpGain>,
     mut stats: MessageWriter<StatGain>,
@@ -1090,21 +1093,26 @@ fn award_kills(
     for d in died.read() {
         let headshot = headshots.remove(&d.entity).unwrap_or(false);
         let takedown = takedowns.0.remove(&d.entity);
-        if d.killer == Some(player) && animals.get(d.entity).is_ok_and(|a| a.animal() == Animal::Shark) {
-            stats.write(StatGain { stat: stat::BULL_SHARKS_KILLED, amount: 1 });
-        }
-        // How the player killed (the gun in hand at the time).
-        if d.killer == Some(player) && npcs.get(d.entity).is_ok() {
-            let class = inv.slots.get(inv.current).map(|s| inv.defs[s.def].class);
-            let kind = match d.kind {
-                DamageKind::Melee => Some(stat::MELEE_KILLS),
-                DamageKind::Explosion => Some(stat::GRENADE_KILLS),
-                DamageKind::Bullet if class == Some(crate::weapons::WeaponClass::Pistol) => Some(stat::HANDGUN_KILLS),
-                DamageKind::Bullet if class == Some(crate::weapons::WeaponClass::Mounted) => Some(stat::MOUNTED_GUN_KILLS),
-                _ => None,
-            };
-            if let Some(stat) = kind {
-                stats.write(StatGain { stat, amount: 1 });
+        // The kill counts: an animal's by its kind, a man's by how the player
+        // killed him (the weapon in hand at the time).
+        if d.killer == Some(player) && d.entity != player {
+            if let Ok(a) = animals.get(d.entity) {
+                for stat in [crate::statistics::stat::ANIMAL_KILLS, crate::statistics::animal_counts(a.animal()).0] {
+                    stats.write(StatGain { stat, amount: 1 });
+                }
+            } else if let Ok(npc) = npcs.get(d.entity) {
+                let how = crate::statistics::Kill {
+                    kind: d.kind,
+                    weapon: inv.slots.get(inv.current).map(|s| &inv.defs[s.def]),
+                    aiming: inv.aiming,
+                    headshot,
+                    takedown: takedown.is_some(),
+                    unaware: npc.state == crate::npc::NpcState::Idle,
+                    driving: driving.vehicle.is_some(),
+                };
+                for stat in crate::statistics::kill_stats(&how) {
+                    stats.write(StatGain { stat, amount: 1 });
+                }
             }
         }
         if d.killer != Some(player) || d.entity == player || !npcs.get(d.entity).is_ok_and(|n| n.faction.hostile_to_player()) {
@@ -3291,7 +3299,7 @@ mod skill_tests {
         use crate::combat::{DamageEvent, DamageKind, Died};
         let mut app = App::new();
         app.add_message::<Died>().add_message::<DamageEvent>().add_message::<XpGain>().add_message::<StatGain>();
-        app.init_resource::<TakedownRewards>();
+        app.init_resource::<TakedownRewards>().init_resource::<crate::vehicles::Driving>();
         app.insert_resource(Skills(SkillTree {
             xp_rewards: vec![("Takedown/StandardTakedown".into(), 3.0), ("Standard/KillWithHeadShotModifier".into(), 2.5)],
             ..Default::default()

@@ -683,7 +683,10 @@ fn apply_reward(
         PickupKind::Plant(plant) => {
             let _ = &world;
             // (Horticulture 101: two of each plant picked.)
-            progress.plants[plant.index()] += if perks.double_plants { 2 } else { 1 };
+            let n = if perks.double_plants { 2 } else { 1 };
+            progress.plants[plant.index()] += n;
+            crate::statistics::add(progress, crate::statistics::stat::PLANTS_HARVESTED, n);
+            crate::statistics::add(progress, crate::statistics::plant_count(plant), n);
             let have = progress.plants[plant.index()];
             format!("{} ({have}) - craft in the journal", plant.name())
         }

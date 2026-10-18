@@ -2087,7 +2087,11 @@ fn run_story(
             Command::MissionState { name, state, block } => {
                 info!("story: {name} {state}");
                 // A mission done opens the abilities it gates.
-                if block.is_none() && state == "Completed" {
+                if block.is_none() && state == "Completed" && !progress.missions.contains(&name.to_ascii_lowercase()) {
+                    // (Counted for the handbook's progress by its type.)
+                    if let Some((kind, giver)) = host.story.mission_type(&name) {
+                        crate::statistics::mission_done(&mut progress, &kind, giver);
+                    }
                     progress.missions.insert(name.to_ascii_lowercase());
                 }
                 if block.is_some() && state == "Completed" {

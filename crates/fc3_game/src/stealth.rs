@@ -242,6 +242,7 @@ fn throw_rock(
     busy: Res<crate::fp::HandsBusy>,
     scripted: Res<crate::story::ScriptedPlayer>,
     test_target: Option<ResMut<RockAimTest>>,
+    mut stats: MessageWriter<crate::progression::StatGain>,
 ) {
     *cooldown -= time.delta_secs();
     let Ok((p, h)) = players.single() else { return };
@@ -261,6 +262,7 @@ fn throw_rock(
     let Ok(cam) = camera.single() else { return };
     *cooldown = 0.7;
     fp.gesture = Some("rock");
+    stats.write(crate::progression::StatGain { stat: crate::statistics::stat::ROCKS_THROWN, amount: 1 });
     let f = cam.forward().as_vec3();
     if let Some(mut target) = test_target {
         if let Some(at) = target.0.take() { info!("story rock test: physical throw from {:?} toward {at:?}", cam.translation()); }
@@ -570,9 +572,13 @@ mod tests {
     #[test]
     fn rock_throws_require_the_mission_gadget_and_obey_signal_locks() {
         let mut app = App::new();
-        app.init_resource::<Time>().init_resource::<ActionState>()
-            .init_resource::<crate::fp::FpState>().init_resource::<crate::fp::HandsBusy>()
-            .init_resource::<ScriptedPlayer>().add_systems(Update, throw_rock);
+        app.init_resource::<Time>()
+            .init_resource::<ActionState>()
+            .init_resource::<crate::fp::FpState>()
+            .init_resource::<crate::fp::HandsBusy>()
+            .init_resource::<ScriptedPlayer>()
+            .add_message::<crate::progression::StatGain>()
+            .add_systems(Update, throw_rock);
         app.world_mut().spawn((player(), Health::new(100.0)));
         app.world_mut().spawn((PlayerCamera, GlobalTransform::default()));
         app.world_mut().resource_mut::<ActionState>().press(Action::ThrowRock);
@@ -752,6 +758,7 @@ fn takedown(
                 actions.consume(Action::Melee);
                 td.chain_window = 0.0;
                 rewards.0.insert(target, "TakedownKnifeThrow");
+                stats.write(crate::progression::StatGain { stat: crate::statistics::stat::KNIFE_THROW_TAKEDOWNS, amount: 1 });
                 damage.write(DamageEvent {
                     target,
                     amount: 10_000.0,
@@ -891,6 +898,8 @@ fn takedown(
                 let front = facing.dot(flat) < -0.3;
                 strike(&mut td, &mut inv, target, pe, at, &mut damage, &mut sfx);
                 stats.write(crate::progression::StatGain { stat: crate::progression::stat::TAKEDOWNS_FROM_BELOW, amount: 1 });
+                let below = if p.swimming { crate::statistics::stat::WATER_TAKEDOWNS } else { crate::statistics::stat::LEDGE_TAKEDOWNS };
+                stats.write(crate::progression::StatGain { stat: below, amount: 1 });
                 rewards.0.insert(target, if p.swimming { "TakedownFromWater" } else { "TakedownFromLedge" });
                 debug!("takedown from below ({} m up, front {front}, water {})", at.y - crate::player::HALF_HEIGHT - feet, p.swimming);
                 anims.write(crate::fp::TakedownAnim {
@@ -1013,9 +1022,27 @@ fn takedown(
     let npc_facing = npcs.get(target).map(|(_, _, n, _)| Vec3::new(-n.yaw.sin(), 0.0, -n.yaw.cos())).unwrap_or(flat);
     let style = if npc_facing.dot(flat) < -0.3 { crate::fp::TakedownStyle::Front } else { crate::fp::TakedownStyle::Back };
     strike(&mut td, &mut inv, target, pe, t.translation, &mut damage, &mut sfx);
-    stats.write(crate::progression::StatGain { stat: crate::progression::stat::TAKEDOWN_KILLS, amount: 1 });
-    // (The XP each victim is worth, by the takedown that kills him.)
+    // (The XP each victim is worth, by the takedown that kills him; the
+    // takedowns counted by kind.)
     let heavy = npcs.get(target).is_ok_and(|(_, _, n, _)| n.role.armoured());
+    {
+        use crate::statistics::stat;
+        let kind = if heavy {
+            stat::HEAVY_TAKEDOWNS
+        } else if grenade.is_some() {
+            stat::GRENADE_TAKEDOWNS
+        } else if drag {
+            stat::DRAG_TAKEDOWNS
+        } else {
+            stat::STANDARD_TAKEDOWNS
+        };
+        let chained = if chain.is_some() { 1 } else { 0 };
+        for (stat, amount) in [(kind, 1), (stat::CHAIN_TAKEDOWNS, chained), (stat::PISTOL_TAKEDOWNS, shots as u32)] {
+            if amount > 0 {
+                stats.write(crate::progression::StatGain { stat, amount });
+            }
+        }
+    }
     rewards.0.insert(target, if heavy { "HeavyTakedown" } else if grenade.is_some() { "TakedownGrenadePinPull" } else { "StandardTakedown" });
     if let Some(c) = chain {
         rewards.0.insert(c, "TakedownChain");

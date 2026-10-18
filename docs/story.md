@@ -203,8 +203,39 @@ is the story's own:
   steps (guards hear steps out of sight, a sprint farthest and a crouch
   hardly at all), and `SP_LootTakedown` searches a takedown's victim as he
   falls. The tattoo grows with what is learned (below). Not done yet: the
-  knife throw's extra XP, and the statistics of activities that aren't in
-  the game (supply drops, Wanted Dead).
+  knife throw's extra XP.
+* **The handbook's statistics** (`statistics`; the page in `docs/ui.md`):
+  the engine's counters by their numbers (`enumStatisticType`, kept in
+  `Progress::stats`, saved with it), counted as they happen:
+  * the time played, days gone by (the clock past midnight), and the way
+    travelled on foot, swimming, driving on land and water, gliding or in
+    a wingsuit, and on zip lines (centimetres; a step of 30 m or more in a
+    frame is a jump, not travel);
+  * kills of men by how (`statistics::kill_stats`: aimed or from the hip,
+    unaware, headshots, the machete, fire, explosives, run over, by the
+    weapon's class and by the weapon itself: its kills pick the favourites
+    of each class), animals killed and skinned by kind, the takedowns by
+    kind, rounds fired (not the machete's swings or the flamethrower's) and
+    as many as struck someone, rocks, grenades and molotovs thrown;
+  * plants harvested by kind, bodies looted, manual heals and medkits,
+    syringes made and used by kind, arrow tips and gear made, money earned
+    and spent;
+  * poker games played, won and lost, their winnings and the largest, and
+    each activity's time at it, races, sharpshooting and knife throwing
+    won and their winnings;
+  * missions by the type their scripts register them with (`mission`,
+    `behaviourquest`, the supply runs, Wanted Dead and hunts:
+    `Story::mission_type`); a save from before is first made up from its
+    missions' names. The progress page's towers, outposts, collectibles,
+    abilities, recipes, and weapons and vehicles met come from where the
+    game keeps them.
+
+  The engine's own table counted assault rifle kills as shotgun kills and
+  sniper kills as assault rifle kills, so the snipers' row never moved,
+  and it swapped the one-hit-kill syringe's made and used labels; here
+  each counts as its row says. Leaving a cleaned poker table now pays out
+  its chips (it paid nothing). Not counted: shots from cover (there's no
+  cover to shoot from), the Trials of the Rakyat (not in the game).
 * **XP**: the converter adds the game's XP rewards (`XPRewards`) to
   `progression/skills.txt`, each looting prototype's own XP (`XpGiven`) to
   its source, and collectibles' XP to their items. A kill is worth the

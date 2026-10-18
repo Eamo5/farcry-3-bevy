@@ -1981,6 +1981,7 @@ fn throw_grenade(
     camera: Query<&GlobalTransform, With<PlayerCamera>>,
     busy: Res<crate::fp::HandsBusy>,
     (perks, time, mut cooking): (Res<crate::progression::Perks>, Res<Time>, Local<Option<f32>>),
+    mut stats: MessageWriter<crate::progression::StatGain>,
 ) {
     let Some(fx) = fx else { return };
     let Ok((e, mut inv, player, health)) = players.single_mut() else { return };
@@ -1993,6 +1994,7 @@ fn throw_grenade(
     if molotov {
         inv.molotovs -= 1;
         fp.gesture = Some("grenade|throw_molotov");
+        stats.write(crate::progression::StatGain { stat: crate::statistics::stat::MOLOTOVS_THROWN, amount: 1 });
         let f = cam.forward().as_vec3();
         commands.spawn((
             Projectile {
@@ -2032,6 +2034,7 @@ fn throw_grenade(
             return;
         }
         inv.grenades -= 1;
+        stats.write(crate::progression::StatGain { stat: crate::statistics::stat::GRENADES_THROWN, amount: 1 });
         if perks.cook_grenades {
             *cooking = Some(0.0);
             return;

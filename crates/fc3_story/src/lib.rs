@@ -1708,6 +1708,15 @@ impl Story {
     }
 
     /// (name, state) of the main missions registered so far.
+    /// A mission's type as its script registered it (`mission`,
+    /// `behaviourquest`, `speedquest`, `wantedquest`, `huntingquest`,
+    /// `optional`, `ulcmission`), and whether it was a giver's (a
+    /// briefing), by its main graph's name.
+    pub fn mission_type(&self, name: &str) -> Option<(String, bool)> {
+        let c = self.core.borrow();
+        c.missions.by_id.values().find(|m| m.block.is_none() && m.name.eq_ignore_ascii_case(name)).map(|m| (m.type_name.clone(), m.giver))
+    }
+
     pub fn missions(&self) -> Vec<(String, String)> {
         let c = self.core.borrow();
         let mut v: Vec<(String, String)> =

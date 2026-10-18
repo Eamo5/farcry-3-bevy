@@ -758,6 +758,7 @@ fn play_poker(
                     }
                 }
                 start_game(game, buy_in, buy_in);
+                crate::statistics::add(&mut progress, crate::statistics::stat::POKER_PLAYED, 1);
                 info!("poker: row {} (buy-in {buy_in})", game.row);
             } else if cancel {
                 stand = true;
@@ -791,6 +792,7 @@ fn play_poker(
                     progress.add_money(chips);
                 }
                 info!("poker: the player leaves with {chips}");
+                crate::statistics::poker_game(&mut progress, chips > game.buy_in, if game.buy_in > 0 { chips.saturating_sub(game.buy_in) } else { 0 });
                 tell.push("JasonLeavesPoker");
                 stand = true;
             } else if cancel {
@@ -799,18 +801,31 @@ fn play_poker(
         }
         Stage::Busted => {
             if confirm && !game.story() {
+                crate::statistics::poker_game(&mut progress, false, 0);
                 game.stage = Stage::Choosing;
                 game.table = None;
             } else if cancel || test.is_some() || game.story() {
+                crate::statistics::poker_game(&mut progress, false, 0);
                 tell.push("JasonLeavesPoker");
                 stand = true;
             }
         }
         Stage::Cleaned => {
+            // Up from a cleaned table: its chips paid out (a game bought
+            // into), and the game counted won.
+            let leaving = confirm || cancel || test.is_some();
+            if leaving {
+                let chips = game.table.as_ref().map_or(0, |t| t.seats[game.player_seat].chips);
+                if game.buy_in > 0 && chips > 0 {
+                    progress.add_money(chips);
+                }
+                info!("poker: the player leaves a cleaned table with {chips}");
+                crate::statistics::poker_game(&mut progress, true, if game.buy_in > 0 { chips.saturating_sub(game.buy_in) } else { 0 });
+            }
             if confirm && game.settings.kind == 0 && test.is_none() {
                 game.stage = Stage::Choosing;
                 game.table = None;
-            } else if confirm || cancel || test.is_some() {
+            } else if leaving {
                 tell.push("JasonLeavesPoker");
                 stand = true;
             }

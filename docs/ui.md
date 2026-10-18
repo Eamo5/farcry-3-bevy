@@ -476,8 +476,26 @@ provider from the handbook (`progression::HandbookData`): `TabCategory`
 collectibles 1, tutorials 4, the manual 6, by `iObjectID`), `SubCategory
 <tab>` (a category's groups), `WikiCategory <group>` (a group's pages:
 `sName`, `sDescription`, `bUnlocked` as `handbook_open` has it). The
-statistics (`StatsCategory`) go empty for now, and the manual (`Emanual`,
-its own movie) isn't answered.
+manual (`Emanual`, its own movie) isn't answered.
+
+The statistics tab lists its own eight categories and asks for one's rows
+at a time, `OnEncyclopediaRequest <category> StatsCategory` (0, the
+progress page, as the tab opens; its legend button flips to the lists).
+The game answers as the engine's `CFCXStatsDataProvider` did, from
+`statistics::rows`: each row's name (the game's string), `iValue`,
+`sMilestones` (the progress page's), `sType` and, on the progress page and
+the animals', `iTotal`. The movie formats a value by its type: `d` a
+distance (sent in decimetres, shown in km), `t` seconds, `m` money, `p` a
+percentage; a row whose value is a text (a favourite weapon's or syringe's
+name, or `-`) sends the same text as its type, which the movie shows as
+the row's description. The animals' skinned column is `-` for those that
+give no skin. The progress page draws each total as blocks, its
+milestones (`<n>-<a|b|c>`) as the achievement, signature weapon and recipe
+icons, and the whole as a percentage. What the rows count is in
+`docs/story.md` (the handbook's statistics). Tests: `FC3_PAUSE_PAGE=10,2`
+opens the tab, and `FC3_PAUSE_KEYS=Click@1636:1050` clicks its legend's
+statistics button (a `Click@x:y` step clicks there in the window's
+pixels).
 
 **Options** (`M_Options_PC.feu`, quick launch 12): on `OnOptionLoaded` the
 game sends `OptionSections`, at the places the PC page's code

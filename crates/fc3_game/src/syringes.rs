@@ -191,6 +191,8 @@ pub fn inject(p: &mut Progress, boosts: &mut Boosts, recipe: &fc3_formats::progr
     let Some(effect) = Syringe::of(&recipe.id) else { return false };
     let Some(n) = p.potions.get_mut(&recipe.id).filter(|n| **n > 0) else { return false };
     *n -= 1;
+    crate::statistics::add(p, crate::statistics::stat::SYRINGES_USED, 1);
+    crate::statistics::add(p, crate::statistics::syringe_counts(effect).1, 1);
     if effect == Syringe::HealthBoost {
         boosts.extra_health = recipe.health_slots as f32 * crate::combat::HEALTH_SEGMENT;
         boosts.full_heal = true;

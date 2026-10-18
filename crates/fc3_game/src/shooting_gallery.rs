@@ -609,6 +609,10 @@ fn run(
                 if r.won > 0 {
                     progress.add_money(r.won);
                 }
+                if r.success {
+                    crate::statistics::add(&mut progress, crate::statistics::stat::SHOOTING_COMPLETED, 1);
+                    crate::statistics::add(&mut progress, crate::statistics::stat::SHOOTING_WINNINGS, r.won);
+                }
                 info!("shooting gallery ({}): {} with {}/{} birds, {} won", r.id, if r.success { "done" } else { "failed" }, r.kills, target, r.won);
                 r.phase = Phase::Result;
                 r.t = 0.0;

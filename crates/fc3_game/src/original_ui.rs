@@ -254,7 +254,7 @@ fn drive_pause(
         Local<CraftPage>,
         Option<ResMut<crate::syringes::Boosts>>,
     ),
-    mut map_page: ResMut<MapPage>,
+    (mut map_page, outposts): (ResMut<MapPage>, Res<crate::outposts::Outposts>),
 ) {
     use crate::menu::GameState;
     use fc3_ui::input::{MouseButton, PlayerEvent};
@@ -348,7 +348,11 @@ fn drive_pause(
             }
             "OnEncyclopediaRequest" => {
                 if let Some(book) = handbook.as_deref().and_then(|b| b.0.as_ref()) {
-                    send_handbook(host, book, &progress, arg(1).parse().unwrap_or(0), arg(2));
+                    let extra = crate::statistics::Extra {
+                        recipes: crafting.as_ref().map_or(0, |c| c.recipes.iter().filter(|r| c.available(&progress, r)).count()),
+                        outposts: outposts.liberated_ids().len(),
+                    };
+                    send_handbook(host, book, &progress, extra, arg(1).parse().unwrap_or(0), arg(2));
                 }
             }
             // Crafting: its tabs, a tab's groups, a group's recipes, a
@@ -467,12 +471,18 @@ fn drive_pause(
     }
     // FC3_PAUSE_KEYS=Enter,Down,Enter (tests): keys pressed one by one,
     // 0.6 s apart, once FC3_PAUSE_PAGE's page has had two seconds (on the
-    // wall clock: the game's is stopped under the menu).
+    // wall clock: the game's is stopped under the menu); `Click@x:y` clicks
+    // there (the window's pixels, as its screenshots have them).
     if let Some(list) = std::env::var("FC3_PAUSE_KEYS").ok().filter(|_| *paged) {
         let since = pressed.0.get_or_insert_with(std::time::Instant::now).elapsed().as_secs_f32();
         let names: Vec<&str> = list.split(',').collect();
         if since > 2.0 + 0.6 * pressed.1 as f32 {
-            if let Some(key) = names.get(pressed.1).and_then(|n| test_key(n)).and_then(movie_key) {
+            let click = names.get(pressed.1).and_then(|n| n.strip_prefix("Click@")).and_then(|at| at.split_once(':'));
+            if let Some((x, y)) = click.and_then(|(x, y)| Some((x.parse::<f64>().ok()?, y.parse::<f64>().ok()?))) {
+                host.input(PlayerEvent::MouseMove { x, y });
+                host.input(PlayerEvent::MouseDown { x, y, button: MouseButton::Left, index: None });
+                host.input(PlayerEvent::MouseUp { x, y, button: MouseButton::Left });
+            } else if let Some(key) = names.get(pressed.1).and_then(|n| test_key(n)).and_then(movie_key) {
                 host.input(PlayerEvent::KeyDown { key: key.clone() });
                 host.input(PlayerEvent::KeyUp { key });
             }
@@ -1217,9 +1227,17 @@ fn open_page(host: &fc3_ui::Host, page: &str) {
 /// (the handbook's categories: collectibles 1, statistics 2, tutorials 4,
 /// the survival guide 5, the manual 6), `SubCategory <tab>` a tab's groups,
 /// `WikiCategory <group>` a group's pages (`bUnlocked` as the game opens
-/// them: `progression::handbook_open`), `StatsCategory` the statistics
-/// (none yet) and `Emanual` the manual's (not answered: its own movie).
-fn send_handbook(host: &fc3_ui::Host, book: &fc3_formats::progression::Handbook, progress: &crate::progression::Progress, id: u32, list: &str) {
+/// them: `progression::handbook_open`), `StatsCategory <category>` a
+/// statistics category's rows (`statistics::rows`) and `Emanual` the
+/// manual's (not answered: its own movie).
+fn send_handbook(
+    host: &fc3_ui::Host,
+    book: &fc3_formats::progression::Handbook,
+    progress: &crate::progression::Progress,
+    extra: crate::statistics::Extra,
+    id: u32,
+    list: &str,
+) {
     use fc3_ui::ExternalValue as V;
     let item = |fields: Vec<(&str, V)>| fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect::<std::collections::BTreeMap<String, V>>();
     let items = match list {
@@ -1261,7 +1279,36 @@ fn send_handbook(host: &fc3_ui::Host, book: &fc3_formats::progression::Handbook,
                 })
                 .collect()
         }
-        "StatsCategory" => Vec::new(),
+        // Each row by name (the game's text), its figure (a number, or a
+        // text the page shows as it is: its type the same text), the
+        // progress page's total and milestones, the animals' skinned column
+        // (a dash where none).
+        "StatsCategory" => crate::statistics::rows(id, progress, extra)
+            .into_iter()
+            .map(|r| {
+                use crate::statistics::Figure;
+                let text = |f: Figure| match f {
+                    Figure::Count(n) => V::Number(n as f64),
+                    Figure::Text(t) => V::String(host.text(t)),
+                    Figure::Dash => V::String("-".into()),
+                };
+                let value = text(r.value);
+                let kind = match &value {
+                    V::String(s) => s.clone(),
+                    _ => r.kind.to_string(),
+                };
+                let mut fields = vec![
+                    ("sName", V::String(host.text(r.name))),
+                    ("iValue", value),
+                    ("sMilestones", V::String(r.milestones.into())),
+                    ("sType", V::String(kind)),
+                ];
+                if let Some(total) = r.total {
+                    fields.push(("iTotal", text(total)));
+                }
+                item(fields)
+            })
+            .collect(),
         _ => return,
     };
     host.set_data(list, items);

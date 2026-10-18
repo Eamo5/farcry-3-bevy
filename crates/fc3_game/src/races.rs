@@ -603,6 +603,10 @@ fn run(
                 if r.money > 0 {
                     progress.add_money(r.money);
                 }
+                if r.won {
+                    crate::statistics::add(&mut progress, crate::statistics::stat::RACES_COMPLETED, 1);
+                    crate::statistics::add(&mut progress, crate::statistics::stat::RACES_WINNINGS, r.money);
+                }
                 say(&mut sfx, if r.won { r.sounds.win } else { r.sounds.fail }, None);
                 say(&mut sfx, r.sounds.player[if r.won { 2 } else { 1 }], None);
                 say(&mut sfx, keeper_line(r, if r.won { 3 } else { 2 }), keeper_at);

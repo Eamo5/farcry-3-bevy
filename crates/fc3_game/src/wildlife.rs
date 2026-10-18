@@ -2352,6 +2352,8 @@ fn skin_animals(
         // (Zoology 101: two skins from each.)
         let n = if perks.as_ref().is_some_and(|p| p.double_skins) { 2 } else { 1 };
         *progress.skins.entry(animal).or_insert(0) += n;
+        crate::statistics::add(&mut progress, crate::statistics::stat::ANIMALS_SKINNED, n);
+        crate::statistics::add(&mut progress, crate::statistics::animal_counts(animal).1, n);
         looted.write(crate::progression::ItemLooted(crate::progression::LootKind::Skin(animal)));
         actions.consume(crate::controls::Action::Interact);
         let what = item(c.species).flatten().map_or_else(|| format!("{} skin", animal.name()), |i| i.name.clone());
