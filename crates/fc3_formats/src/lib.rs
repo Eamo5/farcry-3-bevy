@@ -26,6 +26,7 @@ pub mod facial;
 pub mod fcb;
 pub mod feu;
 pub mod ffd;
+pub mod fire_settings;
 pub mod grade;
 pub mod gsf;
 pub mod handling;

@@ -1,7 +1,8 @@
 //! Grass fires. Molotovs, the flamethrower and explosions set the ground
 //! alight; fire spreads cell by cell through grass and bushes, faster
 //! downwind, burns them away, scorches the ground and burns anything standing
-//! in it. Rain damps it down.
+//! in it. Rain damps it down. The flames and smoke are the game's fire
+//! manager's own effects (`fire_settings`), where they're cached.
 //!
 //! A burnable region (`CBurnableRegion`: a field of crops a mission wants
 //! burnt) catches when fire reaches it and burns across its whole shape;
@@ -25,6 +26,8 @@ impl Plugin for FirePlugin {
         app.add_message::<Ignite>()
             .init_resource::<Fires>()
             .init_resource::<Regions>()
+            .init_resource::<FireEffects>()
+            .add_systems(Startup, load_fire_effects)
             .add_systems(Update, (ignite, spread, burn_regions, burn_effects, burn_damage, fire_lights).chain())
             .add_systems(
                 PreUpdate,
@@ -69,6 +72,8 @@ struct Burning {
     life: f32,
     /// Ground height.
     y: f32,
+    /// A splash on bare ground, burning out by itself.
+    bare: bool,
 }
 
 #[derive(Resource, Default)]
@@ -89,7 +94,7 @@ impl Fires {
 
     fn light(&mut self, c: Cell, y: f32, rng: &mut Rng) {
         if self.burning.len() < MAX_BURNING && self.burnt.len() < MAX_BURNT && !self.burnt.contains(&c) {
-            self.burning.entry(c).or_insert(Burning { age: 0.0, life: rng.range(7.0, 11.0), y });
+            self.burning.entry(c).or_insert(Burning { age: 0.0, life: rng.range(7.0, 11.0), y, bare: false });
         }
     }
 }
@@ -139,6 +144,7 @@ fn ignite(
                 if !fuel.contains_key(&c) {
                     if let Some(b) = fires.burning.get_mut(&c) {
                         b.life = b.life.min(rng.range(3.0, 5.0));
+                        b.bare = true;
                     }
                 }
             }
@@ -424,16 +430,145 @@ fn autopilot_burn(
 }
 
 /// Flames, smoke and embers over burning cells near the camera.
+/// The fire manager's own effects (`fire_settings`, as cached), each with
+/// how many may play at once: a burning patch of ground's (those that burn
+/// on, and the flare that burns out by itself, for a splash on bare ground)
+/// and the smoke over them. With none cached, our flames and smoke stand in.
+#[derive(Resource, Default)]
+struct FireEffects {
+    ground: Vec<(&'static str, usize)>,
+    flare: Option<(&'static str, usize)>,
+    smoke: Vec<(&'static str, usize)>,
+    /// What plays now: each cell's fire, and the smoke over some (with when
+    /// it clears, once the cell has burnt out).
+    playing: HashMap<Cell, (Entity, &'static str)>,
+    smoking: HashMap<Cell, (Entity, &'static str, Option<f32>)>,
+}
+
+impl FireEffects {
+    /// One of a list with room left in its pool, by a cell's lot.
+    fn pick(list: &[(&'static str, usize)], using: &HashMap<&'static str, usize>, lot: usize) -> Option<&'static str> {
+        (0..list.len()).map(|i| list[(lot + i) % list.len()]).find(|(n, cap)| using.get(n).copied().unwrap_or(0) < *cap).map(|(n, _)| n)
+    }
+}
+
+fn load_fire_effects(mut effects: ResMut<FireEffects>) {
+    use fc3_formats::fire_settings as fs;
+    use fc3_formats::particle_effects as pe;
+    let root = fc3_formats::cache::default_cache_root();
+    let Ok(text) = std::fs::read_to_string(root.join(fs::FIRE_SETTINGS_REL)) else { return };
+    for f in fs::from_text(&text).into_iter().filter(|f| crate::authored_fx::available(&f.effect)) {
+        let name = crate::authored_fx::intern(&f.effect);
+        let pool = f.pool as usize;
+        match f.kind.as_str() {
+            fs::REGION => {
+                // (One whose flames don't loop burns out by itself.)
+                let lasting = std::fs::read_to_string(root.join(pe::authored_rel(name)))
+                    .ok()
+                    .and_then(|xml| pe::Effect::parse(&xml).ok())
+                    .is_some_and(|e| e.emitters.iter().filter(|e| e.active && !e.texture.is_empty()).all(|e| e.looping));
+                if lasting {
+                    effects.ground.push((name, pool));
+                } else if effects.flare.is_none() {
+                    effects.flare = Some((name, pool));
+                }
+            }
+            fs::REGION_SMOKE => effects.smoke.push((name, pool)),
+            _ => {}
+        }
+    }
+    info!("fire effects: {} burning, flare {:?}, {} smoke", effects.ground.len(), effects.flare.map(|f| f.0), effects.smoke.len());
+}
+
+/// How far off (m) a fire's and its smoke's effects play.
+const FIRE_RANGE: f32 = 150.0;
+const SMOKE_RANGE: f32 = 250.0;
+/// The share of its life a patch's flames go out at (the last of them
+/// burning down as it ends), and how long (s) its smoke hangs on after.
+const FLAMES_OUT: f32 = 0.88;
+const SMOKE_LINGER: (f32, f32) = (12.0, 20.0);
+
+/// The fire manager's effects over the burning cells: the nearest first,
+/// as many as the pools allow. A patch burns with one of the lasting fires
+/// (one cell in four: each is a few metres across, bigger than our cells),
+/// a splash on bare ground with the flare; one cell in nine smokes, on a
+/// while after it's out.
+fn authored_fire(effects: &mut FireEffects, fires: &Fires, cam: Vec3, now: f32, rng: &mut Rng, commands: &mut Commands) {
+    let lot = |c: Cell| (c.0.wrapping_mul(73_856_093) ^ c.1.wrapping_mul(19_349_663)).unsigned_abs() as usize;
+    let mut want: Vec<(f32, Cell, bool)> = fires
+        .burning
+        .iter()
+        .filter(|(c, b)| (b.bare || (c.0.rem_euclid(2) == 0 && c.1.rem_euclid(2) == 0)) && b.age < b.life * FLAMES_OUT)
+        .map(|(c, b)| (cell_centre(*c, b.y).distance(cam), *c, b.bare))
+        .filter(|(d, ..)| *d < FIRE_RANGE)
+        .collect();
+    want.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let wanted: HashSet<Cell> = want.iter().map(|w| w.1).collect();
+    effects.playing.retain(|c, (e, _)| {
+        let keep = wanted.contains(c);
+        if !keep {
+            commands.entity(*e).despawn();
+        }
+        keep
+    });
+    let mut using: HashMap<&'static str, usize> = HashMap::new();
+    for (_, n) in effects.playing.values() {
+        *using.entry(n).or_default() += 1;
+    }
+    for (_, c, bare) in want {
+        if effects.playing.contains_key(&c) {
+            continue;
+        }
+        let flare = effects.flare.filter(|_| bare).and_then(|f| FireEffects::pick(&[f], &using, 0));
+        let Some(name) = flare.or_else(|| FireEffects::pick(&effects.ground, &using, lot(c))) else { continue };
+        let at = cell_centre(c, fires.burning[&c].y);
+        let e = commands.spawn((Transform::from_translation(at), crate::authored_fx::AuthoredFx(name), crate::authored_fx::NoLights)).id();
+        *using.entry(name).or_default() += 1;
+        effects.playing.insert(c, (e, name));
+    }
+    // Smoke over the patches burning (and a while after).
+    let mut using: HashMap<&'static str, usize> = HashMap::new();
+    for (_, n, _) in effects.smoking.values() {
+        *using.entry(n).or_default() += 1;
+    }
+    for (c, b) in &fires.burning {
+        if b.bare || c.0.rem_euclid(3) != 1 || c.1.rem_euclid(3) != 1 || effects.smoking.contains_key(c) || cell_centre(*c, b.y).distance(cam) > SMOKE_RANGE {
+            continue;
+        }
+        let Some(name) = FireEffects::pick(&effects.smoke, &using, lot(*c)) else { break };
+        let e = commands.spawn((Transform::from_translation(cell_centre(*c, b.y)), crate::authored_fx::AuthoredFx(name))).id();
+        *using.entry(name).or_default() += 1;
+        effects.smoking.insert(*c, (e, name, None));
+    }
+    effects.smoking.retain(|c, (e, _, until)| {
+        if !fires.burning.contains_key(c) && until.is_none() {
+            *until = Some(now + rng.range(SMOKE_LINGER.0, SMOKE_LINGER.1));
+        }
+        let keep = until.is_none_or(|t| now < t);
+        if !keep {
+            commands.entity(*e).despawn();
+        }
+        keep
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
 fn burn_effects(
     time: Res<Time>,
     fires: Res<Fires>,
     mut rng: ResMut<Rng>,
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
     mut particles: ResMut<Particles>,
+    mut effects: ResMut<FireEffects>,
+    mut commands: Commands,
 ) {
     let dt = time.delta_secs();
     let Ok(cam) = cameras.single() else { return };
     let c = cam.translation();
+    if !effects.ground.is_empty() {
+        authored_fire(&mut effects, &fires, c, time.elapsed_secs(), &mut rng, &mut commands);
+        return;
+    }
     for (cell, b) in &fires.burning {
         let at = cell_centre(*cell, b.y);
         if at.distance(c) > 150.0 {

@@ -1940,14 +1940,15 @@ const SKY_MOON: &str = r"graphics\__fc3_graphics\singleplayer\_textures\skybox\n
 fn convert_authored_effects(job: &Job) -> Result<()> {
     use fc3_formats::particle_effects as pe;
     let mut names: Vec<String> = pe::AUTHORED_EFFECTS.iter().map(|n| n.to_string()).collect();
-    // (The world's placed effects, by the names its list keeps; one the
-    // library lacks plays our stand-in, no error.)
-    let mut placed: Vec<String> = Vec::new();
+    // (The world's placed effects, by the names its list keeps, and the fire
+    // manager's: one the library lacks, or keeps empty, plays our stand-in
+    // or nothing, no error.)
+    let mut optional: Vec<String> = Vec::new();
     if let Ok(list) = std::fs::read_to_string(job.root().join(cache::WORLD_FX_REL)) {
         for name in list.lines().filter(|l| !l.starts_with('#')).filter_map(|l| l.split_whitespace().nth(8)) {
             if !names.iter().any(|n| n == name) {
                 names.push(name.to_string());
-                placed.push(name.to_string());
+                optional.push(name.to_string());
             }
         }
     }
@@ -1976,6 +1977,24 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
         }
         Err(e) => job.error(format!("bullet impacts: {e:#}")),
     }
+    // The fire manager's: the burning ground, its smoke...
+    {
+        use fc3_formats::fire_settings as fs;
+        match job.vfs.read(fs::FIRE_SETTINGS).map_err(anyhow::Error::from).and_then(|obj| fs::parse(&obj)) {
+            Ok(fires) => {
+                for f in &fires {
+                    if !names.contains(&f.effect) {
+                        names.push(f.effect.clone());
+                        optional.push(f.effect.clone());
+                    }
+                }
+                if job.should_write(fs::FIRE_SETTINGS_REL) {
+                    write_atomic(job.root(), fs::FIRE_SETTINGS_REL, fs::to_text(&fires).as_bytes(), job.ctx)?;
+                }
+            }
+            Err(e) => job.error(format!("fire settings: {e:#}")),
+        }
+    }
     names.retain(|n| job.should_write(&pe::authored_rel(n)));
     if names.is_empty() {
         return Ok(());
@@ -2001,7 +2020,8 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
             write_atomic(job.root(), &rel, xml.as_bytes(), job.ctx)
         })();
         if let Err(e) = result {
-            if !(placed.contains(name) && format!("{e}").contains("not found")) {
+            let missing = ["not found", "no emitters"].iter().any(|m| format!("{e}").contains(m));
+            if !(optional.contains(name) && missing) {
                 job.error(format!("authored effect {name}: {e:#}"));
             }
         }

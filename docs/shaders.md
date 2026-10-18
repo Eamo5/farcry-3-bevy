@@ -417,6 +417,22 @@ the wounded grunts. A death by fire falls with one of the three
 moves again. `FC3_BURN_TEST=<s>` sets everyone within 40 m alight that long
 after the start; `--npc-test guards` gives two who run, `idle` one who stays.
 
+Grass fires. The fire manager's settings (`firesettings_default.obj`) name,
+for each kind of fire, the effects it plays and how many of each may play at
+once (`iPoolMaxSize`). The converter keeps them (`particles/fire-settings.txt`)
+and caches the effects, skipping those the library lacks or keeps empty. A
+burning patch of ground plays the burning ground's (`FireRegionSettings`). Its
+lasting fires (`fire_ground_a`, `fire_ground_b`) burn on one of our cells in
+four, since each is a few metres across and our cells are 2 m. The nearest to
+the camera come first, as many as their pools allow. A splash on bare ground
+plays the one whose flames don't loop, burning itself out (`fire_ground_d`).
+The smoke (`FireSmokeRegionSettings`: `smok_ground_a`, `smok_ground_b`) rises
+from one cell in nine and hangs on 12 to 20 s after it's out. The effects'
+own lights are left to our four over the fire. Our flames and smoke stand in
+when nothing is cached. Not yet: the region profiles (Savannah, Jungle...)
+and their timings, burning objects and plants, the flamethrower's sticky
+stream.
+
 Each active emitter waits its `SpawnDelay`, then emits for its `EmitDuration`
 (again and again with `EmitLoop`). It gives a burst of `NbInitPart`, then its rate:
 `EmitRateKF`'s value, times its `RatioUI` curve over the emitter's time, give or
