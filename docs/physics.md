@@ -259,6 +259,13 @@ sphere inertia: 3, 2).
   the object's size), an explosive barrel going up, and a cage door shot
   open. A vehicle's wreck swaps its whole-only parts for all its broken parts
   (burnt wheels, hood), kept on the wreck.
+* A vehicle below half its armour smokes, and below a quarter burns, then
+  blows up 4.5 s later. These are its archetype's `EngineFire` effects:
+  `engine_fire` (smoking), then `engine_fire_burning` (boats have the one),
+  for the 4x4, quad, sedan, buggy, cargo truck, zodiac, jetski or patrol
+  boat. Each plays from the vehicle's origin, since its emitters place the
+  hood's and the cabin's fires themselves, and goes when it blows up. Our
+  smoke and flames stand in when an effect isn't cached.
 * `FC3_BREAK_TEST=<id>:<secs>` breaks a placed entity that long into a run.
 
 ## Survey

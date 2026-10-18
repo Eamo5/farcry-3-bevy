@@ -3803,6 +3803,37 @@ pub struct Wear {
     fuse: Option<f32>,
     pub wrecked: bool,
     puff: f32,
+    /// The game's engine fire it plays, and whether the burning stage's.
+    fire: Option<(Entity, bool)>,
+}
+
+/// A vehicle's engine fire (its archetype's `EngineFire`): the smoking
+/// stage's effect, or the burning one's (a boat's is the one).
+fn engine_fire(prefix: &str, burning: bool) -> Option<&'static str> {
+    let (smoke, fire) = match prefix {
+        "vehicle/land/jeep4x4" | "vehicle/land/technical" => {
+            ("fc3_gameplay_vehicule_land.land_vehicule_4x4.engine_fire", "fc3_gameplay_vehicule_land.land_vehicule_4x4.engine_fire_burning")
+        }
+        "vehicle/land/atv" => {
+            ("fc3_gameplay_vehicule_land.land_vehicule_quad_bike.engine_fire", "fc3_gameplay_vehicule_land.land_vehicule_quad_bike.engine_fire_burning")
+        }
+        "vehicle/land/japansedan" | "vehicle/land/germanhatch" => {
+            ("fc3_gameplay_vehicule_land.land_vehicule_japsedan.engine_fire", "fc3_gameplay_vehicule_land.land_vehicule_japsedan.engine_fire_burning")
+        }
+        "vehicle/land/dunebuggy" => {
+            ("fc3_gameplay_vehicule_land.land_vehicule_buggy.engine_fire", "fc3_gameplay_vehicule_land.land_vehicule_buggy.engine_fire_burning")
+        }
+        "vehicle/land/cargotruck" => {
+            ("fc3_gameplay_vehicule_land.land_vehicule_cargotruck.engine_fire", "fc3_gameplay_vehicule_land.land_vehicule_cargotruck.engine_fire_burning")
+        }
+        "vehicle/sea/zodiac" => ("fc3_gameplay_vehicule_sea.sea_vehicule_zodiac.engine_fire", "fc3_gameplay_vehicule_sea.sea_vehicule_zodiac.engine_fire"),
+        "vehicle/sea/jetski" => ("fc3_gameplay_vehicule_sea.sea_vehicule_jetski.engine_fire", "fc3_gameplay_vehicule_sea.sea_vehicule_jetski.engine_fire"),
+        "vehicle/sea/patrolboat" | "vehicle/sea/barge" => {
+            ("fc3_gameplay_vehicule_sea.sea_vehicule_patrolboat.engine_fire", "fc3_gameplay_vehicule_sea.sea_vehicule_patrolboat.engine_fire")
+        }
+        _ => return None,
+    };
+    Some(if burning { fire } else { smoke })
 }
 
 /// Below this share of its armour a vehicle smokes, below the second it
@@ -3853,8 +3884,23 @@ fn vehicle_damage(
         let share = h.current / h.max.max(1.0);
         // The engine end: the front for cars, the back for boats.
         let front = matches!(DEFS[v.def].kind, Kind::Car);
-        let engine = t.transform_point(Vec3::new((v.min.x + v.max.x) * 0.5, v.max.y * 0.8 + v.min.y * 0.2, if front { v.min.z + 0.6 } else { v.max.z - 0.5 }));
-        if share < SMOKING || h.dead {
+        let engine_local = Vec3::new((v.min.x + v.max.x) * 0.5, v.max.y * 0.8 + v.min.y * 0.2, if front { v.min.z + 0.6 } else { v.max.z - 0.5 });
+        let engine = t.transform_point(engine_local);
+        // The game's own engine fire, smoking then burning (else ours).
+        let stage = (share < SMOKING || h.dead).then_some(share < BURNING || h.dead);
+        let authored = stage.and_then(|burning| engine_fire(DEFS[v.def].prefix, burning)).filter(|n| crate::authored_fx::available(n));
+        if w.fire.map(|(_, b)| b) != stage.filter(|_| authored.is_some()) {
+            if let Some((old, _)) = w.fire.take() {
+                commands.entity(old).despawn();
+            }
+            if let (Some(name), Some(burning)) = (authored, stage) {
+                // (At the vehicle's origin: its emitters place the hood's and the
+                // cabin's fires themselves.)
+                let fx = commands.spawn((Transform::default(), crate::authored_fx::AuthoredFx(name), ChildOf(e))).id();
+                w.fire = Some((fx, burning));
+            }
+        }
+        if authored.is_none() && (share < SMOKING || h.dead) {
             w.puff -= dt;
             if w.puff <= 0.0 {
                 w.puff = if share < BURNING || h.dead { 0.08 } else { 0.25 };
@@ -3882,6 +3928,9 @@ fn vehicle_damage(
             continue;
         }
         // It goes up: the blast, then a burnt-out shell.
+        if let Some((fx, _)) = w.fire.take() {
+            commands.entity(fx).despawn();
+        }
         let centre = t.transform_point((v.min + v.max) * 0.5);
         info!("vehicle: {} ({}) wrecked at {centre:.0?}", DEFS[v.def].name, v.spawn_id);
         let effect = match DEFS[v.def].kind {
