@@ -3588,10 +3588,11 @@ struct PartTag {
     piece: bool,
 }
 
-/// Parts under a wheel or the steering wheel are noted with that node (per
-/// LOD, per submesh) so they get parts of their own; so are destruction
-/// states' parts, by state, and each loose piece (its node's body moves in
-/// the game's physics: `motions`, by upper-case body name).
+/// Parts under a wheel, the steering wheel or a helicopter's rotors are
+/// noted with that node (per LOD, per submesh) so they get parts of their
+/// own; so are destruction states' parts, by state, and each loose piece
+/// (its node's body moves in the game's physics: `motions`, by upper-case
+/// body name).
 fn moving_parts(model: &mut fmesh::Model, skin: &fc3_formats::anim::SkinInfo, motions: &HashMap<String, u8>) -> Vec<Vec<PartTag>> {
     let names: Vec<String> = skin.nodes.iter().map(|n| n.name.to_ascii_uppercase()).collect();
     let ancestors = |node: Option<u16>| {
@@ -3621,14 +3622,21 @@ fn moving_parts(model: &mut fmesh::Model, skin: &fc3_formats::anim::SkinInfo, mo
                 && state_node
                     .and_then(|i| motions.get(&names[i]))
                     .is_some_and(|&m| m != fc3_formats::havok::MOTION_FIXED && m != fc3_formats::havok::MOTION_KEYFRAMED);
-            // Wheels and steering turn; a weapon's mounted or handheld pieces
-            // show only when it's used that way; a loose piece falls on its own.
+            // Wheels, steering and rotors turn; a weapon's mounted or handheld
+            // pieces show only when it's used that way; a loose piece falls on
+            // its own.
             let pivot = match state_node.filter(|_| piece) {
                 Some(i) => Some(pivot_at(i)),
                 None => chain
                     .iter()
                     .copied()
-                    .find(|&i| names[i].starts_with("WHEEL_") || names[i] == "STEERINGWHEEL" || names[i].starts_with("PIECES_"))
+                    .find(|&i| {
+                        names[i].starts_with("WHEEL_")
+                            || names[i] == "STEERINGWHEEL"
+                            || names[i] == "ROTOR"
+                            || names[i] == "TAILROTOR"
+                            || names[i].starts_with("PIECES_")
+                    })
                     .map(pivot_at),
             };
             tags.push(PartTag { pivot, state, piece });
