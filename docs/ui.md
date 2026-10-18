@@ -418,8 +418,8 @@ page; on `SinglePlayerMenuLoaded`, `SetUnlockedMenus` (crafting, skills
 and save on; the last checkpoint while a mission runs; no restart, abandon
 or debug), `SetObjective` (the mission's title and objective, the money and
 its most, the rucksack's loot and its size) and `NewItems`. What is chosen
-comes back as `Resume`/`QuitMenu` (play on), `Quit`/`QuitToDesktop` (exit),
-`MissionOptionSelected` 0 (back to the last checkpoint), 6 and 7 and
+comes back as `Resume`/`QuitMenu` (play on), `Quit` (to the main menu),
+`QuitToDesktop` (exit), `MissionOptionSelected` 0 (back to the last checkpoint), 6 and 7 and
 `RequestPageChange` 3 and 8 (our journal, until the skills and crafting
 pages are the original's). The keyboard and mouse go to Ruffle while it is
 up (`Host::input`: keys as Flash key codes, the mouse in the window's
@@ -427,8 +427,12 @@ pixels), and it draws its own cursor. The interface runs on the real clock,
 so its menus animate with the game paused. `--pause` (tests) pauses three
 seconds into play, `FC3_PAUSE_PAGE=13` goes on to a page from there
 (`10,5` with launch arguments: the handbook's guide tab), and
-`FC3_PAUSE_KEYS=Enter,Down,Enter` then presses keys on it, 0.6 s apart
-(Enter, Escape, Space, Tab and the arrows). The game opens a page with
+`FC3_PAUSE_KEYS=Enter,Down,Enter` then presses keys on it (or on the
+pause list without a page), 0.6 s apart (Enter, Escape, Space, Tab and the
+arrows; another name only waits). Nothing unloads a session (the world, the
+story's machine), so `Quit` saves, starts the game again at its menu
+(`save::BackToMenu`; `FC3_BOOT_MENU` skips the logo and the title, and
+`--continue` is left off) and ends this one; an automated run only says so. The game opens a page with
 `SetPageToLoad <page> -1 -1 -1`: a page takes the further arguments as
 where to open it (the crafting page's tab, a group, an entry), and without
 them the crafting page read a blank as its tab.

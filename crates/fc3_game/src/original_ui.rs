@@ -250,7 +250,7 @@ fn drive_pause(
         MessageReader<bevy::input::mouse::MouseButtonInput>,
     ),
     mut windows: Query<(&Window, &mut bevy::window::CursorOptions), With<PrimaryWindow>>,
-    mut exit: MessageWriter<AppExit>,
+    (mut exit, mut back_to_menu): (MessageWriter<AppExit>, ResMut<crate::save::BackToMenu>),
     (mut open, mut mouse, mut paged, mut pressed): (Local<bool>, Local<Vec2>, Local<bool>, Local<(Option<std::time::Instant>, usize)>),
     (mut players, mut crafted, mut page, mut boosts): (
         Query<&mut crate::combat::PlayerStats, With<crate::player::Player>>,
@@ -386,16 +386,21 @@ fn drive_pause(
                 // FC3_PAUSE_PAGE=13 (tests): on to a page, as if chosen
                 // (once: each page says the menu's loaded too); `10,5`
                 // opens it where its launch arguments say (the handbook's
-                // guide tab).
-                if let Some(page) = std::env::var("FC3_PAUSE_PAGE").ok().filter(|_| !*paged) {
+                // guide tab). Without it, FC3_PAUSE_KEYS go to this list.
+                if !*paged {
                     *paged = true;
-                    let mut args: Vec<&str> = page.split(',').collect();
-                    args.resize(4, "-1");
-                    host.event("SetPageToLoad", &args);
+                    if let Ok(page) = std::env::var("FC3_PAUSE_PAGE") {
+                        let mut args: Vec<&str> = page.split(',').collect();
+                        args.resize(4, "-1");
+                        host.event("SetPageToLoad", &args);
+                    }
                 }
             }
             "Resume" | "QuitMenu" => next.set(GameState::Playing),
+            // "Quit" is to the main menu (the game starts again there), the
+            // other to the desktop.
             "Quit" | "QuitToDesktop" => {
+                back_to_menu.0 = arg(0) == "Quit";
                 exit.write(AppExit::Success);
             }
             // The world map (2), skills (3), crafting (8), the handbook

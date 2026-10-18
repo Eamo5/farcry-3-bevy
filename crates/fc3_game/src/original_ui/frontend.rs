@@ -33,7 +33,8 @@
 //! the `SetText` its class listens for has no field here), so the PC's is
 //! put in it while it shows; nor has it the label that says it has gone, so
 //! the menu comes a moment after the key. A run with `FC3_FRONTEND_KEYS`
-//! presses there by itself.
+//! presses there by itself. A game started again from the pause menu's
+//! "Quit" (`save::BackToMenu`) comes straight to the menu.
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -169,6 +170,10 @@ pub(super) fn drive_frontend(
             host.answer("VIEWPORT_WIDTH", &fc3_ui::STAGE.0.to_string());
             host.answer("VIEWPORT_HEIGHT", &fc3_ui::STAGE.1.to_string());
             host.level_visible(super::HUD_LEVEL, false);
+            // (Back from a game, the menu comes at once.)
+            if shown.boot == Boot::Logo && std::env::var_os(crate::save::BOOT_MENU).is_some() {
+                shown.boot = Boot::Menu;
+            }
             if shown.boot == Boot::Logo {
                 host.load(LOGO_MOVIE, FRONTEND_LEVEL);
                 shown.since = Some(std::time::Instant::now());

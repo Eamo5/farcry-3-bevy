@@ -28,6 +28,7 @@ impl Plugin for SavePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SaveSlot>()
             .init_resource::<SaveContinued>()
+            .init_resource::<BackToMenu>()
             .add_message::<ContinueGame>()
             .add_systems(OnExit(GameState::Loading), find_save)
             .add_systems(OnEnter(GameState::Playing), (mark_played, continue_from_args))
@@ -208,6 +209,16 @@ pub struct SaveSlot {
 #[derive(Message, Clone, Copy)]
 pub struct ContinueGame;
 
+/// Leaving for the main menu (the pause menu's "Quit"): nothing here unloads
+/// a session (the world, the story's machine), so, once saved, the game
+/// starts again at its menu (`BOOT_MENU`: no logo, no title) and this one
+/// goes.
+#[derive(Resource, Default)]
+pub struct BackToMenu(pub bool);
+
+/// Set on a game started again for its menu.
+pub const BOOT_MENU: &str = "FC3_BOOT_MENU";
+
 /// The session went on from the save (the story then starts from its own).
 #[derive(Resource, Default)]
 pub struct SaveContinued(pub bool);
@@ -380,9 +391,26 @@ fn autosave(time: Res<Time<Real>>, state: Res<State<GameState>>, mut slot: ResMu
     }
 }
 
-fn save_on_exit(mut exits: MessageReader<AppExit>, mut slot: ResMut<SaveSlot>, sources: SaveSources) {
-    if exits.read().count() > 0 {
-        write_save(&mut slot, &sources);
+fn save_on_exit(mut exits: MessageReader<AppExit>, mut slot: ResMut<SaveSlot>, sources: SaveSources, back: Res<BackToMenu>, args: Res<Args>) {
+    if exits.read().count() == 0 {
+        return;
+    }
+    write_save(&mut slot, &sources);
+    // (An automated run only says so: it would start itself again and again.)
+    if back.0 && args.automated() {
+        info!("back to the main menu (an automated run ends here)");
+    } else if back.0 {
+        start_at_menu();
+    }
+}
+
+/// The game again, at its menu, as it was started (`--continue` aside: the
+/// menu offers that).
+fn start_at_menu() {
+    let args = std::env::args_os().skip(1).filter(|a| a != "--continue");
+    match std::env::current_exe().and_then(|exe| std::process::Command::new(exe).args(args).env(BOOT_MENU, "1").spawn()) {
+        Ok(_) => info!("back to the main menu"),
+        Err(e) => warn!("could not start again for the main menu ({e})"),
     }
 }
 
