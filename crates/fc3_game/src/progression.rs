@@ -1087,6 +1087,35 @@ fn load_loot_catalog(info: Res<crate::data::CacheInfo>, mut catalog: ResMut<Loot
 
 // ---------------------------------------------------------------- awards ---
 
+/// The game's lines under the XP kicker for kills (its strings), by our
+/// reason: each takedown (by its `Takedown/...` reward) and a headshot.
+/// Other gains show none.
+const KICKER_LINES: [(&str, &str, u32); 13] = [
+    ("StandardTakedown", "Takedown", 162743),
+    ("TakedownFromAbove", "Death from above", 162744),
+    ("TakedownPistolMarksman", "Gunslinger takedown", 162745),
+    ("HeavyTakedown", "Heavy beatdown", 162746),
+    ("TakedownFromAboveDouble", "Dual death from above", 162747),
+    ("TakedownFromWaterDouble", "Dual death from below", 162748),
+    ("TakedownFromLedgeDouble", "Dual death from below", 162748),
+    ("TakedownFromWater", "Death from below", 162749),
+    ("TakedownFromLedge", "Death from below", 162749),
+    ("TakedownGrenadePinPull", "Grenade takedown", 162750),
+    ("TakedownKnifeThrow", "Knife throw takedown", 162751),
+    ("TakedownChain", "Chained takedown", 162756),
+    ("", "Headshot", 162752),
+];
+
+/// A takedown's reason for its XP, by its reward's name.
+fn takedown_reason(reward: &str) -> &'static str {
+    KICKER_LINES.iter().find(|l| !l.0.is_empty() && l.0 == reward).map_or("Takedown", |l| l.1)
+}
+
+/// The game's line under the XP kicker for a gain's reason, if it has one.
+pub(crate) fn kicker_line(reason: &str) -> Option<u32> {
+    KICKER_LINES.iter().find(|l| l.1 == reason).map(|l| l.2)
+}
+
 /// Which takedown is killing whom (its `Takedown/...` XP reward), until the
 /// death comes in.
 #[derive(Resource, Default)]
@@ -1148,7 +1177,7 @@ fn award_kills(
         let kit = npc.rig.and_then(|r| kits.get(r).ok()).map_or(0, |k| k.0);
         let base = crafting.as_ref().map_or(0, |c| c.kill_xp(kit));
         let (reward, reason) = match takedown {
-            Some(t) => (format!("Takedown/{t}"), "Takedown"),
+            Some(t) => (format!("Takedown/{t}"), takedown_reason(t)),
             None if d.kind == DamageKind::Explosion => ("Standard/KillWithExplosion".to_string(), "Explosive kill"),
             None if headshot => ("Standard/KillWithHeadShotModifier".to_string(), "Headshot"),
             None if npc.state == crate::npc::NpcState::Idle => ("Standard/StealthKill".to_string(), "Stealth kill"),
@@ -3250,6 +3279,15 @@ mod skill_tests {
 
     fn ability(id: &str, requires: &[&str], mission: &str) -> Ability {
         Ability { id: id.into(), branch: 1, cost: 1, requires: requires.iter().map(|r| r.to_string()).collect(), purchasable: true, available: true, unlock_mission: mission.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn takedowns_and_headshots_have_the_kickers_lines() {
+        assert_eq!(kicker_line(takedown_reason("TakedownFromAbove")), Some(162744));
+        assert_eq!(kicker_line(takedown_reason("TakedownFromLedgeDouble")), Some(162748));
+        assert_eq!(kicker_line(takedown_reason("SomeNewTakedown")), Some(162743));
+        assert_eq!(kicker_line("Headshot"), Some(162752));
+        assert_eq!(kicker_line("Outpost liberated"), None);
     }
 
     #[test]

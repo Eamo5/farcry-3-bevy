@@ -375,7 +375,9 @@ only what changed (and everything again until the movies have loaded):
 * **XP**: `XPKicker` plays a tier by the amount (from frame 2, 42 or 95; it
   holds at 37, 87 or 155 and runs on to its `off` label from the next
   frame), `XPKickerText` the amount (the movie adds the "+") and
-  `XPBonusKickerText` what it was for.
+  `XPBonusKickerText` the game's line for a takedown (by its `Takedown/...`
+  reward: "DEATH FROM ABOVE", "CHAINED TAKEDOWN"...) or a headshot
+  (`progression::kicker_line`, 162743 to 162756); other gains have none.
 * **Loot and cash**: each thing looted plays a line (`LootContainer<n>`
   from frame 2 with `LootItemText<n>`, the two lines in turn; it fades by
   itself and sends `LootAnimationFading`); a change of money shows the cash

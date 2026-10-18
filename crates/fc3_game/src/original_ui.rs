@@ -2337,7 +2337,9 @@ fn drive_xp(state: NonSend<Interface>, time: Res<Time>, mut gains: MessageReader
     if total > 0 {
         let (start, hold, _) = XP_TIERS.iter().rev().find(|t| total >= t.2).copied().unwrap_or(XP_TIERS[0]);
         host.dps_text("XPKickerText", &format!("{total} XP"));
-        host.dps_text("XPBonusKickerText", &reason.to_uppercase());
+        // (Its line: the game's for a takedown or a headshot, else none.)
+        let line = crate::progression::kicker_line(reason).map(|id| host.text(id)).unwrap_or_default();
+        host.dps_text("XPBonusKickerText", &line);
         host.dps_play("XPKicker", fc3_ui::ExternalValue::Number(start as f64));
         *showing = Some((time.elapsed_secs() + XP_HOLD, hold));
     }
