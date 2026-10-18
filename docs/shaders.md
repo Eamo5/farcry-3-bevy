@@ -321,6 +321,35 @@ them, written to `world/effects.txt`:
 `world_fx` plays them with the particle flipbooks. Left out: quest and cinematic effects,
 lamp glows (the lamps draw their own), interiors, and the rest.
 
+Authored effects. Some effects are played as their definitions have them
+(`authored_fx`), not as flipbook stand-ins. `particle_effects::AUTHORED_EFFECTS`
+names them (so far the race gates' `waypointflare` and `finishflare`). The
+converter caches each one's `PartSys` record whole, under the hash of its name
+(`particle_effects::authored_rel`), with its active emitters' diffuse textures.
+`fc3tool particle-effect <name>` prints a definition.
+
+Each active emitter waits its `SpawnDelay`, then emits for its `EmitDuration`
+(again and again with `EmitLoop`). It gives a burst of `NbInitPart`, then its rate:
+`EmitRateKF`'s value, times its `RatioUI` curve over the emitter's time, give or
+take its `VariantKF`. `StaticSize` caps an emitter's live particles. A particle
+is born with each `Init...KF` (life, speed, size, gravity, angle, spin), its value
+give or take its variant. It heads along the emitter's axis: Dunia's +Y turned
+by `RotOffset` (X -90 is straight up), within `EmitDirAxisSpread` and
+`EmitDirPlaneSpread`. Over its life it follows the `Part...KF` curves: speed,
+size, `SizeZ` (a streak's length), alpha, spin and gravity. Its colour follows
+the `PartColorKF` knots times `InitColorKF`; with `RandomColor`, one point is
+picked at birth. The sheet is `FrameCount` by `FrameCountY` (0 is one image),
+shown at `FramePerSecond`. `BlendType` 1 adds; `RedAsAlpha` takes brightness as
+coverage; else the alpha blends. `UniformSize` 0 particles (sparks) are drawn as
+streaks along their motion. `EmitterHDRMulKF` brightens what adds, compressed
+(1 + 1.5 log10 of it: our light isn't the engine's). `SHLighting` sheets darken
+with the daylight. The near and far fades apply. `LightActive` burns a point
+light with its colour, intensity and radius, flickering by
+`LightFlickeringFrequency` and `LightFlickeringAmplitude`. Not yet: soft
+intersections, distortion, child emitters, emission volumes and sounds. Curves
+are joined linearly between knots. `FC3_AUTHORED_FX=<name>` plays one 4 m in
+front of the player.
+
 Lit effects (`EffectLit`: the foam sheets of waterfalls and rapids) stay on standard
 materials. They are drawn additively and unlit, since their maps are DXT1 with no alpha.
 Their first layer `23BE852F` is (tile u, tile v, speed u, speed v); the waterfall's is

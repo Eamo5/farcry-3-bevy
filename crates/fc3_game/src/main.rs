@@ -81,6 +81,7 @@ mod binds;
 mod screen_blur;
 mod script_postfx;
 mod vine_puff;
+mod authored_fx;
 mod retire;
 mod save;
 mod settings;
@@ -497,6 +498,7 @@ fn main() {
             world_fx::WorldFxPlugin,
         ))
         .add_plugins(vine_puff::VinePuffPlugin)
+        .add_plugins(authored_fx::AuthoredFxPlugin)
         .add_plugins(OriginalUi)
         .insert_resource(original_shaders::OriginalShaders { enabled: args.original_shaders })
         .add_systems(Startup, setup);

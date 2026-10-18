@@ -4984,9 +4984,12 @@ are played now (`races`):
   race (a kept checkpoint with G3's outpost taken, the player by its
   keeper): its 31 gates registered, the quad made, all of them passed with
   114.7 s left, $150 paid and the keeper told.
+* **The flares** are the gates' own effects (`waypointflare`, the finish
+  line's `finishflare`), played as authored (`authored_fx`: see
+  shaders.md): the glow, sparks, smoke and the flickering light. Sparks and
+  a glow stand in when they aren't cached.
 * **Not yet.** The racing voice of the player and the keepers' lines go
-  out, but not their flares' real particles (ours are sparks and a glow,
-  faint by day), the course's jump ramps or the D6 track's looting
+  out, but not the course's jump ramps or the D6 track's looting
   pirates, nor the saved best times and medals.
 
 ### Knife throwing

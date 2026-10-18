@@ -287,22 +287,25 @@ struct GateModel(u64);
 struct FlareLight(u64);
 
 /// A land gate's flares (its `FX` and `FX2` bones, its own space, Dunia
-/// axes) and their colour (`waypointflare`'s violet, `finishflare`'s red);
-/// the water gates have none.
-fn flares(model: &str) -> (&'static [[f32; 3]], Vec3) {
+/// axes), their effect (the gates' `psEmitter`: `waypointflare`, the finish
+/// line's `finishflare`) and its colour (for the stand-in when the effect
+/// isn't cached); the water gates have none.
+fn flares(model: &str) -> (&'static [[f32; 3]], &'static str, Vec3) {
     const VIOLET: Vec3 = Vec3::new(0.37, 0.24, 0.98);
     const RED: Vec3 = Vec3::new(1.0, 0.3, 0.12);
+    const WAYPOINT: &str = "fc3_gameplay_exotic.racing_challenge.waypointflare";
+    const FINISH: &str = "fc3_gameplay_exotic.racing_challenge.finishflare";
     let m = model.to_ascii_lowercase();
     if m.contains("waterracing") {
-        (&[], VIOLET)
+        (&[], WAYPOINT, VIOLET)
     } else if m.contains("racing_sf_checkpoint") {
-        (&[[-2.385, -0.024, 0.097], [2.484, -0.024, 0.097]], VIOLET)
+        (&[[-2.385, -0.024, 0.097], [2.484, -0.024, 0.097]], WAYPOINT, VIOLET)
     } else if m.contains("racing_mf_checkpoint") {
-        (&[[-4.14, -0.1, 0.087], [3.726, -0.052, 0.052]], VIOLET)
+        (&[[-4.14, -0.1, 0.087], [3.726, -0.052, 0.052]], WAYPOINT, VIOLET)
     } else if m.contains("racing_finishline") {
-        (&[[-3.197, 0.002, 0.1], [3.229, 0.002, 0.1]], RED)
+        (&[[-3.197, 0.002, 0.1], [3.229, 0.002, 0.1]], FINISH, RED)
     } else {
-        (&[], VIOLET)
+        (&[], WAYPOINT, VIOLET)
     }
 }
 
@@ -325,6 +328,9 @@ pub fn race_time(seconds: f32) -> String {
     let m = (s / 60.0) as u32;
     format!("{m}:{:04.1}", s - m as f32 * 60.0)
 }
+
+/// How long the player stands before `FC3_RACE_TEST` starts the race.
+const RACE_TEST_WAIT: f32 = 10.0;
 
 #[allow(clippy::too_many_arguments)]
 fn run(
@@ -349,7 +355,7 @@ fn run(
         MessageWriter<crate::sound::PlaySfx>,
         Commands,
     ),
-    mut test_used: Local<bool>,
+    mut test_used: Local<(bool, f32)>,
 ) {
     let Ok((mut t, mut p, health)) = players.single_mut() else { return };
     let races = &mut *races;
@@ -441,8 +447,10 @@ fn run(
         races.hud = None;
         races.marker = None;
         // FC3_RACE_TEST (tests): the nearest keeper used, once, as soon as
-        // he can be.
-        if let (Some(host), true) = (host.as_mut(), std::env::var_os("FC3_RACE_TEST").is_some() && !*test_used) {
+        // he can be after the player has stood a while (the loading screen
+        // down).
+        test_used.1 = if p.spawning { 0.0 } else { test_used.1 + time.delta_secs() };
+        if let (Some(host), true) = (host.as_mut(), std::env::var_os("FC3_RACE_TEST").is_some() && !test_used.0 && test_used.1 > RACE_TEST_WAIT) {
             let here = to_dunia(t.translation);
             let usable = host.story.usable_pawns();
             let near = |p: &[f32; 3]| (p[0] - here[0]).hypot(p[1] - here[1]);
@@ -453,7 +461,7 @@ fn run(
             {
                 info!("race test: keeper {keeper} used");
                 host.story.entity_event(*keeper, "Use", vec![fc3_story::Arg::id(fc3_story::PLAYER)]);
-                *test_used = true;
+                test_used.0 = true;
             }
         }
         return;
@@ -814,11 +822,25 @@ fn dress_course(
     }
     let dt = time.delta_secs();
     for g in &lit {
-        let (spots, colour) = flares(g.model.as_deref().unwrap_or(""));
+        let (spots, effect, colour) = flares(g.model.as_deref().unwrap_or(""));
         if spots.is_empty() {
             continue;
         }
         let at = |s: &[f32; 3]| g.at.transform_point(Vec3::new(s[0], s[2], -s[1]));
+        // The game's own flare (`authored_fx`), burning at each spot while
+        // the gate is lit.
+        if crate::authored_fx::available(effect) {
+            if !lights.iter().any(|(_, l)| l.0 == g.id) {
+                for spot in spots {
+                    commands.spawn((
+                        Transform::from_translation(at(spot)).with_rotation(g.at.rotation),
+                        crate::authored_fx::AuthoredFx(effect),
+                        FlareLight(g.id),
+                    ));
+                }
+            }
+            continue;
+        }
         for spot in spots {
             let base = at(spot) + Vec3::Y * 0.15;
             // The flame's halo, flickering, and its whiter heart.

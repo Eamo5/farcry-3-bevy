@@ -9,6 +9,15 @@ pub const VINE_CACHE_REL: &str = "particles/vine-puff.xml";
 /// the player prototype names in its `ScreenDropletParticle`.
 pub const SCREEN_DROPLETS_REL: &str = "particles/screen-droplets.xml";
 
+/// Authored effects the game plays as the game did (`fc3_game::authored_fx`),
+/// each cached whole with its textures: the race gates' flares.
+pub const AUTHORED_EFFECTS: &[&str] = &["fc3_gameplay_exotic.racing_challenge.waypointflare", "fc3_gameplay_exotic.racing_challenge.finishflare"];
+
+/// Where an authored effect is cached, by its name.
+pub fn authored_rel(name: &str) -> String {
+    format!("particles/{}.xml", crate::cache::hash_name(&name.to_ascii_lowercase()))
+}
+
 /// The particle effect the player's lens drops come from: the player
 /// prototype's `ScreenDropletParticle` `psScreenDroplet`.
 pub fn player_screen_droplets(library: &crate::fcb::Object) -> Option<String> {
@@ -103,8 +112,9 @@ impl Effect {
                 ensure!(value.is_finite() && value >= 0.0, "invalid emitter {name}");
                 Ok(value)
             };
-            let frames = [e.u32("FrameCount").context("missing frame columns")?, e.u32("FrameCountY").context("missing frame rows")?];
-            ensure!(frames.iter().all(|n| *n > 0) && frames[0].checked_mul(frames[1]).is_some(), "invalid frame grid");
+            // (No grid is a single image, as the glows have it.)
+            let frames = [e.u32("FrameCount").context("missing frame columns")?.max(1), e.u32("FrameCountY").context("missing frame rows")?.max(1)];
+            ensure!(frames[0].checked_mul(frames[1]).is_some(), "invalid frame grid");
             let offset: Vec<f32> = e.attr("PosOffset").context("missing particle offset")?.split(',')
                 .map(|s| s.trim().parse()).collect::<Result<_, _>>()?;
             ensure!(offset.len() == 3 && offset.iter().all(|v| v.is_finite()), "invalid particle offset");
@@ -172,7 +182,7 @@ mod tests {
         assert_eq!(e.source.child("VertexBuffer").unwrap().children.len(), 6);
         assert_eq!(e.source.child("Flags").unwrap().bool("LocalEmitterSpace"), Some(true));
         assert!(vfs.exists(&e.texture_path().unwrap()));
-        assert!(Effect::parse(&xml.replace("FrameCount=\"5\"", "FrameCount=\"0\"")).is_err());
+        assert_eq!(Effect::parse(&xml.replace("FrameCount=\"5\"", "FrameCount=\"0\"")).unwrap().emitters[0].frames, [1, 5]);
     }
 
     #[test]

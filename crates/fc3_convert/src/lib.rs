@@ -1464,6 +1464,15 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
+    // ---- authored effects the game plays as the game did, with their textures
+    if opts.only_sectors.is_none()
+        && fc3_formats::particle_effects::AUTHORED_EFFECTS.iter().any(|n| job.should_write(&fc3_formats::particle_effects::authored_rel(n)))
+    {
+        if let Err(e) = convert_authored_effects(&job) {
+            job.error(format!("authored effects: {e:#}"));
+        }
+    }
+
     // ---- faces: the rigs, which character uses which, and every facial clip
     if opts.only_sectors.is_none() && (job.should_write(fc3_formats::facial::PAK_REL) || job.should_write(fc3_formats::facial::DEFINITIONS_REL)) {
         if let Err(e) = convert_facial(&job) {
@@ -1921,6 +1930,35 @@ const SKY_CLOUDS: [&str; 5] = [
 ];
 
 const SKY_MOON: &str = r"graphics\__fc3_graphics\singleplayer\_textures\skybox\night\fc3_moon.xbt";
+
+/// The authored effects (`particle_effects::AUTHORED_EFFECTS`): each one's
+/// definition, and its emitters' diffuse textures.
+fn convert_authored_effects(job: &Job) -> Result<()> {
+    let particles = job.vfs.read(fc3_formats::lights::PARTICLE_LIBRARY)?;
+    let library = std::str::from_utf8(&particles)?;
+    for name in fc3_formats::particle_effects::AUTHORED_EFFECTS {
+        let rel = fc3_formats::particle_effects::authored_rel(name);
+        if !job.should_write(&rel) {
+            continue;
+        }
+        let result = (|| -> Result<()> {
+            let xml = fc3_formats::particle_effects::effect_xml(library, name)?;
+            let effect = fc3_formats::particle_effects::Effect::parse(xml)?;
+            for emitter in effect.emitters.iter().filter(|e| e.active && !e.texture.is_empty()) {
+                let path = emitter.texture_path()?;
+                let tex = cache::texture_rel(&path);
+                if job.should_write(&tex) {
+                    convert_texture_to(job, &path, &tex)?;
+                }
+            }
+            write_atomic(job.root(), &rel, xml.as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("authored effect {name}: {e:#}"));
+        }
+    }
+    Ok(())
+}
 
 /// Effect textures (see `cache::FX_TEXTURES`), each converted when missing.
 fn convert_fx(job: &Job) {

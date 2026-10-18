@@ -267,6 +267,12 @@ pub struct ParticleMaterial {
 }
 
 impl ParticleMaterial {
+    /// A plain sheet (its frames chosen by UV): 0 adds light, 1 blends by
+    /// alpha, 2 takes brightness as coverage.
+    pub(crate) fn plain(mode: f32, sheet: Handle<Image>) -> Self {
+        Self { mode: Vec4::new(mode, 0.0, 0.0, 0.0), sheet }
+    }
+
     pub(crate) fn alpha_sheet(sheet: Handle<Image>, frames: [u32; 2], interpolate: bool) -> Self {
         Self { mode: Vec4::new(1.0, frames[0] as f32, frames[1] as f32, if interpolate { 1.0 } else { 0.0 }), sheet }
     }
@@ -307,7 +313,7 @@ enum Batch {
 
 /// A batch mesh before its first particles: one invisible quad (an empty
 /// mesh has no GPU allocation to update later).
-fn empty_mesh() -> Mesh {
+pub(crate) fn empty_mesh() -> Mesh {
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
     let mut quads = Quads::default();
     quads.push(Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, (Vec2::ZERO, Vec2::ZERO), Vec3::Y, Vec4::ZERO);
@@ -392,7 +398,7 @@ fn simulate(time: Res<Time>, mut particles: ResMut<Particles>, mut decals: ResMu
 
 /// Quad geometry gathered for one batch.
 #[derive(Default)]
-struct Quads {
+pub(crate) struct Quads {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
@@ -401,7 +407,7 @@ struct Quads {
 
 impl Quads {
     /// Corners: centre ± `x` ± `y`, with the frame's UV rectangle.
-    fn push(&mut self, centre: Vec3, x: Vec3, y: Vec3, uv: (Vec2, Vec2), normal: Vec3, colour: Vec4) {
+    pub(crate) fn push(&mut self, centre: Vec3, x: Vec3, y: Vec3, uv: (Vec2, Vec2), normal: Vec3, colour: Vec4) {
         let (lo, hi) = uv;
         for (p, t) in [
             (centre - x - y, Vec2::new(lo.x, hi.y)),
@@ -416,7 +422,11 @@ impl Quads {
         }
     }
 
-    fn write(self, mesh: &mut Mesh) {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.positions.is_empty()
+    }
+
+    pub(crate) fn write(self, mesh: &mut Mesh) {
         let quads = self.positions.len() / 4;
         let indices: Vec<u32> = (0..quads as u32).flat_map(|q| [0, 1, 2, 0, 2, 3].map(|i| q * 4 + i)).collect();
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.positions);
@@ -427,7 +437,7 @@ impl Quads {
     }
 }
 
-fn frame_uv(index: u32, cols: u32, rows: u32) -> (Vec2, Vec2) {
+pub(crate) fn frame_uv(index: u32, cols: u32, rows: u32) -> (Vec2, Vec2) {
     let (c, r) = (index % cols, index / cols);
     let size = Vec2::new(1.0 / cols as f32, 1.0 / rows as f32);
     let lo = Vec2::new(c as f32, r as f32) * size;

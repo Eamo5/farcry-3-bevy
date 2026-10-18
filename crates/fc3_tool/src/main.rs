@@ -2703,6 +2703,12 @@ fn main() -> Result<()> {
                 println!("{name}: rgba min {lo:.2?} max {hi:.2?}");
             }
         }
+        "particle-effect" => {
+            // An authored particle effect's definition, by name: particle-effect <name>
+            let name = args.get(1).context("usage: particle-effect <name>")?;
+            let particles = vfs.read(fc3_formats::lights::PARTICLE_LIBRARY)?;
+            println!("{}", fc3_formats::particle_effects::effect_xml(std::str::from_utf8(&particles)?, name)?);
+        }
         "library-grep" => {
             // The cached entity library's objects with a field containing a
             // text, under their prototype's name: library-grep <text> [depth]
