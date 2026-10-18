@@ -235,7 +235,7 @@ is the story's own:
   and it swapped the one-hit-kill syringe's made and used labels; here
   each counts as its row says. Leaving a cleaned poker table now pays out
   its chips (it paid nothing). Not counted: shots from cover (there's no
-  cover to shoot from), the Trials of the Rakyat (not in the game).
+  cover to shoot from).
 * **XP**: the converter adds the game's XP rewards (`XPRewards`) to
   `progression/skills.txt`, each looting prototype's own XP (`XpGiven`) to
   its source, and collectibles' XP to their items. A kill is worth the
@@ -4791,6 +4791,56 @@ table's own movie (`ACTI_Poker.feu`, `docs/ui.md`).
   before the reveal, `JasonLeavesPoker`, B10 completed.
 * **Not yet.** The faces of the scenes' scripted cards (every one is the
   same model in the data: the engine dealt them their rigged cards).
+
+### Trials of the Rakyat
+
+The twelve trials (the engine's "social challenges", `trials`) each have
+their stone in the world, a rock with the challenge board on it
+(`CFCXChallengeBoardComponent`, no script: the engine ran it), and their
+own mission block (`<ID>`, off until the trial runs: its zone's `_intro`
+script, and its `_main` layer's reinforcement points, paths and props).
+Their rows (`challengedata.lib`: the block, the trial's id, 90 s, its name
+and description, the three scores that earn its rewards, the four scores
+to beat) and what scores (`challengescorerules.lib`), copied into the
+cache as they are, and the challenge manager's template (the rewards: $250,
+400 XP, $500; the units, the sounds) are `fc3_formats::challenges`.
+
+* **The stone.** Within 4 m it offers its trial; used, the pause menu opens
+  on the board (quick launch 6): the trial, the player's best among the
+  scores to beat, the rewards ticked once earned. Without the original
+  interface the trial starts at once.
+* **The start.** The player's gear is put away (weapons, ammo, throwables,
+  medkits, armour), the block comes in (`Story::set_block_state`; its zone
+  kept running however far the trial goes, `hold_script`) and, a second
+  later, the player hears `CChallengeEvent` (0, the trial): its scripts
+  give the trial's weapons (`SpawnWeapon` finds the game's by the shop's
+  models now too: `weapons:FC3/STGW-90` is our STG-90), put up its dialog
+  and start the clock (`StartChallengeTimer`).
+* **The score.** Each man the player kills scores by his kind (our roles
+  as the game's classes: assaulter, berserker, defender, heavy gunner,
+  rocket, molotov, beheader) with headshots, stealth kills and takedowns on
+  top (`PlayerKilled`, from the kill awards); each shows its popup, and the
+  clock beeps through its last ten seconds.
+* **The end.** The clock run out (done if the first reward's score is
+  reached), the scripts failing it (`NotifyChallengerFailure`: off the zone
+  too long), the player dying, or giving up from the trial's pause page
+  (Escape while it runs, quick launch 11). Then the block goes, the men and
+  vehicles it brought in go with it (and those still on their way for a few
+  seconds), the gear comes back, each reward reached for the first time
+  pays, the best is kept (`Progress::trials`, saved), and the result page
+  (quick launch 7) offers it again. The trials played count on the
+  handbook's progress page.
+* **Tests.** `FC3_TRIAL_TEST=<block>` starts a trial at once (its boxes
+  accepted), `FC3_TRIAL_USE` uses the stone the player stands by,
+  `FC3_TRIAL_SHOTS=<dir>` captures it at 20 and 60 s. Seen at D4's
+  (`D4_SC_06`, from the stone: board, start, 90 s with the autopilot
+  fighting: 695 points, the three rewards, the result page, the area clear
+  and the gear back after).
+* **Not yet.** The trial's time barrels (+10 s each), the helicopters G3's
+  and C7's waves fly in (they land at their path's end), F3's weapon cycle
+  (it waits on the weapon drawn), the loading screen, and the other
+  natives the trials call that do nothing yet (`SwitchArmy`, tagging,
+  `DisplayCustomUIMsg`, `RefillWeaponAmmo`, `SelectThrowGadget`).
 
 ### Races
 

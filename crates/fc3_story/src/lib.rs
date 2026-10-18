@@ -649,6 +649,21 @@ impl Story {
         self.core.borrow().is_loaded(id)
     }
 
+    /// A mission block by its name (case aside): its id and its zone (the
+    /// entity whose script the block runs).
+    pub fn block_named(&self, name: &str) -> Option<(u64, Option<u64>)> {
+        let c = self.core.borrow();
+        c.data.blocks.values().find(|b| b.name.eq_ignore_ascii_case(name)).map(|b| (b.id, b.zone))
+    }
+
+    /// Sets a mission block's state from the host (a trial's own block, as
+    /// the engine did when a trial began and ended): its layers with it;
+    /// activating it starts its zone's script, putting it away stops it.
+    pub fn set_block_state(&mut self, block: u64, state: LayerState) {
+        self.core.borrow_mut().set_block(block, state);
+        self.pump();
+    }
+
     /// Keeps an entity's start-on-load graph running while its sector is out
     /// of the world (or lets it go with it again): a race's controller, its
     /// gameplay's owner, while the race drives far from it, as the engine

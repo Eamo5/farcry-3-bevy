@@ -63,7 +63,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_gallery,
                     drive_poker,
                     drive_knives,
-                    drive_races,
+                    (drive_races, drive_trials).chain(),
                     drive_pause,
                     drive_map_page,
                     run_interface,
@@ -254,7 +254,7 @@ fn drive_pause(
         Local<CraftPage>,
         Option<ResMut<crate::syringes::Boosts>>,
     ),
-    (mut map_page, outposts): (ResMut<MapPage>, Res<crate::outposts::Outposts>),
+    (mut map_page, outposts, mut trials): (ResMut<MapPage>, Res<crate::outposts::Outposts>, ResMut<crate::trials::Trials>),
 ) {
     use crate::menu::GameState;
     use fc3_ui::input::{MouseButton, PlayerEvent};
@@ -298,7 +298,38 @@ fn drive_pause(
         }
         let arg = |i: usize| call.args.get(i).map(String::as_str).unwrap_or("");
         match arg(0) {
-            "RequestPageToLoad" => open_page(host, if *game.get() == GameState::Map { "2" } else { "-1" }),
+            // (A trial's board, result or pause page when a trial asked.)
+            "RequestPageToLoad" => {
+                // (A trial's page takes FC3_PAUSE_KEYS too, for tests.)
+                *paged |= trials.page_wanted.is_some();
+                let page = trials.page_wanted.take().unwrap_or(if *game.get() == GameState::Map { "2" } else { "-1" });
+                open_page(host, page);
+            }
+            "ChallengeBoardPageLoaded" | "ChallengeResultPageLoaded" => {
+                if let Some(page) = &trials.page {
+                    send_trial_page(host, page);
+                }
+            }
+            "ChallengePausePageLoaded" => {
+                let legend = trials.pause_legend();
+                host.event("SetChallengeSetupLegendInfo", &[&legend[0], &legend[1], &legend[2], &legend[3]]);
+            }
+            // The trial's pages' choices: start it or leave the board, play
+            // it again (0) or leave (2) from the result, give it up (1) or
+            // go on (0) from its pause.
+            "ChallengeBoardStart" | "ChallengeBoardQuit" | "ChallengeResultChoice" | "ChallengePauseAbort" => {
+                use crate::trials::Choice;
+                trials.choices.push(match (arg(0), arg(1)) {
+                    ("ChallengeBoardStart", _) => Choice::Start,
+                    ("ChallengeResultChoice", "0") => Choice::Again,
+                    ("ChallengePauseAbort", "1") => Choice::Abort,
+                    ("ChallengePauseAbort", _) => Choice::Resume,
+                    _ => Choice::Leave,
+                });
+                trials.page = None;
+                next.set(GameState::Playing);
+            }
+            "ChallengeShowGamerCard" => {}
             // The world map page's (`drive_map_page`).
             "MapLoaded" | "IconsLoaded" | "SetupMarker" | "onFastTravel" => map_page.calls.push(call.clone()),
             "OnSwitchMode"
@@ -1314,6 +1345,87 @@ fn send_handbook(
     host.set_data(list, items);
 }
 
+/// A trial's board or result page (`M_ChallengeBoard.feu`,
+/// `M_ChallengeResult.feu`): its name with its description (the board)
+/// or the result and the best and this run's scores, then the scores to
+/// beat (`DataChallengeBoard`: the developers', type 1, and the player's,
+/// type 0) and the rewards (`DataChallengeRewards`, each ticked once
+/// earned).
+fn send_trial_page(host: &fc3_ui::Host, page: &crate::trials::Page) {
+    use crate::trials::PageKind;
+    use fc3_ui::ExternalValue as V;
+    let name = host.text(page.name);
+    match page.kind {
+        PageKind::Result { success } => {
+            host.event("SetResult", &[if success { "1" } else { "0" }, ""]);
+            host.event("SetChallengeGlobalInfo", &[&name, &page.best.to_string(), &page.score.to_string()]);
+        }
+        _ => host.event("SetChallengeGlobalInfo", &[&name, &host.text(page.description), &page.best.to_string()]),
+    }
+    host.event("SetChallengePercent", &[""]);
+    let item = |fields: Vec<(&str, V)>| fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect::<std::collections::BTreeMap<String, V>>();
+    let board = page
+        .board
+        .iter()
+        .map(|(who, score, player)| {
+            item(vec![
+                ("sName", V::String(who.clone())),
+                ("sScore", V::String(score.to_string())),
+                ("iType", V::Number(if *player { 0.0 } else { 1.0 })),
+                ("iClientId", V::Number(0.0)),
+            ])
+        })
+        .collect();
+    host.set_data("DataChallengeBoard", board);
+    let rewards =
+        page.rewards.iter().map(|(line, got)| item(vec![("sName", V::String(line.clone())), ("iRewarded", V::Number(if *got { 1.0 } else { 0.0 }))])).collect();
+    host.set_data("DataChallengeRewards", rewards);
+}
+
+/// A trial's HUD (`H_Challenges.feu`, the main HUD's `Challenges_MC`, up
+/// with `ShowUIElement Challenges`): the score (pulsing as it moves), the
+/// next reward's score, the time left (`mm:ss`), and each score's popup
+/// (`ChallengeUpdateScore_<n>`, two to a kind in turn: kills, headshots,
+/// stealth, takedowns, time) with its rule's name and what it added.
+#[derive(Default)]
+struct TrialsShown {
+    on: bool,
+    last: Option<crate::trials::Hud>,
+}
+
+fn drive_trials(state: NonSend<Interface>, mut trials: ResMut<crate::trials::Trials>, mut shown: Local<TrialsShown>) {
+    use fc3_ui::ExternalValue as V;
+    let Interface::Running(host) = &*state else { return };
+    let Some(hud) = trials.hud else {
+        if shown.on {
+            host.event("HideUIElement", &["Challenges"]);
+            host.dps_visible("ChallengeWidget", false);
+            *shown = TrialsShown::default();
+        }
+        return;
+    };
+    if !shown.on {
+        host.event("ShowUIElement", &["Challenges"]);
+        shown.on = host.dps_visible("ChallengeWidget", true);
+    }
+    if shown.last != Some(hud) {
+        let left = hud.left.ceil() as u32;
+        host.dps_text("ChallengeTextActualScore", &hud.score.to_string());
+        host.dps_text("ChallengeTextChallengerScore", &format!("/{}", hud.target));
+        host.dps_text("ChallengeTextRemainingScore", &format!("{:02}:{:02}", left / 60, left % 60));
+        shown.last = Some(hud);
+    }
+    if std::mem::take(&mut trials.pulse) {
+        host.dps_play("ChallengeTextActualScoreMC", V::String("Anim".into()));
+    }
+    for p in std::mem::take(&mut trials.popups) {
+        let slot = crate::trials::popup_slot(&mut trials, p.kind);
+        host.dps_text(&format!("ChallengeTextUpdateScore_{slot}"), &host.text(p.name));
+        host.dps_text(&format!("ChallengeTextScore_{slot}"), &p.value);
+        host.dps_play(&format!("ChallengeUpdateScore_{slot}"), V::String("FadeIn".into()));
+    }
+}
+
 /// The options page's sections (`OptionSections`), at the places the PC
 /// page's code takes them by (`OptionsPage_PC`): video, calibration, video
 /// quality, controls, gameplay, audio (their names are the game's strings).
@@ -2064,7 +2176,12 @@ fn drive_story(
     hud: Res<crate::hud::HudState>,
     mut last: Local<Option<(Option<String>, Option<String>, Option<String>, Option<String>)>>,
     gallery: Option<Res<crate::shooting_gallery::Gallery>>,
-    (poker, minigame, races): (Option<Res<crate::poker::PokerTable>>, Option<Res<crate::hud::Minigame>>, Option<Res<crate::races::Races>>),
+    (poker, minigame, races, trials): (
+        Option<Res<crate::poker::PokerTable>>,
+        Option<Res<crate::hud::Minigame>>,
+        Option<Res<crate::races::Races>>,
+        Option<Res<crate::trials::Trials>>,
+    ),
 ) {
     let Interface::Running(host) = &*state else { return };
     for card in std::mem::take(&mut ui.cards) {
@@ -2076,12 +2193,13 @@ fn drive_story(
     }
     let subtitle = ui.subtitle.as_ref().filter(|_| settings.subtitles).map(|s| s.0.clone());
     // (Not while a shooting gallery runs: its count is where the box is; nor
-    // while a race does.)
+    // while a race or a trial does.)
     let objective = ui.objective.clone().filter(|_| {
         !gallery.is_some_and(|g| g.holds_player())
             && !poker.is_some_and(|p| p.holds_player())
             && !minigame.is_some_and(|m| m.holds_player())
             && !races.is_some_and(|r| r.holds_player())
+            && !trials.is_some_and(|t| t.holds_player())
     });
     let now = (objective, ui.mission.clone(), subtitle, hud.shown_prompt.clone());
     let first = last.is_none();
@@ -3500,7 +3618,12 @@ fn drive_radar(
     vehicles: Query<(Entity, &GlobalTransform, &crate::vehicles::Vehicle, Option<&crate::vehicles::Wear>)>,
     (reach, driving, objectives): (Res<crate::map::MinimapReach>, Res<crate::vehicles::Driving>, Res<crate::story::ObjectiveMarkers>),
     (outposts, ways, progress): (Res<crate::outposts::Outposts>, Res<crate::traversal::Ways>, Res<crate::progression::Progress>),
-    (hud, pickups, races): (Res<crate::map::HudParams>, Query<(&GlobalTransform, &crate::pickups::Pickup)>, Option<Res<crate::races::Races>>),
+    (hud, pickups, races, trials): (
+        Res<crate::map::HudParams>,
+        Query<(&GlobalTransform, &crate::pickups::Pickup)>,
+        Option<Res<crate::races::Races>>,
+        Option<Res<crate::trials::Trials>>,
+    ),
     mut last: Local<Option<Radar>>,
     (story, time, mut standing): (Option<NonSend<crate::story::StoryHost>>, Res<Time<Real>>, Local<(f32, Vec<(f64, Vec3)>)>),
 ) {
@@ -3611,8 +3734,9 @@ fn drive_radar(
         Some(s) => s.iter().filter(|(k, _)| *k == map_icon::MISSION).map(|(_, p)| *p).collect(),
         None => objectives.0.clone(),
     };
-    // (A race's next gate; while a race holds the player, the gate alone.)
-    if races.as_ref().is_some_and(|r| r.holds_player()) {
+    // (A race's next gate; while a race holds the player, the gate alone;
+    // while a trial does, nothing.)
+    if races.as_ref().is_some_and(|r| r.holds_player()) || trials.as_ref().is_some_and(|t| t.holds_player()) {
         goals.clear();
     }
     goals.extend(races.as_ref().and_then(|r| r.marker));

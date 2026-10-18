@@ -666,6 +666,35 @@ while the player is at a table: `original_ui::drive_poker`, the game in
   While the player is at a table the main HUD and the radar are down, as
   is the objective box.
 
+**Trials of the Rakyat** (`trials`, see `docs/story.md`):
+
+* While one runs, the main HUD's `Challenges_MC`
+  (`UI\Singleplayer\Hud\Challenges\H_Challenges.feu`) is up
+  (`ShowUIElement Challenges`, its widget `ChallengeWidget` shown): the
+  score (`ChallengeTextActualScore`, `ChallengeTextActualScoreMC` played
+  from `Anim` as it moves), `/` the next reward's score
+  (`ChallengeTextChallengerScore`), the time left as `mm:ss`
+  (`ChallengeTextRemainingScore`), and each score's popup
+  (`ChallengeUpdateScore_<n>` played from `FadeIn`, its rule's name in
+  `ChallengeTextUpdateScore_<n>` and `+N` in `ChallengeTextScore_<n>`; two
+  slots to a kind, taken in turn: kills, headshots, stealth, takedowns,
+  time).
+* The stone's board (`M_ChallengeBoard.feu`, quick launch 6) and the
+  result (`M_ChallengeResult.feu`, 7) open from the pause menu: when the
+  game asks for one the pause page's `RequestPageToLoad` is answered with
+  it. On `ChallengeBoardPageLoaded` / `ChallengeResultPageLoaded` the game
+  sends `SetChallengeGlobalInfo` (the board: name, description, best; the
+  result: name, best, this score, after `SetResult 1|0`),
+  `SetChallengePercent ""`, `DataChallengeBoard` (`sName`, `sScore`,
+  `iType` 0 the player or 1 a developer, `iClientId`) and
+  `DataChallengeRewards` (`sName`, `iRewarded`). The board's
+  `ChallengeBoardStart` / `ChallengeBoardQuit`, the result's
+  `ChallengeResultChoice 0|2` (again, leave) and the trial's pause page's
+  (`M_ChallengePause.feu`, 11: its legend from
+  `SetChallengeSetupLegendInfo`) `ChallengePauseAbort 1|0` (give up, go on)
+  go back to the game. The pages' start buttons answer the mouse (the
+  legend's click) and the pad's button, not Enter.
+
 **Races** (`UI\Singleplayer\Activities\ACTI_Driving.feu`, level 4, while a
 race runs: `original_ui::drive_races`, the race in `races`, see
 `docs/story.md`):

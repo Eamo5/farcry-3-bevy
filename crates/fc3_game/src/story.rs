@@ -874,14 +874,14 @@ fn draw_markers(
     cameras: Query<(&Camera, &GlobalTransform), With<crate::player::PlayerCamera>>,
     icons: Query<Entity, With<MarkerIcon>>,
     mut commands: Commands,
-    (scale, minigame, races): (Res<UiScale>, Option<Res<crate::hud::Minigame>>, Option<Res<crate::races::Races>>),
+    (scale, minigame, races, trials): (Res<UiScale>, Option<Res<crate::hud::Minigame>>, Option<Res<crate::races::Races>>, Option<Res<crate::trials::Trials>>),
 ) {
     for e in &icons {
         commands.entity(e).despawn();
     }
     // (A race's next gate with them; while a race holds the player, the gate
     // alone.)
-    let racing = races.as_ref().is_some_and(|r| r.holds_player());
+    let racing = races.as_ref().is_some_and(|r| r.holds_player()) || trials.is_some_and(|t| t.holds_player());
     let all: Vec<Vec3> = markers.0.iter().copied().filter(|_| !racing).chain(races.and_then(|r| r.marker)).collect();
     if all.is_empty() || scripted.hud_hidden || cinema.view.is_some() || minigame.is_some_and(|m| m.holds_player()) {
         if !markers.0.is_empty() {
@@ -1291,7 +1291,7 @@ fn run_story(
             mut chopper,
             mut car_chase,
             mut gallery,
-            (poker, minigame, mut races),
+            (poker, minigame, mut races, mut trials),
         ),
     ): (
         MessageWriter<crate::progression::XpGain>,
@@ -1318,7 +1318,7 @@ fn run_story(
             ResMut<crate::chopper_fight::ChopperFight>,
             ResMut<crate::car_chase::CarChase>,
             ResMut<crate::shooting_gallery::Gallery>,
-            (Res<crate::poker::PokerTable>, Res<crate::hud::Minigame>, ResMut<crate::races::Races>),
+            (Res<crate::poker::PokerTable>, Res<crate::hud::Minigame>, ResMut<crate::races::Races>, ResMut<crate::trials::Trials>),
         ),
     ),
 ) {
@@ -1412,6 +1412,7 @@ fn run_story(
             car_chase.reset();
             gallery.reset();
             races.reset();
+            trials.reset();
             postfx.reset();
             ui.subtitle = None;
             // Rebuild mission actors and discard transient wildlife together.
@@ -2355,6 +2356,9 @@ fn run_story(
                     }
                     // A race's gates registering, to the player: `<player>
                     // GateRegisterEvent <gate> <bone> <bone> <index> <tolerance>`.
+                    // A trial's clock started, or the trial failed (its
+                    // scripts: off the zone too long).
+                    "StartChallengeTimer" | "NotifyChallengerFailure" => trials.natives.push((name.clone(), a(0).parse().unwrap_or(0))),
                     "SendGSFGenericEventToEntity" if a(1) == "GateRegisterEvent" => {
                         if let (Ok(id), Ok(index)) = (a(2).parse::<u64>(), a(5).parse::<u32>()) {
                             races.gates.retain(|g| g.id != id);
@@ -2562,7 +2566,9 @@ fn run_story(
                             scripted.gadgets.insert(a(1));
                         }
                         if let Ok(mut inv) = inventory.single_mut() {
-                            if let Some(def) = weapon_def(&inv, &a(1), &data) {
+                            // (By the shop's models too: a trial's
+                            // `weapons:FC3/STGW-90`, the game's STG-90.)
+                            if let Some(def) = host.weapon_def(&inv, &a(1)) {
                                 let wname = inv.defs[def].name;
                                 crate::weapons::grant_weapon(&mut inv, wname, 4);
                                 // (Known to the story by the script's name:
@@ -3004,6 +3010,7 @@ fn story_boxes(
         || pad_pressed(GamepadButton::South)
         || std::env::var("FC3_STORY_AUTOPILOT").is_ok()
         || std::env::var("FC3_STORY_RETRY_TEST").is_ok()
+        || std::env::var("FC3_TRIAL_TEST").is_ok()
         || std::env::var("FC3_OUTPOST_FIRE_TEST").is_ok();
     let cancel = b.choice && (keys.any_just_pressed([KeyCode::Backspace, KeyCode::KeyQ]) || pad_pressed(GamepadButton::East));
     actions.clear();

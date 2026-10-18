@@ -11,6 +11,7 @@ pub mod body;
 pub mod audio;
 pub mod avm1;
 pub mod cache;
+pub mod challenges;
 pub mod cinema;
 pub mod conversations;
 pub mod counters;

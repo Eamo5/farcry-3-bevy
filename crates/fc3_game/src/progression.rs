@@ -24,6 +24,7 @@ impl Plugin for ProgressionPlugin {
             .init_resource::<Skills>()
             .init_resource::<SkillHover>()
             .add_message::<StatGain>()
+            .add_message::<PlayerKilled>()
             .init_resource::<TakedownRewards>()
             .add_systems(OnExit(GameState::Loading), (load_skills, load_handbook))
             .init_resource::<HandbookData>()
@@ -338,6 +339,15 @@ pub mod stat {
     pub const MEDICINE_CRAFTED: u32 = 834;
 }
 
+/// A man the player killed, and how (a trial scores it).
+#[derive(Message, Clone, Copy)]
+pub struct PlayerKilled {
+    pub victim: Entity,
+    pub headshot: bool,
+    pub takedown: bool,
+    pub unaware: bool,
+}
+
 /// A statistic counted up.
 #[derive(Message, Clone, Copy)]
 pub struct StatGain {
@@ -435,6 +445,10 @@ pub struct Progress {
     /// lower case: JAS_190's takedowns, until the cenote's end): the
     /// abilities with them count as not learned.
     pub removed_plans: std::collections::BTreeSet<String>,
+    /// The Trials of the Rakyat played: each one's best score and the
+    /// rewards it has paid (bits: the first money, the XP, the second
+    /// money), by the trial's id.
+    pub trials: std::collections::BTreeMap<u32, (u32, u8)>,
 }
 
 impl Default for Progress {
@@ -468,6 +482,7 @@ impl Default for Progress {
             whole_tattoo: false,
             bonus_plans: Default::default(),
             removed_plans: Default::default(),
+            trials: Default::default(),
         }
     }
 }
@@ -554,6 +569,9 @@ impl Progress {
         for t in &self.towers {
             s += &format!("tower {t}\n");
         }
+        for (id, (best, paid)) in &self.trials {
+            s += &format!("trial {id} {best} {paid}\n");
+        }
         for m in &self.maps {
             s += &format!("map {m}\n");
         }
@@ -627,6 +645,12 @@ impl Progress {
             "skin" => {
                 if let (Some(a), Some(n)) = (it.next().and_then(Animal::from_id), it.next().and_then(|v| v.parse().ok())) {
                     self.skins.insert(a, n);
+                }
+            }
+            "trial" => {
+                let mut n = || it.next().and_then(|v| v.parse::<u32>().ok());
+                if let (Some(id), Some(best), Some(paid)) = (n(), n(), n()) {
+                    self.trials.insert(id, (best, paid as u8));
                 }
             }
             "tower" => {
@@ -1080,7 +1104,7 @@ fn award_kills(
     driving: Res<crate::vehicles::Driving>,
     mut headshots: Local<HashMap<Entity, bool>>,
     mut xp: MessageWriter<XpGain>,
-    mut stats: MessageWriter<StatGain>,
+    (mut stats, mut killed): (MessageWriter<StatGain>, MessageWriter<PlayerKilled>),
 ) {
     let Ok((player, inv)) = players.single() else { return };
     // Whether the player's last hit on each was to the head.
@@ -1113,6 +1137,7 @@ fn award_kills(
                 for stat in crate::statistics::kill_stats(&how) {
                     stats.write(StatGain { stat, amount: 1 });
                 }
+                killed.write(PlayerKilled { victim: d.entity, headshot, takedown: how.takedown, unaware: how.unaware });
             }
         }
         if d.killer != Some(player) || d.entity == player || !npcs.get(d.entity).is_ok_and(|n| n.faction.hostile_to_player()) {
@@ -3298,7 +3323,7 @@ mod skill_tests {
     fn kills_are_worth_the_victims_xp_times_how_they_died() {
         use crate::combat::{DamageEvent, DamageKind, Died};
         let mut app = App::new();
-        app.add_message::<Died>().add_message::<DamageEvent>().add_message::<XpGain>().add_message::<StatGain>();
+        app.add_message::<Died>().add_message::<DamageEvent>().add_message::<XpGain>().add_message::<StatGain>().add_message::<PlayerKilled>();
         app.init_resource::<TakedownRewards>().init_resource::<crate::vehicles::Driving>();
         app.insert_resource(Skills(SkillTree {
             xp_rewards: vec![("Takedown/StandardTakedown".into(), 3.0), ("Standard/KillWithHeadShotModifier".into(), 2.5)],
