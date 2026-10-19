@@ -2018,6 +2018,14 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
             }
             Err(e) => job.error(format!("fire settings: {e:#}")),
         }
+        // (And how burnable objects burn, and which.)
+        if job.should_write(fs::FIRE_OBJECTS_REL) {
+            let read = |path: &str| job.vfs.read(path).map_err(anyhow::Error::from);
+            match read(fs::FIRE_OBJECTS).and_then(|l| fs::parse_objects(&l)).and_then(|p| Ok((p, fs::parse_burnables(&read(fs::BURNABLES)?)?))) {
+                Ok((profiles, burnables)) => write_atomic(job.root(), fs::FIRE_OBJECTS_REL, fs::objects_to_text(&profiles, &burnables).as_bytes(), job.ctx)?,
+                Err(e) => job.error(format!("fire object profiles: {e:#}")),
+            }
+        }
         // (And how its burning ground burns.)
         if job.should_write(fs::FIRE_REGIONS_REL) {
             match job.vfs.read(fs::FIRE_REGIONS).map_err(anyhow::Error::from).and_then(|lib| fs::parse_regions(&lib)) {

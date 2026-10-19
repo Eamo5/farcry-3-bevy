@@ -474,7 +474,26 @@ bolts this way and that until it's out. Without the profiles, a patch burns
 when nothing is cached. Not yet: picking the profile by the zone painted on
 the ground (`zoneLogicZone` in `burnablesettings_default.obj`, Jungle
 against Savannah), the profiles' damage (`fFireDmg`, `fDmgBuffer`: their
-units are unknown), burning objects, the flamethrower's sticky stream.
+units are unknown), the flamethrower's sticky stream.
+
+Burning objects (`burnables`). The fire manager's object profiles
+(`fireobject.lib`) say how a burnable object burns: its fire's times, its
+smoke's life, the colour it chars to (`BurnColor`) and whether it smokes
+black. `burnablesettings_default.obj` names the models that burn as each.
+The converter keeps both (`particles/fire-objects.txt`). In the world each
+such object carries the ignitor its profile puts on it (`CIgnitorComponent`,
+`fireobjObjectProfile_SP`). Of the list's 1193 models only three are in this
+game's archives: the villages' wooden house platform and frames (162
+placements, `WoodObjects/Large`). The rest name the last game's props. One
+catches when fire is set about it (`fire::Ignite`, within its reach) or the
+ground under it burns. The fire manager's object fires (`fire_object_a` to
+`_e`) then burn over its top, up to eight, 1.5 m apart or more, as their
+pools allow. The burning ground's smoke rises over it, since the objects' own
+smokes aren't in the library. It chars to its burn colour as it burns (its
+parts' materials, taken off the original shaders) and sets the ground under
+it alight once its fire has grown. Its fires go out halfway through dying
+down, its smoke lingers its smoke's life, and it stays charred and doesn't
+burn again.
 
 Each active emitter waits its `SpawnDelay`, then emits for its `EmitDuration`
 (again and again with `EmitLoop`). It gives a burst of `NbInitPart`, then its rate:
