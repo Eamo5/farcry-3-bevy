@@ -425,7 +425,10 @@ only what changed (and everything again until the movies have loaded):
   (71685: held a second, as the game had it, `hud::ALARM_HOLD`; the story's
   autopilot taps; the last one's notice the game's 166404), patching up
   without a medkit (56341, "Hold [Heal] to heal.": held half a second; a
-  medkit is still a press).
+  medkit is still a press), the takedowns (59890; from a ledge below 118680;
+  a double 152236: the grenade, pistol and chain ones stay ours) and, falling,
+  the wingsuit (80178) and the parachute (148015), whose `[Wingsuit]` and
+  `[Parachute]` are the jump key.
 * **Reload prompt**: `ReloadMC` with the game's "[Reload] Reload" (56331,
   by `SetReloadText`) while the weapon in hand's magazine is empty with
   more to load and no reload under way (rare: the game reloads by itself).

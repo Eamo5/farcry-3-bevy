@@ -75,6 +75,7 @@ fn freefall_prompt(
     progress: Res<crate::progression::Progress>,
     heights: Res<crate::terrain::Heightfield>,
     players: Query<(&Player, &Transform)>,
+    text: Option<Res<crate::hud::GameText>>,
     mut hud: ResMut<crate::hud::HudState>,
 ) {
     let Ok((p, t)) = players.single() else { return };
@@ -85,12 +86,17 @@ fn freefall_prompt(
     if clearance < MIN_CLEARANCE || (p.air == AirMode::None && p.velocity.y > -4.0) {
         return;
     }
-    let what = match p.air {
-        AirMode::None if progress.upgrade(WINGSUIT) > 0 => "open the wingsuit",
-        AirMode::None | AirMode::Wingsuit if progress.upgrade(PARACHUTE) > 0 => "open the parachute",
+    // (In the game's words where it has them.)
+    let (what, game) = match p.air {
+        AirMode::None if progress.upgrade(WINGSUIT) > 0 => ("open the wingsuit", crate::hud::prompt::DEPLOY_WINGSUIT),
+        AirMode::None | AirMode::Wingsuit if progress.upgrade(PARACHUTE) > 0 => ("open the parachute", crate::hud::prompt::DEPLOY_PARACHUTE),
         _ => return,
     };
-    hud.prompt = Some(format!("{}  {what}", actions.label(crate::controls::Action::Jump, &settings)));
+    hud.prompt = Some(
+        text.as_deref()
+            .and_then(|t| t.prompt(game, &actions, &settings))
+            .unwrap_or_else(|| format!("{}  {what}", actions.label(crate::controls::Action::Jump, &settings))),
+    );
 }
 
 /// `FC3_FREEFALL=chute|wingsuit` (tests): drops the player from 120 m with the

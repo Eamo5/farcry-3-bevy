@@ -49,7 +49,8 @@ impl GameText {
 }
 
 /// The HUD's prompts in the game's words (its strings): a zip line, a plant,
-/// a glider, a full rucksack, an empty magazine.
+/// a glider, a full rucksack, an empty magazine, the takedowns, the wingsuit
+/// and the parachute.
 pub mod prompt {
     pub const ZIPLINE: u32 = 56342;
     pub const GATHER_PLANT: u32 = 125973;
@@ -58,6 +59,11 @@ pub mod prompt {
     pub const RELOAD: u32 = 56331;
     pub const DISABLE_ALARM: u32 = 71685;
     pub const HEAL: u32 = 56341;
+    pub const TAKEDOWN: u32 = 59890;
+    pub const LEDGE_TAKEDOWN: u32 = 118680;
+    pub const DOUBLE_TAKEDOWN: u32 = 152236;
+    pub const DEPLOY_WINGSUIT: u32 = 80178;
+    pub const DEPLOY_PARACHUTE: u32 = 148015;
 }
 
 /// How long an alarm box's switch is held to turn it off, as the game's

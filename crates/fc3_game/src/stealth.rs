@@ -1110,9 +1110,20 @@ fn takedown_prompt(
     actions: Res<ActionState>,
     settings: Res<crate::settings::Settings>,
     perks: Res<crate::progression::Perks>,
+    text: Option<Res<crate::hud::GameText>>,
     mut hud: ResMut<crate::hud::HudState>,
 ) {
     if td.candidate.is_some() && hud.prompt.is_none() {
+        // The game's words where it has them (a plain takedown, one from a
+        // ledge below, a double); the grenade, pistol and chain ones are ours.
+        use crate::hud::prompt as p;
+        let plain = td.grenade_at.is_none() && td.pistol_targets[0].is_none() && td.chain_target.is_none();
+        let game = match td.kind {
+            TakedownKind::Ground | TakedownKind::Above if plain => Some(p::TAKEDOWN),
+            TakedownKind::Below => Some(p::LEDGE_TAKEDOWN),
+            TakedownKind::Double => Some(p::DOUBLE_TAKEDOWN),
+            _ => None,
+        };
         let what = match td.kind {
             TakedownKind::Ground if td.grenade_at.is_some() => "grenade takedown",
             TakedownKind::Ground if td.pistol_targets[0].is_some() => "pistol takedown",
@@ -1123,7 +1134,9 @@ fn takedown_prompt(
             TakedownKind::Below => "takedown from below",
             TakedownKind::Chain => "throw knife",
         };
-        let mut line = format!("{}  {what}", actions.label(Action::Melee, &settings));
+        let mut line = game
+            .and_then(|id| text.as_deref()?.prompt(id, &actions, &settings))
+            .unwrap_or_else(|| format!("{}  {what}", actions.label(Action::Melee, &settings)));
         if td.kind == TakedownKind::Ground && perks.takedown_drag {
             line += &format!("      {}  drag", actions.label(Action::Interact, &settings));
         }

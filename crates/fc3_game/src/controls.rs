@@ -308,6 +308,8 @@ impl Action {
             // (A zip line: on with the interact key, off with a jump.)
             "zipattach" => Some(Action::Interact),
             "zipdetach" => Some(Action::Jump),
+            // (The wingsuit and the parachute open with a jump.)
+            "parachute" | "wingsuit" => Some(Action::Jump),
             "takedown" => Some(Action::Melee),
             "nextweapon" | "gadgetwheel" | "switchweapon" => Some(Action::NextWeapon),
             "previousweapon" => Some(Action::PrevWeapon),
