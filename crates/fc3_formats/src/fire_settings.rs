@@ -13,6 +13,8 @@ pub const FIRE_SETTINGS_REL: &str = "particles/fire-settings.txt";
 pub const REGION: &str = "FireRegionSettings";
 /// The smoke over one.
 pub const REGION_SMOKE: &str = "FireSmokeRegionSettings";
+/// A burning plant (a bush; the RealTree vegetation's).
+pub const REALTREE: &str = "FireRealtreeSettings";
 /// The kinds of fire, by their blocks in the settings.
 const KINDS: [&str; 8] = [
     REGION,

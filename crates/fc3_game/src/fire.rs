@@ -43,6 +43,13 @@ impl Plugin for FirePlugin {
 #[derive(Component)]
 pub struct Flammable;
 
+/// A bush (not grass), how tall it stands (m): it burns with its own
+/// flames.
+#[derive(Component)]
+pub struct Bush {
+    pub height: f32,
+}
+
 /// Sets fire to the ground around a point.
 #[derive(Message, Clone, Copy)]
 pub struct Ignite {
@@ -439,6 +446,10 @@ struct FireEffects {
     ground: Vec<(&'static str, usize)>,
     flare: Option<(&'static str, usize)>,
     smoke: Vec<(&'static str, usize)>,
+    /// A burning plant's: the small one first (a bush), then the big.
+    plants: Vec<(&'static str, usize)>,
+    /// The bushes burning now, and their flames.
+    bushes: HashMap<Entity, (Entity, &'static str)>,
     /// What plays now: each cell's fire, and the smoke over some (with when
     /// it clears, once the cell has burnt out).
     playing: HashMap<Cell, (Entity, &'static str)>,
@@ -474,6 +485,7 @@ fn load_fire_effects(mut effects: ResMut<FireEffects>) {
                 }
             }
             fs::REGION_SMOKE => effects.smoke.push((name, pool)),
+            fs::REALTREE => effects.plants.push((name, pool)),
             _ => {}
         }
     }
@@ -482,6 +494,8 @@ fn load_fire_effects(mut effects: ResMut<FireEffects>) {
 
 /// How far off (m) a fire's and its smoke's effects play.
 const FIRE_RANGE: f32 = 150.0;
+/// A bush this tall (m) or more burns with the bigger plant fire.
+const BIG_BUSH: f32 = 1.6;
 const SMOKE_RANGE: f32 = 250.0;
 /// The share of its life a patch's flames go out at (the last of them
 /// burning down as it ends), and how long (s) its smoke hangs on after.
@@ -493,7 +507,15 @@ const SMOKE_LINGER: (f32, f32) = (12.0, 20.0);
 /// (one cell in four: each is a few metres across, bigger than our cells),
 /// a splash on bare ground with the flare; one cell in nine smokes, on a
 /// while after it's out.
-fn authored_fire(effects: &mut FireEffects, fires: &Fires, cam: Vec3, now: f32, rng: &mut Rng, commands: &mut Commands) {
+fn authored_fire(
+    effects: &mut FireEffects,
+    fires: &Fires,
+    bushes: &Query<(Entity, &GlobalTransform, &Bush)>,
+    cam: Vec3,
+    now: f32,
+    rng: &mut Rng,
+    commands: &mut Commands,
+) {
     let lot = |c: Cell| (c.0.wrapping_mul(73_856_093) ^ c.1.wrapping_mul(19_349_663)).unsigned_abs() as usize;
     let mut want: Vec<(f32, Cell, bool)> = fires
         .burning
@@ -540,6 +562,38 @@ fn authored_fire(effects: &mut FireEffects, fires: &Fires, cam: Vec3, now: f32, 
         *using.entry(name).or_default() += 1;
         effects.smoking.insert(*c, (e, name, None));
     }
+    // The bushes in burning patches, alight with the plants' fires (the
+    // nearest first, as many as their pools allow) until burnt away.
+    if !effects.plants.is_empty() {
+        let mut alight: Vec<(f32, Entity, Vec3, f32)> = bushes
+            .iter()
+            .map(|(e, t, b)| (t.translation().distance(cam), e, t.translation(), b.height))
+            .filter(|(d, _, p, _)| *d < FIRE_RANGE && fires.burning.get(&cell_of(*p)).is_some_and(|b| b.age < b.life * FLAMES_OUT))
+            .collect();
+        alight.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let keep: HashSet<Entity> = alight.iter().map(|a| a.1).collect();
+        effects.bushes.retain(|bush, (e, _)| {
+            let on = keep.contains(bush);
+            if !on {
+                commands.entity(*e).try_despawn();
+            }
+            on
+        });
+        let mut using: HashMap<&'static str, usize> = HashMap::new();
+        for (_, n) in effects.bushes.values() {
+            *using.entry(n).or_default() += 1;
+        }
+        for (_, bush, at, height) in alight {
+            if effects.bushes.contains_key(&bush) {
+                continue;
+            }
+            let big = usize::from(height >= BIG_BUSH).min(effects.plants.len() - 1);
+            let Some(name) = FireEffects::pick(&effects.plants, &using, big) else { continue };
+            let e = commands.spawn((Transform::from_translation(at), crate::authored_fx::AuthoredFx(name), crate::authored_fx::NoLights)).id();
+            *using.entry(name).or_default() += 1;
+            effects.bushes.insert(bush, (e, name));
+        }
+    }
     effects.smoking.retain(|c, (e, _, until)| {
         if !fires.burning.contains_key(c) && until.is_none() {
             *until = Some(now + rng.range(SMOKE_LINGER.0, SMOKE_LINGER.1));
@@ -560,13 +614,14 @@ fn burn_effects(
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
     mut particles: ResMut<Particles>,
     mut effects: ResMut<FireEffects>,
+    bushes: Query<(Entity, &GlobalTransform, &Bush)>,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs();
     let Ok(cam) = cameras.single() else { return };
     let c = cam.translation();
     if !effects.ground.is_empty() {
-        authored_fire(&mut effects, &fires, c, time.elapsed_secs(), &mut rng, &mut commands);
+        authored_fire(&mut effects, &fires, &bushes, c, time.elapsed_secs(), &mut rng, &mut commands);
         return;
     }
     for (cell, b) in &fires.burning {

@@ -450,11 +450,13 @@ four, since each is a few metres across and our cells are 2 m. The nearest to
 the camera come first, as many as their pools allow. A splash on bare ground
 plays the one whose flames don't loop, burning itself out (`fire_ground_d`).
 The smoke (`FireSmokeRegionSettings`: `smok_ground_a`, `smok_ground_b`) rises
-from one cell in nine and hangs on 12 to 20 s after it's out. The effects'
-own lights are left to our four over the fire. Our flames and smoke stand in
-when nothing is cached. Not yet: the region profiles (Savannah, Jungle...)
-and their timings, burning objects and plants, the flamethrower's sticky
-stream.
+from one cell in nine and hangs on 12 to 20 s after it's out. A bush in a
+burning patch burns with a plant's fire (`FireRealtreeSettings`): a small one
+with `fire_bush`, one 1.6 m tall or more with `fire_foliage_a`, until it's
+burnt away. The effects' own lights are left to our four over the fire. Our
+flames and smoke stand in when nothing is cached. Not yet: the region
+profiles (Savannah, Jungle...) and their timings, burning objects, the
+flamethrower's sticky stream.
 
 Each active emitter waits its `SpawnDelay`, then emits for its `EmitDuration`
 (again and again with `EmitLoop`). It gives a burst of `NbInitPart`, then its rate:

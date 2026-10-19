@@ -524,9 +524,12 @@ fn spawn_vegetation(
                         obj.insert(Name::new(format!("vegetation instance {idx} model {:?} at {:?}", handle.path(), inst.translation)));
                     }
                 }
-                // Grass and bushes burn (see `fire`).
+                // Grass and bushes burn (see `fire`); a bush with its own flames.
                 if is_grass || (inst.kind == veg_kind::MESH && model.is_vegetation) {
                     obj.insert(crate::fire::Flammable);
+                }
+                if !is_grass && inst.kind == veg_kind::MESH && model.is_vegetation {
+                    obj.insert(crate::fire::Bush { height: (model.aabb_max.y - model.aabb_min.y) * inst.scale });
                 }
                 let obj = obj.id();
                 // RealTree models carry several detail levels; everything else draws LOD 0.
