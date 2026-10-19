@@ -473,7 +473,7 @@ they leave the hand 0.09 s in.
 ### Mounted guns
 
 Turrets are world entities `FC3/Turret_Ground360_DSHK_n`, `..._Ground180_DSHK_n` and
-`..._Ground360_M249_n`. Their mount model is `weapons	urret	ripod_01.xbg`, or
+`..._Ground360_M249_n`. Their mount model is `weapons\turret\tripod_01.xbg`, or
 `tripodmount_01.xbg` for the bunker mount. The gun model isn't in the entity: it's
 the DShK (`weapons\dshk\dshk.xbg`) or the minimi (`weapons\lmg\minimi.xbg`), by
 name. The mount's nodes:
@@ -890,7 +890,7 @@ impl FaceChoice { fn from_component(&fcb::Object); fn definition(head_tags) -> O
 * A takedown's victim pulls the face the game made for their half
   (`faces::takedown_face`): beside the body clip (`..._+000fw_facial.dpax`
   for `..._+000fw_target.mab`) or among the takedowns' faces
-  (`facial	akedownsrdge_facial_...` for `3rdge_fulb_...`), played on
+  (`facial\takedowns\3rdge_facial_...` for `3rdge_fulb_...`), played on
   their kit face as a line's lip-sync is; the double takedown's second
   victim too.
 * Not yet: generic characters' rigs by kit head tag, and the other
