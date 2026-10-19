@@ -416,12 +416,23 @@ only what changed (and everything again until the movies have loaded):
   timers in `ObjectiveTimerText` (as the game's own HUD writes it), hidden
   without one.
 * **Subtitles**: `ShowSubTitle(text)` / `HideSubTitle()`.
+* **Using** on foot is a hold, as the game's gameplay map has it (`use` on
+  `kb:e` held, after the `ClickGenerator` `HoldTime`, 0.37 s, which the
+  converter keeps in `story/actionmaps.txt`): searching bodies, skinning,
+  taking things, a zip line, a radio tower, a mounted gun, the shop, a
+  trial's stones, a reward, the poker and knife tables. A tap does nothing;
+  getting out of a vehicle and off a gun stay presses, as do the minigames'
+  own keys. Vehicles are got into with a tap (holding repairs a damaged one).
+  An older cache without the hold time keeps presses.
 * **Interaction prompt**: `InteractionMC` shown with `InteractionText`
   (the prompt the HUD showed this frame, `HudState::shown_prompt`). Where
   the game has the prompt and it is pressed as ours is, it is the game's
   (`hud::GameText`, `hud::prompt`, its `[Action]`s the keys bound): a zip
   line (56342, `[ZipAttach]` the interact key, `[ZipDetach]` jump), a
-  plant (125973), a glider (112303), a full rucksack (98546), an alarm box
+  plant (104574, "HOLD [Loot] to gather plant.", `[Loot]` the interact key),
+  a body (59889), an animal or a shark to skin (104575, 104577), a relic, a
+  letter, a memory card (104638 to 104640), loot (108976), a mission's item
+  (118674), anything else picked up (119600), a glider (112303), a full rucksack (98546), an alarm box
   (71685: held a second, as the game had it, `hud::ALARM_HOLD`; the story's
   autopilot taps; the last one's notice the game's 166404), patching up
   without a medkit (56341, "Hold [Heal] to heal.": held half a second; a

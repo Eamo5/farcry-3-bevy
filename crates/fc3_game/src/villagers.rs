@@ -950,7 +950,7 @@ fn thank_player(
         }
         // FC3_REWARD_TEST (with FC3_CLEAR_TEST): take it when they come.
         let test = std::env::var_os("FC3_REWARD_TEST").is_some();
-        if actions.just_pressed(crate::controls::Action::Interact) || test {
+        if actions.used() || test {
             actions.consume(crate::controls::Action::Interact);
             if test {
                 info!("reward-test: a rescued civilian pays ${} a survivor (had ${})", g.cash, progress.money);

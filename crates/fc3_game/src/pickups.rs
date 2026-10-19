@@ -114,6 +114,7 @@ pub(crate) fn loot_bodies(
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     (busy, mut gestures, mut looted): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>, MessageWriter<crate::progression::ItemLooted>),
     (crafting, kits, auto): (Option<Res<crate::crafting::CraftCatalog>>, Query<&crate::characters::KitId>, Query<(), With<AutoLoot>>),
+    text: Option<Res<crate::hud::GameText>>,
 ) {
     use crate::npc::Role;
     let Ok((pt, player, mut inv, health, mut stats)) = players.single_mut() else { return };
@@ -138,9 +139,13 @@ pub(crate) fn loot_bodies(
         return;
     };
     if taken.is_none() {
-        let what = if body.skin { "skin the animal" } else { "search the body" };
-        hud.prompt = Some(format!("{}  {what}", actions.label(crate::controls::Action::Interact, &settings)));
-        if !actions.just_pressed(crate::controls::Action::Interact) {
+        let (what, game) = if body.skin { ("skin the animal", crate::hud::prompt::SKIN_ANIMAL) } else { ("search the body", crate::hud::prompt::LOOT_BODY) };
+        hud.prompt = Some(
+            text.as_deref()
+                .and_then(|t| t.prompt(game, &actions, &settings))
+                .unwrap_or_else(|| format!("{}  {what}", actions.label(crate::controls::Action::Interact, &settings))),
+        );
+        if !actions.used() {
             return;
         }
         gestures.write(if body.skin { crate::fp::FpAction::Skin { large: true } } else { crate::fp::FpAction::LootBody { crouch: player.crouching } });
@@ -535,15 +540,25 @@ fn interact(
                 .and_then(|t| t.get(crate::hud::prompt::RUCKSACK_FULL))
                 .map_or_else(|| "Rucksack full - use or sell ingredients".into(), str::to_string),
         );
-        if actions.just_pressed(crate::controls::Action::Interact) {
+        if actions.used() || actions.just_pressed(crate::controls::Action::Interact) {
             actions.consume(crate::controls::Action::Interact);
         }
         return;
     }
-    let gather =
-        matches!(p.kind, PickupKind::Plant(_)).then(|| text.as_deref().and_then(|t| t.prompt(crate::hud::prompt::GATHER_PLANT, &actions, &settings))).flatten();
-    hud.prompt = Some(gather.unwrap_or_else(|| format!("{}  pick up {}", actions.label(crate::controls::Action::Interact, &settings), p.kind.label())));
-    if !actions.just_pressed(crate::controls::Action::Interact) {
+    // (In the game's words: what it says for each kind of thing taken.)
+    use crate::hud::prompt as gp;
+    let game = match p.kind {
+        PickupKind::Plant(_) => gp::GATHER_PLANT,
+        PickupKind::Relic => gp::TAKE_RELIC,
+        PickupKind::Letter => gp::TAKE_LETTER,
+        PickupKind::MemoryCard => gp::TAKE_MEMORY_CARD,
+        PickupKind::Loot => gp::LOOT_CONTAINER,
+        PickupKind::Mission => gp::TAKE_ITEM,
+        _ => gp::PICK_UP,
+    };
+    let said = text.as_deref().and_then(|t| t.prompt(game, &actions, &settings));
+    hud.prompt = Some(said.unwrap_or_else(|| format!("{}  pick up {}", actions.label(crate::controls::Action::Interact, &settings), p.kind.label())));
+    if !actions.used() {
         return;
     }
     // Plants are picked by hand.

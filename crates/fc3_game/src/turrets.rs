@@ -311,7 +311,7 @@ pub(crate) fn man_turrets(
         .min_by(|a, b| a.1.total_cmp(&b.1));
     let Some((e, _, _)) = near else { return };
     hud.prompt = Some(format!("{label}  use the machine gun"));
-    if !actions.just_pressed(Action::Interact) {
+    if !actions.used() {
         return;
     }
     actions.consume(Action::Interact);

@@ -414,7 +414,7 @@ fn run(
             // (and the interface is up).
             trials.waited += dt;
             let test_use = !trials.tested && std::env::var("FC3_TRIAL_USE").is_ok() && trials.waited > 3.0 && (original.0 || trials.waited > 10.0);
-            if actions.just_pressed(crate::controls::Action::Interact) || test_use {
+            if actions.used() || test_use {
                 trials.tested = true;
                 actions.consume(crate::controls::Action::Interact);
                 trials.last = Some(stone.trial);

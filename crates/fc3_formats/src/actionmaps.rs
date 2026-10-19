@@ -3,7 +3,9 @@
 //! and adds its own actions, then masks some out; scripts push and pop maps
 //! (`CAPI_Player.PushPlayerActionMap`) to narrow what the player can do (a
 //! narrative scene takes away moving and shooting). The converter keeps, for
-//! each map, the signals it lets through ([`ACTION_MAPS_REL`]).
+//! each map, the signals it lets through ([`ACTION_MAPS_REL`]), and how long
+//! a control is held before a binding on its hold fires (`ClickGenerator`
+//! `HoldTime`: on foot, using is such a hold).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -57,12 +59,40 @@ fn signals(maps: &BTreeMap<String, Element>, name: &str, seen: &mut Vec<String>)
     out
 }
 
-pub fn to_text(maps: &BTreeMap<String, BTreeSet<String>>) -> String {
-    maps.iter().map(|(m, s)| format!("{m}\t{}\n", s.iter().cloned().collect::<Vec<_>>().join(" "))).collect()
+/// How long (s) a control is held before a hold binding fires, from the
+/// files' text (the first `ClickGenerator`'s `HoldTime`).
+pub fn hold_time(texts: &[&str]) -> Option<f32> {
+    let mut hold = None;
+    for text in texts {
+        let Some(root) = crate::xml::parse(text) else { continue };
+        root.walk(&mut |e| {
+            if hold.is_none() && e.name == "ClickGenerator" {
+                hold = e.attr("HoldTime").and_then(|v| v.trim().parse::<f32>().ok());
+            }
+        });
+    }
+    hold
+}
+
+/// The hold time's line in the cache (before the maps).
+const HOLD_LINE: &str = "%hold\t";
+
+pub fn to_text(maps: &BTreeMap<String, BTreeSet<String>>, hold: Option<f32>) -> String {
+    let maps: String = maps.iter().map(|(m, s)| format!("{m}\t{}\n", s.iter().cloned().collect::<Vec<_>>().join(" "))).collect();
+    hold.map_or(maps.clone(), |h| format!("{HOLD_LINE}{h}\n{maps}"))
 }
 
 pub fn from_text(text: &str) -> BTreeMap<String, BTreeSet<String>> {
-    text.lines().filter_map(|l| l.split_once('\t')).map(|(m, s)| (m.to_string(), s.split_whitespace().map(str::to_string).collect())).collect()
+    text.lines()
+        .filter(|l| !l.starts_with('%'))
+        .filter_map(|l| l.split_once('\t'))
+        .map(|(m, s)| (m.to_string(), s.split_whitespace().map(str::to_string).collect()))
+        .collect()
+}
+
+/// The hold time as cached (none in an older cache).
+pub fn hold_from_text(text: &str) -> Option<f32> {
+    text.lines().find_map(|l| l.strip_prefix(HOLD_LINE)).and_then(|v| v.trim().parse().ok())
 }
 
 #[cfg(test)]
@@ -83,6 +113,19 @@ mod tests {
         assert_eq!(maps["all"], set(&["nod", "stroll", "wave"]));
         assert_eq!(maps["quiet"], set(&["nod", "stroll"]));
         assert_eq!(maps["loop"], set(&["spin"]));
-        assert_eq!(from_text(&to_text(&maps)), maps);
+        assert_eq!(from_text(&to_text(&maps, None)), maps);
+    }
+
+    #[test]
+    fn the_hold_time_is_kept_beside_the_maps() {
+        let common = r#"<ActionMaps><Settings><ClickGenerator ClickTime="0.25" HoldTime="0.37"/></Settings>
+            <ActionMap name="walking"><Action><Key signal="stroll"/></Action></ActionMap></ActionMaps>"#;
+        let hold = hold_time(&[common]);
+        assert_eq!(hold, Some(0.37));
+        let maps = resolve(&[common]);
+        let text = to_text(&maps, hold);
+        assert_eq!(hold_from_text(&text), Some(0.37));
+        assert_eq!(from_text(&text), maps);
+        assert_eq!(hold_from_text(&to_text(&maps, None)), None);
     }
 }

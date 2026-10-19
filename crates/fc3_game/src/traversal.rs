@@ -333,7 +333,7 @@ fn zip_prompt(
     });
     let Some((i, _)) = near else { return };
     hud.prompt = Some(text.as_deref().and_then(|t| t.prompt(crate::hud::prompt::ZIPLINE, &actions, &settings)).unwrap_or_else(|| format!("{}  ride the zip line", actions.label(Action::Interact, &settings))));
-    if actions.just_pressed(Action::Interact) {
+    if actions.used() {
         actions.consume(Action::Interact);
         *mount = Mount::Zip { cable: i, s: 0.0, speed: 4.0 };
         p.driving = true;
@@ -569,7 +569,7 @@ fn tower_prompt(
     }
     hud.prompt = Some(format!("{}  take over the radio tower", actions.label(Action::Interact, &settings)));
     // (The story's autopilot takes the towers it is brought to.)
-    if actions.just_pressed(Action::Interact) || std::env::var_os("FC3_STORY_AUTOPILOT").is_some() {
+    if actions.used() || std::env::var_os("FC3_STORY_AUTOPILOT").is_some() {
         actions.consume(Action::Interact);
         progress.towers.insert(i as u32);
         taken.write(TowerTaken { at: Vec3::from(*at) });

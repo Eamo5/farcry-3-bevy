@@ -658,7 +658,7 @@ fn play_poker(
                     game.speech.push((Some(i), "NPC_EnticeHero", 1.0));
                 }
             }
-            near && (actions.just_pressed(Action::Interact) || (test.is_some() && !game.left))
+            near && (actions.used() || (test.is_some() && !game.left))
         };
         if sit {
             game.seated = true;

@@ -3004,7 +3004,7 @@ fn shop_prompt(
         return;
     }
     hud.prompt = Some(format!("{}  shop", actions.label(crate::controls::Action::Interact, &settings)));
-    if actions.just_pressed(crate::controls::Action::Interact) {
+    if actions.used() {
         if let Some(def) = restriction.0.and_then(|s| catalog.selected_weapon(inv, s)) {
             tab.0 = shop_tab(inv.defs[def].class);
         }

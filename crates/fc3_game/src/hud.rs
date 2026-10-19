@@ -50,10 +50,19 @@ impl GameText {
 
 /// The HUD's prompts in the game's words (its strings): a zip line, a plant,
 /// a glider, a full rucksack, an empty magazine, the takedowns, the wingsuit
-/// and the parachute.
+/// and the parachute; looting (held, as using on foot is).
 pub mod prompt {
     pub const ZIPLINE: u32 = 56342;
-    pub const GATHER_PLANT: u32 = 125973;
+    pub const GATHER_PLANT: u32 = 104574;
+    pub const LOOT_BODY: u32 = 59889;
+    pub const SKIN_ANIMAL: u32 = 104575;
+    pub const SKIN_SHARK: u32 = 104577;
+    pub const TAKE_RELIC: u32 = 104638;
+    pub const TAKE_MEMORY_CARD: u32 = 104639;
+    pub const TAKE_LETTER: u32 = 104640;
+    pub const LOOT_CONTAINER: u32 = 108976;
+    pub const TAKE_ITEM: u32 = 118674;
+    pub const PICK_UP: u32 = 119600;
     pub const BOARD_GLIDER: u32 = 112303;
     pub const RUCKSACK_FULL: u32 = 98546;
     pub const RELOAD: u32 = 56331;

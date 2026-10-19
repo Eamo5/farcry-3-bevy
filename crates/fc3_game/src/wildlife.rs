@@ -2348,13 +2348,18 @@ fn skin_animals(
                 .and_then(|t| t.get(crate::hud::prompt::RUCKSACK_FULL))
                 .map_or_else(|| "Rucksack full - use or sell ingredients".into(), str::to_string),
         );
-        if actions.just_pressed(crate::controls::Action::Interact) {
+        if actions.used() || actions.just_pressed(crate::controls::Action::Interact) {
             actions.consume(crate::controls::Action::Interact);
         }
         return;
     }
-    hud.prompt = Some(format!("{}  skin {}", actions.label(crate::controls::Action::Interact, &settings), animal.name().to_lowercase()));
-    if actions.just_pressed(crate::controls::Action::Interact) {
+    let game = if animal == crate::progression::Animal::Shark { crate::hud::prompt::SKIN_SHARK } else { crate::hud::prompt::SKIN_ANIMAL };
+    hud.prompt = Some(
+        text.as_deref()
+            .and_then(|t| t.prompt(game, &actions, &settings))
+            .unwrap_or_else(|| format!("{}  skin {}", actions.label(crate::controls::Action::Interact, &settings), animal.name().to_lowercase())),
+    );
+    if actions.used() {
         // (Zoology 101: two skins from each.)
         let n = if perks.as_ref().is_some_and(|p| p.double_skins) { 2 } else { 1 };
         *progress.skins.entry(animal).or_insert(0) += n;

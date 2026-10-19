@@ -78,9 +78,10 @@ impl ScriptActionMaps {
     }
 }
 
-fn load_action_maps(info: Res<crate::data::CacheInfo>, mut maps: ResMut<ScriptActionMaps>) {
+fn load_action_maps(info: Res<crate::data::CacheInfo>, mut maps: ResMut<ScriptActionMaps>, mut actions: ResMut<ActionState>) {
     let text = std::fs::read_to_string(info.root.join(fc3_formats::actionmaps::ACTION_MAPS_REL)).unwrap_or_default();
     maps.table = fc3_formats::actionmaps::from_text(&text);
+    actions.use_hold = fc3_formats::actionmaps::hold_from_text(&text);
 }
 
 /// The engine's signals an action sends (any of them let through lets it
@@ -308,6 +309,8 @@ impl Action {
             // (A zip line: on with the interact key, off with a jump.)
             "zipattach" => Some(Action::Interact),
             "zipdetach" => Some(Action::Jump),
+            // (Looting is using.)
+            "loot" => Some(Action::Interact),
             // (The wingsuit and the parachute open with a jump.)
             "parachute" | "wingsuit" => Some(Action::Jump),
             "takedown" => Some(Action::Melee),
@@ -527,6 +530,12 @@ pub struct ActionState {
     crouch_latch: bool,
     /// How long the gamepad's D-pad left has been held.
     pad_hold: f32,
+    /// The game's hold to use on foot (s; its `ClickGenerator` `HoldTime`,
+    /// from the cache): none keeps using a press. How long the interact key
+    /// has been down, and whether it used this frame.
+    pub use_hold: Option<f32>,
+    use_held: f32,
+    used: bool,
 }
 
 /// Holding D-pad left this long lays a mine instead of throwing a rock.
@@ -541,10 +550,21 @@ impl ActionState {
         self.just_pressed.contains(&a)
     }
 
-    /// Presses an action this frame (scripted tests).
+    /// The player used what's at hand on foot: as the game has it, the
+    /// interact key held a moment (its gameplay map binds `use` on a hold),
+    /// once a hold; a press without the cache's hold time.
+    pub fn used(&self) -> bool {
+        self.used
+    }
+
+    /// Presses an action this frame (scripted tests; the story's autopilot
+    /// uses with a press).
     pub fn press(&mut self, a: Action) {
         self.pressed.insert(a);
         self.just_pressed.insert(a);
+        if a == Action::Interact {
+            self.used = true;
+        }
     }
 
     /// Holds an action down this frame without a fresh press (scripted tests).
@@ -555,18 +575,25 @@ impl ActionState {
     /// Marks a press as handled so later systems don't act on it too.
     pub fn consume(&mut self, a: Action) {
         self.just_pressed.remove(&a);
+        if a == Action::Interact {
+            self.used = false;
+        }
     }
 
     /// An exclusive interaction owns both the tap and the held control.
     pub fn suppress(&mut self, a: Action) {
         self.pressed.remove(&a);
         self.just_pressed.remove(&a);
+        if a == Action::Interact {
+            self.used = false;
+        }
     }
 
     /// Drops this frame's input (a box on screen has it).
     pub fn clear(&mut self) {
         self.pressed.clear();
         self.just_pressed.clear();
+        self.used = false;
         self.movement = Vec2::ZERO;
         self.look = Vec2::ZERO;
         self.cycle = 0;
@@ -716,5 +743,14 @@ pub fn update_actions(
             state.just_pressed.insert(*a);
         }
     }
+    // Using on foot: once the interact key has been held the game's hold
+    // time (a press without it).
+    let down = pressed.contains(&Action::Interact);
+    let held = if down { state.use_held + time.delta_secs() } else { 0.0 };
+    state.used = match state.use_hold {
+        Some(need) => down && state.use_held < need && held >= need,
+        None => down && !previous.contains(&Action::Interact),
+    };
+    state.use_held = held;
     state.pressed = pressed;
 }

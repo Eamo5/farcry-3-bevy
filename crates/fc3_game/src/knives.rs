@@ -485,7 +485,7 @@ fn play_knives(
             if take && test.is_none() && hud.prompt.is_none() {
                 hud.prompt = Some(format!("{}  Knife throwing", actions.label(Action::Interact, &settings)));
             }
-            if take && (actions.just_pressed(Action::Interact) || test.is_some()) {
+            if take && (actions.used() || test.is_some()) {
                 info!("knives: the player takes the challenger on");
                 game.stage = Stage::Betting;
                 game.row = 1;

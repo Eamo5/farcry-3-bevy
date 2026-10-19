@@ -1394,14 +1394,19 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     }
 
     // ---- the input action maps scripts narrow the player's controls to
-    if opts.only_sectors.is_none() && job.should_write(fc3_formats::actionmaps::ACTION_MAPS_REL) {
+    // (Again where an older cache lacks the hold time.)
+    let without_hold = std::fs::read_to_string(job.root().join(fc3_formats::actionmaps::ACTION_MAPS_REL))
+        .map_or(true, |t| fc3_formats::actionmaps::hold_from_text(&t).is_none());
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::actionmaps::ACTION_MAPS_REL) || without_hold) {
         let result = (|| -> Result<()> {
             let texts = fc3_formats::actionmaps::SOURCES
                 .iter()
                 .map(|p| Ok(String::from_utf8_lossy(&job.vfs.read(p)?).into_owned()))
                 .collect::<Result<Vec<String>>>()?;
-            let maps = fc3_formats::actionmaps::resolve(&texts.iter().map(String::as_str).collect::<Vec<_>>());
-            write_atomic(job.root(), fc3_formats::actionmaps::ACTION_MAPS_REL, fc3_formats::actionmaps::to_text(&maps).as_bytes(), job.ctx)
+            let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+            let maps = fc3_formats::actionmaps::resolve(&texts);
+            let hold = fc3_formats::actionmaps::hold_time(&texts);
+            write_atomic(job.root(), fc3_formats::actionmaps::ACTION_MAPS_REL, fc3_formats::actionmaps::to_text(&maps, hold).as_bytes(), job.ctx)
         })();
         if let Err(e) = result {
             job.error(format!("action maps: {e:#}"));
