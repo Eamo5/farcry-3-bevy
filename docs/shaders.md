@@ -532,8 +532,11 @@ it alight once its fire has grown. Its fires go out halfway through dying
 down, its smoke lingers its smoke's life, and it stays charred and doesn't
 burn again.
 
-Each active emitter waits its `SpawnDelay`, then emits for its `EmitDuration`
-(again and again with `EmitLoop`). It gives a burst of `NbInitPart`, then its rate:
+Each active emitter takes part in an effect's play by its `ActiveChance` (a
+share of the plays: some of a blast's sparks or smoke only now and then). It
+waits its `SpawnDelay`, then emits for its `EmitDuration` (again and again with
+`EmitLoop`). It gives a burst of `NbInitPart` (or a count between
+`NbInitPartMin` and `NbInitPartMax` when the latter is set), then its rate:
 `EmitRateKF`'s value, times its `RatioUI` curve over the emitter's time, give or
 take its `VariantKF`. `StaticSize` caps an emitter's live particles. A particle
 is born with each `Init...KF` (life, speed, size, gravity, angle, spin), its value

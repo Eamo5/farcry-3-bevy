@@ -2,8 +2,10 @@
 //! played as authored: an entity with [`AuthoredFx`] plays its effect where
 //! it stands, each emitter as its definition has it.
 //!
-//! An emitter waits its delay, then emits for its duration (again and again
-//! when it loops): a burst at its start (`NbInitPart`) and a rate
+//! An emitter takes part in a play by its chance (`ActiveChance`), waits its
+//! delay, then emits for its duration (again and again when it loops): a
+//! burst at its start (`NbInitPart`, or between `NbInitPartMin` and `...Max`)
+//! and a rate
 //! (`EmitRateKF`, its value times its ratio curve over the emitter's time,
 //! give or take its variant). Each particle is born with its life, speed,
 //! size, gravity, angle and spin (each `Init...KF`'s value give or take its
@@ -265,6 +267,8 @@ struct FxClock {
     age: f32,
     carry: Vec<f32>,
     burst: Vec<bool>,
+    /// Which emitters take part in this play (by their chance).
+    active: Vec<bool>,
     lights: Vec<Option<Entity>>,
     /// Where the effect was last frame, and so how fast it goes (what its
     /// particles take on: `InitExtSpdRatioKF`).
@@ -387,6 +391,11 @@ struct Compiled {
     delay: f32,
     looping: bool,
     burst: u32,
+    /// Its burst drawn between two counts instead (`NbInitPartMin`,
+    /// `NbInitPartMax`, when the latter is set).
+    burst_range: Option<[u32; 2]>,
+    /// The share of the effect's plays it takes part in (`ActiveChance`).
+    chance: f32,
     max: usize,
     offset: Vec3,
     /// The emitter's axis (Bevy space, the effect's own frame).
@@ -533,6 +542,11 @@ impl Compiled {
             delay: e.delay,
             looping: e.looping,
             burst: e.initial_count,
+            burst_range: (f("NbInitPartMax", 0.0) >= 1.0).then(|| {
+                let hi = f("NbInitPartMax", 0.0) as u32;
+                [(f("NbInitPartMin", 0.0) as u32).min(hi), hi]
+            }),
+            chance: (f("ActiveChance", 100.0) / 100.0).clamp(0.0, 1.0),
             max: (f("StaticSize", 50.0) as usize).clamp(1, 400),
             offset: crate::data::to_bevy(e.offset),
             axis,
@@ -795,9 +809,11 @@ fn emit(
     for (entity, fx, at, clock, once, unlit) in &mut effects {
         let Some(ids) = library.effect(fx.0).cloned() else { continue };
         let Some(mut clock) = clock else {
+            let active = ids.iter().map(|&id| rng.f32() < library.emitters[id].chance).collect();
             commands.entity(entity).insert(FxClock {
                 carry: vec![0.0; ids.len()],
                 burst: vec![false; ids.len()],
+                active,
                 lights: vec![None; ids.len()],
                 last: Some(at.translation()),
                 ..default()
@@ -810,7 +826,10 @@ fn emit(
         clock.last = Some(here);
         // A one-off done: what it emitted lives out on its own.
         let looping = |em: &Compiled| em.looping && !once;
-        if ids.iter().all(|&id| !looping(&library.emitters[id]) && clock.age > library.emitters[id].delay + library.emitters[id].duration) {
+        if ids.iter().enumerate().all(|(k, &id)| {
+            let em = &library.emitters[id];
+            !clock.active[k] || (!looping(em) && clock.age > em.delay + em.duration)
+        }) {
             commands.entity(entity).despawn();
             continue;
         }
@@ -819,6 +838,9 @@ fn emit(
             p.space = Some(at.affine());
         }
         for (k, &id) in ids.iter().enumerate() {
+            if !clock.active[k] {
+                continue;
+            }
             let (spawn, light) = {
                 let em = &library.emitters[id];
                 let t = clock.age - em.delay;
@@ -830,7 +852,7 @@ fn emit(
                 let mut n = 0;
                 if !clock.burst[k] {
                     clock.burst[k] = true;
-                    n += em.burst;
+                    n += em.burst_range.map_or(em.burst, |[lo, hi]| (lo + (rng.f32() * (hi - lo + 1) as f32) as u32).min(hi));
                 }
                 if running {
                     clock.carry[k] += (em.rate.roll(&mut rng) * em.rate_ratio.at(phase)).max(0.0) * dt;
