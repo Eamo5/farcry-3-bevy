@@ -761,7 +761,7 @@ pub fn animate_characters(
     time: Res<Time>,
     skeletons: Res<Assets<Fc3Skeleton>>,
     clips: Res<Assets<Fc3Clip>>,
-    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    cameras: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
     mut rigs: Query<(&mut CharacterRig, &AnimRequest, &GlobalTransform, Option<&AnimRestart>, Option<&ClipOverride>)>,
     mut joints: Query<&mut Transform>,
 ) {

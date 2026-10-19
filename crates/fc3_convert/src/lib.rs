@@ -1042,6 +1042,29 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
+    // ---- the menus' 3D item views: the models shop items and recipes show
+    let current = std::fs::read_to_string(job.root().join(fc3_formats::menu_views::REL)).is_ok_and(|t| fc3_formats::menu_views::MenuViews::is_current(&t));
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::menu_views::REL) || !current) {
+        let views = (|| -> Result<_> {
+            let fcb = |bytes: Vec<u8>| -> Result<_> {
+                let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+                fc3_formats::fcb::parse(&bytes[at..])
+            };
+            let items = fcb(job.vfs.read(fc3_formats::shop::ITEMS_LIB)?)?;
+            let recipes = fcb(job.vfs.read(fc3_formats::progression::RECIPE_LIB)?)?;
+            let library = fcb(std::fs::read(job.root().join("story/entitylibrary.fcb"))?)?;
+            Ok(fc3_formats::menu_views::from_libs(&items, &recipes, &library))
+        })();
+        match views {
+            Ok(views) => {
+                if let Err(e) = write_atomic(job.root(), fc3_formats::menu_views::REL, views.to_text().as_bytes(), job.ctx) {
+                    job.error(format!("menu views: {e:#}"));
+                }
+            }
+            Err(e) => job.error(format!("menu views: {e:#}")),
+        }
+    }
+
     // ---- the maps the shops sell, and what each shows
     if opts.only_sectors.is_none() {
         let current = std::fs::read_to_string(job.root().join(fc3_formats::shop::TREASURE_MAPS_REL))

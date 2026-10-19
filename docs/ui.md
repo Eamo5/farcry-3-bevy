@@ -570,7 +570,8 @@ attaches nothing.
 **Shop** (`shop.feu`, quick launch 0; `original_ui::shop`): at a shop
 (`GameState::Shop`) the pause menu opens on it, in place of ours. On its
 own it asks `onRequestedMenu 0 DataCategory` and says `ShopManagerLoaded`
-(the game hides the weapon's 3D views, the engine's drawing, and sends
+(the game hides the stand-ins of the 3D views the engine draws in, and
+draws the weapon there itself: see **3D item views**; and sends
 `SetMoney <money> <most>`); then it asks for one list at a time, each
 answered from the game's own tree (`shopcategory.lib` and
 `shopsubcategory1.lib`, `fc3_formats::shop::tree_from_libs`) and our stock:
@@ -728,11 +729,43 @@ syringe in each if one is carried. The narrative action maps switch them off
 as they do the game's signals. An arrow tip is made from the inventory: its
 grenade or molotov goes, and a tipped arrow is added up to the quiver's
 special arrows (`CraftCatalog::craft_arrow`). The page counts the tipped
-arrows carried, as it counts syringes. The 3D
-item views (`3D_Crafting_MC` and the like, which the engine draws) are
-hidden: their stand-ins are plain white and blue sheets. Blank data fields
+arrows carried, as it counts syringes. The selected recipe's model shows
+in the page's 3D view (`3D_Crafting_MC`; see **3D item views**), its
+stand-ins (plain white and blue sheets) hidden. Blank data fields
 go to the movie as null, which the shim makes blank again (a blank string
 from the host reads "null" in SWF 8).
+
+**3D item views** (`original_ui::views`): the shop and the crafting page
+leave places for the engine to draw the item they show (`3D_MC`,
+`3D_Weapon_MC`, `3D_Crafting_MC` and their siblings; the stand-ins in them,
+plain sheets, stay hidden). The converter writes each item's view to
+`ui/menu_views.txt` (`fc3_formats::menu_views`): the model its menu
+archetype draws (a shop item's `arkDisplayArchetype`, a recipe's
+`arkMenuArchetype`: the gear's own posed `menu_*` models, a syringe), its
+turn (a shop item's `DisplayDefaultAngles`; a subcategory's own item,
+`bDisplayAsDefaultItem`, with `DisplayDefaultCategoryAngles`) and its sway
+(`fRotationSpeed` in turns a second, `fRotationAmplitude` in turns). The
+shop asks for what to show as the player moves (`onRequestWeapon3D`,
+`onRequestItem3D`, `onRequestAttachment3D` with the shop id, and
+`onRequestCategory3D` with the subcategory); the crafting page's is the
+selected recipe (`CraftingRecipeSelected`). Items with no display
+archetype (ammunition, Refill) show nothing.
+
+While the page shows the place (the shim's `dpsShown`: its parents all
+visible, up to its level, so a page gone or a part of it hidden hides the
+view), a camera of its own draws the model into an image the place's size
+in window pixels. It's on render layer 6, with its own key and fill lights
+and ambient. The model is seen along Dunia's +Y with Z up, framed to fill
+the place (as if at least 24 cm across, so a grenade isn't blown up to a
+rifle's size), and sways about the upright. A model with no turn of its own
+that is long front to back (a syringe) is turned to lie across. A UI node
+over the canvas shows the image. The shop's whole-page place (`3D_MC`,
+where it shows items) is taken as its guns' (`3D_Weapon_MC`, the left
+half). The authored on-screen positions (`vectorDisplayDefaultPosition`)
+aren't used: the engine's menu camera they're relative to isn't known.
+`FC3_MENU_VIEW=shop:<id>` or `recipe:<id>` (tests) shows that item in
+whichever place is up; `FC3_MENU_VIEW_DEBUG` logs each place, whether it's
+shown, and its bounds.
 
 **Handbook** (`M_Handbook.feu`, quick launch 10) asks for one list at a
 time, `OnEncyclopediaRequest <id> <list>`, and the game fills that

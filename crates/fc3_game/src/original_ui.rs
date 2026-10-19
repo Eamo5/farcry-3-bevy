@@ -33,6 +33,7 @@ use fc3_ui::wgpu;
 
 mod frontend;
 mod shop;
+mod views;
 
 pub struct OriginalUiPlugin;
 
@@ -48,8 +49,9 @@ impl Plugin for OriginalUiPlugin {
             .init_resource::<MapPage>()
             .init_resource::<KeyEdit>()
             .init_resource::<shop::ShopPage>()
+            .init_resource::<views::ItemView>()
             .init_resource::<LoadingUp>()
-            .add_systems(Startup, make_canvas)
+            .add_systems(Startup, (make_canvas, views::load_views))
             .add_systems(
                 Update,
                 (
@@ -71,7 +73,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_poker,
                     drive_knives,
                     (drive_races, drive_trials).chain(),
-                    (drive_pause, drive_map_page, shop::drive_shop_page).chain(),
+                    (drive_pause, drive_map_page, shop::drive_shop_page, views::draw_views).chain(),
                     (follow_window, run_interface).chain(),
                 )
                     .chain()
@@ -306,12 +308,13 @@ fn drive_pause(
         Res<Time>,
         ResMut<crate::settings::Settings>,
     ),
-    (loot, perks, skills, handbook, displays): (
+    (loot, perks, skills, handbook, displays, mut item_view): (
         Option<Res<crate::progression::LootCatalog>>,
         Res<crate::progression::Perks>,
         Option<Res<crate::progression::Skills>>,
         Option<Res<crate::progression::HandbookData>>,
         Res<crate::settings::Displays>,
+        ResMut<views::ItemView>,
     ),
     story: Option<NonSendMut<crate::story::StoryHost>>,
     (mut keys, mut moves, mut buttons): (
@@ -525,6 +528,7 @@ fn drive_pause(
                 match call.args[0].as_str() {
                     "CraftingPageLoaded" => {
                         *page = CraftPage::default();
+                        item_view.recipe = None;
                         // The item's 3D views are the engine's drawing; their
                         // stand-ins are plain white and blue sheets.
                         for id in ["3D_Crafting_MC", "3D_CraftMirror_MC", "3D_Crafting_MC_B", "3D_Crafting_MC_C", "3D_Crafting_MC_D"] {
@@ -557,6 +561,8 @@ fn drive_pause(
                     }
                     "CraftingRecipeSelected" => {
                         page.recipe = arg(1).parse().ok().filter(|&i: &usize| i < catalog.recipes.len());
+                        // (Its model in the page's 3D view.)
+                        item_view.recipe = page.recipe.and_then(|i| catalog.recipes.get(i)).map(|r| r.id.clone());
                         send_craft_ingredients(host, catalog, loot, &progress, &page);
                     }
                     // The selected syringe injected (`CraftingUseResult` 1, or 0).

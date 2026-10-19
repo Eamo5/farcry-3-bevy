@@ -543,6 +543,23 @@ api.addCallback("dpsBounds", null, function(id) {
     var b = c.getBounds(_root);
     return [b.xMin, b.yMin, b.xMax, b.yMax];
 });
+// Whether a clip's page shows it: its parents all shown, up to its level
+// (its own visibility is the engine's, which hides the stand-ins it draws
+// over).
+api.addCallback("dpsShown", null, function(id) {
+    var c = _global.__fireFind(id);
+    if (c == undefined || c._parent == undefined) {
+        return false;
+    }
+    var p = c._parent;
+    while (p != undefined) {
+        if (p._visible != true || !(p._alpha > 0)) {
+            return false;
+        }
+        p = p._parent;
+    }
+    return true;
+});
 // (An empty text comes across as null.)
 api.addCallback("dpsText", null, function(id, text) {
     var c = _global.__fireFind(id);

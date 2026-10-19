@@ -35,6 +35,7 @@ pub mod havok;
 pub mod kits;
 pub mod lzo;
 pub mod material;
+pub mod menu_views;
 pub mod original;
 pub mod lights;
 pub mod outposts;

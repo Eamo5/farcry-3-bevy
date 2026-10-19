@@ -20,8 +20,9 @@
 //! puts a sight bought before back on or takes a paint off, `SellLoot <id>`
 //! sells one of a thing and `OnSellAll` the valuables; each has the list
 //! sent again, and the money (`SetMoney`). A tutorial's shop
-//! (`ShopOverride`) opens on its weapon (`OverrideShopMenu`). The weapon's
-//! 3D views are the engine's drawing; they're hidden.
+//! (`ShopOverride`) opens on its weapon (`OverrideShopMenu`). Its 3D views'
+//! stand-ins are hidden: the item it asks to see (`onRequestItem3D` and the
+//! like) is drawn over them (`views`).
 //!
 //! The engine answered a request at once, and the page counts on it: as it
 //! hears of a weapon's customising lists it reads which weapon from where
@@ -55,7 +56,23 @@ pub(super) struct ShopPage {
     override_pending: bool,
     /// The gun the equip wheel is putting in a holster.
     equipping: Option<usize>,
+    /// What the page has the engine show in 3D: a weapon, an item or an
+    /// attachment (by shop id), or a subcategory's own.
+    shown_3d: Option<Shown3d>,
     equip_tested: bool,
+}
+
+/// What a shop page asks to see in 3D (`onRequestWeapon3D` and the like).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Shown3d {
+    Item(u32),
+    Category(u32),
+}
+
+impl ShopPage {
+    pub(super) fn shown_3d(&self) -> Option<Shown3d> {
+        self.shown_3d
+    }
 }
 
 /// A button's kind (`C_ButtonShop.C_TYPE_*`).
@@ -502,6 +519,7 @@ pub(super) fn drive_shop_page(
                 }
                 page.override_pending = restriction.0.is_some();
                 page.weapon = None;
+                page.shown_3d = None;
                 page.shown = None;
                 page.sub = None;
                 changed = true;
@@ -614,7 +632,10 @@ pub(super) fn drive_shop_page(
                 crate::progression::trade(ShopItem::SellAll, &mut inv, &mut stats, &mut progress, &perks, &catalog, crafting, &mut hud);
                 (resend, changed) = (true, true);
             }
-            "SortSell" | "OnMeleeEquip" | "onSeen" | "onRequestWeapon3D" | "onRequestItem3D" | "onRequestAttachment3D" | "onRequestCategory3D" => {}
+            // What to show in the page's 3D view (`original_ui::views`).
+            "onRequestWeapon3D" | "onRequestItem3D" | "onRequestAttachment3D" => page.shown_3d = u32::try_from(number(1)).ok().map(Shown3d::Item),
+            "onRequestCategory3D" => page.shown_3d = u32::try_from(number(1)).ok().map(Shown3d::Category),
+            "SortSell" | "OnMeleeEquip" | "onSeen" => {}
             other => debug!("original UI: shop page {other} {:?} not handled yet", call.args.get(1..)),
         }
         let s = stock!();

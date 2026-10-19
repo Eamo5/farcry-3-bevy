@@ -323,6 +323,12 @@ impl Host {
         (v.len() == 4).then(|| [v[0], v[1], v[2], v[3]])
     }
 
+    /// Whether a clip's page shows it (its parents are all shown; its own
+    /// visibility aside).
+    pub fn dps_shown(&self, id: &str) -> bool {
+        matches!(self.call("dpsShown", vec![ExternalValue::String(id.to_string())]), ExternalValue::Bool(true))
+    }
+
     /// A list for the movies' data providers (`fire.utils.DataProvider(name)`:
     /// the rucksack's loot, recipes...): each item's fields bind to the
     /// clips of the same names on its tile. The pages showing it hear of it.

@@ -242,7 +242,7 @@ fn start_voices(
 /// Poses each nearby face from the clips playing on it, over the body pose.
 fn pose_faces(
     time: Res<Time>,
-    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    cameras: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
     mut faces: Query<(&mut Face, &CharacterRig, &GlobalTransform)>,
     mut joints: Query<&mut Transform>,
 ) {
