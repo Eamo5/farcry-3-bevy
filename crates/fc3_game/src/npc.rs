@@ -1089,11 +1089,17 @@ fn spawn_from_sectors(
                 (Vec3::new(at.x, at.y.max(ground), at.z), yaw0 + yaw.to_radians())
             };
             let part_at = |p: &Part| placed(&p.offset, p.yaw);
-            // (And its start's clip, where that begins.)
+            // (And its start's clip, where that begins; and its end.)
             let part_start = |p: &Part| {
                 p.start.as_ref().map(|(clip, o, yaw)| {
                     let (at, yaw) = placed(o, *yaw);
                     (clip.clone(), at, yaw)
+                })
+            };
+            let part_end = |p: &Part| {
+                p.end.as_ref().map(|e| {
+                    let (at, yaw) = placed(&e.offset, e.yaw);
+                    crate::guard_spots::SceneEnd { clip: e.clip.clone(), at, yaw, after: e.after, rest: e.rest, kills: e.kills }
                 })
             };
             // (A civilian's part among its fighters is a captive's.)
@@ -1136,6 +1142,7 @@ fn spawn_from_sectors(
                             chase,
                             part: part.map(|p| p.clip.clone()),
                             start: part.and_then(part_start),
+                            end: part.and_then(part_end),
                             march,
                         });
                         reward = 0;
@@ -1154,7 +1161,13 @@ fn spawn_from_sectors(
                     }
                     Some(part) => {
                         let (at, yaw) = part_at(part);
-                        commands.entity(npc).insert(crate::guard_spots::OwnSpot { clip: part.clip.clone(), at, yaw, start: part_start(part) });
+                        commands.entity(npc).insert(crate::guard_spots::OwnSpot {
+                            clip: part.clip.clone(),
+                            at,
+                            yaw,
+                            start: part_start(part),
+                            end: part_end(part),
+                        });
                     }
                     None => {}
                 }
@@ -1237,6 +1250,7 @@ fn spawn_from_sectors(
                     dead: false,
                     part: None,
                     start: None,
+                    end: None,
                 });
             }
             // The bodies it leaves: pirates, privateers and rebels fall as if
@@ -1246,7 +1260,7 @@ fn spawn_from_sectors(
                 // (One its scene plays lies where the scene has it.)
                 let part = part_of(Who::Corpse(ci));
                 let (at, yaw) = part.map(part_at).unwrap_or_else(|| place(o));
-                let start = part.and_then(part_start);
+                let (start, end) = (part.and_then(part_start), part.and_then(part_end));
                 let part = part.map(|p| p.clip.clone());
                 match corpse_identity(&o.archetype) {
                     Some(Ok((faction, role))) => {
@@ -1266,6 +1280,7 @@ fn spawn_from_sectors(
                             chase: None,
                             part,
                             start,
+                            end,
                             march: None,
                         });
                     }
@@ -1273,7 +1288,7 @@ fn spawn_from_sectors(
                     None => {
                         let kind = o.archetype.split_once('.').map_or("", |(_, k)| k).trim_start_matches("STP_");
                         let archetype = format!("Corpses/{kind}");
-                        beasts.write(crate::wildlife::PlaceAnimal { archetype, at, yaw, handled: false, cage: None, dead: true, part, start });
+                        beasts.write(crate::wildlife::PlaceAnimal { archetype, at, yaw, handled: false, cage: None, dead: true, part, start, end });
                     }
                 }
             }
@@ -1287,11 +1302,12 @@ fn spawn_from_sectors(
                     at: Vec3::new(at.x, at.y.max(ground), at.z),
                     yaw: yaw0 + s.yaw.to_radians(),
                     start: None,
+                    end: None,
                 });
             }
             for p in parts.iter().filter(|p| p.who == Who::Anyone && p.pace == 0.0) {
                 let (at, yaw) = part_at(p);
-                set_out.write(crate::guard_spots::AddGuardSpot { kind: format!("clip:{}", p.clip), at, yaw, start: part_start(p) });
+                set_out.write(crate::guard_spots::AddGuardSpot { kind: format!("clip:{}", p.clip), at, yaw, start: part_start(p), end: part_end(p) });
             }
             for (i, v) in table.vehicles.get(&pick).into_iter().flatten().enumerate() {
                 let at = pos + Quat::from_rotation_y(yaw0) * Vec3::new(v.offset[0], v.offset[2], -v.offset[1]);

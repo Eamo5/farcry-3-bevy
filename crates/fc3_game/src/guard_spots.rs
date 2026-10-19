@@ -25,7 +25,10 @@ impl Plugin for GuardSpotsPlugin {
         app.add_message::<AddGuardSpot>()
             .add_systems(OnExit(crate::menu::GameState::Loading), load_spots)
             .add_systems(Update, add_spots.before(take_spots).run_if(in_state(crate::menu::GameState::Playing)))
-            .add_systems(Update, (take_spots, leave_spots, enter_parts, spot_test, part_motion).chain().run_if(in_state(crate::menu::GameState::Playing)));
+            .add_systems(
+                Update,
+                (rest, take_spots, leave_spots, enter_parts, end_parts, spot_test, part_motion).chain().run_if(in_state(crate::menu::GameState::Playing)),
+            );
     }
 }
 
@@ -46,8 +49,25 @@ struct Spot {
     part: bool,
     /// A scene part's start: its clip, and where it begins.
     start: Option<(String, Vec3, f32)>,
+    /// A scene part's end, for a scene that loops only so long.
+    end: Option<SceneEnd>,
     /// Its move's abort clips (getting up startled, or curious).
     abort: Vec<String>,
+    /// No one's any more (its scene has killed its civilian).
+    closed: bool,
+}
+
+/// How a scene part ends (`fc3_formats::encounters::End`): its clip and
+/// where it begins, after how long a loop (s), how long its guard then
+/// keeps off it (s), and whether it leaves the scene's civilian dead.
+#[derive(Clone, Debug)]
+pub struct SceneEnd {
+    pub clip: String,
+    pub at: Vec3,
+    pub yaw: f32,
+    pub after: f32,
+    pub rest: f32,
+    pub kills: bool,
 }
 
 /// A guard's own part in his encounter's scene (`fc3_formats::encounters::Part`):
@@ -59,6 +79,7 @@ pub struct OwnSpot {
     pub at: Vec3,
     pub yaw: f32,
     pub start: Option<(String, Vec3, f32)>,
+    pub end: Option<SceneEnd>,
 }
 
 /// A rig playing a scene's part: while its clip plays, the clip's root
@@ -124,38 +145,68 @@ pub struct Entering {
 /// a frame after its time moves on).
 const ENTER_EARLY: f32 = 0.05;
 
+/// A guard at a scene part that ends: how long he has played its loop, and
+/// its end (its clip, from where that begins about the loop's place) once
+/// it is due, then how long he keeps off the part.
+#[derive(Component)]
+pub struct Ending {
+    clip: Handle<Fc3Clip>,
+    from: Transform,
+    after: f32,
+    rest: f32,
+    kills: bool,
+    looped: f32,
+    playing: bool,
+}
+
+/// A guard off his part after its end, for its cooldown (s).
+#[derive(Component)]
+pub struct Resting(f32);
+
 /// What a scene partner's guard (a looter, an assailant, a skinner) is
-/// doing: on his way, playing the start, or the loop.
+/// doing: on his way, playing the start, the loop, or the end.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Phase {
     Coming,
     Start,
     Loop,
+    End,
 }
 
 impl Phase {
-    pub fn of(entering: Option<&Entering>) -> Phase {
-        match entering {
-            None => Phase::Loop,
-            Some(e) if e.playing => Phase::Start,
-            Some(_) => Phase::Coming,
+    pub fn of(entering: Option<&Entering>, ending: Option<&Ending>) -> Phase {
+        match (entering, ending) {
+            (_, Some(e)) if e.playing => Phase::End,
+            (None, _) => Phase::Loop,
+            (Some(e), _) if e.playing => Phase::Start,
+            (Some(_), _) => Phase::Coming,
         }
     }
 }
 
 /// A scene partner's own clips (a body's, a carcass's, a victim's): its
-/// loop, and its start with where that begins about it; what it plays, and
-/// its own clips meanwhile.
+/// loop, and its start and end with where each begins about it; what it
+/// plays, and its own clips meanwhile.
 pub struct PartClips {
     looped: Handle<Fc3Clip>,
     start: Option<(Handle<Fc3Clip>, Transform)>,
+    end: Option<(Handle<Fc3Clip>, Transform)>,
     current: Option<Handle<Fc3Clip>>,
     base: Option<Arc<ClipSet>>,
 }
 
 impl PartClips {
     pub fn new(looped: Handle<Fc3Clip>, start: Option<(Handle<Fc3Clip>, Transform)>) -> PartClips {
-        PartClips { looped, start, current: None, base: None }
+        PartClips { looped, start, end: None, current: None, base: None }
+    }
+
+    pub fn with_end(self, end: Option<(Handle<Fc3Clip>, Transform)>) -> PartClips {
+        PartClips { end, ..self }
+    }
+
+    /// Whether its end is through, that long (s) into it.
+    pub fn through_end(&self, t: f32, clips: &Assets<Fc3Clip>) -> bool {
+        self.end.as_ref().and_then(|(c, _)| clips.get(c)).is_some_and(|c| t > 0.0 && t >= c.0.duration - ENTER_EARLY)
     }
 
     pub fn ready(&self, clips: &Assets<Fc3Clip>) -> bool {
@@ -177,6 +228,7 @@ impl PartClips {
         let want = match phase {
             Some(Phase::Loop) => self.looped.clone(),
             Some(Phase::Start) => start.unwrap_or_else(|| self.looped.clone()),
+            Some(Phase::End) => self.end.as_ref().map_or_else(|| self.looped.clone(), |(c, _)| c.clone()),
             _ => self.current.clone().or_else(|| start.filter(|_| still)).unwrap_or_else(|| self.looped.clone()),
         };
         self.play(want, (rig_e, rig, motion), clips, commands);
@@ -221,7 +273,7 @@ impl PartClips {
         } else {
             rig.set_clips(Arc::new(set));
         }
-        let from = self.start.as_ref().filter(|(c, _)| *c == want).map_or(Transform::IDENTITY, |(_, f)| *f);
+        let from = [&self.start, &self.end].into_iter().flatten().find(|(c, _)| *c == want).map_or(Transform::IDENTITY, |(_, f)| *f);
         set_motion(rig_e, motion, want.clone(), from, commands);
         self.current = Some(want);
     }
@@ -277,6 +329,86 @@ fn enter_parts(
         commands.entity(e).remove::<Entering>();
         if std::env::var("FC3_SPOT_DEBUG").is_ok() {
             info!("guard spot: through its start ({d:.1} s), into its loop at {:.1?}", en.at);
+        }
+    }
+}
+
+/// A guard whose scene loops only so long: once it has, its end (his
+/// partner's in step, `Phase::End`); through that, off his part where the
+/// end has left him, for its cooldown, after which he takes it again
+/// (unless the end has killed its civilian).
+#[allow(clippy::type_complexity)]
+fn end_parts(
+    time: Res<Time>,
+    clips: Res<Assets<Fc3Clip>>,
+    spots: Option<ResMut<GuardSpots>>,
+    mut npcs: Query<(Entity, &mut Npc, &mut Transform, &AtSpot, &mut Ending), Without<Entering>>,
+    mut rigs: Query<(&mut CharacterRig, &mut Transform, Option<&mut PartMotion>), Without<Npc>>,
+    mut held: Query<(&ChildOf, &mut Visibility), With<HeldWeapon>>,
+    mut commands: Commands,
+) {
+    let Some(mut spots) = spots else { return };
+    let debug = std::env::var("FC3_SPOT_DEBUG").is_ok();
+    for (e, mut npc, mut t, at, mut end) in &mut npcs {
+        let Some(rig_e) = npc.rig else { continue };
+        let Ok((mut rig, mut rig_tf, motion)) = rigs.get_mut(rig_e) else { continue };
+        if !end.playing {
+            end.looped += time.delta_secs();
+            if end.looped < end.after || !clips.contains(&end.clip) {
+                continue;
+            }
+            let mut set = ClipSet { skeleton: rig.clips().skeleton.clone(), clips: rig.clips().clips.clone() };
+            set.clips.insert(AnimKind::Idle, end.clip.clone());
+            rig.set_clips_blended(Arc::new(set));
+            set_motion(rig_e, motion, end.clip.clone(), end.from, &mut commands);
+            end.playing = true;
+            if debug {
+                info!("guard spot: its scene ends after {:.0} s", end.after);
+            }
+            continue;
+        }
+        let (kind, played) = rig.playing();
+        let through = kind == AnimKind::Idle
+            && rig.clips().clips.get(&AnimKind::Idle) == Some(&end.clip)
+            && clips.get(&end.clip).is_some_and(|c| played >= c.0.duration - ENTER_EARLY);
+        if !through {
+            continue;
+        }
+        // Where the end has left him: the rig's place (its clip's root
+        // motion about where it stood) becomes his.
+        let base = motion.as_ref().and_then(|m| m.base).unwrap_or(*rig_tf);
+        let moved = Transform::from_matrix(Mat4::from(t.compute_affine() * rig_tf.compute_affine() * base.compute_affine().inverse()));
+        let yaw = moved.rotation.to_euler(EulerRot::YXZ).0;
+        (t.translation.x, t.translation.z) = (moved.translation.x, moved.translation.z);
+        t.rotation = Quat::from_rotation_y(yaw);
+        (npc.post, npc.post_yaw, npc.yaw) = (t.translation, yaw, yaw);
+        *rig_tf = base;
+        commands.entity(rig_e).remove::<PartMotion>();
+        rig.set_clips_blended(at.base.clone());
+        if at.unarmed {
+            hold_weapon(&rig, &mut held, true);
+        }
+        npc.at_spot = false;
+        spots.taken.remove(&at.index);
+        let mut off = commands.entity(e);
+        off.remove::<(AtSpot, Ending)>().insert(Resting(end.rest));
+        // (Nothing left to play it with.)
+        if end.kills {
+            off.remove::<OwnSpot>();
+            spots.list[at.index].closed = true;
+        }
+        if debug {
+            info!("guard spot: through its end, off it for {:.0} s at {:.1?}", end.rest, t.translation);
+        }
+    }
+}
+
+/// A guard's cooldown after his part's end.
+fn rest(time: Res<Time>, mut resting: Query<(Entity, &mut Resting)>, mut commands: Commands) {
+    for (e, mut r) in &mut resting {
+        r.0 -= time.delta_secs();
+        if r.0 <= 0.0 {
+            commands.entity(e).remove::<Resting>();
         }
     }
 }
@@ -385,7 +517,7 @@ fn load_spots(mut commands: Commands, info: Res<CacheInfo>) {
             }
             let (at, yaw) = (Vec3::new(v[0], v[1], v[2]), Quat::from_xyzw(v[3], v[4], v[5], v[6]).to_euler(EulerRot::YXZ).0);
             let abort = token.strip_prefix("move:").map(|mv| abort_clips(mv, |m| moves.get(m))).unwrap_or_default();
-            Some(Spot { kind, at, yaw, clip, owner: None, part: false, start: first.map(|c| (c, at, yaw)), abort })
+            Some(Spot { kind, at, yaw, clip, owner: None, part: false, start: first.map(|c| (c, at, yaw)), end: None, abort, closed: false })
         })
         .collect();
     info!("{} guard spots", list.len());
@@ -431,6 +563,7 @@ pub struct AddGuardSpot {
     pub yaw: f32,
     /// A scene part's start: its clip, and where it begins.
     pub start: Option<(String, Vec3, f32)>,
+    pub end: Option<SceneEnd>,
 }
 
 /// Encounters' spots join the world's (once: the same spot set out again is
@@ -469,7 +602,7 @@ fn add_spots(mut added: MessageReader<AddGuardSpot>, spots: Option<ResMut<GuardS
         });
         let abort = a.kind.strip_prefix("move:").map(|mv| abort_clips(mv, |m| moves.as_ref()?.0.get(m))).unwrap_or_default();
         if !spots.list.iter().any(|s| s.at.distance(a.at) < 0.5) {
-            spots.list.push(Spot { kind, at: a.at, yaw: a.yaw, clip, owner: None, part, start, abort });
+            spots.list.push(Spot { kind, at: a.at, yaw: a.yaw, clip, owner: None, part, start, end: a.end.clone(), abort, closed: false });
         }
     }
 }
@@ -490,7 +623,7 @@ fn take_spots(
     time: Res<Time>,
     spots: Option<ResMut<GuardSpots>>,
     server: Res<AssetServer>,
-    mut npcs: Query<(Entity, &mut Npc, &Health, Option<&OwnSpot>), (Without<AtSpot>, Without<SpotChecked>)>,
+    mut npcs: Query<(Entity, &mut Npc, &Health, Option<&OwnSpot>), (Without<AtSpot>, Without<SpotChecked>, Without<Resting>)>,
     all: Query<(), With<Npc>>,
     mut rigs: Query<(&mut CharacterRig, Option<&mut PartMotion>)>,
     mut held: Query<(&ChildOf, &mut Visibility), With<HeldWeapon>>,
@@ -528,12 +661,23 @@ fn take_spots(
             let i = match spots.list.iter().position(|s| s.at.distance(o.at) < 0.5) {
                 Some(i) => i,
                 None => {
-                    spots.list.push(Spot { kind: "move", at: o.at, yaw: o.yaw, clip: None, owner: None, part: true, start: None, abort: Vec::new() });
+                    spots.list.push(Spot {
+                        kind: "move",
+                        at: o.at,
+                        yaw: o.yaw,
+                        clip: None,
+                        owner: None,
+                        part: true,
+                        start: None,
+                        end: None,
+                        abort: Vec::new(),
+                        closed: false,
+                    });
                     spots.list.len() - 1
                 }
             };
             let s = &mut spots.list[i];
-            (s.clip, s.owner, s.part, s.start) = (Some(o.clip.clone()), Some(e), true, o.start.clone());
+            (s.clip, s.owner, s.part, s.start, s.end) = (Some(o.clip.clone()), Some(e), true, o.start.clone(), o.end.clone());
             if spots.taken.get(&i).is_some_and(|t| *t != e) {
                 spots.taken.remove(&i);
             }
@@ -555,13 +699,14 @@ fn take_spots(
             .enumerate()
             .filter(|(i, s)| {
                 !spots.taken.contains_key(i)
+                    && !s.closed
                     && s.owner.is_none_or(|o| o == e)
                     && Vec2::new(s.at.x - post.x, s.at.z - post.z).length() < REACH
                     && (s.at.y - post.y).abs() < REACH_UP
             })
             .min_by(|a, b| a.1.owner.is_none().cmp(&b.1.owner.is_none()).then(a.1.at.distance(post).total_cmp(&b.1.at.distance(post))))
-            .map(|(i, s)| (i, s.kind, s.at, s.yaw, s.clip.clone(), s.part, s.start.clone(), s.abort.clone()));
-        let Some((i, kind, at, yaw, own, part, start, abort)) = free else { continue };
+            .map(|(i, s)| (i, s.kind, s.at, s.yaw, s.clip.clone(), s.part, (s.start.clone(), s.end.clone()), s.abort.clone()));
+        let Some((i, kind, at, yaw, own, part, (start, end), abort)) = free else { continue };
         let path = match own {
             Some(full) => full,
             None => {
@@ -585,6 +730,18 @@ fn take_spots(
         }
         if start.is_some() {
             commands.entity(e).insert(Entering { start: first, into: clip, at, yaw, playing: false });
+        }
+        // (A scene that loops only so long: its end, once due.)
+        if let Some(end) = end.filter(|_| part) {
+            commands.entity(e).insert(Ending {
+                clip: server.load(cache_path(&cache::anim_rel(&end.clip))),
+                from: start_from(at, yaw, end.at, end.yaw),
+                after: end.after,
+                rest: end.rest,
+                kills: end.kills,
+                looped: 0.0,
+                playing: false,
+            });
         }
         let lower = path.to_ascii_lowercase();
         let unarmed = kind == "smoke" || ["nowep", "noweap", "noweapon"].iter().any(|w| lower.contains(w));
@@ -675,6 +832,6 @@ fn leave_spots(
         }
         npc.at_spot = false;
         spots.taken.remove(&at.index);
-        commands.entity(e).remove::<(AtSpot, Entering)>();
+        commands.entity(e).remove::<(AtSpot, Entering, Ending)>();
     }
 }

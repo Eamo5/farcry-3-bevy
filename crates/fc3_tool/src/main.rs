@@ -3353,6 +3353,11 @@ fn main() -> Result<()> {
                         continue;
                     }
                     lines.push(format!("  {name} at [{:.2}, {:.2}, {:.2}] yaw {yaw:.1}", at[0], at[1], at[2]));
+                    // (A scene point's duration, canLoop and PlayFullNormalEnding.)
+                    if let Some(p) = e.child("Components").and_then(|c| c.child("CAIContextualActionComponent")).and_then(|c| c.child("Parameters")) {
+                        let raw = |h: u32| p.field_h(h).map_or("-".to_string(), |b| b.iter().map(|x| format!("{x:02x}")).collect());
+                        lines.push(format!("      duration {} canLoop {} fullEnding {}", raw(0x865F80C0), raw(0xE2B1F119), raw(0x91A46B4A)));
+                    }
                     for s in &seqs {
                         lines.push(format!("      {s}"));
                         if s.to_ascii_lowercase().contains("loop") && !loops.contains(s) {

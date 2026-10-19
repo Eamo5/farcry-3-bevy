@@ -853,8 +853,19 @@ is the story's own:
   in the original too: their `_Encounter` points set no
   `conversationTemplate` (the base archetype names `PiratesGenericConvo_
   MSM_A`, the CRC-32 that `dialog\conversationtable.dat`'s conversations
-  carry as `AnimTemplate`). The scenes' end sequences are not played (our
-  guards keep to their parts until something breaks them off). The hostage
+  carry as `AnimTemplate`). A scene whose lead point gives it a duration
+  (its `duration`, with the end sequence its `cinemaSequenceEnd` names;
+  most have none and loop until broken off) ends once its loop has played
+  that long (`encounters::End`, `guard_spots::Ending`): the corpse looting
+  after 10 to 20 s (the looter gets up, the body settles), the pirates'
+  conversation after 30 s, the woman being beaten after 30 s (his last
+  blow, her death: the end leaves her dead, `Died` with no killer). Each
+  of its people plays their track of the end where it begins
+  (`Phase::End`), the guard then stands where it has left him, off his
+  part for its point's cooldown (`Idle`'s `CoolDownTime`, `Resting`), and
+  takes it again unless the end has killed its civilian. The points'
+  `PlayFullNormalEnding` (an end played out even once alerted) is not
+  modelled: an alert breaks off an end as it does a loop. The hostage
   walk (its points set `isPatrol`; their loops walk on, 4 m a loop) is a
   march (`villagers::Marched`, `Escort`): each prisoner and the escort
   nearest their part walk at the clip's pace (`Part::pace`, 1.17 m/s) along

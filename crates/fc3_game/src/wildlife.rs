@@ -1295,6 +1295,7 @@ pub struct PlaceAnimal {
     /// clip's archive path; and its start's, where that begins.
     pub part: Option<String>,
     pub start: Option<(String, Vec3, f32)>,
+    pub end: Option<crate::guard_spots::SceneEnd>,
 }
 
 /// A carcass in an encounter's scene: it lies in its part, moving with it
@@ -1309,7 +1310,10 @@ const PART_REACH: f32 = 4.0;
 fn carcass_parts(
     clips: Res<Assets<crate::cache_assets::Fc3Clip>>,
     mut carcasses: Query<(&Transform, &WildAnimal, &mut CarcassPart), With<Carcass>>,
-    actors: Query<(&Transform, &Health, &crate::guard_spots::AtSpot, Option<&crate::guard_spots::Entering>), Without<WildAnimal>>,
+    actors: Query<
+        (&Transform, &Health, &crate::guard_spots::AtSpot, Option<&crate::guard_spots::Entering>, Option<&crate::guard_spots::Ending>),
+        Without<WildAnimal>,
+    >,
     mut rigs: Query<(&mut crate::characters::CharacterRig, &mut AnimRequest, Option<&mut crate::guard_spots::PartMotion>)>,
     mut commands: Commands,
 ) {
@@ -1322,8 +1326,8 @@ fn carcass_parts(
         }
         let phase = actors
             .iter()
-            .filter(|(at, h, spot, _)| spot.part() && !h.dead && at.translation.distance(t.translation) < PART_REACH)
-            .map(|(_, _, _, en)| Phase::of(en))
+            .filter(|(at, h, spot, _, _)| spot.part() && !h.dead && at.translation.distance(t.translation) < PART_REACH)
+            .map(|(_, _, _, en, end)| Phase::of(en, end))
             .max();
         p.0.follow(phase, true, (rig_e, &mut rig, motion), &clips, &mut commands);
         let worked = phase.is_some_and(|ph| ph != Phase::Coming);
@@ -1381,7 +1385,11 @@ fn place_animals(
             if let Some(clip) = &r.part {
                 let start =
                     r.start.as_ref().map(|(s, at, yaw)| (server.load(cache_path(&cache::anim_rel(s))), crate::guard_spots::start_from(feet, r.yaw, *at, *yaw)));
-                commands.entity(e).insert(CarcassPart(crate::guard_spots::PartClips::new(server.load(cache_path(&cache::anim_rel(clip))), start)));
+                let end =
+                    r.end.as_ref().map(|x| (server.load(cache_path(&cache::anim_rel(&x.clip))), crate::guard_spots::start_from(feet, r.yaw, x.at, x.yaw)));
+                commands
+                    .entity(e)
+                    .insert(CarcassPart(crate::guard_spots::PartClips::new(server.load(cache_path(&cache::anim_rel(clip))), start).with_end(end)));
             }
         }
         // (Held where it stands, pacing on the spot, until let out.)

@@ -227,7 +227,7 @@ pub fn prefab_animals(root: &Object) -> Vec<Animal> {
 }
 
 pub const MARKERS_REL: &str = "world/encounters.txt";
-const MARKERS_MAGIC: &str = "fc3-encounters 26";
+const MARKERS_MAGIC: &str = "fc3-encounters 27";
 
 /// Whether a cached markers table is this version's.
 pub fn markers_current(text: &str) -> bool {
@@ -299,6 +299,23 @@ pub struct Part {
     /// A loop that walks its actor on (a hostage marched along): its pace
     /// (m/s, the clip's root motion over its length); 0: played in place.
     pub pace: f32,
+    /// How the scene ends, for a scene that loops only so long.
+    pub end: Option<End>,
+}
+
+/// A scene's end ([`Part::end`]): after `after` seconds of its loop (the
+/// lead point's `duration`), each plays their track of its end sequence
+/// (`clip`, from where that begins, as a start's), and a guard then leaves
+/// it for `rest` seconds (his point's cooldown) before taking it again.
+/// `kills`: the end leaves its civilian dead (a woman beaten to death).
+#[derive(Debug, Clone, PartialEq)]
+pub struct End {
+    pub clip: String,
+    pub offset: [f32; 3],
+    pub yaw: f32,
+    pub after: f32,
+    pub rest: f32,
+    pub kills: bool,
 }
 
 /// Who plays a scene's part: one of the prefab's people (by index in its
@@ -338,6 +355,12 @@ const TRACK_TAG_TEXT: u32 = 0xB546_1383;
 const LEAD_POINT: u32 = 0x600B_6061;
 /// A scene that walks its actors along (`isPatrol`: the hostage walk).
 const IS_PATROL: u32 = 0xCA93_29AB;
+/// The scene's end sequence (`cinemaSequenceEnd`, its text) and how long
+/// its loop plays before it (`duration`, s; 0: until broken off).
+const END_SEQUENCE_TEXT: u32 = 0xE204_A155;
+const DURATION: u32 = 0x865F_80C0;
+/// A point's cooldown when it has no `Idle` block of its own (s).
+const REST: f32 = 20.0;
 /// A scene's body lies this near it (m).
 const BODY_REACH: f32 = 4.0;
 
@@ -451,10 +474,24 @@ pub fn prefab_parts(root: &Object, sequence: &dyn Fn(&str) -> Option<String>, st
         let (offset, yaw) = place_any(scene, &clip, f32::MAX)?;
         Some((clip, offset, yaw))
     };
+    // A scene's end, if it loops only so long: its sequence and duration.
+    let ending = |params: &Object| {
+        let after = params.field_h(DURATION).and_then(|b| Some(f32::from_le_bytes(b.try_into().ok()?))).filter(|d| d.is_finite() && *d > 0.0)?;
+        let path = params.str_h(END_SEQUENCE_TEXT).filter(|p| p.to_ascii_lowercase().ends_with(".cseq"))?;
+        Some((path, after))
+    };
+    // A track of it (as `started`), and whether it leaves its civilian dead.
+    let ended = |scene: &Object, (path, after, rest): &(String, f32, f32), pick: &dyn Fn(&[(String, String)]) -> Option<String>| {
+        let tracks = sequence(path).map(|x| sequence_tracks(&x))?;
+        let kills = tracks.iter().any(|(_, c)| c.rsplit('\\').next().unwrap_or(c).to_ascii_lowercase().contains("death"));
+        let clip = pick(&tracks)?;
+        let (offset, yaw) = place_any(scene, &clip, f32::MAX)?;
+        Some(End { clip, offset, yaw, after: *after, rest: *rest, kills })
+    };
     let mut parts = Vec::new();
     let mut used = Vec::new();
     let mut cast: Vec<usize> = Vec::new();
-    let mut scenes: Vec<(u64, String)> = Vec::new();
+    let mut scenes: Vec<(u64, String, Option<(String, f32, f32)>)> = Vec::new();
     for e in entities.iter().skip(1) {
         let e: &Object = e;
         let Some(name) = e.str("hidName") else { continue };
@@ -510,10 +547,15 @@ pub fn prefab_parts(root: &Object, sequence: &dyn Fn(&str) -> Option<String>, st
             _ => {}
         }
         let start = started(scene, &looped, &|t| t.iter().find(|(g, _)| *g == tag).map(|(_, c)| c.clone()));
-        parts.push(Part { who, clip, offset, yaw, start, pace });
+        // Its end: as its own point has it, else its lead's.
+        let lead_params = lead_point.and_then(|l| point(l)).and_then(|c| c.child("Parameters").cloned());
+        let rest = c.child("Idle").and_then(|i| i.f32("CoolDownTime")).filter(|r| r.is_finite() && *r >= 0.0).unwrap_or(REST);
+        let scene_end = ending(params).or_else(|| ending(lead_params.as_deref()?)).map(|(p, after)| (p, after, rest));
+        let end = scene_end.as_ref().and_then(|e| ended(scene, e, &|t| t.iter().find(|(g, _)| *g == tag).map(|(_, c)| c.clone())));
+        parts.push(Part { who, clip, offset, yaw, start, pace, end });
         used.push(id);
-        if let Some(s) = scene.u64("disEntityId").filter(|s| !scenes.iter().any(|(k, _)| k == s)) {
-            scenes.push((s, looped));
+        if let Some(s) = scene.u64("disEntityId").filter(|s| !scenes.iter().any(|(k, _, _)| k == s)) {
+            scenes.push((s, looped, scene_end));
         }
     }
     // Its civilians' own points: their loop moves.
@@ -537,12 +579,20 @@ pub fn prefab_parts(root: &Object, sequence: &dyn Fn(&str) -> Option<String>, st
         let Some(i) = who else { continue };
         cast.push(i);
         let offset = [at[0] - origin[0], at[1] - origin[1], at[2] - origin[2]];
-        parts.push(Part { who: Who::Pawn(i), clip: format!("move:{mv}"), offset, yaw: e.vec3("hidAngles").map_or(0.0, |a| a[2]), start: None, pace: 0.0 });
+        parts.push(Part {
+            who: Who::Pawn(i),
+            clip: format!("move:{mv}"),
+            offset,
+            yaw: e.vec3("hidAngles").map_or(0.0, |a| a[2]),
+            start: None,
+            pace: 0.0,
+            end: None,
+        });
         used.push(id);
     }
     // The bodies its scenes play (their untagged tracks): the nearest each.
     let mut laid: Vec<usize> = Vec::new();
-    for (s, looped) in scenes {
+    for (s, looped, scene_end) in scenes {
         let Some(scene) = by_id.get(&s).copied() else { continue };
         let Some(at) = scene.vec3("hidPos") else { continue };
         let untagged = sequence(&looped).map(|x| sequence_tracks(&x)).unwrap_or_default().into_iter().filter(|(t, _)| t.is_empty());
@@ -556,7 +606,8 @@ pub fn prefab_parts(root: &Object, sequence: &dyn Fn(&str) -> Option<String>, st
             let (Some(i), Some((offset, yaw))) = (body, place(scene, &clip)) else { continue };
             laid.push(i);
             let start = started(scene, &looped, &|t| t.iter().filter(|(g, _)| g.is_empty()).nth(n).map(|(_, c)| c.clone()));
-            parts.push(Part { who: Who::Corpse(i), clip, offset, yaw, start, pace: 0.0 });
+            let end = scene_end.as_ref().and_then(|e| ended(scene, e, &|t| t.iter().filter(|(g, _)| g.is_empty()).nth(n).map(|(_, c)| c.clone())));
+            parts.push(Part { who: Who::Corpse(i), clip, offset, yaw, start, pace: 0.0, end });
         }
     }
     (parts, used)
@@ -943,6 +994,10 @@ impl Markers {
                 if let Some((clip, o, yaw)) = &p.start {
                     s += &format!("\t{clip}\t{},{},{}\t{yaw}", o[0], o[1], o[2]);
                 }
+                if let Some(e) = &p.end {
+                    let o = e.offset;
+                    s += &format!("\tend\t{}\t{},{},{}\t{}\t{}\t{}\t{}", e.clip, o[0], o[1], o[2], e.yaw, e.after, e.rest, u8::from(e.kills));
+                }
                 s += "\n";
             }
         }
@@ -1001,12 +1056,25 @@ impl Markers {
                         continue;
                     };
                     let pace = f.get(6).and_then(|p| p.parse().ok()).unwrap_or(0.0);
-                    let start = (|| {
-                        let o: Vec<f32> = f.get(8)?.split(',').filter_map(|x| x.parse().ok()).collect();
-                        Some((f.get(7)?.to_string(), [*o.first()?, *o.get(1)?, *o.get(2)?], f.get(9)?.parse().ok()?))
-                    })();
+                    let vec3 = |s: &str| -> Option<[f32; 3]> {
+                        let o: Vec<f32> = s.split(',').filter_map(|x| x.parse().ok()).collect();
+                        Some([*o.first()?, *o.get(1)?, *o.get(2)?])
+                    };
+                    let start = (|| Some((f.get(7).filter(|c| **c != "end")?.to_string(), vec3(f.get(8)?)?, f.get(9)?.parse().ok()?)))();
+                    // (Then its end, if it has one.)
+                    let end = f.iter().position(|x| *x == "end").and_then(|i| {
+                        let num = |j: usize| f.get(i + j)?.parse::<f32>().ok();
+                        Some(End {
+                            clip: f.get(i + 1)?.to_string(),
+                            offset: vec3(f.get(i + 2)?)?,
+                            yaw: num(3)?,
+                            after: num(4)?,
+                            rest: num(5)?,
+                            kills: f.get(i + 6) == Some(&"1"),
+                        })
+                    });
                     if v.len() == 3 {
-                        m.parts.entry(k).or_default().push(Part { who, clip: clip.to_string(), offset: [v[0], v[1], v[2]], yaw, start, pace });
+                        m.parts.entry(k).or_default().push(Part { who, clip: clip.to_string(), offset: [v[0], v[1], v[2]], yaw, start, pace, end });
                     }
                 }
                 (Some("chase"), Some(k)) => {
@@ -1214,9 +1282,18 @@ mod tests {
                     yaw: -100.0,
                     start: Some((r"anims\a_start.mab".into(), [0.75, 0.5, 0.0], -90.0)),
                     pace: 0.0,
+                    end: Some(End { clip: r"anims\a_end.mab".into(), offset: [0.5, 0.0, 0.0], yaw: -95.0, after: 30.0, rest: 20.0, kills: true }),
                 },
-                Part { who: Who::Corpse(1), clip: r"anims\b_loop.mab".into(), offset: [1.0, 0.0, 0.0], yaw: 80.0, start: None, pace: 0.0 },
-                Part { who: Who::Anyone, clip: r"anims\c_walk.mab".into(), offset: [0.0, 0.0, 0.0], yaw: 0.0, start: None, pace: 1.25 },
+                Part {
+                    who: Who::Corpse(1),
+                    clip: r"anims\b_loop.mab".into(),
+                    offset: [1.0, 0.0, 0.0],
+                    yaw: 80.0,
+                    start: None,
+                    pace: 0.0,
+                    end: Some(End { clip: r"anims\b_end.mab".into(), offset: [1.0, 0.0, 0.0], yaw: 80.0, after: 11.0, rest: 20.0, kills: false }),
+                },
+                Part { who: Who::Anyone, clip: r"anims\c_walk.mab".into(), offset: [0.0, 0.0, 0.0], yaw: 0.0, start: None, pace: 1.25, end: None },
             ],
         );
         assert_eq!(Markers::from_text(&m.to_text()).unwrap(), m);

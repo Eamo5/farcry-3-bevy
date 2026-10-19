@@ -364,6 +364,8 @@ pub struct PlaceVillager {
     /// where that begins.
     pub part: Option<String>,
     pub start: Option<(String, Vec3, f32)>,
+    /// And its end, for a scene that loops only so long.
+    pub end: Option<crate::guard_spots::SceneEnd>,
     /// Marched along (the hostage walk): the way, the pace and the pairing
     /// with their escort.
     pub march: Option<(Vec<Vec3>, f32, u64)>,
@@ -529,6 +531,10 @@ pub struct ScenePart {
     alone: bool,
     /// Its move's abort clip (getting up from it), if it has one.
     abort: Option<Handle<Fc3Clip>>,
+    /// The scene's end leaves them dead (a woman beaten to death), and how
+    /// long it has been playing (s).
+    kills: bool,
+    ending: f32,
 }
 
 /// `FC3_PART_TEST=<s>` (tests): from that many seconds in, stands the
@@ -608,21 +614,38 @@ const PART_REACH: f32 = 4.0;
 /// play theirs while at ease.
 #[allow(clippy::type_complexity)]
 fn play_parts(
+    time: Res<Time>,
     clips: Res<Assets<Fc3Clip>>,
-    mut villagers: Query<(&mut Villager, &mut ScenePart, &Health, Has<Hostage>, &EncounterCivilian, Option<&Marched>)>,
-    actors: Query<(&Transform, &crate::npc::Npc, &Health, &crate::guard_spots::AtSpot, Option<&crate::guard_spots::Entering>), Without<Villager>>,
+    (mut villagers, mut died): (
+        Query<(Entity, &mut Villager, &mut ScenePart, &mut Health, Has<Hostage>, &EncounterCivilian, Option<&Marched>)>,
+        MessageWriter<crate::combat::Died>,
+    ),
+    actors: Query<
+        (&Transform, &crate::npc::Npc, &Health, &crate::guard_spots::AtSpot, Option<&crate::guard_spots::Entering>, Option<&crate::guard_spots::Ending>),
+        Without<Villager>,
+    >,
     mut rigs: Query<(&mut CharacterRig, &mut AnimRequest, Option<&mut crate::guard_spots::PartMotion>)>,
     mut commands: Commands,
 ) {
     use crate::guard_spots::Phase;
-    for (mut v, mut p, h, held, group, marched) in &mut villagers {
-        let Some(rig_e) = v.rig else { continue };
-        let Ok((mut rig, mut anim, motion)) = rigs.get_mut(rig_e) else { continue };
+    for (e, mut v, mut p, mut h, held, group, marched) in &mut villagers {
         let phase = actors
             .iter()
-            .filter(|(t, n, nh, at, _)| at.part() && n.marker_id == group.0 && !nh.dead && t.translation.distance(p.at) < PART_REACH)
-            .map(|(_, _, _, _, en)| Phase::of(en))
+            .filter(|(t, n, nh, at, _, _)| at.part() && n.marker_id == group.0 && !nh.dead && t.translation.distance(p.at) < PART_REACH)
+            .map(|(_, _, _, _, en, end)| Phase::of(en, end))
             .max();
+        // A scene that ends with them dead: through its end, they are
+        // (by its length, seen or not).
+        p.ending = if phase == Some(Phase::End) { p.ending + time.delta_secs() } else { 0.0 };
+        if p.kills && !h.dead && p.clips.through_end(p.ending, &clips) {
+            (h.current, h.dead) = (0.0, true);
+            died.write(crate::combat::Died { entity: e, killer: None, kind: crate::combat::DamageKind::Melee });
+            if std::env::var_os("FC3_ENCOUNTER_DEBUG").is_some() {
+                info!("encounter: the scene's end leaves its civilian dead");
+            }
+        }
+        let Some(rig_e) = v.rig else { continue };
+        let Ok((mut rig, mut anim, motion)) = rigs.get_mut(rig_e) else { continue };
         let worked = phase.is_some_and(|ph| ph != Phase::Coming) || marched.is_some_and(|m| m.marching);
         let at_ease = v.state == State::Idle;
         let on = (h.dead || if p.captive { held && (worked || p.alone) } else { at_ease }) && p.clips.ready(&clips);
@@ -1034,8 +1057,13 @@ fn place_villagers(
                 .as_ref()
                 .map(|(s, at, yaw)| (server.load(cache_path(&fc3_formats::cache::anim_rel(s))), crate::guard_spots::start_from(r.at, r.yaw, *at, *yaw)))
                 .or_else(|| own_start.map(|s| (server.load(cache_path(&fc3_formats::cache::anim_rel(&s))), Transform::IDENTITY)));
-            let clips = crate::guard_spots::PartClips::new(clip, start);
-            commands.entity(e).insert(ScenePart { clips, at: r.at, group: r.group, captive: r.hostage, alone, abort });
+            let end = r
+                .end
+                .as_ref()
+                .map(|x| (server.load(cache_path(&fc3_formats::cache::anim_rel(&x.clip))), crate::guard_spots::start_from(r.at, r.yaw, x.at, x.yaw)));
+            let clips = crate::guard_spots::PartClips::new(clip, start).with_end(end);
+            let kills = r.end.as_ref().is_some_and(|x| x.kills);
+            commands.entity(e).insert(ScenePart { clips, at: r.at, group: r.group, captive: r.hostage, alone, abort, kills, ending: 0.0 });
         }
         if let Some((route, pace, pair)) = r.march.clone().filter(|_| !r.dead) {
             commands.entity(e).insert(Marched { route, leg: 0, back: false, pace, pair, marching: false });
