@@ -856,7 +856,12 @@ the effects' names:
 | a syringe's own (`healthboostfx`, `animalrepellantfx`, ...) | as it goes in |
 
 A state only ends the effects it started, so a script's effect of the same
-name plays on.
+name plays on. Scripts that listen (`PostFxListener`, CIT_050 B40E's fade to
+white) hear `DominoEvent_FxStart` and `DominoEvent_FxStop` on the player as
+effects start and end, with the effect's id. The mission graphs mostly start
+fades: `cinematicfadetoblack` (105 boxes), `blackscreenfx` (91),
+`blackscreenwithfadeinandout2sec` (43), `blackscreennowfx` (20), the fades to
+white, `hallumaster`, `heat_distortion`, `weedbuzzfx` and the mushroom trips.
 
 Each sequence's clips are post-effect clips (`fc3_formats::cinema`,
 `ClipKind::Blur` and `ClipKind::Post`): blur (203), colour mask (99), bloom

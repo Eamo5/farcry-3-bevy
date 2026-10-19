@@ -76,6 +76,9 @@ pub struct PostFx {
     order: u64,
     /// The effects a state holds on (see [`PostFx::hold`]).
     held: std::collections::HashSet<String>,
+    /// Effects started (true) and ended since last asked, by id (the CRC-32
+    /// of the lower-case name, as scripts' `GetNoCaseStringID`).
+    events: Vec<(bool, u32)>,
 }
 
 #[derive(Clone, Copy)]
@@ -162,6 +165,12 @@ impl PostFx {
         self.playing.iter().any(|p| p.name == key)
     }
 
+    /// The effects that started and ended since last asked (for scripts'
+    /// `DominoEvent_FxStart` and `DominoEvent_FxStop`).
+    pub fn take_events(&mut self) -> Vec<(bool, u32)> {
+        std::mem::take(&mut self.events)
+    }
+
     /// Clears every effect (a checkpoint loaded).
     pub fn reset(&mut self) {
         self.playing.clear();
@@ -218,10 +227,12 @@ impl PostFx {
         let dt = if dt.is_finite() { dt.max(0.0) } else { 0.0 };
         for (name, request) in std::mem::take(&mut self.requests) {
             let key = self.resolve(&name);
+            let id = fc3_formats::hash::crc32(key.as_bytes());
             match request {
                 Request::Start | Request::Restart => {
-                    if matches!(request, Request::Restart) {
+                    if matches!(request, Request::Restart) && self.playing.iter().any(|p| p.name == key) {
                         self.playing.retain(|p| p.name != key);
+                        self.events.push((false, id));
                     }
                     if let Some(p) = self.playing.iter_mut().find(|p| p.name == key) {
                         // Back in from its fade-out.
@@ -240,6 +251,7 @@ impl PostFx {
                     let phase = if effect.fade_in.kind == 1 && effect.fade_in.sequence.is_some() { Phase::In } else { Phase::Loop };
                     let weight = if effect.fade_in.kind == 2 && effect.fade_in.time > 0.0 { 0.0 } else { 1.0 };
                     debug!("postfx: start {key}");
+                    self.events.push((true, id));
                     self.playing.push(Playing { name: key, effect, phase, time: 0.0, order: self.order, weight, leaving: false, intensity: 1.0 });
                 }
                 Request::Stop => {
@@ -253,7 +265,9 @@ impl PostFx {
                         2 if p.effect.fade_out.time > 0.0 => p.leaving = true,
                         1 => {}
                         _ => {
+                            debug!("postfx: end {key}");
                             self.playing.remove(i);
+                            self.events.push((false, id));
                         }
                     }
                 }
@@ -266,36 +280,48 @@ impl PostFx {
         }
         let sequences = &self.sequences;
         let length = |name: &str| sequences.get(&name.to_ascii_lowercase()).map(|s| (s.duration, s.looping));
+        let mut ended = Vec::new();
         self.playing.retain_mut(|p| {
-            p.time += dt;
-            if p.effect.fade_in.kind == 2 && !p.leaving {
-                p.weight = (p.weight + dt / p.effect.fade_in.time.max(1e-3)).min(1.0);
+            let keep = advance(p, dt, &length);
+            if !keep {
+                debug!("postfx: end {}", p.name);
+                ended.push((false, fc3_formats::hash::crc32(p.name.as_bytes())));
             }
-            if p.leaving {
-                p.weight -= dt / p.effect.fade_out.time.max(1e-3);
-                if p.weight <= 0.0 {
-                    return false;
-                }
-            }
-            match p.phase {
-                Phase::In => {
-                    let Some((d, _)) = p.effect.fade_in.sequence.as_deref().and_then(length) else { return false };
-                    if p.time >= d {
-                        p.time -= d;
-                        p.phase = Phase::Loop;
-                    }
-                    true
-                }
-                Phase::Loop => match length(&p.effect.sequence) {
-                    Some((d, looping)) => looping || p.time <= d,
-                    None => false,
-                },
-                Phase::Out => {
-                    let Some((d, _)) = p.effect.fade_out.sequence.as_deref().and_then(length) else { return false };
-                    p.time <= d
-                }
-            }
+            keep
         });
+        self.events.extend(ended);
+    }
+}
+
+/// Moves a playing effect on by `dt`; false once it has ended.
+fn advance(p: &mut Playing, dt: f32, length: &dyn Fn(&str) -> Option<(f32, bool)>) -> bool {
+    p.time += dt;
+    if p.effect.fade_in.kind == 2 && !p.leaving {
+        p.weight = (p.weight + dt / p.effect.fade_in.time.max(1e-3)).min(1.0);
+    }
+    if p.leaving {
+        p.weight -= dt / p.effect.fade_out.time.max(1e-3);
+        if p.weight <= 0.0 {
+            return false;
+        }
+    }
+    match p.phase {
+        Phase::In => {
+            let Some((d, _)) = p.effect.fade_in.sequence.as_deref().and_then(length) else { return false };
+            if p.time >= d {
+                p.time -= d;
+                p.phase = Phase::Loop;
+            }
+            true
+        }
+        Phase::Loop => match length(&p.effect.sequence) {
+            Some((d, looping)) => looping || p.time <= d,
+            None => false,
+        },
+        Phase::Out => {
+            let Some((d, _)) = p.effect.fade_out.sequence.as_deref().and_then(length) else { return false };
+            p.time <= d
+        }
     }
 }
 
@@ -946,6 +972,9 @@ mod tests {
         assert_eq!(fx.playing[0].phase, Phase::Out);
         fx.tick(0.5);
         assert!(!fx.playing("low"));
+        // Scripts hear it start and stop, by its name's id.
+        let id = fc3_formats::hash::crc32(b"low");
+        assert_eq!(fx.take_events(), vec![(true, id), (false, id)]);
     }
 
     #[test]

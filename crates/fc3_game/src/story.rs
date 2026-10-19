@@ -1375,6 +1375,14 @@ fn run_story(
             }
         }
     }
+    // Screen effects started and ended, for the scripts that listen
+    // (`PostFxListener`).
+    for (start, id) in postfx.take_events() {
+        let event = if start { "DominoEvent_FxStart" } else { "DominoEvent_FxStop" };
+        if host.story.awaits_event(fc3_story::PLAYER, event) {
+            host.story.entity_event(fc3_story::PLAYER, event, vec![fc3_story::Arg::Num(id as f64)]);
+        }
+    }
     let Ok((mut t, mut p, mut health)) = players.single_mut() else { return };
     let mut heal = false;
     host.scene_in_block |= cinema.view.is_some();
