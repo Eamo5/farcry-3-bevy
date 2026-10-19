@@ -214,5 +214,10 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     if fx.adjust.w > 0.0 {
         c = saturate(pow(max(c, vec3<f32>(0.0)), vec3<f32>(fx.adjust.z)) + fx.adjust.x) * fx.adjust.y;
     }
+
+    // The letterbox's bars.
+    if fx.screen.w > 0.0 && abs(in.uv.y - 0.5) * 2.0 > fx.screen.w {
+        c = vec3<f32>(0.0);
+    }
     return vec4<f32>(c, original.a);
 }

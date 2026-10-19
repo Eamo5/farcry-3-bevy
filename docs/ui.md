@@ -782,8 +782,54 @@ they move, and its reset sends 50 to each. The game keeps them in
 <values> <section>` brings the section's values back, comma-separated in
 row order, into `settings::Settings` (sliders over the native menu's
 ranges: sensitivity 0.1-5, field of view 55-110, volumes 0-1), which saves
-as it changes. Display resolution and the vegetation, terrain and water
-qualities aren't ours to set yet.
+as it changes.
+
+The video and video quality sections have the engine's own rows, in its
+order (`FC3.dll` builds them from its string ids; the PC page handles
+several by place):
+
+* **Video:**
+  * display resolution: the primary monitor's modes, as text of ours;
+  * window mode: fullscreen (exclusive, at that resolution), windowed (that
+    size) or borderless. The page greys the resolution out for borderless.
+  * V-Sync: off, 1 frame or 2 frames (here both present at every refresh);
+  * GPU max buffered frames (1-5): the swap chain's frame latency;
+  * widescreen letterbox (see below);
+  * DirectX: our graphics API, greyed out;
+  * MSAA (off, 2, 4, 8): here SMAA's low, medium and high presets;
+  * alpha to coverage: greyed out, since it needs MSAA, which this renderer
+    doesn't use;
+  * SSAO method (SSAO, HDAO, HBAO): the occlusion's medium, high and ultra
+    quality;
+  * field of view.
+* **Video quality:**
+  * overall quality, of seven labels: LOW to ULTRA, OPTIMAL and CUSTOM;
+  * textures, ambient lighting, shadow, post FX, geometry, vegetation,
+    terrain and water, each in the engine's levels: textures, ambient and
+    terrain stop at HIGH, vegetation and water at VERY HIGH, the rest go to
+    ULTRA.
+
+  When the overall level changes, the page sends the section and asks for
+  it again. The game then sets every row to that level, or to the row's own
+  highest below it (OPTIMAL is taken as HIGH). Any other change keeps the
+  rows, and the overall level shows the preset they make, else CUSTOM. The
+  rows do the following here:
+  * textures: anisotropy 2/4/8, and low skips the finest mip level. It
+    applies to textures loaded once the settings are, so it needs a
+    restart.
+  * ambient lighting: no occlusion, low occlusion, or the method's level;
+  * post FX: bloom from medium, sun shafts and the distance blur from high;
+  * geometry: the streaming radii;
+  * vegetation: grass and small clutter reach 40/55/75/100 m and
+    110/145/180/240 m;
+  * terrain: how far the finer levels reach;
+  * water: the ocean grid's density, and no caustics at low.
+
+The letterbox (the engine's `WidescreenLetterbox`) shows a 16:9
+band on windows narrower than that. The post-effects pass draws the bars,
+and the camera's field of view is widened for rendering, so the band
+frames what a 16:9 screen would. The original HUD still draws over the
+bars.
 
 **Key bindings** (`M_KeyBinding.feu`): the options page loads it into
 itself (a `MovieClipLoader`) for customizing the controls. It asks

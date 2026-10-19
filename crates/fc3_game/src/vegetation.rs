@@ -33,9 +33,19 @@ pub fn far_radius(settings: &crate::settings::Settings) -> i32 {
     (FAR_RADIUS as f32 * settings.distance_scale()).round() as i32
 }
 const GRASS_RADIUS: i32 = 2;
-const GRASS_DRAW: Range<f32> = 0.0..75.0;
-const CLUTTER_DRAW: Range<f32> = 0.0..180.0;
 const TREE_DRAW: Range<f32> = 0.0..360.0;
+
+/// How far grass and small clutter show at a vegetation quality (High: 75
+/// and 180 m).
+fn reach(q: crate::settings::Quality) -> (f32, f32) {
+    use crate::settings::Quality;
+    match q {
+        Quality::Low => (40.0, 110.0),
+        Quality::Medium => (55.0, 145.0),
+        Quality::High => (75.0, 180.0),
+        _ => (100.0, 240.0),
+    }
+}
 /// Vegetation instances spawned per frame (bounded to avoid hitches: 1,200
 /// made about 500 entities in a frame, which held the main thread up for
 /// 15 to 20 ms); a layer that doesn't fit continues on the next frame.
@@ -334,6 +344,8 @@ fn concealment_test(time: Res<Time>, cover: Res<Concealment>, mut last: Local<f3
 pub struct VegStreamer {
     slots: HashMap<SectorCoord, Slot>,
     center: Option<SectorCoord>,
+    /// The vegetation quality the placed plants have.
+    quality: Option<crate::settings::Quality>,
 }
 
 impl VegStreamer {
@@ -368,6 +380,16 @@ fn request_vegetation(
         return;
     }
     streamer.center = Some(center);
+    // A new vegetation quality places everything again, at its reach.
+    if streamer.quality != Some(settings.vegetation) {
+        streamer.quality = Some(settings.vegetation);
+        for slot in streamer.slots.values_mut() {
+            for (_, e) in slot.roots.drain() {
+                crate::retire::retire(&mut commands, e);
+            }
+            slot.cursor.clear();
+        }
+    }
     let mut keep = HashSet::new();
     let far = far_radius(&settings);
     let grass = (GRASS_RADIUS as f32 * settings.distance_scale()).round().max(1.0) as i32;
@@ -431,13 +453,14 @@ fn grass_tint_tag(tint: [u8; 3]) -> MeshTag {
 /// The brightest a grass tint channel goes (see `foliage_wind.wgsl`).
 const TINT_MAX: f32 = 1.6;
 
-fn draw_range(kind: u8, model: &Fc3Model) -> Range<f32> {
+fn draw_range(kind: u8, model: &Fc3Model, quality: crate::settings::Quality) -> Range<f32> {
+    let (grass, clutter) = reach(quality);
     match kind {
-        veg_kind::GRASS => GRASS_DRAW,
+        veg_kind::GRASS => 0.0..grass,
         veg_kind::TREE => TREE_DRAW,
         // Big clutter (boulders) stays visible further than pebbles.
         _ if model.radius() > 3.0 => TREE_DRAW,
-        _ => CLUTTER_DRAW,
+        _ => 0.0..clutter,
     }
 }
 
@@ -461,6 +484,7 @@ fn spawn_vegetation(
         .filter(|_| std::env::var("FC3_NO_SSS").is_err())
         .map_or(Vec4::ZERO, |v| Vec4::new(v[0] * v[6], v[1] * v[6], v[2] * v[6], 1.0));
     let mut budget = INSTANCE_BUDGET;
+    let quality = streamer.quality.unwrap_or(crate::settings::Quality::High);
     let skip = std::env::var("FC3_NO_VEG").ok();
     if skip.as_deref() == Some("all") {
         return;
@@ -506,7 +530,7 @@ fn spawn_vegetation(
                 let Some(handle) = veg.models.get(inst.model as usize) else { continue };
                 let Some(model) = models.get(handle) else { continue };
                 let Some(lod) = model.lods.first() else { continue };
-                let range = draw_range(inst.kind, model);
+                let range = draw_range(inst.kind, model, quality);
                 let fade = (range.end * 0.08).max(2.0);
                 let vis = VisibilityRange { start_margin: 0.0..0.0, end_margin: (range.end - fade)..range.end, use_aabb: false };
                 let mut obj = commands.spawn((

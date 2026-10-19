@@ -83,9 +83,9 @@ impl Opt {
             Opt::MusicVolume => "Music volume",
             Opt::ViewDistance => "View distance",
             Opt::Shadows => "Shadows",
-            Opt::Effects => "Effects (AA, bloom, shafts)",
+            Opt::Effects => "Effects (bloom, shafts)",
             Opt::VSync => "V-sync",
-            Opt::Fullscreen => "Fullscreen",
+            Opt::Fullscreen => "Window mode",
             Opt::OriginalShaders => "Original shaders",
             Opt::ShowFps => "Show FPS",
             Opt::Subtitles => "Subtitles",
@@ -109,7 +109,7 @@ impl Opt {
             Opt::Shadows => s.shadows.name().into(),
             Opt::Effects => s.effects.name().into(),
             Opt::VSync => on(s.vsync),
-            Opt::Fullscreen => on(s.fullscreen),
+            Opt::Fullscreen => s.window.name().into(),
             Opt::OriginalShaders => on(s.original_shaders),
             Opt::ShowFps => on(s.show_fps),
             Opt::Subtitles => on(s.subtitles),
@@ -137,7 +137,11 @@ impl Opt {
             Opt::Shadows => s.shadows = cycle(s.shadows),
             Opt::Effects => s.effects = cycle(s.effects),
             Opt::VSync => s.vsync = !s.vsync,
-            Opt::Fullscreen => s.fullscreen = !s.fullscreen,
+            Opt::Fullscreen => {
+                use crate::settings::WindowKind;
+                let i = WindowKind::ALL.iter().position(|k| *k == s.window).unwrap_or(1) as i32;
+                s.window = WindowKind::ALL[(i + dir).rem_euclid(WindowKind::ALL.len() as i32) as usize];
+            }
             Opt::OriginalShaders => s.original_shaders = !s.original_shaders,
             Opt::ShowFps => s.show_fps = !s.show_fps,
             Opt::Subtitles => s.subtitles = !s.subtitles,

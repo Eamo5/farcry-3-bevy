@@ -504,7 +504,8 @@ pub struct PostView {
     noise: Vec4,
     /// Distortion: scale, scroll; blurriness, factor, threshold, on.
     distort: [Vec4; 2],
-    /// One over the screen size, seconds.
+    /// One over the screen size, seconds, the letterbox's band (the share
+    /// of the height the picture keeps; 0 none).
     screen: Vec4,
     /// The calibration (`Settings::color_adjustment`): offset, scale,
     /// exponent, on.
@@ -523,6 +524,7 @@ impl PostView {
             || self.noise.x > 0.0
             || self.distort[1].w > 0.0
             || self.adjust.w > 0.0
+            || self.screen.w > 0.0
     }
 }
 
@@ -800,7 +802,8 @@ fn play(
         textures[5] = texture(&tex);
     }
     let size = windows.single().map_or(Vec2::new(1920.0, 1080.0), |w| Vec2::new(w.width().max(1.0), w.height().max(1.0)));
-    view.screen = Vec4::new(1.0 / size.x, 1.0 / size.y, seconds, 0.0);
+    let band = windows.single().ok().and_then(|w| crate::settings::letterbox_band(&settings, w)).unwrap_or(0.0);
+    view.screen = Vec4::new(1.0 / size.x, 1.0 / size.y, seconds, band);
     let [offset, scale, exponent] = settings.color_adjustment();
     let neutral = offset.abs() < 1e-4 && (scale - 1.0).abs() < 1e-4 && (exponent - 1.0).abs() < 1e-4;
     view.adjust = Vec4::new(offset, scale, exponent, if neutral { 0.0 } else { 1.0 });

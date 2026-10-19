@@ -41,8 +41,10 @@ pub struct WaterPlugin;
 impl Plugin for WaterPlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "water.wgsl");
-        app.add_plugins(MaterialPlugin::<WaterMaterial>::default())
-            .add_systems(Update, (setup_water.run_if(resource_exists::<CacheInfo>), follow_camera, update_floor, inland_water, update_fog, caustic_light));
+        app.add_plugins(MaterialPlugin::<WaterMaterial>::default()).add_systems(
+            Update,
+            (setup_water.run_if(resource_exists::<CacheInfo>), water_quality, follow_camera, update_floor, inland_water, update_fog, caustic_light),
+        );
     }
 }
 
@@ -354,9 +356,11 @@ fn setup_water(
         built_sectors: 0,
         task: None,
     });
+    // (High's grid; `water_quality` puts the setting's on.)
+    let (rings, segments) = ocean_grid(crate::settings::Quality::High);
     commands.spawn((
         Ocean,
-        Mesh3d(meshes.add(radial_grid(150, 160))),
+        Mesh3d(meshes.add(radial_grid(rings, segments))),
         MeshMaterial3d(material.clone()),
         Transform::from_xyz(0.0, SEA_LEVEL, 0.0),
         bevy::light::NotShadowCaster,
@@ -364,6 +368,36 @@ fn setup_water(
         Name::new("ocean"),
     ));
     commands.insert_resource(Water { material, floor, corner: Vec2::splat(f32::MAX), built_sectors: 0, task: None });
+}
+
+/// The ocean grid's rings and segments at a water quality (High: 150 by
+/// 160).
+fn ocean_grid(quality: crate::settings::Quality) -> (usize, usize) {
+    use crate::settings::Quality;
+    match quality {
+        Quality::Low => (80, 96),
+        Quality::Medium => (110, 128),
+        Quality::High => (150, 160),
+        _ => (200, 220),
+    }
+}
+
+/// Puts the water quality's grid on the ocean.
+fn water_quality(
+    settings: Res<crate::settings::Settings>,
+    mut shown: Local<Option<crate::settings::Quality>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut ocean: Query<&mut Mesh3d, With<Ocean>>,
+) {
+    let Ok(mut mesh) = ocean.single_mut() else { return };
+    if *shown == Some(settings.water) {
+        return;
+    }
+    if shown.is_some() || settings.water != crate::settings::Quality::High {
+        let (rings, segments) = ocean_grid(settings.water);
+        mesh.0 = meshes.add(radial_grid(rings, segments));
+    }
+    *shown = Some(settings.water);
 }
 
 fn follow_camera(cameras: Query<&GlobalTransform, With<PlayerCamera>>, mut ocean: Query<&mut Transform, With<Ocean>>) {
@@ -564,8 +598,9 @@ fn inland_texels(heights: &Heightfield, planes: &HashMap<u32, f32>, around: &std
 }
 
 /// Sets how bright the caustics on the bed are: with the sun up and the sky
-/// clear (fainter in the murkier rivers).
+/// clear (fainter in the murkier rivers), none at the lowest water quality.
 fn caustic_light(
+    settings: Res<crate::settings::Settings>,
     tod: Res<crate::sky::TimeOfDay>,
     weather: Res<crate::clouds::Weather>,
     water: Option<Res<Water>>,
@@ -574,6 +609,7 @@ fn caustic_light(
     mut materials: ResMut<Assets<WaterMaterial>>,
 ) {
     let k = crate::sky::smoothstep(0.05, 0.4, tod.sun_dir().y) * (1.0 - weather.overcast());
+    let k = if settings.water == crate::settings::Quality::Low { 0.0 } else { k };
     let (Some(water), Some(inland)) = (water, inland) else { return };
     if (k - *last).abs() < 0.02 {
         return;

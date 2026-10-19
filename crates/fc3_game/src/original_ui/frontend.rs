@@ -142,7 +142,7 @@ pub(super) fn drive_frontend(
     game: Res<State<crate::menu::GameState>>,
     mut next: ResMut<NextState<crate::menu::GameState>>,
     mut original: ResMut<crate::menu::OriginalPause>,
-    (slot, mut settings): (Res<crate::save::SaveSlot>, ResMut<crate::settings::Settings>),
+    (slot, mut settings, displays): (Res<crate::save::SaveSlot>, ResMut<crate::settings::Settings>, Res<crate::settings::Displays>),
     (mut continue_game, mut exit): (MessageWriter<crate::save::ContinueGame>, MessageWriter<AppExit>),
     (mut keys, mut moves, mut buttons): (
         MessageReader<bevy::input::keyboard::KeyboardInput>,
@@ -278,10 +278,14 @@ pub(super) fn drive_frontend(
             "ValidateNewGameSlot" => host.event("NewGameSlotValidated", &[]),
             "InitNewGame" => next.set(GameState::Playing),
             "OnOptionLoaded" => super::send_option_sections(host),
-            "OnRequestOptions" => super::send_options(host, &settings, arg(1).parse().unwrap_or(0)),
+            "OnRequestOptions" => {
+                let video = super::VideoInfo::new(&settings, &displays, super::window_size(&windows));
+                super::send_options(host, &settings, &video, arg(1).parse().unwrap_or(0));
+            }
             "SetOptions" => {
                 let values: Vec<i32> = arg(1).split(',').map(|v| v.trim().parse().unwrap_or(0)).collect();
-                super::set_options(&mut settings, arg(2).parse().unwrap_or(u32::MAX), &values);
+                let video = super::VideoInfo::new(&settings, &displays, super::window_size(&windows));
+                super::set_options(&mut settings, &video, arg(2).parse().unwrap_or(u32::MAX), &values);
             }
             other => debug!("original UI: frontend {other} {:?}", call.args.get(1..)),
         }

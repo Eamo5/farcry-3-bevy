@@ -239,11 +239,12 @@ fn drive_pause(
         Res<Time>,
         ResMut<crate::settings::Settings>,
     ),
-    (loot, perks, skills, handbook): (
+    (loot, perks, skills, handbook, displays): (
         Option<Res<crate::progression::LootCatalog>>,
         Res<crate::progression::Perks>,
         Option<Res<crate::progression::Skills>>,
         Option<Res<crate::progression::HandbookData>>,
+        Res<crate::settings::Displays>,
     ),
     story: Option<NonSendMut<crate::story::StoryHost>>,
     (mut keys, mut moves, mut buttons): (
@@ -412,10 +413,14 @@ fn drive_pause(
             // original's, and back (-1) is the pause page.
             "RequestPageChange" if matches!(arg(1), "2" | "3" | "8" | "10" | "12" | "13" | "-1") => open_page(host, arg(1)),
             "OnOptionLoaded" => send_option_sections(host),
-            "OnRequestOptions" => send_options(host, &settings, arg(1).parse().unwrap_or(0)),
+            "OnRequestOptions" => {
+                let video = VideoInfo::new(&settings, &displays, window_size(&windows));
+                send_options(host, &settings, &video, arg(1).parse().unwrap_or(0));
+            }
             "SetOptions" => {
+                let video = VideoInfo::new(&settings, &displays, window_size(&windows));
                 let values: Vec<i32> = arg(1).split(',').map(|v| v.trim().parse().unwrap_or(0)).collect();
-                set_options(&mut settings, arg(2).parse().unwrap_or(u32::MAX), &values);
+                set_options(&mut settings, &video, arg(2).parse().unwrap_or(u32::MAX), &values);
             }
             "OnEncyclopediaRequest" => {
                 if let Some(book) = handbook.as_deref().and_then(|b| b.0.as_ref()) {
@@ -1690,28 +1695,82 @@ const OPTIONS_CONTROLS: u32 = 3;
 const OPTIONS_GAMEPLAY: u32 = 4;
 const OPTIONS_AUDIO: u32 = 5;
 
-/// ON and OFF, and the quality levels LOW, MEDIUM, HIGH and ULTRA, as the
-/// game's strings.
+/// ON and OFF, OFF and ON (as the video rows have them), the quality levels
+/// LOW to ULTRA (the rows that stop short take the first few), and the
+/// overall quality's (those, OPTIMAL and CUSTOM), as the game's strings.
 const OPTION_ON_OFF: [u32; 2] = [150702, 150703];
-const OPTION_QUALITY: [u32; 4] = [167389, 167390, 167391, 167393];
+const OPTION_OFF_ON: [u32; 2] = [150703, 150702];
+const OPTION_QUALITY: [u32; 5] = [167389, 167390, 167391, 167392, 167393];
+const OPTION_OVERALL: [u32; 7] = [167389, 167390, 167391, 167392, 167393, 167840, 167841];
+/// The overall quality's place for CUSTOM (rows that make no level).
+const OVERALL_CUSTOM: i32 = 6;
+
+/// A choice's label: the game's string, or text of ours (a resolution, the
+/// graphics API).
+enum Label {
+    Text(u32),
+    Plain(String),
+}
 
 /// A row of the options page: its name and description (the game's
 /// strings), how it is set (`iWidgetType`: 0 a choice among labels, 1 a
-/// slider 0-100, 7 nothing: the page opens something of its own), and its
-/// value (a label's place, or the slider's).
+/// slider 0-100, 7 nothing: the page opens something of its own), its
+/// value (a label's place, or the slider's), and whether it can be set.
 struct OptionRow {
     name: u32,
     desc: u32,
     widget: u32,
-    labels: Vec<u32>,
+    labels: Vec<Label>,
     current: i32,
+    enabled: bool,
+}
+
+/// What the video rows show of the display: the resolutions offered
+/// (smallest first), the one shown as current (the setting's, else the
+/// window's), and the graphics API.
+pub(crate) struct VideoInfo {
+    sizes: Vec<UVec2>,
+    current: usize,
+    api: String,
+}
+
+impl VideoInfo {
+    pub(crate) fn new(s: &crate::settings::Settings, displays: &crate::settings::Displays, window: UVec2) -> VideoInfo {
+        let mut sizes = displays.sizes.clone();
+        let shown = s.resolution.unwrap_or(window);
+        if shown.min_element() > 0 && !sizes.contains(&shown) {
+            sizes.push(shown);
+            sizes.sort_by_key(|v| (v.x, v.y));
+        }
+        if sizes.is_empty() {
+            sizes.push(UVec2::new(1920, 1080));
+        }
+        let current = sizes.iter().position(|&v| v == shown).unwrap_or(sizes.len() - 1);
+        let api = if displays.api.is_empty() { "wgpu".to_string() } else { displays.api.clone() };
+        VideoInfo { sizes, current, api }
+    }
+}
+
+/// The primary window's size in pixels.
+pub(crate) fn window_size(windows: &Query<(&Window, &mut bevy::window::CursorOptions), With<PrimaryWindow>>) -> UVec2 {
+    windows.single().map_or(UVec2::ZERO, |(w, _)| w.resolution.physical_size())
 }
 
 /// A section's rows from the settings. Some places are the page's own: the
 /// control type third and customizing the controls fourth among controls.
-fn option_rows(section: u32, s: &crate::settings::Settings) -> Vec<OptionRow> {
-    use crate::settings::{Difficulty, Quality};
-    let choice = |name, desc, labels: &[u32], current: usize| OptionRow { name, desc, widget: 0, labels: labels.to_vec(), current: current as i32 };
+/// The video and video quality sections have the engine's own rows (its
+/// `OptionsPage_PC` takes several by place: resolution 0, window mode 1,
+/// V-Sync 2, DirectX 5, field of view 9; overall quality 0).
+fn option_rows(section: u32, s: &crate::settings::Settings, video: &VideoInfo) -> Vec<OptionRow> {
+    use crate::settings::{Difficulty, Quality, WindowKind};
+    let choice = |name, desc, labels: &[u32], current: usize| OptionRow {
+        name,
+        desc,
+        widget: 0,
+        labels: labels.iter().map(|&l| Label::Text(l)).collect(),
+        current: current as i32,
+        enabled: true,
+    };
     let on_off = |name, desc, on: bool| choice(name, desc, &OPTION_ON_OFF, if on { 0 } else { 1 });
     let bar = |name, desc, v: f32, lo: f32, hi: f32| OptionRow {
         name,
@@ -1719,25 +1778,58 @@ fn option_rows(section: u32, s: &crate::settings::Settings) -> Vec<OptionRow> {
         widget: 1,
         labels: Vec::new(),
         current: ((v - lo) / (hi - lo) * 100.0).round().clamp(0.0, 100.0) as i32,
+        enabled: true,
     };
-    let quality = |name, desc, q: Quality| choice(name, desc, &OPTION_QUALITY, Quality::ALL.iter().position(|x| *x == q).unwrap_or(2));
+    // A quality row of `levels` levels.
+    let quality = |name, desc, q: Quality, levels: usize| choice(name, desc, &OPTION_QUALITY[..levels], q.index().min(levels - 1));
     match section {
         OPTIONS_VIDEO => vec![
-            // Window mode: fullscreen, windowed.
-            choice(172054, 172055, &[167839, 167837], if s.fullscreen { 0 } else { 1 }),
-            on_off(150291, 150292, s.vsync),
-            bar(172598, 150270, s.fov, 55.0, 110.0),
+            OptionRow {
+                name: 150287,
+                desc: 150288,
+                widget: 0,
+                labels: video.sizes.iter().map(|v| Label::Plain(format!("{}x{}", v.x, v.y))).collect(),
+                current: video.current as i32,
+                enabled: true,
+            },
+            // Window mode: fullscreen, windowed, borderless.
+            choice(172054, 172055, &[167839, 167837, 167838], WindowKind::ALL.iter().position(|k| *k == s.window).unwrap_or(1)),
+            // V-Sync: off, every refresh, every other.
+            choice(150291, 150292, &[150703, 172651, 172652], if s.vsync { s.vsync_frames.clamp(1, 2) as usize } else { 0 }),
+            // GPU max buffered frames: 1 to 5.
+            choice(172499, 172500, &[56086, 56087, 56088, 56089, 56090], (s.buffered_frames.clamp(1, 5) - 1) as usize),
+            choice(172622, 172623, &OPTION_OFF_ON, s.letterbox as usize),
+            // DirectX: here the graphics API, not ours to change.
+            OptionRow { name: 150344, desc: 150345, widget: 0, labels: vec![Label::Plain(video.api.clone())], current: 0, enabled: false },
+            // MSAA: off, 2, 4, 8.
+            choice(172495, 172496, &[150703, 56087, 56089, 56093], s.antialiasing.min(3) as usize),
+            // Alpha to coverage: off, standard, enhanced (it needs MSAA,
+            // which this renderer doesn't use).
+            OptionRow { enabled: false, ..choice(172619, 172620, &[172631, 172632, 172633], 0) },
+            // SSAO method: SSAO, HDAO, HBAO.
+            choice(172618, 172621, &[172634, 172635, 172636], s.ssao_method.min(2) as usize),
+            bar(172598, 172498, s.fov, 55.0, 110.0),
         ],
         // (The page's popup: its sliders send SetBrightness, SetContrast and
         // SetGamma as they move.)
         OPTIONS_CALIBRATION => vec![bar(91542, 0, s.brightness, 0.0, 100.0), bar(150346, 0, s.contrast, 0.0, 100.0), bar(150353, 0, s.gamma, 0.0, 100.0)],
-        OPTIONS_QUALITY => vec![quality(150397, 150398, s.shadows), quality(150393, 150394, s.effects), quality(150391, 150392, s.view_distance)],
+        OPTIONS_QUALITY => vec![
+            choice(167842, 172283, &OPTION_OVERALL, s.preset().map_or(OVERALL_CUSTOM as usize, |q| q.index())),
+            quality(150395, 150396, s.textures, 3),
+            quality(150399, 150400, s.ambient, 3),
+            quality(150397, 150398, s.shadows, 5),
+            quality(150393, 150394, s.effects, 5),
+            quality(150391, 150392, s.view_distance, 5),
+            quality(150383, 150384, s.vegetation, 4),
+            quality(150389, 150390, s.terrain, 3),
+            quality(150401, 150402, s.water, 4),
+        ],
         OPTIONS_CONTROLS => vec![
             on_off(91540, 0, s.invert_y),
             bar(150281, 150282, s.sensitivity, 0.1, 5.0),
             // Control type: keyboard and mouse, gamepad.
             choice(150276, 150277, &[167702, 167703], 0),
-            OptionRow { name: 150279, desc: 150280, widget: 7, labels: Vec::new(), current: 0 },
+            OptionRow { name: 150279, desc: 150280, widget: 7, labels: Vec::new(), current: 0, enabled: true },
             bar(91554, 0, s.gamepad_sensitivity, 0.1, 5.0),
         ],
         OPTIONS_GAMEPLAY => vec![
@@ -1766,14 +1858,17 @@ fn send_option_sections(host: &fc3_ui::Host) {
 /// labels (`sLocCurrentValues`, a list of `sLocCurrentValue`s: the row's
 /// binder wraps it in a list of its own), the number of them (100 for a
 /// slider) and its value.
-fn send_options(host: &fc3_ui::Host, settings: &crate::settings::Settings, section: u32) {
+pub(crate) fn send_options(host: &fc3_ui::Host, settings: &crate::settings::Settings, video: &VideoInfo, section: u32) {
     use fc3_ui::ExternalValue as V;
-    let items = option_rows(section, settings)
+    let items = option_rows(section, settings, video)
         .into_iter()
         .enumerate()
         .map(|(i, row)| {
-            let labels: Vec<V> =
-                row.labels.iter().map(|&l| V::Object([("sLocCurrentValue".to_string(), V::String(host.text(l)))].into_iter().collect())).collect();
+            let label = |l: &Label| match l {
+                Label::Text(id) => host.text(*id),
+                Label::Plain(t) => t.clone(),
+            };
+            let labels: Vec<V> = row.labels.iter().map(|l| V::Object([("sLocCurrentValue".to_string(), V::String(label(l)))].into_iter().collect())).collect();
             let count = if row.widget == 1 { 100 } else { row.labels.len() };
             [
                 ("iIndex", V::Number(i as f64)),
@@ -1783,7 +1878,7 @@ fn send_options(host: &fc3_ui::Host, settings: &crate::settings::Settings, secti
                 ("iNbValues", V::Number(count as f64)),
                 ("iCurrentValue", V::Number(row.current as f64)),
                 ("sLocCurrentValues", V::List(labels)),
-                ("bEnable", V::Bool(true)),
+                ("bEnable", V::Bool(row.enabled)),
             ]
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
@@ -1795,17 +1890,30 @@ fn send_options(host: &fc3_ui::Host, settings: &crate::settings::Settings, secti
 
 /// The values the options page sends for a section (`SetOptions`, its rows'
 /// values in order) into the settings (saved as they change).
-fn set_options(s: &mut crate::settings::Settings, section: u32, values: &[i32]) {
-    use crate::settings::{Difficulty, Quality};
+pub(crate) fn set_options(s: &mut crate::settings::Settings, video: &VideoInfo, section: u32, values: &[i32]) {
+    use crate::settings::{Difficulty, Quality, WindowKind};
     let v = |i: usize| values.get(i).copied();
     let on = |i: usize, was: bool| v(i).map_or(was, |x| x == 0);
     let bar = |i: usize, was: f32, lo: f32, hi: f32| v(i).map_or(was, |x| lo + (hi - lo) * x.clamp(0, 100) as f32 / 100.0);
-    let quality = |i: usize, was: Quality| v(i).and_then(|x| Quality::ALL.get(x as usize).copied()).unwrap_or(was);
+    let quality = |i: usize, was: Quality, levels: usize| v(i).and_then(|x| Quality::ALL[..levels].get(x as usize).copied()).unwrap_or(was);
     match section {
         OPTIONS_VIDEO => {
-            s.fullscreen = on(0, s.fullscreen);
-            s.vsync = on(1, s.vsync);
-            s.fov = bar(2, s.fov, 55.0, 110.0);
+            // (The resolution only once it's moved off the one shown.)
+            if let Some(&size) = v(0).filter(|&i| i as usize != video.current).and_then(|i| video.sizes.get(i as usize)) {
+                s.resolution = Some(size);
+            }
+            s.window = v(1).and_then(|i| WindowKind::ALL.get(i as usize).copied()).unwrap_or(s.window);
+            if let Some(x) = v(2) {
+                s.vsync = x > 0;
+                if x > 0 {
+                    s.vsync_frames = x.clamp(1, 2) as u8;
+                }
+            }
+            s.buffered_frames = v(3).map_or(s.buffered_frames, |x| (x + 1).clamp(1, 5) as u32);
+            s.letterbox = v(4).map_or(s.letterbox, |x| x == 1);
+            s.antialiasing = v(6).map_or(s.antialiasing, |x| x.clamp(0, 3) as u8);
+            s.ssao_method = v(8).map_or(s.ssao_method, |x| x.clamp(0, 2) as u8);
+            s.fov = bar(9, s.fov, 55.0, 110.0);
         }
         OPTIONS_CALIBRATION => {
             s.brightness = bar(0, s.brightness, 0.0, 100.0);
@@ -1813,9 +1921,24 @@ fn set_options(s: &mut crate::settings::Settings, section: u32, values: &[i32]) 
             s.gamma = bar(2, s.gamma, 0.0, 100.0);
         }
         OPTIONS_QUALITY => {
-            s.shadows = quality(0, s.shadows);
-            s.effects = quality(1, s.effects);
-            s.view_distance = quality(2, s.view_distance);
+            let shown = s.preset().map_or(OVERALL_CUSTOM, |q| q.index() as i32);
+            match v(0) {
+                // A new overall level sets every row (OPTIMAL: high), and
+                // the page asks for them again.
+                Some(x) if x != shown && (0..OVERALL_CUSTOM).contains(&x) => {
+                    s.apply_preset(Quality::ALL.get(x as usize).copied().unwrap_or(Quality::High));
+                }
+                _ => {
+                    s.textures = quality(1, s.textures, 3);
+                    s.ambient = quality(2, s.ambient, 3);
+                    s.shadows = quality(3, s.shadows, 5);
+                    s.effects = quality(4, s.effects, 5);
+                    s.view_distance = quality(5, s.view_distance, 5);
+                    s.vegetation = quality(6, s.vegetation, 4);
+                    s.terrain = quality(7, s.terrain, 3);
+                    s.water = quality(8, s.water, 4);
+                }
+            }
         }
         OPTIONS_CONTROLS => {
             s.invert_y = on(0, s.invert_y);

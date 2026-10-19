@@ -101,11 +101,21 @@ impl TerrainStreamer {
     }
 }
 
-fn lod_for(dist: i32) -> usize {
-    match dist {
-        0..=3 => 0,
-        4..=8 => 1,
-        _ => 2,
+/// A sector's level of detail at a distance (sectors), by terrain quality:
+/// High keeps the finest within 3 and the middle within 8.
+fn lod_for(dist: i32, quality: crate::settings::Quality) -> usize {
+    use crate::settings::Quality;
+    let (fine, middle) = match quality {
+        Quality::Low => (1, 5),
+        Quality::Medium => (2, 6),
+        _ => (3, 8),
+    };
+    if dist <= fine {
+        0
+    } else if dist <= middle {
+        1
+    } else {
+        2
     }
 }
 
@@ -134,7 +144,7 @@ fn request_terrain(
                 continue;
             }
             keep.insert(c);
-            let lod = lod_for(dx.abs().max(dy.abs()));
+            let lod = lod_for(dx.abs().max(dy.abs()), settings.terrain);
             let slot = streamer.slots.entry(c).or_insert_with(|| Slot {
                 handle: server.load(cache_path(&cache::terrain_rel(c.id()))),
                 entity: None,

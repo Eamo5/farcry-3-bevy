@@ -119,7 +119,27 @@ async fn read_all(reader: &mut dyn Reader) -> Result<Vec<u8>, std::io::Error> {
     Ok(bytes)
 }
 
+/// The texture quality (`Settings::textures`: 0 low, 1 medium, 2 high) for
+/// the textures loaded from now on; the settings set it as they load, so a
+/// change shows after a restart.
+static TEXTURE_QUALITY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+pub(crate) fn set_texture_quality(level: usize) {
+    TEXTURE_QUALITY.store(level.min(2) as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The texture quality's filtering: anisotropy, and the finest mip level
+/// sampled (low leaves out the finest, half the detail).
+fn filtering() -> (u16, f32) {
+    match TEXTURE_QUALITY.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => (2, 1.0),
+        1 => (4, 0.0),
+        _ => (8, 0.0),
+    }
+}
+
 pub(crate) fn repeat_sampler() -> ImageSampler {
+    let (anisotropy_clamp, lod_min_clamp) = filtering();
     ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: ImageAddressMode::Repeat,
         address_mode_v: ImageAddressMode::Repeat,
@@ -127,19 +147,22 @@ pub(crate) fn repeat_sampler() -> ImageSampler {
         mag_filter: ImageFilterMode::Linear,
         min_filter: ImageFilterMode::Linear,
         mipmap_filter: ImageFilterMode::Linear,
-        anisotropy_clamp: 8,
+        anisotropy_clamp,
+        lod_min_clamp,
         ..default()
     })
 }
 
 pub(crate) fn clamp_sampler() -> ImageSampler {
+    let (anisotropy_clamp, lod_min_clamp) = filtering();
     ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: ImageAddressMode::ClampToEdge,
         address_mode_v: ImageAddressMode::ClampToEdge,
         mag_filter: ImageFilterMode::Linear,
         min_filter: ImageFilterMode::Linear,
         mipmap_filter: ImageFilterMode::Linear,
-        anisotropy_clamp: 8,
+        anisotropy_clamp,
+        lod_min_clamp,
         ..default()
     })
 }

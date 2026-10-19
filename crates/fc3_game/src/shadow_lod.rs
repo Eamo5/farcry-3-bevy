@@ -131,6 +131,7 @@ pub fn shadow_range(radius: f32, quality: Quality) -> f32 {
     let scale = match quality {
         Quality::Low | Quality::Medium => 0.6,
         Quality::High => 1.0,
+        Quality::VeryHigh => 1.5,
         Quality::Ultra => 2.0,
     };
     (radius * RANGE_PER_METRE * scale).max(MIN_RANGE * scale)
