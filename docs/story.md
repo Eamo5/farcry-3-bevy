@@ -4992,9 +4992,13 @@ are played now (`races`):
   line's `finishflare`), played as authored (`authored_fx`: see
   shaders.md): the glow, sparks, smoke and the flickering light. Sparks and
   a glow stand in when they aren't cached.
+* **The jump ramps** (`Racing_JumpRamp_*`: models with collision) stand
+  on the race's base layer, so they come in with the track: seen at C3's
+  jet ski race (`RMG_C3_WaypointRace_main`), whose three ramps were put in
+  their sectors as the race started.
 * **Not yet.** The racing voice of the player and the keepers' lines go
-  out, but not the course's jump ramps or the D6 track's looting
-  pirates, nor the saved best times and medals.
+  out, but not the D6 track's looting pirates, nor the saved best times
+  and medals.
 
 ### Knife throwing
 

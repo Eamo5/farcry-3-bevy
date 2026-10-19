@@ -161,6 +161,7 @@ fn stream_layers(
                     }
                 }
             }
+            debug!("layer {layer:#x}: {} objects in sector {}", placed.len(), sector.id);
             have.insert(*layer, lroot);
         }
     }
