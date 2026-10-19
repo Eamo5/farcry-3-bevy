@@ -87,6 +87,11 @@ const THROW_MOVE: &str = "ex_knife_throw_npc_throw_knife.mab";
 const TO_WATCH_MOVE: &str = "ex_knife_throw_npc_move_to_spectate.mab";
 const WATCH_MOVE: &str = "ex_knife_throw_npc_spectate_idle.mab";
 const END_MOVE: &str = "ex_knife_throw_npc_game_end.mab";
+/// Their walks: in from where they talk to throw, and back after the game.
+const TO_THROW_MOVE: &str = "ex_knife_throw_npc_move_to_throw.mab";
+const TO_START_MOVE: &str = "ex_knife_throw_npc_move_to_start.mab";
+/// How long the walk in takes (its move's length): the first throw after.
+const NPC_WALK_IN: f32 = 5.067;
 /// The challenger's throw's whoosh (the player's comes with their arms'
 /// throw).
 const NPC_THROW_SOUND: u32 = 0x0015_911F;
@@ -516,7 +521,8 @@ fn play_knives(
                 game.wager = wager;
                 game.scores = [0; 2];
                 game.landed = 0;
-                game.stage = Stage::Challenger(0, 0.0);
+                // (Walking in to throw first.)
+                game.stage = Stage::Challenger(0, -NPC_WALK_IN);
                 info!("knives: row {} (wager {wager}, difficulty {})", game.row, game.settings.difficulty[game.row]);
             } else if cancel {
                 game.stage = Stage::Away;
@@ -797,10 +803,15 @@ fn pose_challenger(
     let current = game.pose.as_ref().map(|(_, m, _)| *m);
     let ended = game.pose.as_ref().is_some_and(|(_, _, until)| game.clock >= *until);
     let (want, looping) = match game.stage {
+        // (Walking in first.)
+        Stage::Challenger(_, into) if into < 0.0 => (TO_THROW_MOVE, false),
         Stage::Challenger(..) => (THROW_MOVE, false),
         Stage::Thrower(..) if current == Some(THROW_MOVE) || (current == Some(TO_WATCH_MOVE) && !ended) => (TO_WATCH_MOVE, false),
         Stage::Thrower(..) => (WATCH_MOVE, true),
-        Stage::Result(_) if current != Some(TALK_MOVE) && !(current == Some(END_MOVE) && ended) => (END_MOVE, false),
+        // The game's end, then the walk back to where they talk.
+        _ if current == Some(END_MOVE) && ended => (TO_START_MOVE, false),
+        _ if current == Some(TO_START_MOVE) && !ended => (TO_START_MOVE, false),
+        Stage::Result(_) if current != Some(TALK_MOVE) && current != Some(TO_START_MOVE) && !(current == Some(END_MOVE) && ended) => (END_MOVE, false),
         _ => (TALK_MOVE, true),
     };
     // (A throw's move starts again with each knife.)
