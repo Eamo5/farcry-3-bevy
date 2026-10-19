@@ -530,8 +530,20 @@ front of it. The converter now caches haze emitters' sheets and maps, even
 for effects cached before. `DistortionDistanceScale` isn't used.
 `FC3_HAZE_SCALE=<times>` (tests) bends that much more, to be seen.
 
-Not yet: mesh particles, child emitters, the plotted discs and sounds. Curves
-are joined linearly between knots. `FC3_AUTHORED_FX=<name>[,<metres>]` plays one as an impact, on the ground
+Mesh particles. A mesh emitter (`Geometry`, in 19 of them: the bullet
+impacts' chips of rock, wood, plaster and grass, the explosions' metal and
+wood debris) shows each particle as its model. The `.glm` it names is
+exported as the `.xbg` of the same name, which the converter caches with
+every model. Each particle is that model's first LOD, turned at random as it
+is born (the emitters give no angles) and sized by its size (`InitSizeKF`
+times `PartSizeKF`). The models are a metre or so in radius, as a sprite's
+size is its half-extent, so 0.03 makes a chip a few centimetres across. It shows while it
+has a size and isn't beyond its far fade. A pool of each model's entities is
+kept, as many as have lived at once, placed each frame and hidden when not
+needed. The effects' sounds are all unset (`-1`).
+
+Not yet: child emitters (`PartChildEmitUnit`, in a few) and the plotted
+discs. Curves are joined linearly between knots. `FC3_AUTHORED_FX=<name>[,<metres>]` plays one as an impact, on the ground
 4 m (or that far) in front of the player, once he has stood 15 s.
 `FC3_AUTHORED_FX_SHOTS=<dir>` then captures the screen 0.05, 0.2, 0.5, 1, 2
 and 4 s in.

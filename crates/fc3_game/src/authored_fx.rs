@@ -22,10 +22,12 @@
 //! `FarClipping...`) apply. An emitter with a light (`LightActive`) burns a
 //! point light, flickering as authored. A heat haze's particles
 //! (`DistortionEnabled`) bend the view behind them through their distortion
-//! map instead (`particles::HazeMaterial`).
+//! map instead (`particles::HazeMaterial`). A mesh emitter's (`Geometry`:
+//! bullet impacts' chips, explosions' debris) are its model, turned at
+//! random as they're born, sized by their size.
 //!
-//! Not played (yet): child emitters, mesh particles, plotted emission
-//! volumes and sounds; curves are joined linearly between their knots.
+//! Not played (yet): child emitters, plotted emission volumes and sounds;
+//! curves are joined linearly between their knots.
 
 use std::collections::HashMap;
 
@@ -358,6 +360,8 @@ impl HazeKey {
 /// An emitter made ready to play.
 struct Compiled {
     batch: Option<BatchKey>,
+    /// A mesh emitter's model (cached), its particles shown as it.
+    mesh: Option<String>,
     frames: [u32; 2],
     fps: Ranged,
     random_start: bool,
@@ -461,10 +465,15 @@ impl Compiled {
         } else {
             1
         };
-        // (Heat haze bends the view through its map; not drawn: meshes, and
-        // haze without its map.)
+        // (Heat haze bends the view through its map; not drawn as sprites:
+        // meshes, and haze without its map. A mesh's `.glm` is exported as
+        // its `.xbg`.)
         let haze = if on("DistortionEnabled") { HazeKey::of(e) } else { None };
-        let drawn = s.attr("Geometry").is_none_or(str::is_empty) && (haze.is_some() || !on("DistortionEnabled"));
+        let mesh = s
+            .attr("Geometry")
+            .filter(|g| !g.is_empty())
+            .map(|g| fc3_formats::cache::model_rel(&format!("{}.xbg", g.rsplit_once('.').map_or(g, |(stem, _)| stem))));
+        let drawn = mesh.is_none() && (haze.is_some() || !on("DistortionEnabled"));
         let soft = if on("Soft") { (s.f32("SoftRange").unwrap_or(0.0).max(0.0) * 100.0).round() as u16 } else { 0 };
         let batch = e.texture_path().ok().filter(|_| drawn && !e.texture.is_empty()).map(|t| BatchKey {
             texture: fc3_formats::cache::texture_rel(&t),
@@ -493,6 +502,7 @@ impl Compiled {
         let ext_speed_ratio = s.child("InitExtSpdRatioKF").and_then(|k| k.child("ValueKF")).map_or(Lut([1.0; 33]), |v| Lut::of(v, "RatioUI", 1.0));
         Compiled {
             batch,
+            mesh,
             frames: e.frames,
             fps: Ranged { value: e.fps, variant: e.fps_variant },
             random_start: on("FrameRandomStart"),
@@ -599,6 +609,9 @@ struct Library {
     emitters: Vec<Compiled>,
     batches: HashMap<BatchKey, Entity>,
     particles: Vec<Particle>,
+    /// Mesh particles' models (by cache path), each with the entities that
+    /// show them (as many as have lived at once; hidden when not needed).
+    meshes: HashMap<String, (Handle<crate::cache_assets::Fc3Model>, Vec<Entity>)>,
 }
 
 impl Library {
@@ -650,6 +663,8 @@ struct Particle {
     size: f32,
     rot: f32,
     spin: f32,
+    /// A mesh particle's turn as it was born (at random).
+    turn: Quat,
     colour: Option<Vec3>,
     frame: f32,
     fps: f32,
@@ -758,7 +773,7 @@ fn emit(
                     None => {}
                 }
             }
-            if spawn == 0 || library.emitters[id].batch.is_none() {
+            if spawn == 0 || (library.emitters[id].batch.is_none() && library.emitters[id].mesh.is_none()) {
                 continue;
             }
             let alive = library.particles.iter().filter(|p| p.emitter == id && p.owner == entity).count();
@@ -805,6 +820,12 @@ fn emit(
                     size: em.size.roll(&mut rng).max(0.0),
                     rot: em.angle.roll(&mut rng).to_radians(),
                     spin: em.spin.roll(&mut rng).to_radians(),
+                    turn: if em.mesh.is_some() {
+                        let tau = std::f32::consts::TAU;
+                        Quat::from_euler(EulerRot::YXZ, rng.f32() * tau, rng.f32() * tau, rng.f32() * tau)
+                    } else {
+                        Quat::IDENTITY
+                    },
                     colour: em.random_colour.then(|| gradient(&em.colours, rng.f32())),
                     frame: if em.random_start { (rng.f32() * frames).floor() } else { 0.0 },
                     fps: em.fps.roll(&mut rng).max(0.0),
@@ -889,12 +910,17 @@ fn load_map(server: &AssetServer, rel: &str) -> Handle<Image> {
 #[derive(Component)]
 struct FxBatch(BatchKey);
 
+/// One of a mesh particle model's entities.
+#[derive(Component)]
+struct FxMesh;
+
 #[allow(clippy::too_many_arguments)]
 fn draw(
     mut library: ResMut<Library>,
     daylight: Res<crate::clouds::Daylight>,
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
-    mut batches: Query<(&FxBatch, &Mesh3d, &mut Transform, &mut Visibility)>,
+    mut batches: Query<(&FxBatch, &Mesh3d, &mut Transform, &mut Visibility), Without<FxMesh>>,
+    (mut shown, models): (Query<(&mut Transform, &mut Visibility), (With<FxMesh>, Without<FxBatch>)>, Res<Assets<crate::cache_assets::Fc3Model>>),
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ParticleMaterial>>,
     mut hazes: ResMut<Assets<crate::particles::HazeMaterial>>,
@@ -1001,6 +1027,55 @@ fn draw(
         if !empty {
             if let Some(mut m) = meshes.get_mut(&mesh.0) {
                 quads.write(&mut m);
+            }
+        }
+    }
+    // Mesh particles: their model where each is, turned as it was born and
+    // sized by its size (a model a metre or so in radius), while it has a size
+    // and isn't beyond its far fade.
+    let mut places: HashMap<String, Vec<Transform>> = HashMap::new();
+    for p in &library.particles {
+        let em = &library.emitters[p.emitter];
+        let Some(model) = &em.mesh else { continue };
+        let pos = p.world_pos();
+        let scale = p.size * em.part_size.at((p.age / p.life).clamp(0.0, 1.0));
+        if scale <= 0.002 || em.far.is_some_and(|(_, end)| pos.distance(origin) > end) {
+            continue;
+        }
+        let up = p.world_vector(Vec3::Y).normalize_or(Vec3::Y);
+        let rotation = Quat::from_axis_angle(up, p.rot) * p.turn;
+        places.entry(model.clone()).or_default().push(Transform { translation: pos, rotation, scale: Vec3::splat(scale) });
+    }
+    for (model, (_, pool)) in &library.meshes {
+        if !places.contains_key(model) {
+            for e in pool {
+                if let Ok((_, mut vis)) = shown.get_mut(*e) {
+                    *vis = Visibility::Hidden;
+                }
+            }
+        }
+    }
+    for (model, list) in places {
+        let (handle, pool) = library.meshes.entry(model.clone()).or_insert_with(|| (server.load(crate::cache_assets::cache_path(&model)), Vec::new()));
+        let Some(lod) = models.get(&*handle).and_then(|m| m.lods.first()) else { continue };
+        while pool.len() < list.len() {
+            let e = commands.spawn((FxMesh, Transform::default(), Visibility::Hidden, Name::new("authored fx mesh"))).id();
+            for part in &lod.parts {
+                commands.spawn((Mesh3d(part.mesh.clone()), MeshMaterial3d(part.material.clone()), NotShadowCaster, ChildOf(e)));
+            }
+            pool.push(e);
+        }
+        for (i, e) in pool.iter().enumerate() {
+            match (list.get(i), shown.get_mut(*e)) {
+                (Some(place), Ok((mut t, mut vis))) => {
+                    *t = *place;
+                    *vis = Visibility::Inherited;
+                }
+                (Some(place), Err(_)) => {
+                    commands.entity(*e).insert((*place, Visibility::Inherited));
+                }
+                (None, Ok((_, mut vis))) => *vis = Visibility::Hidden,
+                (None, Err(_)) => {}
             }
         }
     }
