@@ -711,7 +711,10 @@ keys the page shows: the camera (none here), the rock and the two slots.
 it out of the other. The slots are saved (`quickslot`), and their keys
 (`use_recipe_a` and `_b`, the game's 7 and 8, rebindable) inject the
 syringe in each if one is carried. The narrative action maps switch them off
-as they do the game's signals. Crafting arrows isn't there yet, and the 3D
+as they do the game's signals. An arrow tip is made from the inventory: its
+grenade or molotov goes, and a tipped arrow is added up to the quiver's
+special arrows (`CraftCatalog::craft_arrow`). The page counts the tipped
+arrows carried, as it counts syringes. The 3D
 item views (`3D_Crafting_MC` and the like, which the engine draws) are
 hidden: their stand-ins are plain white and blue sheets. Blank data fields
 go to the movie as null, which the shim makes blank again (a blank string

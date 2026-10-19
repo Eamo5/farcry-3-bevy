@@ -254,7 +254,7 @@ fn drive_pause(
     (mut exit, mut back_to_menu, mut save_request): (MessageWriter<AppExit>, ResMut<crate::save::BackToMenu>, MessageWriter<crate::save::SaveRequest>),
     (mut open, mut mouse, mut paged, mut pressed): (Local<bool>, Local<Vec2>, Local<bool>, Local<(Option<std::time::Instant>, usize)>),
     (mut players, mut crafted, mut page, mut boosts): (
-        Query<&mut crate::combat::PlayerStats, With<crate::player::Player>>,
+        Query<(&mut crate::combat::PlayerStats, &mut crate::weapons::Inventory), With<crate::player::Player>>,
         MessageWriter<crate::crafting::ItemCrafted>,
         Local<CraftPage>,
         Option<ResMut<crate::syringes::Boosts>>,
@@ -433,7 +433,11 @@ fn drive_pause(
             | "CraftingRecipeAssigned"
             | "CraftingRecipeUsed" => {
                 let (Some(catalog), Some(loot)) = (crafting.as_deref(), loot.as_deref()) else { continue };
-                let mut stats = players.single_mut().ok();
+                let mut player = players.single_mut().ok();
+                let (mut stats, mut inv) = match player.as_mut() {
+                    Some((s, i)) => (Some(&mut **s), Some(&mut **i)),
+                    None => (None, None),
+                };
                 match call.args[0].as_str() {
                     "CraftingPageLoaded" => {
                         *page = CraftPage::default();
@@ -461,11 +465,11 @@ fn drive_pause(
                     }
                     "CraftingRecipeTypeChanged" => {
                         page.category = arg(1).parse().unwrap_or(0);
-                        send_craft_groups(host, catalog, loot, &progress, stats.as_deref(), perks.medkit_cap, page.category);
+                        send_craft_groups(host, catalog, loot, &progress, &Pack::of(stats.as_deref(), inv.as_deref(), &perks), page.category);
                     }
                     "CraftingRecipeSubTypeChanged" => {
                         page.subtype = arg(2).parse().unwrap_or(0);
-                        send_craft_recipes(host, catalog, loot, &progress, stats.as_deref(), perks.medkit_cap, &page);
+                        send_craft_recipes(host, catalog, loot, &progress, &Pack::of(stats.as_deref(), inv.as_deref(), &perks), &page);
                     }
                     "CraftingRecipeSelected" => {
                         page.recipe = arg(1).parse().ok().filter(|&i: &usize| i < catalog.recipes.len());
@@ -479,17 +483,23 @@ fn drive_pause(
                             _ => false,
                         };
                         host.event("CraftingUseResult", &[if used { "1" } else { "0" }]);
-                        send_craft_groups(host, catalog, loot, &progress, stats.as_deref(), perks.medkit_cap, page.category);
-                        send_craft_recipes(host, catalog, loot, &progress, stats.as_deref(), perks.medkit_cap, &page);
+                        send_craft_groups(host, catalog, loot, &progress, &Pack::of(stats.as_deref(), inv.as_deref(), &perks), page.category);
+                        send_craft_recipes(host, catalog, loot, &progress, &Pack::of(stats.as_deref(), inv.as_deref(), &perks), &page);
                     }
                     _ => {
                         let Some(recipe) = page.recipe.and_then(|i| catalog.recipes.get(i)) else { continue };
-                        let Some(stats) = stats.as_deref_mut() else { continue };
-                        if let Some(event) = catalog.craft(&mut progress, stats, perks.medkit_cap, loot, &recipe.id) {
+                        // (An arrow tip takes a grenade or a molotov from the
+                        // inventory.)
+                        let made = if crate::crafting::arrow_kind(recipe).is_some() {
+                            inv.as_deref_mut().and_then(|i| catalog.craft_arrow(&progress, i, perks.arrow_cap, &recipe.id))
+                        } else {
+                            stats.as_deref_mut().and_then(|s| catalog.craft(&mut progress, s, perks.medkit_cap, loot, &recipe.id))
+                        };
+                        if let Some(event) = made {
                             crafted.write(event);
                         }
-                        send_craft_groups(host, catalog, loot, &progress, Some(stats), perks.medkit_cap, page.category);
-                        send_craft_recipes(host, catalog, loot, &progress, Some(stats), perks.medkit_cap, &page);
+                        send_craft_groups(host, catalog, loot, &progress, &Pack::of(stats.as_deref(), inv.as_deref(), &perks), page.category);
+                        send_craft_recipes(host, catalog, loot, &progress, &Pack::of(stats.as_deref(), inv.as_deref(), &perks), &page);
                         send_craft_ingredients(host, catalog, loot, &progress, &page);
                     }
                 }
@@ -1685,12 +1695,46 @@ struct CraftPage {
     recipe: Option<usize>,
 }
 
-/// How many of what a recipe makes the player carries (medicine, syringes).
-fn craft_carried(progress: &crate::progression::Progress, stats: Option<&crate::combat::PlayerStats>, recipe: &fc3_formats::progression::Recipe) -> u32 {
-    if recipe.id == crate::crafting::MEDICINE {
-        stats.map_or(0, |s| s.medkits)
-    } else {
-        progress.potions.get(&recipe.id).copied().unwrap_or(0)
+/// What the player carries, as the crafting page counts it: their
+/// medicine, their inventory (the arrows), and how much the kits hold.
+struct Pack<'a> {
+    stats: Option<&'a crate::combat::PlayerStats>,
+    inv: Option<&'a crate::weapons::Inventory>,
+    medkit_cap: u32,
+    arrow_cap: u32,
+}
+
+impl<'a> Pack<'a> {
+    fn of(stats: Option<&'a crate::combat::PlayerStats>, inv: Option<&'a crate::weapons::Inventory>, perks: &crate::progression::Perks) -> Pack<'a> {
+        Pack { stats, inv, medkit_cap: perks.medkit_cap, arrow_cap: perks.arrow_cap }
+    }
+
+    /// Whether a recipe can be made now (an arrow tip from the inventory's
+    /// grenades and molotovs, the rest from loot and plants).
+    fn craftable(
+        &self,
+        catalog: &crate::crafting::CraftCatalog,
+        progress: &crate::progression::Progress,
+        loot: &crate::progression::LootCatalog,
+        r: &fc3_formats::progression::Recipe,
+    ) -> bool {
+        if crate::crafting::arrow_kind(r).is_some() {
+            self.inv.is_some_and(|i| catalog.can_craft_arrow(progress, i, self.arrow_cap, &r.id))
+        } else {
+            self.stats.is_some_and(|st| catalog.can_craft(progress, st, self.medkit_cap, loot, &r.id))
+        }
+    }
+
+    /// How many of what a recipe makes the player carries (medicine,
+    /// syringes, tipped arrows).
+    fn carried(&self, progress: &crate::progression::Progress, recipe: &fc3_formats::progression::Recipe) -> u32 {
+        if recipe.id == crate::crafting::MEDICINE {
+            self.stats.map_or(0, |s| s.medkits)
+        } else if let Some(kind) = crate::crafting::arrow_kind(recipe) {
+            self.inv.and_then(|i| i.special_arrows.get(kind as usize - 1).copied()).unwrap_or(0)
+        } else {
+            progress.potions.get(&recipe.id).copied().unwrap_or(0)
+        }
     }
 }
 
@@ -1747,8 +1791,7 @@ fn send_craft_groups(
     catalog: &crate::crafting::CraftCatalog,
     loot: &crate::progression::LootCatalog,
     progress: &crate::progression::Progress,
-    stats: Option<&crate::combat::PlayerStats>,
-    medkit_cap: u32,
+    pack: &Pack,
     tab: u32,
 ) {
     use fc3_ui::ExternalValue as V;
@@ -1759,8 +1802,8 @@ fn send_craft_groups(
         .iter()
         .map(|s| {
             let recipes: Vec<_> = catalog.recipes.iter().filter(|r| r.category == tab && r.subcategory == s.id).collect();
-            let craftable = stats.is_some_and(|st| recipes.iter().any(|r| catalog.can_craft(progress, st, medkit_cap, loot, &r.id)));
-            let carried: u32 = recipes.iter().map(|r| craft_carried(progress, stats, r)).sum();
+            let craftable = recipes.iter().any(|r| pack.craftable(catalog, progress, loot, r));
+            let carried: u32 = recipes.iter().map(|r| pack.carried(progress, r)).sum();
             let done = recipes.iter().all(|r| craft_done(progress, r));
             [
                 ("iID", V::Number(s.id as f64)),
@@ -1788,8 +1831,7 @@ fn send_craft_recipes(
     catalog: &crate::crafting::CraftCatalog,
     loot: &crate::progression::LootCatalog,
     progress: &crate::progression::Progress,
-    stats: Option<&crate::combat::PlayerStats>,
-    medkit_cap: u32,
+    pack: &Pack,
     page: &CraftPage,
 ) {
     use fc3_ui::ExternalValue as V;
@@ -1799,7 +1841,7 @@ fn send_craft_recipes(
     let items = recipes
         .iter()
         .map(|&(i, r)| {
-            let craftable = stats.is_some_and(|st| catalog.can_craft(progress, st, medkit_cap, loot, &r.id));
+            let craftable = pack.craftable(catalog, progress, loot, r);
             let duration = if r.duration > 0.0 { format!("{:.0}s", r.duration) } else { String::new() };
             [
                 ("iObjectID", V::Number(i as f64)),
@@ -1810,7 +1852,7 @@ fn send_craft_recipes(
                 ("iUnlocked", V::Number(if catalog.available(progress, r) || craft_done(progress, r) { 1.0 } else { 0.0 })),
                 ("bCraftable", V::Bool(craftable)),
                 ("iFinishedCrafting", V::Number(if craft_done(progress, r) { 1.0 } else { 0.0 })),
-                ("iQuantity", V::Number(craft_carried(progress, stats, r) as f64)),
+                ("iQuantity", V::Number(pack.carried(progress, r) as f64)),
                 ("bNew", V::Bool(false)),
                 ("iSortID", V::Number(r.sort as f64)),
                 ("iLevelProgressCurrent", V::Number(0.0)),
