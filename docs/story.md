@@ -4081,8 +4081,14 @@ the game now plays (`boss_fight`) instead of ending it at once.
   each hit on the mask bursts as the explosive arrows do. A scene's clip
   made for another skeleton drives the character's own, so B15E's
   finishing blow poses the giant on its skeleton.
+* **The breath** is its weapon's flame (`m_flamethrowerArchetype`,
+  `LPO-50.CitraFlamebreath`, in the weapons' table): its stream effect
+  (`citra_flame_breath`) launched from the jaw on its clock along the
+  breath's aim, and its flame mesh (see shaders.md). Our flame stream stands
+  in when the effect isn't cached. `FC3_BOSS_SHOTS` also captures each second
+  of a breath.
 * Not yet: the minions' ink look and the fight's other particles (the
-  eyes, the breath's own flames).
+  eyes).
 
 ## Button prompts (`CGSFInputManager`)
 

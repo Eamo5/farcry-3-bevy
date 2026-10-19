@@ -19,8 +19,10 @@ use anyhow::{bail, Result};
 use crate::fcb::Object;
 
 pub const STATS_REL: &str = "weapons/stats.txt";
-const MAGIC: &str = "fc3-weapons 12";
-/// The form before the flame's mesh (read the same, without it).
+const MAGIC: &str = "fc3-weapons 13";
+/// The forms before the flames' variants and before the flame's mesh (read
+/// the same, without them).
+const MAGIC_12: &str = "fc3-weapons 12";
 const MAGIC_11: &str = "fc3-weapons 11";
 
 /// Whether a cached table is in this version's form.
@@ -665,6 +667,8 @@ pub fn weapon_stats(library: &Object, shop_items: Option<&Object>) -> Vec<Weapon
     let mut gadget_by_id: HashMap<u64, Gadget> = HashMap::new();
     // Library item id -> a curve's points (`Curves:`).
     let mut curves: HashMap<u64, Vec<[f32; 2]>> = HashMap::new();
+    // Variants with a flame mesh of their own (`LPO-50.CitraFlamebreath`).
+    let mut variants: Vec<(String, Object)> = Vec::new();
     library.walk(&mut |o, _| {
         if !o.is("EntityPrototype") {
             return;
@@ -711,6 +715,14 @@ pub fn weapon_stats(library: &Object, shop_items: Option<&Object>) -> Vec<Weapon
         } else if let Some(n) = name.strip_prefix("WeaponProperties:FC3/").filter(|n| !n.contains('.')) {
             if let Some(p) = e.child("Components").and_then(|c| c.child("CWeaponProperties")) {
                 props.push((n.to_string(), p.as_ref().clone()));
+            }
+        } else if let Some(n) = name.strip_prefix("WeaponProperties:FC3/") {
+            if let Some(p) = e.child("Components").and_then(|c| c.child("CWeaponProperties")) {
+                let mut flame = false;
+                p.walk(&mut |c, _| flame |= c.is("FlameMesh"));
+                if flame {
+                    variants.push((n.to_string(), p.as_ref().clone()));
+                }
             }
         }
     });
@@ -819,6 +831,22 @@ pub fn weapon_stats(library: &Object, shop_items: Option<&Object>) -> Vec<Weapon
             }
         }
     }
+    // A variant whose flame isn't its weapon's (the Ink Monster's breath):
+    // its weapon's handling, with its own flame, after it.
+    let mut extra = Vec::new();
+    for (name, p) in variants {
+        let Some(w) = name.split_once('.').and_then(|(base, _)| out.iter().find(|w| w.name.eq_ignore_ascii_case(base))) else { continue };
+        let mut flame = None;
+        p.walk(&mut |c, _| {
+            if flame.is_none() && c.is("FireStrategyProperties") {
+                flame = Flame::read(c, &curves);
+            }
+        });
+        if flame.is_some() && flame != w.flame {
+            extra.push(WeaponStats { name, flame, attachments: Vec::new(), gadgets: Vec::new(), ..w.clone() });
+        }
+    }
+    out.extend(extra);
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
 }
@@ -859,7 +887,7 @@ pub fn to_text(stats: &[WeaponStats]) -> String {
 
 pub fn from_text(text: &str) -> Result<Vec<WeaponStats>> {
     let mut lines = text.lines();
-    if !matches!(lines.next().map(str::trim), Some(MAGIC | MAGIC_11)) {
+    if !matches!(lines.next().map(str::trim), Some(MAGIC | MAGIC_12 | MAGIC_11)) {
         bail!("not a weapon stats table");
     }
     Ok(lines

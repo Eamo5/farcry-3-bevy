@@ -456,8 +456,11 @@ The tube widens from `sizeGrowInterpolation`'s first width to its second over
 tiles along the rope every `fTeselation` metres, so the flame comes in pulses
 that travel with the knots. The texture's `fTextureFrames` slices across take
 turns every `fTextureChangeTime`. The weapons' table keeps the mesh (version
-12; 11 still reads, without it), and the converter caches its texture. The
-flamers' bursts feed one too. `FC3_ROPE_GLOW` sets how brightly it glows (3).
+13; 11 and 12 still read, without it or the variants). It also keeps, after
+its weapon, a variant whose flame isn't the weapon's: the Ink Monster's breath
+(`LPO-50.CitraFlamebreath`, a 100 m mesh at 40 m/s with its own stream
+effect). The converter caches the mesh's texture and the variants' effects.
+The flamers' bursts feed a mesh too. `FC3_ROPE_GLOW` sets how brightly it glows (3).
 `FC3_TEST_MAG` keeps the magazines full, for a long burst under
 `--fire-test`. `FC3_FIRE_SWEEP=<deg>,<period s>[,<pitch deg>]` swings the
 test's aim from side to side (the stream's curve), raised so far.

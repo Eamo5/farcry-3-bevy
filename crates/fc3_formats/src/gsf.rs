@@ -236,6 +236,9 @@ pub struct BossFightSettings {
     pub rock_archetype: String,
     pub breath_damage: f32,
     pub breath_radius: f32,
+    /// The weapon its breath is (`m_flamethrowerArchetype`:
+    /// `weapons:FC3/LPO-50.CitraFlamebreath`), whose flame it breathes.
+    pub breath_weapon: String,
     pub pound_radius: f32,
     pub pound_damage: f32,
     pub minions: f32,
@@ -346,6 +349,7 @@ impl BossFightSettings {
             rock_archetype: text("m_rockArchetype"),
             breath_damage: n("m_firebreathDmg"),
             breath_radius: n("m_firebreathRadius"),
+            breath_weapon: text("m_flamethrowerArchetype"),
             pound_radius: n("m_summonPoundRadius"),
             pound_damage: n("m_summonPoundDmg"),
             minions: n("m_summonMinionsCount"),

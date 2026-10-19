@@ -142,6 +142,12 @@ struct Fight {
     swept: bool,
     /// Breathing fire, and where the flame is aimed.
     breath: Option<Vec3>,
+    /// Its breath's flame (its weapon's: stream effects and flame mesh), and
+    /// each stream effect's clock.
+    flame: Option<crate::flamethrower::Flame>,
+    flame_clocks: Vec<f32>,
+    /// Seconds it has breathed this time (for `FC3_BOSS_SHOTS`).
+    breathed: f32,
     /// The weak spot: a sphere riding on the head, shot at.
     mask: Option<Entity>,
     /// Told the player to shoot the mask.
@@ -307,6 +313,8 @@ fn start_and_end(
         // FC3_BOSS_HP=<health> (tests): the giant starts with that much, in
         // its phase for it.
         let hp = std::env::var("FC3_BOSS_HP").ok().and_then(|v| v.parse::<f32>().ok()).map_or(s.hp, |h| h.clamp(1.0, s.hp));
+        // (Its breath's weapon, by its name in the weapons' table.)
+        let flame = crate::weapons::flame_of(s.breath_weapon.rsplit('/').next().unwrap_or_default());
         fight.active = Some(Fight {
             id: start.id,
             hp,
@@ -323,6 +331,9 @@ fn start_and_end(
             attacks: 0,
             swept: false,
             breath: None,
+            flame,
+            flame_clocks: Vec::new(),
+            breathed: 0.0,
             mask: None,
             hinted: false,
             rocks_thrown: 0,
@@ -637,11 +648,28 @@ fn fight(
         *aim = aim.lerp(player_at, (dt * 1.2).min(1.0));
         let dir = (*aim - mouth).normalize_or_zero();
         let reach = mouth.distance(*aim) + 4.0;
-        crate::particles::fx::flame_stream(&mut particles, &mut rng, mouth, dir, Vec3::ZERO, reach);
+        // Its own flame (the stream's effects and its mesh), else ours.
+        let theirs = f.flame.as_ref().is_some_and(|fl| crate::flamethrower::stream(&mut commands, fl, &mut f.flame_clocks, dt, mouth, dir, reach, false));
+        if let Some(rope) = f.flame.as_ref().and_then(|fl| fl.rope.clone()) {
+            crate::flamethrower::feed_rope(&mut commands, rig_entity, rope, mouth, dir, Vec3::ZERO, reach, 0.05);
+        }
+        if !theirs {
+            crate::particles::fx::flame_stream(&mut particles, &mut rng, mouth, dir, Vec3::ZERO, reach);
+        }
+        // (FC3_BOSS_SHOTS: and one each second it breathes.)
+        if let Some(shots) = std::env::var_os("FC3_BOSS_SHOTS").filter(|_| (f.breathed + dt).floor() > f.breathed.floor()) {
+            crate::camera::capture(
+                &mut commands,
+                std::path::Path::new(&shots).join(format!("breath_{}_{:.0}.png", f.shots, f.breathed + dt)).to_string_lossy().into_owned(),
+            );
+        }
+        f.breathed += dt;
         let along = (player_at - mouth).dot(dir).clamp(0.0, reach);
         if (mouth + dir * along).distance(player_at) < f.s.breath_radius {
             harm(&mut damage, pe, f.s.breath_damage * dt, DamageKind::Fire, Some(mouth));
         }
+    } else {
+        f.breathed = 0.0;
     }
     // Ink smoking off its arms (`smoke_arms`), while it stands.
     f.ink -= dt;

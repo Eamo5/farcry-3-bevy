@@ -447,6 +447,36 @@ fn ropes(
     }
 }
 
+/// A flame breathed for `dt` seconds (the Ink Monster's): each of its stream
+/// effects launched on its clock (as often as with the aim at rest) from
+/// `from` along `dir`, as far as it reaches; first person's effects, or
+/// third's. False when none is cached.
+#[allow(clippy::too_many_arguments)]
+pub fn stream(commands: &mut Commands, flame: &Flame, clocks: &mut Vec<f32>, dt: f32, from: Vec3, dir: Vec3, reach: f32, third_person: bool) -> bool {
+    let frame = crate::authored_fx::muzzle_frame(dir);
+    clocks.resize(flame.stream.len(), 0.0);
+    let mut any = false;
+    for (s, clock) in flame.stream.iter().zip(clocks.iter_mut()) {
+        let Some(name) = (if third_person { s.effect_3p } else { s.effect }).filter(|n| crate::authored_fx::available(n)) else { continue };
+        any = true;
+        *clock += dt;
+        let t = &s.timing;
+        let every = (t.every * t.turning_ratio(0.0)).max(1e-3);
+        let end = t.distance.min(reach);
+        while *clock >= every {
+            *clock -= every;
+            // (Each from where it would be had it left on its tick.)
+            let gone = (t.speed * *clock).min(end);
+            commands.spawn((
+                Transform::from_translation(from + dir * gone).with_rotation(frame),
+                crate::authored_fx::AuthoredFx(name),
+                Launched { velocity: dir * t.speed, left: ((end - gone) / t.speed).max(0.0) },
+            ));
+        }
+    }
+    any
+}
+
 /// Stream effects go on their way until they've gone their distance or
 /// struck something, and stop there.
 fn fly(time: Res<Time>, mut launched: Query<(Entity, &mut Transform, &mut Launched)>, mut commands: Commands) {
