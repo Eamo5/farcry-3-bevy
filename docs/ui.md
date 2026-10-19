@@ -664,9 +664,12 @@ minute). The movie plays itself: its shuffled
 words, the game's tips (string ids of its own), and the spinner it loads
 (`Loading.feu`, which says `CommonResourcesLoaded`); it says
 `SinglePlayerLoadingLoaded` and asks `IsBootTitle` ("0"; "1" shows the boot
-title's guns instead). The HUD hides under it. The trials' own
-(`SocialChallenge\(SC)Singleplayer.feu`) carries the challenge's pause page
-as well, and isn't used yet. `FC3_LOADING_SHOT=<file>` (tests) captures it
+title's guns instead). The HUD hides under it. A trial's run beginning
+(the player taken to its start) puts up the trials' own instead
+(`SocialChallenge\(SC)Singleplayer.feu`): the challenge's pause page in
+loading mode (`CChallengePausePage` 1, `ChallengePausePageLoaded`), its
+titles and the points' legend (`SetChallengeSetupLegendInfo`, sent while it's
+up as the page listens only once loaded), fading to the spinner after 12 s. `FC3_LOADING_SHOT=<file>` (tests) captures it
 two seconds in.
 
 **Skills** (`M_Skills.feu`, quick launch 3): on `PlayerSkillsLoaded` the

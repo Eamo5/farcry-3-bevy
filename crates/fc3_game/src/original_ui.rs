@@ -3950,6 +3950,12 @@ fn drive_credits(
 /// `IsBootTitle` ("1" is the boot title's guns instead). The HUD hides
 /// under it. `FC3_LOADING_SHOT=<file>` (tests) captures it two seconds in.
 const LOADING_MOVIE: &str = r"UI\Singleplayer\Menu\Loading\GameModes\Singleplayer.feu";
+/// A trial's own, as its run begins (the player taken to its start): its
+/// challenge page in loading mode (`CChallengePausePage` 1), the trial's
+/// titles and its points' legend (`SetChallengeSetupLegendInfo`, sent while
+/// it's up: the page listens once it has loaded), fading to the spinner
+/// after 12 s.
+const TRIAL_LOADING_MOVIE: &str = r"UI\Singleplayer\Menu\Loading\SocialChallenge\(SC)Singleplayer.feu";
 const LOADING_LEVEL: u32 = 60;
 const LOADING_AFTER: f32 = 0.5;
 const LOADING_LEAST: f32 = 2.0;
@@ -3976,6 +3982,8 @@ struct LoadingShown {
     /// screen up came with it.
     playing: Option<f32>,
     starts_play: bool,
+    /// The trial's own screen is up (a run beginning).
+    trial: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3988,6 +3996,7 @@ fn drive_loading(
     mut shown: Local<LoadingShown>,
     mut commands: Commands,
     mut up: ResMut<LoadingUp>,
+    trials: Option<Res<crate::trials::Trials>>,
 ) {
     let Interface::Running(host) = &*state else { return };
     up.0 = shown.since.is_some();
@@ -4006,7 +4015,8 @@ fn drive_loading(
         }
         if shown.waiting > LOADING_AFTER {
             host.answer("IsBootTitle", "0");
-            host.load(LOADING_MOVIE, LOADING_LEVEL);
+            shown.trial = trials.as_ref().is_some_and(|t| t.running());
+            host.load(if shown.trial { TRIAL_LOADING_MOVIE } else { LOADING_MOVIE }, LOADING_LEVEL);
             host.level_visible(HUD_LEVEL, false);
             shown.since = Some(now);
             shown.shot = false;
@@ -4016,6 +4026,10 @@ fn drive_loading(
         }
         return;
     };
+    if let Some(t) = trials.as_ref().filter(|_| shown.trial) {
+        let legend = t.pause_legend();
+        host.event("SetChallengeSetupLegendInfo", &[&legend[0], &legend[1], &legend[2], &legend[3]]);
+    }
     if !shown.shot && now - since > 2.0 {
         shown.shot = true;
         if let Ok(path) = std::env::var("FC3_LOADING_SHOT") {

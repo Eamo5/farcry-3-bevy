@@ -150,6 +150,11 @@ impl Trials {
 
     /// The trial's pause page's legend: what kills score (the least and
     /// the most) and what a time bonus adds, with their units.
+    /// Whether a trial is being played (its run begun, not yet over).
+    pub fn running(&self) -> bool {
+        self.run.is_some()
+    }
+
     pub fn pause_legend(&self) -> [String; 4] {
         let Some(Some(t)) = &self.table else { return Default::default() };
         let kills: Vec<i32> = t.rules.iter().filter(|r| !r.time && r.score > 0).map(|r| r.score).collect();
