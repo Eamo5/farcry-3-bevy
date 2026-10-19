@@ -443,9 +443,15 @@ struct Compiled {
     /// Its particles move with the effect (`LocalEmitterSpace`: a muzzle's
     /// flames go with the gun).
     local: bool,
-    /// Oriented in the effect's frame (`Orientation`): one that hardly moves
+    /// Oriented in the effect's frame (`Orientation` 1): one sized evenly
+    /// lies in the frame's plane (foam, rings of smoke on the ground, water
+    /// ripples), turned by its angle; one sized unevenly that hardly moves
     /// (a flame, a standing wisp) stands along the frame's Z (Dunia's).
     oriented: bool,
+    /// Fading out as it's seen edge-on (`FadeAngle`, degrees): one lying in
+    /// the frame's plane as the view nears the plane, a stretched one as it
+    /// nears its heading (sparks coming at the camera).
+    fade_angle: f32,
     lit: bool,
     near: Option<(f32, f32)>,
     far: Option<(f32, f32)>,
@@ -596,6 +602,7 @@ impl Compiled {
             pivot: Vec2::new(f("PartSizeOffsetX", 0.0), f("PartSizeOffsetY", 0.0)),
             local: s.child("Flags").is_some_and(|f| f.bool("LocalEmitterSpace") == Some(true)),
             oriented: s.child("Flags").is_some_and(|f| f.bool("Orientation") == Some(true)),
+            fade_angle: f("FadeAngle", 0.0).clamp(0.0, 90.0),
             lit: on("SHLighting") && mode != 0,
             // (Faded near the camera by its alpha (`NearClippingAlpha`: a
             // flamethrower's fireballs, impacts' smoke); far off by its alpha
@@ -1120,6 +1127,8 @@ fn draw(
             let near = camera_scale(em, dist);
             let half = (p.size * em.part_size.at(t) * near).max(0.005);
             let mut centre = pos - origin;
+            // (Edge-on: its plane's normal, or its heading, as the camera sees it.)
+            let mut edge: Option<(Vec3, bool)> = None;
             let (x, y) = if !em.uniform {
                 // Sized unevenly (sparks, streaks of smoke): its width
                 // across and its length (`PartSizeZKF`) along its heading as
@@ -1132,11 +1141,20 @@ fn draw(
                 } else {
                     p.world_vector(p.dir)
                 };
+                edge = Some((heading, false));
                 let along = (heading - view * heading.dot(view)).normalize_or(up);
                 let side = view.cross(along).normalize_or(right);
                 let (width, length) = (half.max(0.003), (p.size * em.part_length.at(t) * near).max(0.003));
                 centre += side * (width * em.pivot.x) + along * (length * em.pivot.y);
                 (side * width, along * length)
+            } else if em.oriented {
+                // Lying in the effect's plane, turned by its angle.
+                let normal = p.world_vector(p.stand).normalize_or(Vec3::Y);
+                edge = Some((normal, true));
+                let a = normal.any_orthonormal_vector();
+                let b = normal.cross(a);
+                let (s, c) = p.rot.sin_cos();
+                (a * (c * half) + b * (s * half), b * (c * half) - a * (s * half))
             } else {
                 let (s, c) = p.rot.sin_cos();
                 (right * (c * half) + up * (s * half), up * (c * half) - right * (s * half))
@@ -1151,6 +1169,17 @@ fn draw(
             } else {
                 (p.frame + p.age * p.fps) as u32 % n
             };
+            // (Faded as it's seen edge-on: the angle between the line of
+            // sight and its plane, or its heading.)
+            if let Some((axis, plane)) = edge.filter(|_| em.fade_angle > 0.0) {
+                let sight = centre.normalize_or(view);
+                let cos = sight.dot(axis.normalize_or(Vec3::Y)).abs().min(1.0);
+                let angle = if plane { cos.asin() } else { cos.acos() }.to_degrees();
+                alpha *= crate::sky::smoothstep(0.0, em.fade_angle, angle);
+                if alpha <= 0.002 {
+                    continue;
+                }
+            }
             quads.push(centre, x, y, frame_uv(frame, em.frames[0].max(1), em.frames[1].max(1)), -view, colour.extend(alpha));
         }
         let empty = quads.is_empty();

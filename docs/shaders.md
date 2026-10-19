@@ -557,8 +557,15 @@ the blasts came out half the original's. `UniformSize` 0 particles (sparks,
 flames, streaks of smoke) are drawn along their heading as seen. `PartSizeKF`
 gives their width and `PartSizeZKF` their length (both times their size). They
 hang from their point by `PartSizeOffsetX` (across) and `PartSizeOffsetY`
-(along). One oriented in its effect's frame (`Flags` `Orientation`) that hardly
+(along). One oriented in its effect's frame (`Flags` `Orientation` 1) that hardly
 moves (a flame, a standing wisp) stands along the frame's Z (Dunia's) instead.
+An evenly sized one oriented so lies in the frame's plane, turned by its angle:
+foam, rings of smoke on the ground, a water impact's ring. (`Orientation` is a
+mode, one bit of several: 8 is mostly the sparks and shards drawn along their
+heading, 4 smoke against a wall, the high bits clouds and god rays. Only 1 is
+read.) `FadeAngle` fades a flat one out as the line of sight nears its plane,
+and a stretched one as it nears its heading, over that many degrees, so
+neither shows edge-on as a sliver.
 An emitter in its own space (`Flags` `LocalEmitterSpace`) keeps its particles in
 its effect's frame, following the effect while it lasts. A particle takes on
 its effect's own motion by `InitExtSpdRatioKF` (its share over the emitter's
