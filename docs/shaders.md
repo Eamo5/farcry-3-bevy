@@ -450,13 +450,27 @@ four, since each is a few metres across and our cells are 2 m. The nearest to
 the camera come first, as many as their pools allow. A splash on bare ground
 plays the one whose flames don't loop, burning itself out (`fire_ground_d`).
 The smoke (`FireSmokeRegionSettings`: `smok_ground_a`, `smok_ground_b`) rises
-from one cell in nine and hangs on 12 to 20 s after it's out. A bush in a
-burning patch burns with a plant's fire (`FireRealtreeSettings`): a small one
-with `fire_bush`, one 1.6 m tall or more with `fire_foliage_a`, until it's
-burnt away. The effects' own lights are left to our four over the fire. Our
-flames and smoke stand in when nothing is cached. Not yet: the region
-profiles (Savannah, Jungle...) and their timings, burning objects, the
-flamethrower's sticky stream.
+from one cell in nine. A bush in a burning patch burns with a plant's fire
+(`FireRealtreeSettings`): a small one with `fire_bush`, one 1.6 m tall or
+more with `fire_foliage_a`, until it's burnt away. The effects' own lights
+are left to our four over the fire.
+
+How long a patch burns is the fire manager's region profile's
+(`fireregion.lib`, kept as `particles/fire-regions.txt`): its fire's growing,
+burning and dying-down times (`fStartingTime`, `fAliveTime`,
+`fExtinctionTime`), give or take 15 %. Its flames go out halfway through the
+dying down, and its smoke lingers the profile's smoke life
+(`fSmokeMinLifeTime` to `fSmokeMaxLifeTime`). The open world's grass burns
+as the savannah's (`Region/Savannah`). A burnable region burns as its
+ignitor names (`fireregRegionProfile_SP`: WIL_020's drug fields are
+`Region/Cannabis`). Animals within a fire's `Fire_FearStim` radius run from
+it, unless their personality ignores fear (`bIgnorFearStim`). One alight
+bolts this way and that until it's out. Without the profiles, a patch burns
+7 to 11 s and its smoke lingers 12 to 20 s. Our flames and smoke stand in
+when nothing is cached. Not yet: picking the profile by the zone painted on
+the ground (`zoneLogicZone` in `burnablesettings_default.obj`, Jungle
+against Savannah), the profiles' damage (`fFireDmg`, `fDmgBuffer`: their
+units are unknown), burning objects, the flamethrower's sticky stream.
 
 Each active emitter waits its `SpawnDelay`, then emits for its `EmitDuration`
 (again and again with `EmitLoop`). It gives a burst of `NbInitPart`, then its rate:

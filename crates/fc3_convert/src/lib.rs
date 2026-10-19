@@ -2018,6 +2018,13 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
             }
             Err(e) => job.error(format!("fire settings: {e:#}")),
         }
+        // (And how its burning ground burns.)
+        if job.should_write(fs::FIRE_REGIONS_REL) {
+            match job.vfs.read(fs::FIRE_REGIONS).map_err(anyhow::Error::from).and_then(|lib| fs::parse_regions(&lib)) {
+                Ok(profiles) => write_atomic(job.root(), fs::FIRE_REGIONS_REL, fs::regions_to_text(&profiles).as_bytes(), job.ctx)?,
+                Err(e) => job.error(format!("fire region profiles: {e:#}")),
+            }
+        }
     }
     names.retain(|n| job.should_write(&pe::authored_rel(n)));
     if names.is_empty() {

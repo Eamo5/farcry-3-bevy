@@ -39,6 +39,8 @@ pub struct Personality {
     pub self_defend: bool,
     /// While idle, ignores someone in its smell radius (but not nearer).
     pub ignore_while_idle: bool,
+    /// Not scared off by fire (`bIgnorFearStim`).
+    pub ignore_fear: bool,
     /// Someone this near becomes known to it (aware).
     pub smell: f32,
     pub stealth_smell: f32,
@@ -143,6 +145,7 @@ fn personality(t: &Object) -> Personality {
         defensive: base.is_some_and(|b| flag(b, "bIsDefensive")),
         self_defend: base.is_some_and(|b| flag(b, "bCanSelfDefend")),
         ignore_while_idle: aware.is_some_and(|a| flag(a, "bIgnorePawnsDetectionWhileIdle")),
+        ignore_fear: aware.is_some_and(|a| flag(a, "bIgnorFearStim")),
         smell: f(aware, "fThreatPosSmellDetectionRadius"),
         stealth_smell: f(aware, "fThreatStealthPosSmellDetectionRadius"),
         immediate: f(aware, "fThreatPosImmediateDetectionRadius"),
@@ -251,6 +254,8 @@ pub fn to_text(all: &[Personality]) -> String {
         n.extend([p.attack_delay.0, p.attack_delay.1].map(|v| v.to_string()));
         n.extend([p.attacks_before_pause.0, p.attacks_before_pause.1].map(|v| v.to_string()));
         n.extend([p.attack_reach, p.attack_height, p.walk, p.run, p.sprint].map(|v| v.to_string()));
+        // (Last, so a table cached before it reads as fearful.)
+        n.push(u8::from(p.ignore_fear).to_string());
         s += &format!("{}\t{}\t{}\n", p.name, p.senses.as_deref().unwrap_or("-"), n.join(","));
     }
     s
@@ -302,6 +307,7 @@ pub fn from_text(text: &str) -> Result<Vec<Personality>> {
             walk: v[30],
             run: v[31],
             sprint: v[32],
+            ignore_fear: v.get(33).is_some_and(|x| *x != 0.0),
         });
     }
     Ok(out)
@@ -324,6 +330,7 @@ mod tests {
             attack_delay: (0.9, 1.2),
             attacks_before_pause: (2, 3),
             attack_reach: 2.5,
+            ignore_fear: true,
             ..Default::default()
         };
         let boar = Personality { name: "Boar".into(), temper: 2, defensive: true, stealth_smell: -1.0, smell: 25.0, ..Default::default() };

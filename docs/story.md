@@ -949,8 +949,10 @@ is the story's own:
   its aware-to-active time with them still sensed it acts, and it relaxes
   once nothing has been sensed for its cooldown. Prey move off to the avoid
   distance, or flee to the flee distance when pressed (hurt, too near,
-  gunfire or an explosion); defensive animals charge when pressed and stop
-  after their unprovoked time; predators hunt and strike in bursts of the
+  gunfire or an explosion), and all of them run from a fire within its
+  `Fire_FearStim` radius (see shaders.md); defensive animals charge when
+  pressed and stop after their unprovoked time; predators hunt and strike
+  in bursts of the
   personality's size, each strike its attack clip's length (it stands
   between them) and its delay between strikes, then pause to look.
   Wandering uses the idle chance and radii. `--animal-test herd` puts the

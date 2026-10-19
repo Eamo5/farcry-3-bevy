@@ -2,7 +2,10 @@
 //! alight; fire spreads cell by cell through grass and bushes, faster
 //! downwind, burns them away, scorches the ground and burns anything standing
 //! in it. Rain damps it down. The flames and smoke are the game's fire
-//! manager's own effects (`fire_settings`), where they're cached.
+//! manager's own effects (`fire_settings`), where they're cached, and a
+//! patch burns as long as the fire manager's region profile says (the
+//! savannah's, or a burnable region's own), its smoke lingering as long, and
+//! scares animals off from as far.
 //!
 //! A burnable region (`CBurnableRegion`: a field of crops a mission wants
 //! burnt) catches when fire reaches it and burns across its whole shape;
@@ -27,7 +30,7 @@ impl Plugin for FirePlugin {
             .init_resource::<Fires>()
             .init_resource::<Regions>()
             .init_resource::<FireEffects>()
-            .add_systems(Startup, load_fire_effects)
+            .add_systems(Startup, (load_fire_effects, load_fire_profiles))
             .add_systems(Update, (ignite, spread, burn_regions, burn_effects, burn_damage, fire_lights).chain())
             .add_systems(
                 PreUpdate,
@@ -81,6 +84,8 @@ struct Burning {
     y: f32,
     /// A splash on bare ground, burning out by itself.
     bare: bool,
+    /// Its region profile (an index into [`Fires::profiles`]).
+    profile: Option<usize>,
 }
 
 #[derive(Resource, Default)]
@@ -92,6 +97,10 @@ pub struct Fires {
     next_spread: f32,
     next_damage: f32,
     lights: Vec<Entity>,
+    /// The fire manager's region profiles (as cached), and the one the open
+    /// world's grass burns with.
+    profiles: Vec<fc3_formats::fire_settings::RegionProfile>,
+    grass: Option<usize>,
 }
 
 impl Fires {
@@ -99,11 +108,50 @@ impl Fires {
         self.burning.contains_key(&cell_of(p))
     }
 
-    fn light(&mut self, c: Cell, y: f32, rng: &mut Rng) {
-        if self.burning.len() < MAX_BURNING && self.burnt.len() < MAX_BURNT && !self.burnt.contains(&c) {
-            self.burning.entry(c).or_insert(Burning { age: 0.0, life: rng.range(7.0, 11.0), y, bare: false });
+    fn profile(&self, b: &Burning) -> Option<&fc3_formats::fire_settings::RegionProfile> {
+        b.profile.and_then(|i| self.profiles.get(i))
+    }
+
+    /// When a patch's flames go out: its profile's fire half died down (the
+    /// effect's own flames burn down the rest), else near its end.
+    fn flames_out(&self, b: &Burning) -> f32 {
+        match self.profile(b) {
+            Some(p) => (b.life - p.extinction * 0.5).max(b.life * 0.5),
+            None => b.life * FLAMES_OUT,
         }
     }
+
+    /// The nearest fire near enough to scare off an animal at a point (in
+    /// its profile's `Fire_FearStim` radius).
+    pub fn scaring(&self, p: Vec3) -> Option<Vec3> {
+        self.burning
+            .iter()
+            .filter_map(|(c, b)| {
+                let (at, r) = (cell_centre(*c, b.y), self.profile(b)?.fear);
+                (at.distance_squared(p) < r * r).then_some(at)
+            })
+            .min_by(|a, b| a.distance_squared(p).total_cmp(&b.distance_squared(p)))
+    }
+
+    /// Sets a cell alight, to burn as long as its profile's fire grows,
+    /// burns and dies down (a little more or less), or 7 to 11 s.
+    fn light(&mut self, c: Cell, y: f32, profile: Option<usize>, rng: &mut Rng) {
+        if self.burning.len() < MAX_BURNING && self.burnt.len() < MAX_BURNT && !self.burnt.contains(&c) {
+            let life = match profile.and_then(|i| self.profiles.get(i)) {
+                Some(p) => (p.starting + p.alive + p.extinction) * rng.range(0.85, 1.15),
+                None => rng.range(7.0, 11.0),
+            };
+            self.burning.entry(c).or_insert(Burning { age: 0.0, life, y, bare: false, profile });
+        }
+    }
+}
+
+fn load_fire_profiles(mut fires: ResMut<Fires>) {
+    use fc3_formats::fire_settings as fs;
+    let Ok(text) = std::fs::read_to_string(fc3_formats::cache::default_cache_root().join(fs::FIRE_REGIONS_REL)) else { return };
+    fires.profiles = fs::regions_from_text(&text);
+    fires.grass = fires.profiles.iter().position(|p| p.name == fs::SAVANNAH);
+    info!("fire: {} region profiles, grass burns as {:?}", fires.profiles.len(), fires.grass.map(|i| &fires.profiles[i].name));
 }
 
 /// Plants per fire cell near a point (only what's spawned near the camera).
@@ -147,7 +195,8 @@ fn ignite(
                 }
                 // The splash itself burns briefly even on bare ground.
                 let y = fuel.get(&c).map(|v| v[0].1).unwrap_or(ground);
-                fires.light(c, y, &mut rng);
+                let grass = fires.grass;
+                fires.light(c, y, grass, &mut rng);
                 if !fuel.contains_key(&c) {
                     if let Some(b) = fires.burning.get_mut(&c) {
                         b.life = b.life.min(rng.range(3.0, 5.0));
@@ -213,7 +262,8 @@ fn spread(
         }
     }
     for (c, y) in new {
-        fires.light(c, y, &mut rng);
+        let grass = fires.grass;
+        fires.light(c, y, grass, &mut rng);
     }
     for c in done {
         let Some(b) = fires.burning.remove(&c) else { continue };
@@ -250,6 +300,8 @@ struct Region {
     state: RegionState,
     /// Its centre (Bevy space, at its own height).
     centre: Vec3,
+    /// Its region profile (its ignitor's), if cached.
+    profile: Option<usize>,
 }
 
 /// The story's burnable regions, read once its data is in.
@@ -268,7 +320,7 @@ impl Regions {
     }
 }
 
-fn read_regions(data: &fc3_story::data::StoryData) -> Vec<Region> {
+fn read_regions(data: &fc3_story::data::StoryData, profiles: &[fc3_formats::fire_settings::RegionProfile]) -> Vec<Region> {
     use fc3_story::triggers::{shape_of, Shape};
     let mut out = Vec::new();
     for e in data.entities.values().filter(|e| e.class == "CBurnableRegion" || e.has("CIgnitorComponent")) {
@@ -294,7 +346,9 @@ fn read_regions(data: &fc3_story::data::StoryData) -> Vec<Region> {
             continue;
         }
         let centre = crate::data::to_bevy([(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, e.pos[2]]);
-        out.push(Region { id: e.id, cells, burnt: HashSet::new(), state: RegionState::Unlit, centre });
+        let key = e.component("CIgnitorComponent").and_then(|c| c.u64("fireregRegionProfile_SP"));
+        let profile = key.and_then(|k| profiles.iter().position(|p| p.key == k));
+        out.push(Region { id: e.id, cells, burnt: HashSet::new(), state: RegionState::Unlit, centre, profile });
     }
     out
 }
@@ -312,7 +366,7 @@ fn burn_regions(
 ) {
     let Some(host) = host.as_mut() else { return };
     if regions.list.is_none() {
-        let list = read_regions(&host.story.data());
+        let list = read_regions(&host.story.data(), &fires.profiles);
         debug!("fire: {} burnable regions", list.len());
         regions.list = Some(list);
     }
@@ -345,7 +399,8 @@ fn burn_regions(
                 let n = (c.0 + dx, c.1 + dz);
                 if !r.burnt.contains(&n) && !fires.burning.contains_key(&n) && r.cells.contains(&n) && rng.f32() < REGION_SPREAD {
                     let y = heights.height_at(cell_centre(n, 0.0)).unwrap_or(r.centre.y);
-                    fires.light(n, y, &mut rng);
+                    let profile = r.profile.or(fires.grass);
+                    fires.light(n, y, profile, &mut rng);
                 }
             }
         }
@@ -451,9 +506,9 @@ struct FireEffects {
     /// The bushes burning now, and their flames.
     bushes: HashMap<Entity, (Entity, &'static str)>,
     /// What plays now: each cell's fire, and the smoke over some (with when
-    /// it clears, once the cell has burnt out).
+    /// it clears, once the cell has burnt out, and how long it may linger).
     playing: HashMap<Cell, (Entity, &'static str)>,
-    smoking: HashMap<Cell, (Entity, &'static str, Option<f32>)>,
+    smoking: HashMap<Cell, (Entity, &'static str, Option<f32>, (f32, f32))>,
 }
 
 impl FireEffects {
@@ -497,16 +552,17 @@ const FIRE_RANGE: f32 = 150.0;
 /// A bush this tall (m) or more burns with the bigger plant fire.
 const BIG_BUSH: f32 = 1.6;
 const SMOKE_RANGE: f32 = 250.0;
-/// The share of its life a patch's flames go out at (the last of them
-/// burning down as it ends), and how long (s) its smoke hangs on after.
+/// Without a region profile, the share of its life a patch's flames go out
+/// at (the last of them burning down as it ends), and how long (s) its smoke
+/// hangs on after.
 const FLAMES_OUT: f32 = 0.88;
 const SMOKE_LINGER: (f32, f32) = (12.0, 20.0);
 
 /// The fire manager's effects over the burning cells: the nearest first,
 /// as many as the pools allow. A patch burns with one of the lasting fires
 /// (one cell in four: each is a few metres across, bigger than our cells),
-/// a splash on bare ground with the flare; one cell in nine smokes, on a
-/// while after it's out.
+/// a splash on bare ground with the flare; one cell in nine smokes, on as
+/// long as its profile's smoke lasts after it's out.
 fn authored_fire(
     effects: &mut FireEffects,
     fires: &Fires,
@@ -520,7 +576,7 @@ fn authored_fire(
     let mut want: Vec<(f32, Cell, bool)> = fires
         .burning
         .iter()
-        .filter(|(c, b)| (b.bare || (c.0.rem_euclid(2) == 0 && c.1.rem_euclid(2) == 0)) && b.age < b.life * FLAMES_OUT)
+        .filter(|(c, b)| (b.bare || (c.0.rem_euclid(2) == 0 && c.1.rem_euclid(2) == 0)) && b.age < fires.flames_out(b))
         .map(|(c, b)| (cell_centre(*c, b.y).distance(cam), *c, b.bare))
         .filter(|(d, ..)| *d < FIRE_RANGE)
         .collect();
@@ -550,7 +606,7 @@ fn authored_fire(
     }
     // Smoke over the patches burning (and a while after).
     let mut using: HashMap<&'static str, usize> = HashMap::new();
-    for (_, n, _) in effects.smoking.values() {
+    for (_, n, ..) in effects.smoking.values() {
         *using.entry(n).or_default() += 1;
     }
     for (c, b) in &fires.burning {
@@ -560,7 +616,8 @@ fn authored_fire(
         let Some(name) = FireEffects::pick(&effects.smoke, &using, lot(*c)) else { break };
         let e = commands.spawn((Transform::from_translation(cell_centre(*c, b.y)), crate::authored_fx::AuthoredFx(name))).id();
         *using.entry(name).or_default() += 1;
-        effects.smoking.insert(*c, (e, name, None));
+        let linger = fires.profile(b).map(|p| p.smoke).filter(|s| s.1 > 0.0).unwrap_or(SMOKE_LINGER);
+        effects.smoking.insert(*c, (e, name, None, linger));
     }
     // The bushes in burning patches, alight with the plants' fires (the
     // nearest first, as many as their pools allow) until burnt away.
@@ -568,7 +625,7 @@ fn authored_fire(
         let mut alight: Vec<(f32, Entity, Vec3, f32)> = bushes
             .iter()
             .map(|(e, t, b)| (t.translation().distance(cam), e, t.translation(), b.height))
-            .filter(|(d, _, p, _)| *d < FIRE_RANGE && fires.burning.get(&cell_of(*p)).is_some_and(|b| b.age < b.life * FLAMES_OUT))
+            .filter(|(d, _, p, _)| *d < FIRE_RANGE && fires.burning.get(&cell_of(*p)).is_some_and(|b| b.age < fires.flames_out(b)))
             .collect();
         alight.sort_by(|a, b| a.0.total_cmp(&b.0));
         let keep: HashSet<Entity> = alight.iter().map(|a| a.1).collect();
@@ -594,9 +651,9 @@ fn authored_fire(
             effects.bushes.insert(bush, (e, name));
         }
     }
-    effects.smoking.retain(|c, (e, _, until)| {
+    effects.smoking.retain(|c, (e, _, until, linger)| {
         if !fires.burning.contains_key(c) && until.is_none() {
-            *until = Some(now + rng.range(SMOKE_LINGER.0, SMOKE_LINGER.1));
+            *until = Some(now + rng.range(linger.0, linger.1));
         }
         let keep = until.is_none_or(|t| now < t);
         if !keep {
@@ -742,7 +799,8 @@ mod tests {
     use std::sync::Arc;
 
     /// A burnable region's fire cells are the cells whose centres fall in
-    /// its shape (Dunia's x and y onto Bevy's x and -z).
+    /// its shape (Dunia's x and y onto Bevy's x and -z), and it burns with
+    /// the profile its ignitor names.
     #[test]
     fn a_burnable_region_covers_the_cells_in_its_shape() {
         let object = |name: &str, fields: Vec<(&str, Vec<u8>)>| {
@@ -764,12 +822,18 @@ mod tests {
                 angles: [0.0; 3],
                 layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
                 origin: fc3_story::data::Origin::Global,
-                components: Arc::new(Object { name_hash: name_hash("Components"), fields: vec![], children: vec![object("CIgnitorComponent", vec![])] }),
+                components: Arc::new(Object {
+                    name_hash: name_hash("Components"),
+                    fields: vec![],
+                    children: vec![object("CIgnitorComponent", vec![("fireregRegionProfile_SP", 0x4556_7cc9u64.to_le_bytes().to_vec())])],
+                }),
                 fields: object("Entity", vec![("hidShapePoints", shape)]),
             },
         );
-        let regions = read_regions(&data);
+        let profile = |key: u64| fc3_formats::fire_settings::RegionProfile { key, ..Default::default() };
+        let regions = read_regions(&data, &[profile(0x47fd_f013), profile(0x4556_7cc9)]);
         assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].profile, Some(1));
         let r = &regions[0];
         assert_eq!(r.id, 7);
         // 10 m across is five 2 m cells each way.
@@ -777,5 +841,24 @@ mod tests {
         assert!(r.cells.contains(&cell_of(crate::data::to_bevy([101.0, 201.0, 0.0]))));
         assert!(!r.cells.contains(&cell_of(crate::data::to_bevy([99.0, 201.0, 0.0]))));
         assert_eq!(r.state, RegionState::Unlit);
+    }
+
+    /// A patch burns as long as its profile's fire grows, burns and dies
+    /// down, and scares animals off within its fear radius.
+    #[test]
+    fn a_patch_burns_and_scares_as_its_profile_says() {
+        let savannah = fc3_formats::fire_settings::RegionProfile { starting: 5.0, alive: 5.0, extinction: 5.0, fear: 20.0, ..Default::default() };
+        let mut fires = Fires { profiles: vec![savannah], grass: Some(0), ..Default::default() };
+        let mut rng = Rng::seeded(7);
+        fires.light((0, 0), 0.0, Some(0), &mut rng);
+        let b = &fires.burning[&(0, 0)];
+        assert!((12.75..=17.25).contains(&b.life), "{}", b.life);
+        assert!((fires.flames_out(b) - (b.life - 2.5)).abs() < 1e-4);
+        assert_eq!(fires.scaring(Vec3::new(1.0, 0.0, 15.0)), Some(cell_centre((0, 0), 0.0)));
+        assert_eq!(fires.scaring(Vec3::new(1.0, 0.0, 25.0)), None);
+        // Without a profile: 7 to 11 s, and it scares nothing.
+        fires.light((5, 5), 0.0, None, &mut rng);
+        assert!((7.0..=11.0).contains(&fires.burning[&(5, 5)].life));
+        assert_eq!(fires.scaring(cell_centre((5, 5), 0.0) + Vec3::X * 10.0), None);
     }
 }

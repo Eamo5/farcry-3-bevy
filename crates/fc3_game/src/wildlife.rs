@@ -1828,6 +1828,7 @@ fn animal_ai(
         Option<Res<AnimalAssets>>,
         Res<Assets<crate::cache_assets::Fc3Clip>>,
     ),
+    (fires, aflame): (Option<Res<crate::fire::Fires>>, Query<(), With<crate::burning::Aflame>>),
 ) {
     let dt = time.delta_secs();
     let Ok((pe, pt, player, ph, inventory)) = players.single() else { return };
@@ -2110,6 +2111,19 @@ fn animal_ai(
                         a.mood = Mood::Hunt;
                     }
                 }
+            }
+        }
+        // Fire scares it off: one alight bolts this way and that until it's
+        // out (or dead), and one near a fire (within its profile's fear
+        // radius) runs from it, unless fire doesn't scare it.
+        if aflame.contains(e) {
+            if a.mood != Mood::Flee {
+                let from = pos + Vec3::new(rng.range(-1.0, 1.0), 0.0, rng.range(-1.0, 1.0));
+                move_off(&mut a, &mut rng, pos, from, p.flee, Mood::Flee);
+            }
+        } else if let Some(at) = fires.as_ref().and_then(|f| f.scaring(pos)).filter(|_| !p.ignore_fear) {
+            if a.mood != Mood::Flee {
+                move_off(&mut a, &mut rng, pos, at, p.flee, Mood::Flee);
             }
         }
         // Bolting, or going for someone: the alarm call.
