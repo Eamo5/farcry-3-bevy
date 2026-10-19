@@ -506,6 +506,9 @@ pub struct PostView {
     distort: [Vec4; 2],
     /// One over the screen size, seconds.
     screen: Vec4,
+    /// The calibration (`Settings::color_adjustment`): offset, scale,
+    /// exponent, on.
+    adjust: Vec4,
 }
 
 impl PostView {
@@ -519,6 +522,7 @@ impl PostView {
             || self.hue.z > 0.0
             || self.noise.x > 0.0
             || self.distort[1].w > 0.0
+            || self.adjust.w > 0.0
     }
 }
 
@@ -715,6 +719,7 @@ fn play(
     mut shake: ResMut<PostShake>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     cameras: Query<Entity, With<PlayerCamera>>,
+    settings: Res<crate::settings::Settings>,
     mut commands: Commands,
 ) {
     let fixed = std::env::var("FC3_POSTFX_TEST_TIME").ok().and_then(|s| s.parse::<f32>().ok());
@@ -796,6 +801,9 @@ fn play(
     }
     let size = windows.single().map_or(Vec2::new(1920.0, 1080.0), |w| Vec2::new(w.width().max(1.0), w.height().max(1.0)));
     view.screen = Vec4::new(1.0 / size.x, 1.0 / size.y, seconds, 0.0);
+    let [offset, scale, exponent] = settings.color_adjustment();
+    let neutral = offset.abs() < 1e-4 && (scale - 1.0).abs() < 1e-4 && (exponent - 1.0).abs() < 1e-4;
+    view.adjust = Vec4::new(offset, scale, exponent, if neutral { 0.0 } else { 1.0 });
     let on = view.active();
     for camera in &cameras {
         if on {

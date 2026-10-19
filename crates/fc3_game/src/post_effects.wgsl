@@ -15,6 +15,7 @@ struct PostView {
     noise: vec4<f32>,
     distort: array<vec4<f32>, 2>,
     screen: vec4<f32>,
+    adjust: vec4<f32>,
 }
 
 @group(0) @binding(0) var screen: texture_2d<f32>;
@@ -206,5 +207,12 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     }
 
     c = colour_mask(c, 1u, in.uv);
+
+    // The calibration as the game's final passes apply it (its
+    // `ColorAdjustment`, on the squared colour): one over gamma as the
+    // exponent, brightness as an offset, contrast as a scale.
+    if fx.adjust.w > 0.0 {
+        c = saturate(pow(max(c, vec3<f32>(0.0)), vec3<f32>(fx.adjust.z)) + fx.adjust.x) * fx.adjust.y;
+    }
     return vec4<f32>(c, original.a);
 }

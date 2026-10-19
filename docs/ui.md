@@ -772,24 +772,27 @@ oasis find <text>` finds a string's id), `iWidgetType` (0 a choice, 1 a
 slider 0-100, 7 a row the page opens itself), `sLocCurrentValues` (a list
 of `sLocCurrentValue` labels: ON/OFF, LOW..ULTRA, the difficulties...; the
 row's binder wraps it in a list of its own), `iNbValues`,
-`iCurrentValue`, `bEnable`. Some places are the page's: brightness first
-in calibration (its own popup; we have no brightness), the control type
-third and customizing the controls fourth among controls. `SetOptions
+`iCurrentValue`, `bEnable`. Some places are the page's: the control type
+third and customizing the controls fourth among controls. Calibration is
+the page's own popup of three sliders (brightness, contrast, gamma, in that
+order). They send `SetBrightness`, `SetContrast` and `SetGamma <0-100>` as
+they move, and its reset sends 50 to each. The game keeps them in
+`settings::Settings`, and the post-effects pass applies them (see
+`shaders.md`, Calibration). `SetOptions
 <values> <section>` brings the section's values back, comma-separated in
 row order, into `settings::Settings` (sliders over the native menu's
 ranges: sensitivity 0.1-5, field of view 55-110, volumes 0-1), which saves
-as it changes. Display resolution, the calibration popup's gamma and
-contrast and the vegetation, terrain and water qualities aren't ours to set
-yet.
+as it changes. Display resolution and the vegetation, terrain and water
+qualities aren't ours to set yet.
 
 **Key bindings** (`M_KeyBinding.feu`): the options page loads it into
 itself (a `MovieClipLoader`) for customizing the controls. It asks
 `OnKeyBindingsRequest`, and the game gives it `KeyBindings`, a row per
-rebindable action: `sKey` the action's name (the game's own where it has
-one: "Move Forward" 172370 to "Next Weapon" 172381, "Shoot" 156374, "Throw
-Rock" 156377, "Crafted Item 1" and "2" 156358 and 156378 for the syringe
-slots) and `sValue` its key. Activating a row sends
-`OnKeyBindingChangeRequest <row>`. The game shows its "Press any key" with
+rebindable action: `sKey` the action's name (the game's own string where it
+has one: 172370-172381 for movement through the next weapon, 156374 for
+firing, 156377 for throwing a rock, 156358 and 156378 for the two syringe
+slots; `original_ui::action_text`) and `sValue` its key. Activating a row
+sends `OnKeyBindingChangeRequest <row>`. The game shows its key prompt with
 `ShowPressKeyPrompt true`, and the next key or mouse button pressed (not
 passed to the movie; Escape leaves the row) rebinds it, swapping with the
 action that had it. The rows come again, and `ShowPressKeyPrompt false`

@@ -922,3 +922,24 @@ those stay plain.
 
 `FC3_POSTFX_TEST=<effect or sequence>` plays one held on, and
 `FC3_POSTFX_TEST_TIME=<s>` holds it at a time (job tmp `postfx_run.ps1`).
+
+### Calibration
+
+The options' calibration sliders (0-100) become the engine's brightness
+`clamp(0.9 + v * 0.002, 0.9, 1.1)`, contrast `v * 0.02` and gamma ramp
+`clamp(0.8 + v * 0.004, 0.8, 1.2)`. These are the `SetBrightness`,
+`SetContrast` and `SetGamma` handlers in `FC3.dll`; a render setting holds
+them at `+0x12C`, `+0x130` and `+0x134`. Each frame the renderer packs them
+into `ColorAdjustment`:
+
+* `x`: (brightness - 1) / 6, clamped from -1 to 1 first;
+* `y`: 1 + (contrast - 1) / 2, likewise;
+* `z`: 1 / gamma, with gamma clamped from 0.5 to 5;
+* `w`: 0.
+
+About 250 final pixel shaders apply it to the squared colour. The UI's
+shaders apply it too. The colour is raised to the power `z`, `x` is added,
+the result saturated and multiplied by `y`, and the square root is written.
+At 50 each slider leaves the picture as it is. Here the post-effects pass
+does the same on its linear colour (`Settings::color_adjustment`), as the
+last step. It runs only when a slider is off 50. The UI isn't adjusted.

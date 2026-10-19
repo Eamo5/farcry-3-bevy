@@ -569,6 +569,17 @@ fn drive_pause(
                     host.event("ShowPressKeyPrompt", &["true"]);
                 }
             }
+            // The calibration popup's sliders, as they move.
+            "SetBrightness" | "SetContrast" | "SetGamma" => {
+                if let Ok(v) = arg(1).parse::<f32>() {
+                    let v = v.clamp(0.0, 100.0);
+                    match arg(0) {
+                        "SetBrightness" => settings.brightness = v,
+                        "SetContrast" => settings.contrast = v,
+                        _ => settings.gamma = v,
+                    }
+                }
+            }
             "onApplyChange" => {
                 if let Some(d) = key_edit.draft.take() {
                     settings.bindings = d.bindings;
@@ -1696,9 +1707,8 @@ struct OptionRow {
     current: i32,
 }
 
-/// A section's rows from the settings. Some places are the page's own:
-/// brightness first in calibration (its own popup), the control type third
-/// and customizing the controls fourth among controls.
+/// A section's rows from the settings. Some places are the page's own: the
+/// control type third and customizing the controls fourth among controls.
 fn option_rows(section: u32, s: &crate::settings::Settings) -> Vec<OptionRow> {
     use crate::settings::{Difficulty, Quality};
     let choice = |name, desc, labels: &[u32], current: usize| OptionRow { name, desc, widget: 0, labels: labels.to_vec(), current: current as i32 };
@@ -1718,8 +1728,9 @@ fn option_rows(section: u32, s: &crate::settings::Settings) -> Vec<OptionRow> {
             on_off(150291, 150292, s.vsync),
             bar(172598, 150270, s.fov, 55.0, 110.0),
         ],
-        // (Brightness: the page's own popup; not one of ours.)
-        OPTIONS_CALIBRATION => vec![OptionRow { name: 91542, desc: 0, widget: 1, labels: Vec::new(), current: 50 }],
+        // (The page's popup: its sliders send SetBrightness, SetContrast and
+        // SetGamma as they move.)
+        OPTIONS_CALIBRATION => vec![bar(91542, 0, s.brightness, 0.0, 100.0), bar(150346, 0, s.contrast, 0.0, 100.0), bar(150353, 0, s.gamma, 0.0, 100.0)],
         OPTIONS_QUALITY => vec![quality(150397, 150398, s.shadows), quality(150393, 150394, s.effects), quality(150391, 150392, s.view_distance)],
         OPTIONS_CONTROLS => vec![
             on_off(91540, 0, s.invert_y),
@@ -1795,6 +1806,11 @@ fn set_options(s: &mut crate::settings::Settings, section: u32, values: &[i32]) 
             s.fullscreen = on(0, s.fullscreen);
             s.vsync = on(1, s.vsync);
             s.fov = bar(2, s.fov, 55.0, 110.0);
+        }
+        OPTIONS_CALIBRATION => {
+            s.brightness = bar(0, s.brightness, 0.0, 100.0);
+            s.contrast = bar(1, s.contrast, 0.0, 100.0);
+            s.gamma = bar(2, s.gamma, 0.0, 100.0);
         }
         OPTIONS_QUALITY => {
             s.shadows = quality(0, s.shadows);

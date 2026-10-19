@@ -136,6 +136,11 @@ pub struct Settings {
     /// A new game plays the story (else the island is free to roam).
     pub story: bool,
     pub difficulty: Difficulty,
+    /// The calibration popup's brightness, contrast and gamma (its sliders,
+    /// 0-100, 50 neutral).
+    pub brightness: f32,
+    pub contrast: f32,
+    pub gamma: f32,
     pub bindings: HashMap<Action, Binding>,
 }
 
@@ -160,6 +165,9 @@ impl Default for Settings {
             subtitles: true,
             story: true,
             difficulty: Difficulty::Adventurer,
+            brightness: 50.0,
+            contrast: 50.0,
+            gamma: 50.0,
             bindings: default_bindings(),
         }
     }
@@ -182,6 +190,18 @@ impl Settings {
         self.bindings.insert(a, b);
     }
 
+    /// The calibration as the game's final passes take it
+    /// (`ColorAdjustment`): an offset (brightness), a scale (contrast) and an
+    /// exponent (one over gamma). The engine maps the sliders to brightness
+    /// 0.9-1.1, contrast 0-2 and gamma 0.8-1.2, then the offset is a sixth
+    /// of brightness - 1 and the scale 1 + (contrast - 1) / 2.
+    pub fn color_adjustment(&self) -> [f32; 3] {
+        let brightness = (0.9 + self.brightness * 0.002).clamp(0.9, 1.1);
+        let contrast = self.contrast * 0.02;
+        let gamma = (0.8 + self.gamma * 0.004).clamp(0.8, 1.2);
+        [(brightness - 1.0) / 6.0, 1.0 + 0.5 * (contrast - 1.0).clamp(-1.0, 1.0), 1.0 / gamma]
+    }
+
     /// Streaming radii scale for the view distance setting.
     pub fn distance_scale(&self) -> f32 {
         [0.65, 0.85, 1.0, 1.35][self.view_distance.index()]
@@ -200,6 +220,7 @@ impl Settings {
         out += &format!("vsync {}\nfullscreen {}\noriginal_shaders {}\nshow_fps {}\n", self.vsync, self.fullscreen, self.original_shaders, self.show_fps);
         out += &format!("subtitles {}\nstory {}\ndifficulty {}\nmusic_volume {}\n", self.subtitles, self.story, self.difficulty.name(), self.music_volume);
         out += &format!("vibration {}\naim_assist {}\n", self.vibration, self.aim_assist);
+        out += &format!("brightness {}\ncontrast {}\ngamma {}\n", self.brightness, self.contrast, self.gamma);
         for a in Action::ALL {
             if let Some(b) = self.binding(a) {
                 out += &format!("bind {} {}\n", a.id(), b.id());
@@ -234,6 +255,9 @@ impl Settings {
                 "subtitles" => s.subtitles = b(value, true),
                 "story" => s.story = b(value, true),
                 "difficulty" => s.difficulty = Difficulty::from_name(value).unwrap_or(Difficulty::Adventurer),
+                "brightness" => s.brightness = f(value, 50.0).clamp(0.0, 100.0),
+                "contrast" => s.contrast = f(value, 50.0).clamp(0.0, 100.0),
+                "gamma" => s.gamma = f(value, 50.0).clamp(0.0, 100.0),
                 "bind" => {
                     if let (Some(a), Some(binding)) = (Action::from_id(value), it.next().and_then(Binding::from_id)) {
                         s.rebind(a, binding);
@@ -368,12 +392,33 @@ mod tests {
 
     #[test]
     fn settings_roundtrip() {
-        let mut s =
-            Settings { sensitivity: 1.7, fov: 90.0, invert_y: true, view_distance: Quality::Ultra, difficulty: Difficulty::Warrior, ..Default::default() };
+        let mut s = Settings {
+            sensitivity: 1.7,
+            fov: 90.0,
+            invert_y: true,
+            view_distance: Quality::Ultra,
+            difficulty: Difficulty::Warrior,
+            brightness: 70.0,
+            gamma: 20.0,
+            ..Default::default()
+        };
         s.rebind(Action::Jump, Binding::Key(KeyCode::KeyV));
         s.rebind(Action::Fire, Binding::Key(KeyCode::KeyW));
         // Taking W from "forward" hands it fire's old binding.
         assert_eq!(s.binding(Action::Forward), Some(Binding::Mouse(MouseButton::Left)));
         assert_eq!(Settings::from_text(&s.to_text()), s);
+    }
+
+    #[test]
+    fn calibration_maps_the_sliders_as_the_engine_does() {
+        let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4);
+        // 50 everywhere leaves the picture.
+        assert!(near(Settings::default().color_adjustment(), [0.0, 1.0, 1.0]));
+        // The far ends: brightness 1.1 (an offset of 0.1 / 6), contrast 2
+        // (a scale of 1.5), gamma 1.2 (an exponent of 1 / 1.2).
+        let top = Settings { brightness: 100.0, contrast: 100.0, gamma: 100.0, ..Default::default() };
+        assert!(near(top.color_adjustment(), [0.1 / 6.0, 1.5, 1.0 / 1.2]));
+        let bottom = Settings { brightness: 0.0, contrast: 0.0, gamma: 0.0, ..Default::default() };
+        assert!(near(bottom.color_adjustment(), [-0.1 / 6.0, 0.5, 1.0 / 0.8]));
     }
 }
