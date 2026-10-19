@@ -313,6 +313,14 @@ pub enum Classified {
     Explosive,
 }
 
+/// A weapon pickup's weapon, by its name in the game's table: the name
+/// without its variant or its number (`m93.m93_sniperchallenge_0` is
+/// `m93`, `kw1911_11` is `kw1911`).
+fn game_weapon(pickup: &str) -> &str {
+    let name = pickup.split('.').next().unwrap_or(pickup);
+    name.rsplit_once('_').filter(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).map_or(name, |(base, _)| base)
+}
+
 /// Classifies a world entity by name (pickup categories and explosive props).
 pub fn classify(name: &str) -> Option<Classified> {
     let n = name.to_ascii_lowercase();
@@ -337,10 +345,16 @@ pub fn classify(name: &str) -> Option<Classified> {
             PickupKind::Grenade
         } else if w.starts_with("proximity") || w.starts_with("ied") {
             PickupKind::Explosives
+        } else if let Some(def) = crate::weapons::def_of_game_weapon(game_weapon(w)) {
+            // The game's weapon by its name (`KW1911_3`, `M93.M93_SniperChallenge_0`):
+            // ours drawn with its model.
+            PickupKind::Weapon(def)
         } else if w.starts_with("ak") {
             PickupKind::Weapon("AK-74M Rifle")
-        } else if w.starts_with("6p") || w.starts_with("p_") || w.starts_with("p.") {
-            PickupKind::Weapon("MK23 Pistol")
+        } else if w.starts_with("6p") {
+            PickupKind::Weapon("6P9")
+        } else if w.starts_with("p_") || w.starts_with("p.") {
+            PickupKind::Weapon("1911")
         } else if w.starts_with("vz") {
             PickupKind::Weapon("MP5 SMG")
         } else if w.starts_with("rpg") {
@@ -753,6 +767,15 @@ mod tests {
     use crate::controls::{Action, ActionState};
     use crate::progression::{ItemLooted, LootKind, Progress};
     use crate::syringes::Plant;
+
+    #[test]
+    fn weapon_pickups_name_the_games_weapons() {
+        assert_eq!(game_weapon("kw1911_11"), "kw1911");
+        assert_eq!(game_weapon("m93.m93_sniperchallenge_0"), "m93");
+        assert_eq!(game_weapon("lpo-50_0"), "lpo-50");
+        assert_eq!(game_weapon("frag_grenade"), "frag_grenade");
+        assert_eq!(game_weapon("frag_grenade_3"), "frag_grenade");
+    }
 
     #[test]
     fn plant_interaction_respects_the_mission_lock_and_updates_inventory_and_loot_once() {

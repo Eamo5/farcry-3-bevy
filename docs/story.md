@@ -3939,7 +3939,11 @@ plays the player, and only goes for a box within `ALARM_REACH` (150 m).
   weapon; mission layers only put collectibles and ammunition in the world,
   so it never appeared and the brief never ended (its scene played on every
   load since). Weapon pickups on mission layers now come into the world too:
-  one we know by name is that weapon, any other the mission's own item
+  one we know by name is that weapon (by the game's name in the weapons'
+  table, `KW1911_3`, the weapon drawn with its model: the world's 1911s,
+  P416s, MS16s, Z93s and the rest give themselves, not ammunition, and the
+  6P9 and VZ61 their own; the starting pistol is the 1911, the MK23 being
+  none of the game's), any other the mission's own item
   (`PickupKind::Mission`), taken for the scripts (`PickupPicked`) with
   nothing kept.
 * **A pickup across the island.** The autopilot only picked up what was in

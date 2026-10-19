@@ -243,6 +243,14 @@ pub fn flash_3p_into(commands: &mut Commands, particles: &mut crate::particles::
     }
 }
 
+/// Ours of one of the game's weapons, by its name in the game's table
+/// (`KW1911`, `VZ61`): the one drawn with its model.
+pub fn def_of_game_weapon(name: &str) -> Option<&'static str> {
+    let s = WEAPON_STATS.get()?.iter().find(|s| s.name.eq_ignore_ascii_case(name))?;
+    let key = fc3_formats::weapons::model_key(&s.model);
+    base_weapon_defs().into_iter().find(|d| !d.model.is_empty() && fc3_formats::weapons::model_key(&d.model_path()) == key).map(|d| d.name)
+}
+
 /// A flamethrower's own flame, by its name in the game's table (`LPO-50`):
 /// what the characters' flamers show.
 pub fn flame_of(weapon: &str) -> Option<crate::flamethrower::Flame> {
@@ -1109,7 +1117,9 @@ fn give_player_loadout(
     let attachment_models: Vec<Handle<Fc3Model>> =
         ATTACHMENT_MODELS.iter().chain([&OPTICAL_MODEL, &REFLEX_B_MODEL]).map(|m| model_handle(&server, &format!("{MODEL_ROOT}{m}"))).collect();
     // Start with the machete, pistol and rifle; the rest are found in the world.
-    let starting = ["Machete", "MK23 Pistol", "AK-74M Rifle", "870 Shotgun"];
+    // (The game's 1911 for the pistol: the MK23 isn't among its weapons, nor
+    // on its wheel.)
+    let starting = ["Machete", "1911", "AK-74M Rifle", "870 Shotgun"];
     let wanted = args.start_weapon.as_deref();
     let slots: Vec<WeaponSlot> = defs
         .iter()
@@ -1117,7 +1127,10 @@ fn give_player_loadout(
         .filter(|(_, d)| starting.contains(&d.name) || wanted.is_some_and(|w| d.name.eq_ignore_ascii_case(w)))
         .map(|(i, d)| WeaponSlot { def: i, mag: d.magazine, reserve: d.max_reserve / 2 })
         .collect();
-    let current = wanted.and_then(|w| slots.iter().position(|s| defs[s.def].name.eq_ignore_ascii_case(w))).unwrap_or(2);
+    let current = wanted
+        .and_then(|w| slots.iter().position(|s| defs[s.def].name.eq_ignore_ascii_case(w)))
+        .or_else(|| slots.iter().position(|s| defs[s.def].name == "AK-74M Rifle"))
+        .unwrap_or(0);
     // FC3_ATTACH=all (tests): every weapon starts with everything it takes.
     // (Its first sight fitted; FC3_ATTACH=<name>, e.g. `reflexb`: that one.)
     let mut fitted = vec![0u32; defs.len()];
