@@ -689,7 +689,9 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
     if opts.only_sectors.is_none() && job.should_write(cache::ROOMS_REL) {
-        let text: String = rooms.iter().map(|r| r.to_line() + "\n").collect();
+        // The ambience regions the rooms name, then the rooms.
+        let regions = job.vfs.read(fc3_formats::rooms::REGIONS_PATH).map(|b| fc3_formats::rooms::parse_regions(&b)).unwrap_or_default();
+        let text: String = regions.iter().map(|r| r.to_line() + "\n").chain(rooms.iter().map(|r| r.to_line() + "\n")).collect();
         if let Err(e) = write_atomic(job.root(), cache::ROOMS_REL, text.as_bytes(), job.ctx) {
             job.error(format!("rooms: {e:#}"));
         }

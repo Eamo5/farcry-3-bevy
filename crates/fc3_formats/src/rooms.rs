@@ -176,6 +176,47 @@ impl Room {
     }
 }
 
+/// The ambience sound regions (`soundregions_default.obj`), which rooms
+/// name by index.
+pub const REGIONS_PATH: &str = r"generated\databases\generic\soundregions_default.obj";
+
+/// A sound region: its index (`disUniqueId`), name and looping bed (0:
+/// none).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SoundRegion {
+    pub index: u32,
+    pub name: String,
+    pub bed: u32,
+}
+
+pub fn parse_regions(bytes: &[u8]) -> Vec<SoundRegion> {
+    let Ok(root) = crate::fcb::parse(bytes) else { return Vec::new() };
+    let Some(list) = root.child("SoundRegions") else { return Vec::new() };
+    list.children
+        .iter()
+        .filter_map(|r| {
+            let index = r.field("disUniqueId").and_then(|b| b.first().copied())? as u32;
+            let bed = r.child("Ambiance").map_or(0, |a| event(a, "sndMultitrackSound"));
+            Some(SoundRegion { index, name: r.str("sName").unwrap_or_default(), bed })
+        })
+        .collect()
+}
+
+impl SoundRegion {
+    /// `region <index> <bed> <name>`.
+    pub fn to_line(&self) -> String {
+        format!("region {} {:08x} {}", self.index, self.bed, self.name)
+    }
+
+    pub fn from_line(line: &str) -> Option<SoundRegion> {
+        let mut it = line.splitn(4, ' ');
+        (it.next()? == "region").then_some(())?;
+        let index = it.next()?.parse().ok()?;
+        let bed = u32::from_str_radix(it.next()?, 16).ok()?;
+        Some(SoundRegion { index, bed, name: it.next().unwrap_or_default().to_string() })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +236,7 @@ mod tests {
         assert!(!room.contains([99.0, 13.5, -51.0]));
         assert!(!room.contains([101.5, 11.0, -51.0]));
         assert_eq!(Room::from_line(&room.to_line()), Some(room));
+        let region = SoundRegion { index: 25, name: "MEM_INT_Cave".into(), bed: 0x618A2 };
+        assert_eq!(SoundRegion::from_line(&region.to_line()), Some(region));
     }
 }

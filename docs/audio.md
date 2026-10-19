@@ -413,7 +413,20 @@ the faces' planes, the bounds and the settings to `world/rooms.txt`
 without a conversion). The manifest's `mixing` lines carry each mixing's
 key. The game (`mixer::room_mixings`) finds the smallest room the listener
 is in (by 64 m cell), starts its mixing while inside and plays its sounds
-of going in and out. The rooms' regions and reverbs aren't applied. `FC3_MIXING_TEST=<name>[,<s>]` starts one into
+of going in and out.
+
+A room's region is the index (`disUniqueId`) of one of the 64 regions in
+`soundregions_default.obj`, written ahead of the rooms as `region <index>
+<bed> <name>`. The rooms use these, among others:
+
+* 25, `MEM_INT_Cave`;
+* 50, `MEM_INT_Bunker`;
+* 63, `MEM_INT_Subpen`;
+* 27 and 28, the Shanghai boat and its sunk copy.
+
+Inside such a room the ambience plays that region's bed at full, with no
+calls from outside, in place of the one picked from the ground (see
+Ambience). The rooms' reverbs aren't applied. `FC3_MIXING_TEST=<name>[,<s>]` starts one into
 play, and `RUST_LOG=farcry3::sound=debug` tallies the sounds the mixer
 pauses and lowers.
 

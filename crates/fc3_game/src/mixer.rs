@@ -207,6 +207,17 @@ pub struct Rooms {
     rooms: Vec<fc3_formats::rooms::Room>,
     cells: HashMap<(i32, i32), Vec<usize>>,
     inside: Option<usize>,
+    /// The ambience regions' beds, by index.
+    beds: HashMap<u32, u32>,
+}
+
+impl Rooms {
+    /// The bed of the room the listener is in, where it has a region of its
+    /// own (a cave, a bunker).
+    pub fn bed(&self) -> Option<u32> {
+        let region = self.rooms.get(self.inside?)?.region?;
+        self.beds.get(&region).copied().filter(|b| *b != 0)
+    }
 }
 
 const ROOM_CELL: f32 = 64.0;
@@ -214,6 +225,7 @@ const ROOM_CELL: f32 = 64.0;
 pub fn load_rooms(mut commands: Commands, info: Res<crate::data::CacheInfo>) {
     let text = std::fs::read_to_string(info.root.join(fc3_formats::cache::ROOMS_REL)).unwrap_or_default();
     let rooms: Vec<fc3_formats::rooms::Room> = text.lines().filter_map(fc3_formats::rooms::Room::from_line).collect();
+    let beds = text.lines().filter_map(fc3_formats::rooms::SoundRegion::from_line).map(|r| (r.index, r.bed)).collect();
     let mut cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
     for (i, r) in rooms.iter().enumerate() {
         let cell = |v: f32| (v / ROOM_CELL).floor() as i32;
@@ -224,7 +236,7 @@ pub fn load_rooms(mut commands: Commands, info: Res<crate::data::CacheInfo>) {
         }
     }
     info!("{} rooms", rooms.len());
-    commands.insert_resource(Rooms { rooms, cells, inside: None });
+    commands.insert_resource(Rooms { rooms, cells, inside: None, beds });
 }
 
 /// A room's mixing (`#` and its key), unless it has none.

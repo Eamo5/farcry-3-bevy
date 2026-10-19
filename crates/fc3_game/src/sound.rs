@@ -874,7 +874,7 @@ fn ambience(
     mut sfx: MessageWriter<PlaySfx>,
     (mut next_bird, mut outdoors, mut beds): (Local<f32>, Local<Option<f32>>, Local<Vec<(u32, f32)>>),
     mut rng: ResMut<Rng>,
-    (probe, tod, driving): (crate::surfaces::SurfaceProbe, Res<crate::sky::TimeOfDay>, Res<crate::vehicles::Driving>),
+    (probe, tod, driving, rooms): (crate::surfaces::SurfaceProbe, Res<crate::sky::TimeOfDay>, Res<crate::vehicles::Driving>, Option<Res<crate::mixer::Rooms>>),
 ) {
     if *state.get() == crate::menu::GameState::Paused {
         return;
@@ -893,10 +893,13 @@ fn ambience(
     let out = outdoors.get_or_insert(1.0);
     let target = if roofed { INDOOR_LEVEL } else { 1.0 };
     *out += (target - *out) * (time.delta_secs() * 2.0).min(1.0);
-    let out = *out;
-    // The region's bed, faded in as the last one fades out.
+    // The region's bed, faded in as the last one fades out; inside a room
+    // with a region of its own (a cave, a bunker), its bed, at full and
+    // with no calls from outside.
     let region = Region::at(ground, probe.terrain_layer(p.translation), driving.vehicle.is_some() || p.translation.y < crate::sky::SEA_LEVEL + 3.0);
-    let (bed, day_calls, night_calls) = region.sounds();
+    let room_bed = rooms.as_deref().and_then(|r| r.bed());
+    let (bed, day_calls, night_calls) = room_bed.map_or_else(|| region.sounds(), |b| (b, 0, 0));
+    let out = if room_bed.is_some() { 1.0 } else { *out };
     let dt = time.delta_secs();
     if !beds.iter().any(|b| b.0 == bed) {
         beds.push((bed, 0.0));

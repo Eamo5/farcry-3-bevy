@@ -2018,7 +2018,7 @@ fn main() -> Result<()> {
         "rooms" => {
             // The rooms' sound volumes as the converter writes them: rooms <out.txt>
             let out = args.get(1).context("usage: rooms <out.txt>")?;
-            let mut text = String::new();
+            let mut text: String = vfs.read(fc3_formats::rooms::REGIONS_PATH).map(|b| fc3_formats::rooms::parse_regions(&b)).unwrap_or_default().iter().map(|r| r.to_line() + "\n").collect();
             for (h, name) in &vfs.names {
                 if !name.starts_with("worlds\\fc3_main\\") || !name.contains("worldsectors") || !name.ends_with(".data.fcb") { continue; }
                 let Ok(bytes) = vfs.read_hash(*h) else { continue };
@@ -2033,7 +2033,7 @@ fn main() -> Result<()> {
                 }
             }
             std::fs::write(out, &text)?;
-            println!("{} rooms", text.lines().count());
+            println!("{} rooms", text.lines().filter(|l| l.starts_with("room ")).count());
         }
         "bytes-find" => {
             // Files (by path filter) holding any of the given little-endian u64s (hex): bytes-find <filter> <hex>...
