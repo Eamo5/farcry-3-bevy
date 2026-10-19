@@ -4083,8 +4083,7 @@ the game now plays (`boss_fight`) instead of ending it at once.
   (`m_bossBrokenMaskArchetype`), and the weak spot sits at the mask model's
   middle. Rocks are the archetype's ink ball (`m_rockArchetype`). The
   converter keeps these archetypes with the scripts' (the GSF library's
-  `Library:Path` text fields). Ink smokes off the arms (`smoke_arms`), and
-  each hit on the mask bursts as the explosive arrows do. A scene's clip
+  `Library:Path` text fields). A scene's clip
   made for another skeleton drives the character's own, so B15E's
   finishing blow poses the giant on its skeleton.
 * **The breath** is its weapon's flame (`m_flamethrowerArchetype`,
@@ -4093,8 +4092,15 @@ the game now plays (`boss_fight`) instead of ending it at once.
   breath's aim, and its flame mesh (see shaders.md). Our flame stream stands
   in when the effect isn't cached. `FC3_BOSS_SHOTS` also captures each second
   of a breath.
-* Not yet: the minions' ink look and the fight's other particles (the
-  eyes).
+* **Its effects** are the fight's own (its entry's `m_particle...`,
+  `BossFightSettings::effects`, which the converter caches): the ink smoking
+  off its arms (`BossBody`) and its eyes' glow (`BossEyes`) on its bones
+  while it stands, each rock's ink ball (`BossInkBall`) and its impact
+  (`BossInkBallImpact`, shot down or landed), each hit on the mask
+  (`BossMaskImpact` and `BossMaskImpactExplosion`), a goodie laid
+  (`GoodieCue`), and the minions coming up in their burst (`MinionSpawn`),
+  inked over (`MinionBody`) until they fall (`MinionDeath`). Ours stand in
+  for any not cached.
 
 ## Button prompts (`CGSFInputManager`)
 

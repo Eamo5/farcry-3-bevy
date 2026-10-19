@@ -239,6 +239,12 @@ pub struct BossFightSettings {
     /// The weapon its breath is (`m_flamethrowerArchetype`:
     /// `weapons:FC3/LPO-50.CitraFlamebreath`), whose flame it breathes.
     pub breath_weapon: String,
+    /// Its particle effects by what they're for (named beside the
+    /// `m_particle...` ids, `text_m_particle...`; keyed without the prefix: `BossBody` the ink smoking off its arms, `BossEyes`,
+    /// `MinionBody`, `MinionSpawn`, `MinionDeath`, `BossInkBall` its rocks,
+    /// `BossInkBallImpact`, `BossMaskImpact`, `BossMaskImpactExplosion`,
+    /// `GoodieCue`, `InkStickies`, `Flamebreath`), lower-cased.
+    pub effects: std::collections::BTreeMap<String, String>,
     pub pound_radius: f32,
     pub pound_damage: f32,
     pub minions: f32,
@@ -350,6 +356,25 @@ impl BossFightSettings {
             breath_damage: n("m_firebreathDmg"),
             breath_radius: n("m_firebreathRadius"),
             breath_weapon: text("m_flamethrowerArchetype"),
+            effects: [
+                "InkStickies",
+                "Flamebreath",
+                "BossBody",
+                "MinionBody",
+                "BossEyes",
+                "MinionSpawn",
+                "BossInkBall",
+                "BossInkBallImpact",
+                "BossMaskImpact",
+                "BossMaskImpactExplosion",
+                "MinionDeath",
+                "GoodieCue",
+            ]
+            .into_iter()
+            .map(|n| (n.to_string(), text(&format!("text_m_particle{n}"))))
+            .filter(|(_, e)| e.contains('.'))
+            .map(|(n, e)| (n, e.to_ascii_lowercase()))
+            .collect(),
             pound_radius: n("m_summonPoundRadius"),
             pound_damage: n("m_summonPoundDmg"),
             minions: n("m_summonMinionsCount"),

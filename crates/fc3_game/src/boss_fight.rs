@@ -148,6 +148,9 @@ struct Fight {
     flame_clocks: Vec<f32>,
     /// Seconds it has breathed this time (for `FC3_BOSS_SHOTS`).
     breathed: f32,
+    /// Its effects on its bones (the ink off its arms, its eyes' glow),
+    /// once they're on.
+    dressed: Option<Vec<Entity>>,
     /// The weak spot: a sphere riding on the head, shot at.
     mask: Option<Entity>,
     /// Told the player to shoot the mask.
@@ -334,6 +337,7 @@ fn start_and_end(
             flame,
             flame_clocks: Vec::new(),
             breathed: 0.0,
+            dressed: None,
             mask: None,
             hinted: false,
             rocks_thrown: 0,
@@ -363,6 +367,9 @@ fn start_and_end(
         info!("boss fight {}: over", f.id);
         if let Some(m) = f.mask {
             commands.entity(m).despawn();
+        }
+        for e in f.dressed.into_iter().flatten() {
+            commands.entity(e).try_despawn();
         }
         for r in &rocks {
             commands.entity(r).despawn();
@@ -469,9 +476,17 @@ fn fight(
         let amount = amount * WEAK_SPOT;
         f.hp = (f.hp - amount).max(0.0);
         debug!("boss fight: the mask hit for {amount:.0} ({:.0} left)", f.hp);
-        // (The bow's arrows are explosive: a blast on the mask.)
+        // (The bow's arrows are explosive: a blast on the mask, the fight's
+        // own impact and explosion where they're cached.)
         if let Some(h) = head {
-            crate::particles::fx::explosion(&mut particles, &mut rng, h.transform_point(f.mask_center), ARROW_BLAST);
+            let at = h.transform_point(f.mask_center);
+            let own = [effect(&f.s, "BossMaskImpact"), effect(&f.s, "BossMaskImpactExplosion")];
+            for name in own.into_iter().flatten() {
+                crate::authored_fx::play(&mut commands, name, at);
+            }
+            if own.iter().all(Option::is_none) {
+                crate::particles::fx::explosion(&mut particles, &mut rng, at, ARROW_BLAST);
+            }
         }
         if amount >= f.s.hurt_threshold {
             sound(&mut sfx, &f.s, if amount > f.s.hurt_threshold * 4.0 { "BossGruntPainBig" } else { "BossGruntPainSmall" }, head.map(|h| h.translation()));
@@ -594,6 +609,10 @@ fn fight(
                             Health::new(f.s.rock_health.max(1.0)),
                         ))
                         .id();
+                    // (Its ink ball's own trail.)
+                    if let Some(name) = effect(&f.s, "BossInkBall") {
+                        commands.spawn((Transform::IDENTITY, crate::authored_fx::AuthoredFx(name), ChildOf(rock)));
+                    }
                     // (Its archetype's ink ball; a dark sphere until that is in.)
                     match f.rock_model.as_ref().and_then(|h| models.get(h).map(|m| (h, m))) {
                         Some((handle, model)) => {
@@ -671,9 +690,35 @@ fn fight(
     } else {
         f.breathed = 0.0;
     }
-    // Ink smoking off its arms (`smoke_arms`), while it stands.
+    // Its own effects on its bones: the ink smoking off its arms
+    // (`BossBody`) and its eyes' glow (`BossEyes`), while it stands.
+    if f.dressed.is_none() {
+        let joint = |name: &str| rig.joint(fc3_formats::hash::name_hash(name)).map(|(_, j)| j);
+        let mut on = Vec::new();
+        if let Some(name) = effect(&f.s, "BossBody") {
+            for b in ["LeftForeArm", "RightForeArm", "LeftHand", "RightHand"] {
+                if let Some(j) = joint(b) {
+                    on.push(commands.spawn((Transform::IDENTITY, crate::authored_fx::AuthoredFx(name), ChildOf(j))).id());
+                }
+            }
+        }
+        if let Some(name) = effect(&f.s, "BossEyes") {
+            let eyes: Vec<Entity> = ["LeftEye", "RightEye"].into_iter().filter_map(joint).collect();
+            for j in if eyes.is_empty() { joint("Head").into_iter().collect() } else { eyes } {
+                on.push(commands.spawn((Transform::IDENTITY, crate::authored_fx::AuthoredFx(name), ChildOf(j))).id());
+            }
+        }
+        debug!("boss fight: {} of its own effects on its bones", on.len());
+        f.dressed = Some(on);
+    }
+    if f.act == Act::KnockedOut {
+        for e in f.dressed.iter_mut().flat_map(std::mem::take) {
+            commands.entity(e).try_despawn();
+        }
+    }
+    // (Ours, ink puffs off its arms, when its own isn't cached.)
     f.ink -= dt;
-    if f.ink <= 0.0 && f.act != Act::KnockedOut {
+    if f.ink <= 0.0 && f.act != Act::KnockedOut && effect(&f.s, "BossBody").is_none() {
         f.ink = INK_EVERY;
         for b in ["LeftForeArm", "RightForeArm", "LeftHand", "RightHand"] {
             if let Some(at) = bone(b).map(|j| j.translation()) {
@@ -849,6 +894,7 @@ fn extras(
     models: Res<Assets<crate::cache_assets::Fc3Model>>,
     pickups: Query<(), With<Pickup>>,
     minions: Query<&Health, With<BossMinion>>,
+    mut fallen: Query<(Entity, &Health, &GlobalTransform, &mut InkBody), With<BossMinion>>,
     players: Query<&Transform, With<Player>>,
     heights: Res<crate::terrain::Heightfield>,
     mut spawner: crate::npc::NpcSpawner,
@@ -890,6 +936,9 @@ fn extras(
                 .id();
             f.goodie_spots[i].1 = Some(e);
             debug!("boss fight: {archetype} laid at {at:.1}");
+            if let Some(name) = effect(&f.s, "GoodieCue") {
+                crate::authored_fx::play(&mut commands, name, at);
+            }
             // Drawn as its archetype (a weapon's shows the weapon: `pickups`).
             if !matches!(kind, PickupKind::Weapon(_) | PickupKind::Grenade) {
                 let path = host.as_ref().and_then(|h| h.story.data().archetype_named(&archetype).and_then(crate::story_props::archetype_model));
@@ -920,11 +969,39 @@ fn extras(
         }
         let feet = at.with_y(ground(at));
         if let Some(e) = spawner.spawn_hunting(&mut commands, crate::npc::Faction::Pirate, crate::npc::Role::Charger, feet, pt.translation) {
-            commands.entity(e).insert((BossMinion, Name::new("ink monster's minion")));
+            // (Coming up in its own burst, inked over.)
+            if let Some(name) = effect(&f.s, "MinionSpawn") {
+                crate::authored_fx::play(&mut commands, name, feet);
+            }
+            let ink = effect(&f.s, "MinionBody")
+                .map(|name| commands.spawn((Transform::from_xyz(0.0, 0.9, 0.0), crate::authored_fx::AuthoredFx(name), ChildOf(e))).id());
+            commands.entity(e).insert((BossMinion, InkBody(ink), Name::new("ink monster's minion")));
             debug!("boss fight: a minion comes up at {feet:.1}");
         }
     }
+    // A minion falling: its own death's burst, its ink gone.
+    for (e, health, at, mut ink) in &mut fallen {
+        if health.dead {
+            if let Some(fx) = ink.0.take() {
+                commands.entity(fx).try_despawn();
+                if let Some(name) = effect(&f.s, "MinionDeath") {
+                    crate::authored_fx::play(&mut commands, name, at.translation());
+                }
+            }
+            commands.entity(e).remove::<InkBody>();
+        }
+    }
 }
+
+/// One of the fight's own effects (`BossFightSettings::effects`), if it's
+/// cached.
+fn effect(s: &fc3_formats::gsf::BossFightSettings, what: &str) -> Option<&'static str> {
+    s.effects.get(what).map(|n| crate::authored_fx::intern(n)).filter(|n| crate::authored_fx::available(n))
+}
+
+/// A minion's ink (`MinionBody`), gone as it dies.
+#[derive(Component)]
+struct InkBody(Option<Entity>);
 
 /// Seconds between minions coming up.
 const MINION_EVERY: f32 = 0.6;
@@ -958,9 +1035,15 @@ fn rocks(
     let Ok((pe, pt)) = players.single() else { return };
     for (e, mut rock, mut t, health) in &mut rocks {
         rock.age += dt;
+        let own_impact = fight.active.as_ref().and_then(|f| effect(&f.s, "BossInkBallImpact"));
         if health.dead || health.current < health.max {
             // Shot down.
-            crate::particles::fx::explosion(&mut particles, &mut rng, t.translation, ROCK_SIZE);
+            match own_impact {
+                Some(name) => {
+                    crate::authored_fx::play(&mut commands, name, t.translation);
+                }
+                None => crate::particles::fx::explosion(&mut particles, &mut rng, t.translation, ROCK_SIZE),
+            }
             commands.entity(e).despawn();
             continue;
         }
@@ -977,7 +1060,12 @@ fn rocks(
             if at.distance(pt.translation) < rock.radius {
                 harm(&mut damage, pe, rock.damage, DamageKind::Explosion, Some(at));
             }
-            crate::particles::fx::explosion(&mut particles, &mut rng, at, rock.radius);
+            match own_impact {
+                Some(name) => {
+                    crate::authored_fx::play(&mut commands, name, at);
+                }
+                None => crate::particles::fx::explosion(&mut particles, &mut rng, at, rock.radius),
+            }
             if let Some(s) = fight.active.as_ref().map(|f| &f.s) {
                 sound(&mut sfx, s, "RockImpact", Some(at));
             }
