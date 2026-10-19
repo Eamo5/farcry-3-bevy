@@ -27,7 +27,7 @@ impl Plugin for FacesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Voices>()
             .add_systems(OnExit(crate::menu::GameState::Loading), load_faces)
-            .add_systems(Update, (start_voices, attach_kit_faces))
+            .add_systems(Update, (start_voices, attach_kit_faces, mouth_where_said))
             .add_systems(PostUpdate, pose_faces.after(crate::characters::animate_characters).before(TransformSystems::Propagate));
     }
 }
@@ -172,6 +172,33 @@ fn attach_kit_faces(
             // (No face: don't look again.)
             None => commands.entity(e).remove::<crate::characters::KitId>(),
         };
+    }
+}
+
+/// A spoken line played where a face is (a villager calling the player
+/// over, the poker players, the race keepers, the knife thrower): that face
+/// mouths it, where the game has the line's lip-sync. (What isn't speech
+/// has none.)
+fn mouth_where_said(mut said: MessageReader<crate::sound::PlaySfx>, library: Option<ResMut<FaceLibrary>>, mut faces: Query<(&mut Face, &GlobalTransform)>) {
+    let Some(mut library) = library else {
+        said.clear();
+        return;
+    };
+    for s in said.read() {
+        let Some(at) = s.at else { continue };
+        let Some(clip) = library.clip(&facial::voice_clip_path(s.event)) else { continue };
+        // (The face whose feet are under where it was said, within a
+        // stride.)
+        let near = |t: &GlobalTransform| {
+            let d = t.translation() - at;
+            (d.y.abs() < 2.5).then(|| Vec2::new(d.x, d.z).length()).filter(|r| *r < 1.2)
+        };
+        let Some((mut face, _)) = faces.iter_mut().filter_map(|(f, t)| near(t).map(|r| (f, r))).min_by(|a, b| a.1.total_cmp(&b.1)) else { continue };
+        // (Not again when its speaker already set it going.)
+        if !face.voice.as_ref().is_some_and(|(c, _)| Arc::ptr_eq(c, &clip)) {
+            face.voice = Some((clip, 0.0));
+            debug!("faces: line {:#x} mouthed where it was said", s.event);
+        }
     }
 }
 

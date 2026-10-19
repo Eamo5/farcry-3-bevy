@@ -879,7 +879,13 @@ impl FaceChoice { fn from_component(&fcb::Object); fn definition(head_tags) -> O
   (`CFacialClip`, from its start frame) and the speaker's lip-sync clip for a
   spoken line add up. `FC3_NO_FACES=1` leaves faces on the body pose (A/B).
 * Faces outside scenes also play the library's neutral blink loop, with
-  staggered phases. The library loads when conversion finishes, including
+  staggered phases.
+* Generic characters' kit faces mouth what they say: barks and encounter
+  conversations set their speaker's line going, and any other spoken line
+  played where a face stands (within a stride of its feet: a villager calling
+  the player over, the poker players, the race keepers, the knife thrower)
+  goes on that face, when the game has the line's lip-sync clip (sounds
+  that aren't speech have none). The library loads when conversion finishes, including
   on first launch.
 * Not yet: generic characters' rigs (by archetype and kit head tag),
   gameplay `*_facial` clips.
