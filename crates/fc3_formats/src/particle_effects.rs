@@ -234,6 +234,19 @@ pub struct Effect {
 }
 
 impl Effect {
+    /// The textures its active emitters draw with: each one's sheet, and a
+    /// heat haze's (`DistortionEnabled`) distortion map as well.
+    pub fn textures(&self) -> Vec<Result<String>> {
+        let mut out = Vec::new();
+        for e in self.emitters.iter().filter(|e| e.active && !e.texture.is_empty()) {
+            out.push(e.texture_path());
+            if e.source.attr("DistortionEnabled") == Some("1") {
+                out.extend(e.texture_of("DistortionTexture"));
+            }
+        }
+        out
+    }
+
     pub fn parse(xml: &str) -> Result<Self> {
         let root = crate::xml::parse(xml).context("invalid particle XML")?;
         ensure!(root.name == "PartSys", "particle definition must be a PartSys");

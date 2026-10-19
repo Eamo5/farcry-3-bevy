@@ -512,10 +512,26 @@ effects burn none (`NoLights`), since the converter already puts their lights
 among the world's. A soft emitter (`Soft`) fades over its `SoftRange` (m) as
 it nears what's behind it, so smoke meets the ground without a hard line. That
 needs the camera's depth prepass, there at high effects and up (for SSAO); our
-stand-in smoke and dust fade over 0.5 m. Not yet: distortion (heat haze isn't
-drawn), mesh particles, child
-emitters, the plotted discs and sounds. Curves are joined linearly between
-knots. `FC3_AUTHORED_FX=<name>[,<metres>]` plays one as an impact, on the ground
+stand-in smoke and dust fade over 0.5 m.
+
+Heat haze. A distortion emitter (`DistortionEnabled`, in 55 of the cached
+effects: fires, explosions, muzzles) draws no colour. Its particles bend the
+view behind them instead (`particles::HazeMaterial`, `haze.wgsl`). How much
+is the sprite's shape (its sheet's red with `RedAsAlpha`, else its alpha)
+times its alpha, as any sprite's. Which way is its `DistortionTexture`, an
+offset map (red one way, green the other, 0.5 none). It is tiled across the
+sprite (`DistortionTilingU`, `...V`) and scrolls (`DistortionSpeedU`,
+`...V`, a second). The bend reaches `DistortionStrength` of the view and is
+blurred by `DistortionBlurStrength` as far again. The haze is drawn among
+Bevy's transmissive things, which see the scene as it stood before them,
+copied once. Those include the opaque world, but not the clouds, sea and
+other particles drawn after, so it doesn't bend the sky or the flames in
+front of it. The converter now caches haze emitters' sheets and maps, even
+for effects cached before. `DistortionDistanceScale` isn't used.
+`FC3_HAZE_SCALE=<times>` (tests) bends that much more, to be seen.
+
+Not yet: mesh particles, child emitters, the plotted discs and sounds. Curves
+are joined linearly between knots. `FC3_AUTHORED_FX=<name>[,<metres>]` plays one as an impact, on the ground
 4 m (or that far) in front of the player, once he has stood 15 s.
 `FC3_AUTHORED_FX_SHOTS=<dir>` then captures the screen 0.05, 0.2, 0.5, 1, 2
 and 4 s in.

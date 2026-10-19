@@ -20,11 +20,12 @@
 //! brightness isn't the engine's), lit sheets (`SHLighting`) darken with the
 //! daylight, and the near and far fades (`NearClipping...`,
 //! `FarClipping...`) apply. An emitter with a light (`LightActive`) burns a
-//! point light, flickering as authored.
+//! point light, flickering as authored. A heat haze's particles
+//! (`DistortionEnabled`) bend the view behind them through their distortion
+//! map instead (`particles::HazeMaterial`).
 //!
-//! Not played (yet): the emitters' soft intersections, distortion, child
-//! emitters, emission volumes and sounds; curves are joined linearly between
-//! their knots.
+//! Not played (yet): child emitters, mesh particles, plotted emission
+//! volumes and sounds; curves are joined linearly between their knots.
 
 use std::collections::HashMap;
 
@@ -301,12 +302,57 @@ impl Ranged {
 }
 
 /// What a batch draws: a texture, its grid, how it blends and how soft it
-/// is (`Soft`'s `SoftRange`, in cm; 0 hard).
+/// is (`Soft`'s `SoftRange`, in cm; 0 hard); or, for heat haze, how it
+/// bends the view.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct BatchKey {
     texture: String,
     mode: u8,
     soft: u16,
+    haze: Option<HazeKey>,
+}
+
+/// A heat haze's distortion map and how it bends the view through it: its
+/// scroll a second, its tiling, its strength and blur (`Distortion...`, as
+/// bits), and whether its shape is the sheet's red (`RedAsAlpha`).
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct HazeKey {
+    map: String,
+    numbers: [u32; 6],
+    red: bool,
+}
+
+impl HazeKey {
+    fn of(e: &Emitter) -> Option<HazeKey> {
+        let s = &e.source;
+        let f = |n: &str, d: f32| s.f32(n).unwrap_or(d);
+        let map = e.texture_of("DistortionTexture")?.ok()?;
+        Some(HazeKey {
+            map: fc3_formats::cache::texture_rel(&map),
+            numbers: [
+                f("DistortionSpeedU", 0.0),
+                f("DistortionSpeedV", 0.0),
+                f("DistortionTilingU", 1.0),
+                f("DistortionTilingV", 1.0),
+                f("DistortionStrength", 0.0),
+                f("DistortionBlurStrength", 0.0),
+            ]
+            .map(f32::to_bits),
+            red: s.f32("RedAsAlpha").is_some_and(|v| v != 0.0),
+        })
+    }
+
+    /// (`FC3_HAZE_SCALE=<times>`, tests: bent that much more, to be seen.)
+    fn material(&self, shape: Handle<Image>, map: Handle<Image>, soft: f32) -> crate::particles::HazeMaterial {
+        let n = self.numbers.map(f32::from_bits);
+        let scale = std::env::var("FC3_HAZE_SCALE").ok().and_then(|s| s.parse::<f32>().ok()).unwrap_or(1.0);
+        crate::particles::HazeMaterial::new(
+            shape,
+            map,
+            Vec4::new(n[0], n[1], n[2], n[3]),
+            Vec4::new(n[4] * scale, n[5], soft, if self.red { 1.0 } else { 0.0 }),
+        )
+    }
 }
 
 /// An emitter made ready to play.
@@ -415,11 +461,17 @@ impl Compiled {
         } else {
             1
         };
-        // (Not drawn: heat haze, which bends the view, and meshes.)
-        let drawn = !on("DistortionEnabled") && s.attr("Geometry").is_none_or(str::is_empty);
+        // (Heat haze bends the view through its map; not drawn: meshes, and
+        // haze without its map.)
+        let haze = if on("DistortionEnabled") { HazeKey::of(e) } else { None };
+        let drawn = s.attr("Geometry").is_none_or(str::is_empty) && (haze.is_some() || !on("DistortionEnabled"));
         let soft = if on("Soft") { (s.f32("SoftRange").unwrap_or(0.0).max(0.0) * 100.0).round() as u16 } else { 0 };
-        let batch =
-            e.texture_path().ok().filter(|_| drawn && !e.texture.is_empty()).map(|t| BatchKey { texture: fc3_formats::cache::texture_rel(&t), mode, soft });
+        let batch = e.texture_path().ok().filter(|_| drawn && !e.texture.is_empty()).map(|t| BatchKey {
+            texture: fc3_formats::cache::texture_rel(&t),
+            mode,
+            soft,
+            haze,
+        });
         // The gradient's points (`Knot`s), else its even samples (`Key`s).
         let gradient = s.child("PartColorKF");
         let mut colours: Vec<(f32, Vec3)> = gradient
@@ -815,6 +867,24 @@ fn load_sheet(server: &AssetServer, rel: &str) -> Handle<Image> {
         .load(crate::cache_assets::cache_path(rel))
 }
 
+/// A heat haze's distortion map: its offsets as they are (not colour), tiled.
+fn load_map(server: &AssetServer, rel: &str) -> Handle<Image> {
+    server
+        .load_builder()
+        .with_settings(|s: &mut ImageLoaderSettings| {
+            s.is_srgb = false;
+            s.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                mag_filter: ImageFilterMode::Linear,
+                min_filter: ImageFilterMode::Linear,
+                mipmap_filter: ImageFilterMode::Linear,
+                ..default()
+            });
+        })
+        .load(crate::cache_assets::cache_path(rel))
+}
+
 /// A batch's mesh: its particles as quads round the camera.
 #[derive(Component)]
 struct FxBatch(BatchKey);
@@ -827,6 +897,7 @@ fn draw(
     mut batches: Query<(&FxBatch, &Mesh3d, &mut Transform, &mut Visibility)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ParticleMaterial>>,
+    mut hazes: ResMut<Assets<crate::particles::HazeMaterial>>,
     server: Res<AssetServer>,
     mut commands: Commands,
 ) {
@@ -837,20 +908,22 @@ fn draw(
         if library.batches.contains_key(&key) {
             continue;
         }
-        let material = materials.add(ParticleMaterial::plain(key.mode as f32, load_sheet(&server, &key.texture)).soft(key.soft as f32 / 100.0));
-        let e = commands
-            .spawn((
-                FxBatch(key.clone()),
-                Mesh3d(meshes.add(empty_mesh())),
-                MeshMaterial3d(material),
-                Transform::default(),
-                Visibility::Hidden,
-                NotShadowCaster,
-                NotShadowReceiver,
-                bevy::camera::visibility::NoFrustumCulling,
-                Name::new("authored fx"),
-            ))
-            .id();
+        let mut batch = commands.spawn((
+            FxBatch(key.clone()),
+            Mesh3d(meshes.add(empty_mesh())),
+            Transform::default(),
+            Visibility::Hidden,
+            NotShadowCaster,
+            NotShadowReceiver,
+            bevy::camera::visibility::NoFrustumCulling,
+            Name::new("authored fx"),
+        ));
+        let (shape, soft) = (load_sheet(&server, &key.texture), key.soft as f32 / 100.0);
+        match &key.haze {
+            Some(haze) => batch.insert(MeshMaterial3d(hazes.add(haze.material(shape, load_map(&server, &haze.map), soft)))),
+            None => batch.insert(MeshMaterial3d(materials.add(ParticleMaterial::plain(key.mode as f32, shape).soft(soft)))),
+        };
+        let e = batch.id();
         library.batches.insert(key, e);
     }
     let origin = cam.translation();

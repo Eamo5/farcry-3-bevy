@@ -15,7 +15,7 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError};
+use bevy::render::render_resource::{AsBindGroup, BlendState, RenderPipelineDescriptor, SpecializedMeshPipelineError};
 use bevy::shader::ShaderRef;
 use bevy::transform::TransformSystems;
 use fc3_formats::cache::fx_rel;
@@ -30,7 +30,8 @@ pub struct ParticlesPlugin;
 impl Plugin for ParticlesPlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "particles.wgsl");
-        app.add_plugins(MaterialPlugin::<ParticleMaterial>::default())
+        bevy::asset::embedded_asset!(app, "haze.wgsl");
+        app.add_plugins((MaterialPlugin::<ParticleMaterial>::default(), MaterialPlugin::<HazeMaterial>::default()))
             .init_resource::<Particles>()
             .init_resource::<Decals>()
             .add_systems(Update, (setup_batches.run_if(resource_exists::<CacheInfo>), simulate, fx_test))
@@ -309,6 +310,76 @@ impl Material for ParticleMaterial {
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = None;
+        Ok(())
+    }
+}
+
+/// Heat haze (an emitter's `DistortionEnabled`): its particles bend the view
+/// behind them through their distortion map, by their shape and alpha (see
+/// `haze.wgsl`). Drawn among the transmissive things, which see the scene
+/// as it stood before them, laid over it without writing depth.
+#[derive(Asset, AsBindGroup, TypePath, Clone, Debug)]
+pub struct HazeMaterial {
+    /// xy: the map's scroll a second (`DistortionSpeedU`, `...V`); zw: its
+    /// tiling (`DistortionTilingU`, `...V`).
+    #[uniform(0)]
+    motion: Vec4,
+    /// x: how far it bends, a share of the view (`DistortionStrength`); y:
+    /// how much it blurs (`DistortionBlurStrength`); z: the depth (m) it
+    /// fades over nearing what's behind; w: 1 when the shape is the sheet's
+    /// red (`RedAsAlpha`).
+    #[uniform(1)]
+    look: Vec4,
+    #[texture(2)]
+    #[sampler(3)]
+    shape: Handle<Image>,
+    #[texture(4)]
+    #[sampler(5)]
+    map: Handle<Image>,
+}
+
+impl HazeMaterial {
+    pub(crate) fn new(shape: Handle<Image>, map: Handle<Image>, motion: Vec4, look: Vec4) -> Self {
+        Self { motion, look, shape, map }
+    }
+}
+
+impl Material for HazeMaterial {
+    fn fragment_shader() -> ShaderRef {
+        bevy::asset::AssetPath::from_path_buf(bevy::asset::embedded_path!("haze.wgsl")).with_source("embedded").into()
+    }
+
+    /// (Opaque only to be drawn with the transmissive things: it blends
+    /// itself, see `specialize`.)
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Opaque
+    }
+
+    fn reads_view_transmission_texture(&self) -> bool {
+        true
+    }
+
+    fn enable_prepass() -> bool {
+        false
+    }
+
+    fn enable_shadows() -> bool {
+        false
+    }
+
+    fn specialize(
+        _pipeline: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        descriptor.primitive.cull_mode = None;
+        if let Some(depth) = descriptor.depth_stencil.as_mut() {
+            depth.depth_write_enabled = Some(false);
+        }
+        if let Some(target) = descriptor.fragment.as_mut().and_then(|f| f.targets.first_mut()).and_then(|t| t.as_mut()) {
+            target.blend = Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+        }
         Ok(())
     }
 }

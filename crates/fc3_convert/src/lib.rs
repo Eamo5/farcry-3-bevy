@@ -2026,6 +2026,22 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
             }
         }
     }
+    // (Those cached before: any texture they draw with that isn't, such as
+    // their heat haze's.)
+    for name in names.iter().filter(|n| !job.should_write(&pe::authored_rel(n))) {
+        let Ok(effect) = std::fs::read_to_string(job.root().join(pe::authored_rel(name))).map_err(anyhow::Error::from).and_then(|x| pe::Effect::parse(&x))
+        else {
+            continue;
+        };
+        for path in effect.textures().into_iter().flatten() {
+            let rel = cache::texture_rel(&path);
+            if job.should_write(&rel) {
+                if let Err(e) = convert_texture_to(job, &path, &rel) {
+                    job.error(format!("authored effect {name}: {e:#}"));
+                }
+            }
+        }
+    }
     names.retain(|n| job.should_write(&pe::authored_rel(n)));
     if names.is_empty() {
         return Ok(());
@@ -2040,9 +2056,8 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
         let result = (|| -> Result<()> {
             let xml = fc3_formats::particle_effects::effect_xml(library, name)?;
             let effect = fc3_formats::particle_effects::Effect::parse(xml)?;
-            // (Heat haze isn't drawn.)
-            for emitter in effect.emitters.iter().filter(|e| e.active && !e.texture.is_empty() && e.source.attr("DistortionEnabled") != Some("1")) {
-                let path = emitter.texture_path()?;
+            for path in effect.textures() {
+                let path = path?;
                 let tex = cache::texture_rel(&path);
                 if job.should_write(&tex) {
                     convert_texture_to(job, &path, &tex)?;
