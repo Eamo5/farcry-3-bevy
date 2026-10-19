@@ -81,17 +81,34 @@ impl Decodable for Sfx {
             Sfx::Compressed(bytes, filters) => (Inner::Compressed(Box::new(decoder(bytes).expect("decoded when loaded"))), filters.clone()),
         };
         let (channels, rate) = (inner.channels().get() as usize, inner.sample_rate().get() as f32);
-        SfxDecoder { inner, filter: LowPass { slots: filters, state: [[0.0; 2]; 8], a: 1.0, countdown: 0, channel: 0, channels: channels.clamp(1, 8), rate } }
+        SfxDecoder {
+            inner,
+            filter: LowPass {
+                slots: filters,
+                state: [[0.0; 2]; 8],
+                high: [0.0; 8],
+                a: 1.0,
+                b: 0.0,
+                countdown: 0,
+                channel: 0,
+                channels: channels.clamp(1, 8),
+                rate,
+            },
+        }
     }
 }
 
-/// The mixer's low-pass on a playing sound: two one-pole stages per
-/// channel at the lowest cutoff of its slots (checked every 256 samples).
+/// The mixer's filters on a playing sound: two one-pole low-pass stages
+/// per channel at the lowest low-pass cutoff of its slots, then a one-pole
+/// high-pass at the highest high-pass cutoff (checked every 256 samples).
 struct LowPass {
     slots: Arc<[u8]>,
     state: [[f32; 2]; 8],
-    /// The stages' coefficient (1: open).
+    /// The high-pass's own low-pass state, per channel.
+    high: [f32; 8],
+    /// The low-pass stages' coefficient (1: open), the high-pass's (0: off).
     a: f32,
+    b: f32,
     countdown: u32,
     channel: usize,
     channels: usize,
@@ -106,18 +123,31 @@ impl LowPass {
         }
         if self.countdown == 0 {
             self.countdown = 256;
-            self.a = crate::mixer::cutoff(&self.slots).map_or(1.0, |hz| 1.0 - (-std::f32::consts::TAU * hz / self.rate.max(1.0)).exp());
+            let coefficient = |hz: f32| 1.0 - (-std::f32::consts::TAU * hz / self.rate.max(1.0)).exp();
+            let (low, high) = crate::mixer::cutoffs(&self.slots);
+            self.a = low.map_or(1.0, coefficient);
+            self.b = high.map_or(0.0, coefficient);
         }
         self.countdown -= 1;
-        let s = &mut self.state[self.channel];
+        let ch = self.channel;
         self.channel = (self.channel + 1) % self.channels;
-        if self.a >= 0.999 {
+        let s = &mut self.state[ch];
+        let y = if self.a >= 0.999 {
             *s = [x, x];
-            return x;
+            x
+        } else {
+            s[0] += self.a * (x - s[0]);
+            s[1] += self.a * (s[0] - s[1]);
+            s[1]
+        };
+        // (The high-pass: what's left over a low-pass at its cutoff.)
+        let h = &mut self.high[ch];
+        *h += self.b * (y - *h);
+        if self.b > 0.0 {
+            y - *h
+        } else {
+            y
         }
-        s[0] += self.a * (x - s[0]);
-        s[1] += self.a * (s[0] - s[1]);
-        s[1]
     }
 }
 
@@ -244,7 +274,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_state_low_passes_the_sounds_below_its_unit() {
+    fn a_state_filters_the_sounds_below_its_units() {
         // A bus with one low-pass unit; a state turning it on at 800 Hz.
         let mut mix = crate::mixer::MixData::default();
         mix.read("bus", "00007000 00006000 0 0");
@@ -255,7 +285,8 @@ mod tests {
             let samples: Vec<f32> = (0..4800).map(|i| (i as f32 * std::f32::consts::TAU * 5000.0 / 48000.0).sin()).map(|x| filter.apply(x)).collect();
             (samples[2400..].iter().map(|s| s * s).sum::<f32>() / 2400.0).sqrt()
         };
-        let filter = || LowPass { slots: Arc::from([0u8]), state: [[0.0; 2]; 8], a: 1.0, countdown: 0, channel: 0, channels: 1, rate: 48000.0 };
+        let filter =
+            || LowPass { slots: Arc::from([0u8]), state: [[0.0; 2]; 8], high: [0.0; 8], a: 1.0, b: 0.0, countdown: 0, channel: 0, channels: 1, rate: 48000.0 };
         let open = tone(&mut filter());
         let mut mixer = crate::mixer::Mixer::default();
         mixer.apply(&mix, 0x20);
@@ -263,5 +294,22 @@ mod tests {
         let muffled = tone(&mut filter());
         // A 5 kHz tone through two 800 Hz poles: well under a tenth.
         assert!(open > 0.6 && muffled < open * 0.1, "{open} {muffled}");
+
+        // A high-pass unit (the same slot, now of kind 2) on at 1 kHz: a
+        // 100 Hz hum all but goes.
+        let mut mix = crate::mixer::MixData::default();
+        mix.read("bus", "00007000 00006000 0 0");
+        mix.read("fx", "00007002 00007000 2 150");
+        mix.read("mixfx", "00000201 00007002:0:1:0:0 00007002:1:1000:0:0");
+        mix.read("mixevent", "00000021 +00000201");
+        let hum = |filter: &mut LowPass| -> f32 {
+            let samples: Vec<f32> = (0..9600).map(|i| (i as f32 * std::f32::consts::TAU * 100.0 / 48000.0).sin()).map(|x| filter.apply(x)).collect();
+            (samples[4800..].iter().map(|s| s * s).sum::<f32>() / 4800.0).sqrt()
+        };
+        let mut mixer = crate::mixer::Mixer::default();
+        mixer.apply(&mix, 0x21);
+        mixer.advance(&mix, 0.1);
+        let thinned = hum(&mut filter());
+        assert!(thinned < 0.2, "{thinned}");
     }
 }

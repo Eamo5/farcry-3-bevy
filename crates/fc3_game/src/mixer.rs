@@ -9,7 +9,7 @@
 //! (`sound_source`); the other kinds of unit aren't applied.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock, RwLock};
 
 use bevy::prelude::*;
@@ -30,9 +30,11 @@ pub struct MixData {
     /// names by key (what rooms name them by).
     mixings: HashMap<String, (u32, u32)>,
     keys: HashMap<u64, String>,
-    /// Each bus's low-pass units, and each unit's slot (see [`CUTOFFS`]).
+    /// Each bus's filter units (low- and high-pass), and each unit's slot
+    /// (see [`CUTOFFS`]).
     lowpass: HashMap<u32, Vec<u32>>,
     slots: HashMap<u32, u8>,
+    high: HashSet<u32>,
     /// Each state's changes to effect units, like `states`.
     effects: HashMap<u32, Vec<(u32, u32, f32, f32, f32)>>,
 }
@@ -41,6 +43,8 @@ pub struct MixData {
 /// for the playing sounds to read.
 const SLOTS: usize = 64;
 static CUTOFFS: [AtomicU32; SLOTS] = [const { AtomicU32::new(0) }; SLOTS];
+/// Which slots are high-passes (the rest low-passes).
+static HIGH: [AtomicBool; SLOTS] = [const { AtomicBool::new(false) }; SLOTS];
 
 /// The low-pass slots on each sound's way to the mix (its bus's and those
 /// above it), by file stem, for the sound loader.
@@ -52,13 +56,26 @@ pub fn filters_of(stem: &str) -> Arc<[u8]> {
     FILTERS.read().ok().and_then(|m| m.get(stem).cloned()).unwrap_or_else(|| Arc::from([]))
 }
 
-/// The cutoff (Hz) for a sound going through `slots`: the lowest on, if any.
-pub fn cutoff(slots: &[u8]) -> Option<f32> {
-    slots.iter().map(|&s| f32::from_bits(CUTOFFS[s as usize].load(Ordering::Relaxed))).filter(|c| *c > 0.0).reduce(f32::min)
+/// The cutoffs (Hz) for a sound going through `slots`: the lowest low-pass
+/// on and the highest high-pass on, if any.
+pub fn cutoffs(slots: &[u8]) -> (Option<f32>, Option<f32>) {
+    let (mut low, mut high): (Option<f32>, Option<f32>) = (None, None);
+    for &s in slots {
+        let hz = f32::from_bits(CUTOFFS[s as usize].load(Ordering::Relaxed));
+        if hz > 0.0 {
+            if HIGH[s as usize].load(Ordering::Relaxed) {
+                high = Some(high.map_or(hz, |h| h.max(hz)));
+            } else {
+                low = Some(low.map_or(hz, |l| l.min(hz)));
+            }
+        }
+    }
+    (low, high)
 }
 
-/// A low-pass unit's cutoff when open (Hz).
+/// A low-pass unit's cutoff when open, and a high-pass unit's (Hz).
 const OPEN: f32 = 20_000.0;
+const OPEN_HIGH: f32 = 20.0;
 
 impl MixData {
     /// Reads one of the manifest's mixer records: its kind (`bus`,
@@ -76,14 +93,18 @@ impl MixData {
                 }
             }
             "fx" => {
-                // unit, bus, kind (0: a low-pass), default
+                // unit, bus, kind (0 a low-pass, 2 a high-pass), default
                 let v: Vec<&str> = it.collect();
-                if let [unit, bus, "0", _] = v[..] {
+                if let [unit, bus, kind @ ("0" | "2"), _] = v[..] {
                     if let (Some(unit), Some(bus)) = (hex(unit), hex(bus)) {
                         self.lowpass.entry(bus).or_default().push(unit);
                         let next = self.slots.len();
                         if next < SLOTS {
-                            self.slots.entry(unit).or_insert(next as u8);
+                            let slot = *self.slots.entry(unit).or_insert(next as u8);
+                            if kind == "2" {
+                                self.high.insert(unit);
+                            }
+                            HIGH[slot as usize].store(kind == "2", Ordering::Relaxed);
                         }
                     }
                 }
@@ -361,9 +382,9 @@ impl Mixer {
         }
         self.levels.retain(|k, r| want.contains_key(k) || (r.now - mix.base(k.0, k.1)).abs() > 1e-4);
 
-        // The low-pass units: on (parameter 0) at a cutoff (1) as the latest
+        // The filter units: on (parameter 0) at a cutoff (1) as the latest
         // state has them, else open.
-        let open = OPEN.log2();
+        let open_of = |unit: u32| if mix.high.contains(&unit) { OPEN_HIGH.log2() } else { OPEN.log2() };
         let mut cut: HashMap<u32, (Option<bool>, Option<f32>, f32, f32)> = HashMap::new();
         for state in &self.stack {
             for &(unit, param, value, fade_in, fade_out) in mix.effects.get(state).into_iter().flatten() {
@@ -381,11 +402,12 @@ impl Mixer {
         }
         let units: HashSet<u32> = self.cutoffs.keys().chain(cut.keys()).copied().collect();
         for unit in units {
+            let open = open_of(unit);
             let r = self.cutoffs.entry(unit).or_insert(Ramp { now: open, from: open, to: open, t: 0.0, len: 0.0, back: 0.0 });
             let (to, len) = match cut.get(&unit) {
                 Some(&(Some(true), Some(hz), fade_in, fade_out)) => {
                     r.back = fade_out;
-                    (hz.clamp(20.0, OPEN).log2(), fade_in)
+                    (hz.clamp(OPEN_HIGH, OPEN).log2(), fade_in)
                 }
                 _ => (open, r.back),
             };
@@ -395,11 +417,11 @@ impl Mixer {
             r.t += dt;
             r.now = if r.len <= 0.0 || r.t >= r.len { r.to } else { r.from + (r.to - r.from) * r.t / r.len };
             if let Some(&slot) = mix.slots.get(&unit) {
-                let hz = if r.now >= open - 0.01 { 0.0 } else { r.now.exp2() };
+                let hz = if (r.now - open).abs() < 0.01 { 0.0 } else { r.now.exp2() };
                 CUTOFFS[slot as usize].store(hz.to_bits(), Ordering::Relaxed);
             }
         }
-        self.cutoffs.retain(|u, r| cut.contains_key(u) || r.now < open - 0.01);
+        self.cutoffs.retain(|u, r| cut.contains_key(u) || (r.now - open_of(*u)).abs() >= 0.01);
     }
 
     /// The mixer's change to the sounds of `bus` (dB, beside the levels
@@ -422,10 +444,9 @@ impl Mixer {
         (db, paused, stopped)
     }
 
-    /// The low-pass units turned on now, with their cutoffs (Hz).
+    /// The filter units turned on now, with their cutoffs (Hz).
     pub fn filters_on(&self) -> Vec<(u32, f32)> {
-        let open = OPEN.log2() - 0.01;
-        self.cutoffs.iter().filter(|(_, r)| r.now < open).map(|(u, r)| (*u, r.now.exp2())).collect()
+        self.cutoffs.iter().filter(|(_, r)| r.now < OPEN.log2() - 0.01 && r.now > OPEN_HIGH.log2() + 0.01).map(|(u, r)| (*u, r.now.exp2())).collect()
     }
 
     /// Forgets this frame's stops (once every sound has heard them).
@@ -442,15 +463,20 @@ impl Mixer {
 
 /// The game's own mixings: the pause (over the pause menu, the map, the
 /// handbook and the shop), the player's head under water, health in its
-/// last bar (the world muffled), and riding a vehicle.
+/// last bar (the world muffled), riding a vehicle, and a fight (enemies in
+/// combat with the player, as the music has it: the beds thinned).
 /// `FC3_MIXING_TEST=<name>[,<seconds>]` (tests) starts a mixing that many
 /// seconds into play (default 10).
 pub fn game_mixings(
     state: Res<State<GameState>>,
     breath: Option<Res<crate::syringes::Breath>>,
     (time, mut test): (Res<Time>, Local<Option<f32>>),
-    (players, driving): (Query<&crate::combat::Health, With<crate::player::Player>>, Option<Res<crate::vehicles::Driving>>),
-    mut on: Local<[bool; 4]>,
+    (players, driving, music): (
+        Query<&crate::combat::Health, With<crate::player::Player>>,
+        Option<Res<crate::vehicles::Driving>>,
+        Option<Res<crate::music::Music>>,
+    ),
+    mut on: Local<[bool; 5]>,
     mut mixings: ResMut<Mixings>,
 ) {
     if let Ok(spec) = std::env::var("FC3_MIXING_TEST") {
@@ -473,8 +499,10 @@ pub fn game_mixings(
         breath.is_some_and(|b| b.under),
         playing && players.single().is_ok_and(|h| !h.dead && h.current < crate::combat::HEALTH_SEGMENT),
         playing && driving.is_some_and(|d| d.vehicle.is_some()),
+        playing && music.is_some_and(|m| m.in_combat()),
     ];
-    for (i, name) in ["Exclusive/Pause", "Exclusive/Underwater", "Compatible/Health_Low", "Compatible/In_Vehicles"].into_iter().enumerate() {
+    for (i, name) in ["Exclusive/Pause", "Exclusive/Underwater", "Compatible/Health_Low", "Compatible/In_Vehicles", "Compatible/Combat"].into_iter().enumerate()
+    {
         if now[i] != on[i] {
             if now[i] {
                 mixings.start(name);

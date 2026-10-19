@@ -90,6 +90,11 @@ pub struct Music {
 }
 
 impl Music {
+    /// Whether enemies are fighting the player (or were a moment ago).
+    pub fn in_combat(&self) -> bool {
+        self.combat_left > 0.0
+    }
+
     fn state(&self, name: &str) -> Option<usize> {
         let n = name.trim().to_ascii_lowercase();
         self.by_name.get(&n).or_else(|| self.by_name.get(n.trim_start_matches("play_"))).copied()

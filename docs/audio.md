@@ -390,7 +390,9 @@ menu, the map, the handbook and the shop. It starts `Exclusive/Underwater`
 while the player's head is under water (it mutes the above-water beds and
 low-passes the world at 800 Hz). `Compatible/Health_Low` runs while health
 is in its last bar (the world at 1 kHz, a bed 10 dB down), and
-`Compatible/In_Vehicles` in a vehicle (10 kHz). The scripts' mixings go by
+`Compatible/In_Vehicles` in a vehicle (10 kHz), and `Compatible/Combat`
+while enemies fight the player (as the music has it), which runs the
+ambience beds' buses through 180 Hz high-passes. The scripts' mixings go by
 name.
 
 ### Rooms
@@ -785,9 +787,10 @@ are 32 kHz stereo Ogg, mostly streamed. List them with
 * Blend (type 7) volume and pitch curves are applied to loops through `LoopSfx`
   parameters, and to one-shots for distance only. Curve kinds other than volume and pitch
   aren't applied.
-* Of the mixer states' effect units only the low-pass is applied (not the
-  high-pass in combat, nor whatever rings after a blast), and only while a
-  state turns it on (not the unit at 3,080 Hz by default). Bus parameter 4
+* Of the mixer states' effect units the low- and high-passes are applied
+  (a high-pass is what is left over a one-pole low-pass at its cutoff), not
+  whatever rings after a blast, and only while a state turns them on (not
+  the low-pass at 3,080 Hz by default). Bus parameter 4
   isn't applied. Neither is
   `Exclusive`/`Compatible` stacking (the latest state wins each parameter).
   Beyond the rooms and these four, the mixings the engine starts itself
