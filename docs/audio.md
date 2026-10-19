@@ -387,8 +387,11 @@ follows its bus and the buses above it: the levels' change on top of its
 gain, paused, or stopped. Any event played that pushes or pops a state does
 so (cinema clips, groups). The game starts `Exclusive/Pause` over the pause
 menu, the map, the handbook and the shop. It starts `Exclusive/Underwater`
-while the player's head is under water (it mutes the above-water beds). The
-scripts' mixings go by name. `FC3_MIXING_TEST=<name>[,<s>]` starts one into
+while the player's head is under water (it mutes the above-water beds and
+low-passes the world at 800 Hz). `Compatible/Health_Low` runs while health
+is in its last bar (the world at 1 kHz, a bed 10 dB down), and
+`Compatible/In_Vehicles` in a vehicle (10 kHz). The scripts' mixings go by
+name. `FC3_MIXING_TEST=<name>[,<s>]` starts one into
 play, and `RUST_LOG=farcry3::sound=debug` tallies the sounds the mixer
 pauses and lowers.
 
@@ -752,8 +755,8 @@ are 32 kHz stereo Ogg, mostly streamed. List them with
   state turns it on (not the unit at 3,080 Hz by default). Bus parameter 4
   isn't applied. Neither is
   `Exclusive`/`Compatible` stacking (the latest state wins each parameter).
-  The mixings the engine starts itself aren't known, except the pause and
-  under water. Music plays outside the mixer. The positioning's other
+  The mixings the engine starts itself aren't known beyond these four. Its
+  rooms and caves (sound zones) and the takedowns go unmixed. Music plays outside the mixer. The positioning's other
   entries (perhaps filtering by distance) aren't applied.
 * Event kind 4 is treated as "play both targets" (the second is often a delay
   or silence).

@@ -348,14 +348,16 @@ impl Mixer {
 }
 
 /// The game's own mixings: the pause (over the pause menu, the map, the
-/// handbook and the shop) and the player's head under water.
+/// handbook and the shop), the player's head under water, health in its
+/// last bar (the world muffled), and riding a vehicle.
 /// `FC3_MIXING_TEST=<name>[,<seconds>]` (tests) starts a mixing that many
 /// seconds into play (default 10).
 pub fn game_mixings(
     state: Res<State<GameState>>,
     breath: Option<Res<crate::syringes::Breath>>,
     (time, mut test): (Res<Time>, Local<Option<f32>>),
-    mut on: Local<[bool; 2]>,
+    (players, driving): (Query<&crate::combat::Health, With<crate::player::Player>>, Option<Res<crate::vehicles::Driving>>),
+    mut on: Local<[bool; 4]>,
     mut mixings: ResMut<Mixings>,
 ) {
     if let Ok(spec) = std::env::var("FC3_MIXING_TEST") {
@@ -372,8 +374,14 @@ pub fn game_mixings(
             *test = Some(0.0);
         }
     }
-    let now = [matches!(state.get(), GameState::Paused | GameState::Map | GameState::Journal | GameState::Shop), breath.is_some_and(|b| b.under)];
-    for (i, name) in ["Exclusive/Pause", "Exclusive/Underwater"].into_iter().enumerate() {
+    let playing = *state.get() == GameState::Playing;
+    let now = [
+        matches!(state.get(), GameState::Paused | GameState::Map | GameState::Journal | GameState::Shop),
+        breath.is_some_and(|b| b.under),
+        playing && players.single().is_ok_and(|h| !h.dead && h.current < crate::combat::HEALTH_SEGMENT),
+        playing && driving.is_some_and(|d| d.vehicle.is_some()),
+    ];
+    for (i, name) in ["Exclusive/Pause", "Exclusive/Underwater", "Compatible/Health_Low", "Compatible/In_Vehicles"].into_iter().enumerate() {
         if now[i] != on[i] {
             if now[i] {
                 mixings.start(name);
