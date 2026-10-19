@@ -779,8 +779,24 @@ third and customizing the controls fourth among controls. `SetOptions
 row order, into `settings::Settings` (sliders over the native menu's
 ranges: sensitivity 0.1-5, field of view 55-110, volumes 0-1), which saves
 as it changes. Display resolution, the calibration popup's gamma and
-contrast, the key bindings page and the vegetation, terrain and water
-qualities aren't ours to set yet.
+contrast and the vegetation, terrain and water qualities aren't ours to set
+yet.
+
+**Key bindings** (`M_KeyBinding.feu`): the options page loads it into
+itself (a `MovieClipLoader`) for customizing the controls. It asks
+`OnKeyBindingsRequest`, and the game gives it `KeyBindings`, a row per
+rebindable action: `sKey` the action's name (the game's own where it has
+one: "Move Forward" 172370 to "Next Weapon" 172381, "Shoot" 156374, "Throw
+Rock" 156377, "Crafted Item 1" and "2" 156358 and 156378 for the syringe
+slots) and `sValue` its key. Activating a row sends
+`OnKeyBindingChangeRequest <row>`. The game shows its "Press any key" with
+`ShowPressKeyPrompt true`, and the next key or mouse button pressed (not
+passed to the movie; Escape leaves the row) rebinds it, swapping with the
+action that had it. The rows come again, and `ShowPressKeyPrompt false`
+hides the prompt. The edit is a draft until the options page's Apply
+(`onApplyChange`). Back drops it (`onCancelEdit`), and Reset to Defaults
+(`onResetToDefault`) restores the default keys. Tests: `Bind:<key>` in
+`FC3_PAUSE_KEYS` is the key pressed for a waiting row.
 
 **World map** (`WorldMap.feu`, quick launch 2; the map key opens the pause
 menu straight at it, the game's own map screen standing down while it's up,

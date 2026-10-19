@@ -46,6 +46,7 @@ impl Plugin for OriginalUiPlugin {
             .insert_non_send(Interface::Waiting)
             .init_resource::<UiCalls>()
             .init_resource::<MapPage>()
+            .init_resource::<KeyEdit>()
             .init_resource::<shop::ShopPage>()
             .init_resource::<LoadingUp>()
             .add_systems(Startup, make_canvas)
@@ -259,11 +260,12 @@ fn drive_pause(
         Local<CraftPage>,
         Option<ResMut<crate::syringes::Boosts>>,
     ),
-    (mut map_page, outposts, mut trials, mut shop_page): (
+    (mut map_page, outposts, mut trials, mut shop_page, mut key_edit): (
         ResMut<MapPage>,
         Res<crate::outposts::Outposts>,
         ResMut<crate::trials::Trials>,
         ResMut<shop::ShopPage>,
+        ResMut<KeyEdit>,
     ),
 ) {
     use crate::menu::GameState;
@@ -284,6 +286,7 @@ fn drive_pause(
         map_page.open = false;
         map_page.calls.clear();
         shop_page.calls.clear();
+        *key_edit = KeyEdit::default();
         if paused {
             host.answer("ShowGamePadInterface", "0");
             host.answer("IsSplitscreen", "0");
@@ -552,6 +555,36 @@ fn drive_pause(
                 "7" => open_page(host, "3"),
                 _ => {}
             },
+            // The key bindings page (in the options page): its rows from
+            // the bindings as edited, a row's new key taken from the next
+            // press, applied or dropped with the options page's own buttons.
+            "OnKeyBindingsRequest" => {
+                let draft = key_edit.draft.get_or_insert_with(|| settings.clone());
+                send_key_bindings(host, draft);
+            }
+            "OnKeyBindingChangeRequest" => {
+                if let Some(&a) = arg(1).parse::<usize>().ok().and_then(|i| crate::controls::Action::ALL.get(i)) {
+                    key_edit.draft.get_or_insert_with(|| settings.clone());
+                    key_edit.waiting = Some(a);
+                    host.event("ShowPressKeyPrompt", &["true"]);
+                }
+            }
+            "onApplyChange" => {
+                if let Some(d) = key_edit.draft.take() {
+                    settings.bindings = d.bindings;
+                }
+                key_edit.waiting = None;
+            }
+            "onCancelEdit" => {
+                *key_edit = KeyEdit::default();
+                host.event("ShowPressKeyPrompt", &["false"]);
+            }
+            "onResetToDefault" if key_edit.draft.is_some() => {
+                if let Some(d) = key_edit.draft.as_mut() {
+                    d.bindings = crate::controls::default_bindings();
+                    send_key_bindings(host, d);
+                }
+            }
             other => debug!("original UI: pause menu {other} {:?} not handled yet", call.args.get(1..)),
         }
     }
@@ -561,6 +594,13 @@ fn drive_pause(
         host.input(PlayerEvent::MouseMove { x: m.position.x as f64 * scale, y: m.position.y as f64 * scale });
     }
     for b in buttons.read() {
+        // (A row waiting for its new input takes the press.)
+        if key_edit.waiting.is_some() {
+            if b.state.is_pressed() {
+                take_binding(host, &mut key_edit, Some(crate::controls::Binding::Mouse(b.button)));
+            }
+            continue;
+        }
         let button = match b.button {
             bevy::input::mouse::MouseButton::Left => MouseButton::Left,
             bevy::input::mouse::MouseButton::Right => MouseButton::Right,
@@ -571,6 +611,14 @@ fn drive_pause(
         host.input(if b.state.is_pressed() { PlayerEvent::MouseDown { x, y, button, index: None } } else { PlayerEvent::MouseUp { x, y, button } });
     }
     for k in keys.read() {
+        if key_edit.waiting.is_some() {
+            if k.state.is_pressed() {
+                // (Escape leaves the row as it was.)
+                let b = (k.key_code != KeyCode::Escape).then_some(crate::controls::Binding::Key(k.key_code));
+                take_binding(host, &mut key_edit, b);
+            }
+            continue;
+        }
         let Some(key) = movie_key(k.key_code) else { continue };
         host.input(if k.state.is_pressed() { PlayerEvent::KeyDown { key } } else { PlayerEvent::KeyUp { key } });
     }
@@ -583,7 +631,10 @@ fn drive_pause(
         let names: Vec<&str> = list.split(',').collect();
         if since > 2.0 + 0.6 * pressed.1 as f32 {
             let click = names.get(pressed.1).and_then(|n| n.strip_prefix("Click@")).and_then(|at| at.split_once(':'));
-            if let Some((x, y)) = click.and_then(|(x, y)| Some((x.parse::<f64>().ok()?, y.parse::<f64>().ok()?))) {
+            // (`Bind:<key>`: the key the key bindings page is waiting for.)
+            if let Some(code) = names.get(pressed.1).and_then(|n| n.strip_prefix("Bind:")).and_then(test_key) {
+                take_binding(host, &mut key_edit, Some(crate::controls::Binding::Key(code)));
+            } else if let Some((x, y)) = click.and_then(|(x, y)| Some((x.parse::<f64>().ok()?, y.parse::<f64>().ok()?))) {
                 host.input(PlayerEvent::MouseMove { x, y });
                 host.input(PlayerEvent::MouseDown { x, y, button: MouseButton::Left, index: None });
                 host.input(PlayerEvent::MouseUp { x, y, button: MouseButton::Left });
@@ -593,6 +644,76 @@ fn drive_pause(
             }
             pressed.1 += 1;
         }
+    }
+}
+
+/// The key bindings page's edit (`M_KeyBinding.feu`, which the options page
+/// loads for customizing the controls): the settings as edited, and the
+/// action waiting for its new key.
+#[derive(Resource, Default)]
+struct KeyEdit {
+    draft: Option<crate::settings::Settings>,
+    waiting: Option<crate::controls::Action>,
+}
+
+/// The game's name for an action on the key bindings page, where it has
+/// one.
+fn action_text(a: crate::controls::Action) -> Option<u32> {
+    use crate::controls::Action::*;
+    Some(match a {
+        Forward => 172370,
+        Back => 172371,
+        Left => 172372,
+        Right => 172373,
+        Jump => 156380,
+        Crouch => 156385,
+        Sprint => 172374,
+        Fire => 156374,
+        Aim => 156357,
+        Reload => 156386,
+        Interact => 172375,
+        Grenade => 172377,
+        Molotov => 44858,
+        Medkit => 172376,
+        Melee => 172378,
+        NextWeapon => 172381,
+        PrevWeapon => 156384,
+        Map => 156365,
+        Tag => 160482,
+        ThrowRock => 156377,
+        C4 => 31924,
+        Mine => 32517,
+        SyringeA => 156358,
+        SyringeB => 156378,
+        SwimDown => return None,
+    })
+}
+
+/// The key bindings page's rows (`KeyBindings`): each action's name
+/// (`sKey`, the game's where it has one) and its input (`sValue`).
+fn send_key_bindings(host: &fc3_ui::Host, s: &crate::settings::Settings) {
+    use fc3_ui::ExternalValue as V;
+    let items = crate::controls::Action::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, &a)| {
+            let name = action_text(a).map_or_else(|| a.name().to_string(), |id| host.text(id));
+            let input = s.binding(a).map_or_else(String::new, |b| b.label());
+            [("iIndex", V::Number(i as f64)), ("sKey", V::String(name)), ("sValue", V::String(input))].into_iter().map(|(k, v)| (k.to_string(), v)).collect()
+        })
+        .collect();
+    host.set_data("KeyBindings", items);
+}
+
+/// The waiting row's new input (none: left as it was), into the edit.
+fn take_binding(host: &fc3_ui::Host, edit: &mut KeyEdit, binding: Option<crate::controls::Binding>) {
+    let Some(a) = edit.waiting.take() else { return };
+    host.event("ShowPressKeyPrompt", &["false"]);
+    if let (Some(b), Some(d)) = (binding, edit.draft.as_mut()) {
+        d.rebind(a, b);
+    }
+    if let Some(d) = edit.draft.as_ref() {
+        send_key_bindings(host, d);
     }
 }
 
