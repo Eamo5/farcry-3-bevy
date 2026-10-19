@@ -63,6 +63,7 @@ mod breakables;
 mod shake;
 mod aim_assist;
 mod poker;
+mod post_effects;
 mod credits;
 mod qte;
 mod stims;
@@ -81,8 +82,6 @@ mod treasure_maps;
 mod shooting_gallery;
 mod boss_fight;
 mod binds;
-mod screen_blur;
-mod script_postfx;
 mod vine_puff;
 mod authored_fx;
 mod retire;
@@ -447,8 +446,7 @@ fn main() {
             video::VideoPlugin,
             qte::QtePlugin,
             vine::VinePlugin,
-            screen_blur::ScreenBlurPlugin,
-            script_postfx::PostFxPlugin,
+            post_effects::PostEffectsPlugin,
             faces::FacesPlugin,
         ))
         .add_plugins(tattoo::TattooPlugin)

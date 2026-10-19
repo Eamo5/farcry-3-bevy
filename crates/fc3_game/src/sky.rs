@@ -273,6 +273,7 @@ pub(crate) fn advance_time(
     mut ambient: ResMut<GlobalAmbientLight>,
     mut sun: Query<(&mut Transform, &mut DirectionalLight, &mut SunDisk), With<Sun>>,
     mut cameras: Query<&mut Exposure, With<crate::player::PlayerCamera>>,
+    post: Option<Res<crate::post_effects::PostLight>>,
 ) {
     if keys.pressed(KeyCode::KeyT) {
         tod.hours += time.delta_secs() * 2.0;
@@ -323,7 +324,8 @@ pub(crate) fn advance_time(
     if game.is_none() {
         *scene = SceneExposure { ev100: tod.ev100(), game: None, probe: None, unit: None };
     }
-    let ev100 = scene.ev100;
+    // (A screen effect's bloom clip opens the exposure further: a blast's flash.)
+    let ev100 = scene.ev100 - post.map_or(0.0, |p| p.exposure.max(0.01).log2());
     for mut e in &mut cameras {
         e.ev100 = ev100;
     }

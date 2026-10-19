@@ -1338,7 +1338,7 @@ fn run_story(
         ResMut<crate::video::Videos>,
         ResMut<crate::qte::Qtes>,
         ResMut<crate::vine::Vines>,
-        ResMut<crate::script_postfx::PostEffects>,
+        ResMut<crate::post_effects::PostFx>,
         ResMut<crate::pawn_anims::PawnAnims>,
         ResMut<crate::controls::ScriptActionMaps>,
         ResMut<crate::breakables::Breaks>,

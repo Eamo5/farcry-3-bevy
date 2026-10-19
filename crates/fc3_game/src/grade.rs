@@ -125,7 +125,7 @@ struct GradePipeline {
 #[derive(Component, Deref)]
 struct GradePipelineId(CachedRenderPipelineId);
 
-/// The uniform on the GPU, written once.
+/// The uniform on the GPU, written again when the bloom changes.
 #[derive(Resource)]
 struct GradeBuffer(UniformBuffer<GradeUniform>);
 
@@ -197,15 +197,29 @@ fn prepare_pipelines(
 fn prepare_uniform(
     mut commands: Commands,
     grade: Option<Res<GameGrade>>,
-    buffer: Option<Res<GradeBuffer>>,
+    buffer: Option<ResMut<GradeBuffer>>,
+    post: Option<Res<crate::post_effects::PostLight>>,
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
 ) {
-    let (Some(grade), None) = (grade, buffer) else { return };
-    let mut b = UniformBuffer::from(grade.uniform);
-    b.set_label(Some("colour grade"));
-    b.write_buffer(&device, &queue);
-    commands.insert_resource(GradeBuffer(b));
+    let Some(grade) = grade else { return };
+    // A screen effect's bloom clip scales the bloom (a blast's glare).
+    let mut uniform = grade.uniform;
+    uniform.params.z *= post.map_or(1.0, |p| p.bloom.max(0.0));
+    match buffer {
+        Some(mut b) => {
+            if b.0.get().params != uniform.params {
+                b.0.set(uniform);
+                b.0.write_buffer(&device, &queue);
+            }
+        }
+        None => {
+            let mut b = UniformBuffer::from(uniform);
+            b.set_label(Some("colour grade"));
+            b.write_buffer(&device, &queue);
+            commands.insert_resource(GradeBuffer(b));
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -208,6 +208,7 @@ fn run_shakes(
     mut requests: MessageReader<Shake>,
     mut table: ResMut<ShakeTable>,
     mut view: ResMut<ViewShake>,
+    post: Option<Res<crate::post_effects::PostShake>>,
     gamepads: Query<Entity, With<Gamepad>>,
     mut rumble: MessageWriter<GamepadRumbleRequest>,
 ) {
@@ -240,6 +241,9 @@ fn run_shakes(
             *t < hit.length()
         });
     }
+    // (Screen effects' camera-shake clips add theirs.)
+    let p = post.map_or(Vec3::ZERO, |p| p.0);
+    let (roll, pitch, yaw) = (roll + p.x, pitch + p.y, yaw + p.z);
     *view = ViewShake { roll: roll.clamp(-MAX_ANGLE, MAX_ANGLE), pitch: pitch.clamp(-MAX_ANGLE, MAX_ANGLE), yaw: yaw.clamp(-MAX_ANGLE, MAX_ANGLE) };
     // The pad: each step, its motors set to where the curves are.
     *rumble_wait -= dt;

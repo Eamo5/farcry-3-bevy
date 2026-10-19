@@ -307,11 +307,13 @@ pub struct Breath {
     pub left: f32,
     pub max: f32,
     hurt: f32,
+    /// The player's head is under water.
+    pub under: bool,
 }
 
 impl Default for Breath {
     fn default() -> Self {
-        Breath { left: AIR, max: AIR, hurt: 0.0 }
+        Breath { left: AIR, max: AIR, hurt: 0.0, under: false }
     }
 }
 
@@ -340,6 +342,7 @@ fn breath(
     let oxygen = body.as_ref().and_then(|b| b.0.oxygen).unwrap_or(fc3_formats::body::Oxygen { max: AIR, drain: 1.0, refill: 8.0, drown: 12.0 });
     air.max = oxygen.max * lungs * if boosts.active(Syringe::NeverDrown) { 4.0 } else { 1.0 };
     let under = p.swimming && crate::water::submerged(cam.translation(), &heights, 0.15) && !h.dead;
+    air.under = under;
     if !under {
         air.left = (air.left + dt * oxygen.refill).min(air.max);
         air.hurt = 0.0;

@@ -742,24 +742,20 @@ fn vignette(colour: Color, reach: f32) -> BackgroundGradient {
 
 fn update_damage(
     time: Res<Time>,
-    players: Query<(&Health, &PlayerStats, &Player, &GlobalTransform)>,
+    players: Query<(&PlayerStats, &Player, &GlobalTransform)>,
     mut vignettes: Query<&mut BackgroundGradient, With<DamageVignette>>,
     mut arrow: Query<(&mut Node, &mut TextColor, &mut Text, &mut UiTransform), With<DamageArrow>>,
     original: Res<OriginalHud>,
 ) {
-    let Ok((h, ps, p, gt)) = players.single() else { return };
-    let low = (1.0 - h.current / (HEALTH_SEGMENT * 1.2)).clamp(0.0, 1.0);
-    let pulse = ps.hurt_dir.map(|(_, s)| s).unwrap_or(0.0);
+    let Ok((ps, p, gt)) = players.single() else { return };
     if let Ok(mut bg) = vignettes.single_mut() {
-        // Low health and hits redden the edges; burning adds flickering orange.
+        // Burning reddens the edges with a flickering orange. (Hits and low
+        // health are the game's own post-effects: `post_effects`.)
         let burn = ps.burning.min(1.0);
         let t = time.elapsed_secs();
         let flicker = 0.75 + 0.25 * (t * 23.0).sin() * (t * 7.3).cos();
-        let red = (low * 0.55 + pulse * 0.25).min(0.65);
-        let orange = burn * 0.4 * flicker;
-        let a = (red + orange).min(0.7);
-        let mix = if a > 0.0 { orange / a } else { 0.0 };
-        *bg = vignette(Color::srgba(0.55 + 0.4 * mix, 0.32 * mix, 0.0, a), low.max(burn * 0.25));
+        let a = (burn * 0.4 * flicker).min(0.7);
+        *bg = vignette(Color::srgba(0.95, 0.32, 0.0, a), burn * 0.25);
     }
     let Ok((mut node, mut color, mut text, mut xf)) = arrow.single_mut() else { return };
     // (The original HUD's hit indicators show it.)

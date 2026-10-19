@@ -2230,6 +2230,10 @@ without blur and 329 FPS with the fixed authored transition effect
 counter samples, not a controlled GPU benchmark. The normal VSync setting
 has not been changed.
 
+(Superseded 2026-10-19: every effect of the PostFX database now plays, for
+scripts and the player's own state, with all its clip kinds; see
+`docs/shaders.md`, Post-effects. `FC3_POSTFX_GAMEPLAY_TEST` is gone.)
+
 `FC3_POSTFX_GAMEPLAY_TEST=1` now opts the script host into mushroom effect
 playback using the installed PostFX database. Start/stop requests resolve
 the authored IN/LOOP/OUT sequences, use gameplay time, preserve elapsed

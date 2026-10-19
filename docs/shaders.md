@@ -829,3 +829,91 @@ diagnostic system added was enough to bring it on every run).
 player first comes within `radius` of each point, to look at a place along a
 scripted walk. `FC3_BURST=<dir>,<seconds>` captures 24 frames 40 ms apart from
 that long after start (real time), for what lasts a moment.
+
+## Post-effects (`fc3_game/src/post_effects.rs`)
+
+The game's screen effects are sequences in `cinema_postfx.xml` (305 of them),
+played by name through the PostFX database (`PostFXs:PostFXs/Database` in the
+entity library, 183 effects). Each effect names its loop sequence, a priority,
+an intensity control (`selIntensityControl`; the game sets a strength for the
+ones it drives, like blasts and speed) and a fade in and out. `selFadeType` 1
+plays a fade sequence, 2 ramps the strength over `fFadeTime`, 0 cuts. An
+effect's id (`sFX`) is the CRC-32 of its lower-case name. Scripts start and
+stop them by name (`CAPI_Player.StartPostFX`). The engine starts the rest from
+the player's state; no data names those triggers, so the game picks them by
+the effects' names:
+
+| effect | when |
+|---|---|
+| `sp_health_hit`, `meleehitfx`, `animalslash_leftside`/`_rightside` | a hit, a blow, an animal's strike (sides alternate) |
+| `nearmiss` | a round passing close (its whizz sound) |
+| `criticalhealth`, `death` | health in its last segment, dead |
+| `grenade_explosionfx` | a blast within three of its radii, stronger nearer |
+| `sprintingfx`, `slidingfx`, `fallingfx`, `landingfx` | sprinting, sliding, falling fast, a hard landing |
+| `ziplinespeedfx`, `handgliderspeedfx`, `wingsuitspeedfx`, `vehiclesspeedfx` | by speed |
+| `diving`, `drowning_health` | head under water, air below a third |
+| `ironsightfx`, `binocularfx` | aiming down iron sights, binoculars |
+| a syringe's own (`healthboostfx`, `animalrepellantfx`, ...) | as it goes in |
+
+A state only ends the effects it started, so a script's effect of the same
+name plays on.
+
+Each sequence's clips are post-effect clips (`fc3_formats::cinema`,
+`ClipKind::Blur` and `ClipKind::Post`): blur (203), colour mask (99), bloom
+(67), RGB separation (59), colour burn (29), desaturation (26), source
+distortion (21), camera shake (10), noise (4), hue and saturation (4), slow
+motion (2), motion blur (2) and field of view (1). Every frame, the strongest
+playing effect's clip of each kind wins (by effect priority, then the clip's
+`nPriority`, then the latest started). Up to two colour masks play at once.
+They all go to one full-screen pass after tone mapping
+(`post_effects.wgsl`).
+
+The game's own pixel shaders for most of these were found by their
+constants' CRC-32. The constant names are strings in `FC3.dll`, and so are the
+techniques (`PostFxColorMask`, `PostFxRGBSeparation`, `PostFxBlur_Radial`, ...)
+and the enum names, registered in code in order:
+
+* **Colour mask** (`Color`, `SrcSampler`; textured: `TextureSampler`,
+  `Tiling`, `AlphaOffset`). Every variant squares the source (gamma to near
+  linear) and takes a square root at the end. `selBlendType` is None, Alpha,
+  Additive, Screen, Multiply, Multiply2X, Substractive (0-6). None and Alpha
+  are `lerp(src, C, a)`, Additive `src + C a`, Screen `C a + src (1 - C a)`,
+  Multiply `src lerp(1, C, a)`, Multiply2X `2 src (a (C - 0.5) + 0.5)` and
+  Substractive `src - C a`. Textured, the colour is the texture's times the
+  clip's and the alpha is `saturate(C.a t.a + AlphaOffset)`. The texture's
+  place comes from `ScaleOffset` and `Tiling` (vertex shader
+  `QuadParams`/`Tiling`/`UVScaleOffset`). The fades to black and white are
+  colour masks (None); a hit's blood and the scope mask textured ones.
+* **Desaturation** (`DesaturationColour`, `DesaturationScale`):
+  `mix(src, dot(src, (0.3, 0.59, 0.11)) * colour, scale)`.
+* **RGB separation** (`Opacity`, `MaskSampler`, and the vertex shader's
+  `UV0Params`..`UV2Params`). Three samples of the source at
+  their own places, each channel lerped from the source's by the mask's
+  channel. The result is mixed back toward the source by `Opacity` (1 shows
+  only the source). The clip's per-channel scale and offset (pixels) become
+  those places (here: zoomed about the centre by the scale).
+* **Masked blur composite** (`TextureAlpha`, `MaskOffset`, `SrcSampler`,
+  `TextureSampler`): `lerp(src, blurred, saturate((mask.r + MaskOffset) *
+  TextureAlpha))` (the blurred copy's alpha also adds; it is taken as 0). The
+  vignette mask (`mushbuzz_vignette_01`) is black in the middle and white at
+  the edges. `selBlurType` is Gaussian, Radial, Diamond, Directional,
+  GaussianSeparate (0-4). The game blurs a quarter-size copy with 9-tap
+  passes (`UVOffsets`, weights 0.07-0.15). Here the radial blur takes 16 taps
+  along the line from the centre, spanning 0.3% of the distance per unit of
+  factor times `Direction` (20 by 5 for speed), each tap spread a little. The
+  2D kinds take a 25-tap disc of 10 px per unit of factor.
+
+Colour burn, hue and saturation, noise and distortion weren't found as
+separate programs. They follow the editor's help text: colour burn greys all
+but the colours near its own (threshold) with contrast; `SaturationRatio` is a
+saturation offset (-1 grey) and `HUE_Rotation` a fraction of a turn; noise
+modulates by its texture, tiled; distortion moves the source by its texture's
+offsets (pixels, `DistortionFactor`). Bloom clips (`fIntensity`, `fExposure`)
+multiply the grade's bloom and the scene's exposure. The fades to white go to
+1,500 times. Camera-shake clips add to the view's shake. Motion blur and slow
+motion aren't played. Clips name four textures the game doesn't ship
+(`critical_health`, `bossinksplash`, `animalslash_center`, `animalslash01`);
+those stay plain.
+
+`FC3_POSTFX_TEST=<effect or sequence>` plays one held on, and
+`FC3_POSTFX_TEST_TIME=<s>` holds it at a time (job tmp `postfx_run.ps1`).
