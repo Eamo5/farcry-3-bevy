@@ -449,6 +449,15 @@ impl Mixer {
         self.cutoffs.iter().filter(|(_, r)| r.now < OPEN.log2() - 0.01 && r.now > OPEN_HIGH.log2() + 0.01).map(|(u, r)| (*u, r.now.exp2())).collect()
     }
 
+    /// Back to the mix as authored, every state gone (a load, the main
+    /// menu: nothing a story or a room pushed carries over).
+    pub fn reset(&mut self) {
+        *self = Mixer::default();
+        for c in &CUTOFFS {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
     /// Forgets this frame's stops (once every sound has heard them).
     pub fn clear_stops(&mut self) {
         self.stopped.clear();
@@ -465,6 +474,15 @@ impl Mixer {
 /// handbook and the shop), the player's head under water, health in its
 /// last bar (the world muffled), riding a vehicle, and a fight (enemies in
 /// combat with the player, as the music has it: the beds thinned).
+/// Clears the mixer as a game loads or the main menu comes up (see
+/// [`Mixer::reset`]), and the rooms' notion of where the listener is.
+pub fn reset_mixer(mut mixer: ResMut<Mixer>, rooms: Option<ResMut<Rooms>>) {
+    mixer.reset();
+    if let Some(mut rooms) = rooms {
+        rooms.inside = None;
+    }
+}
+
 /// `FC3_MIXING_TEST=<name>[,<seconds>]` (tests) starts a mixing that many
 /// seconds into play (default 10).
 pub fn game_mixings(

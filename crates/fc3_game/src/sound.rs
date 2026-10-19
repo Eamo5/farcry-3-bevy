@@ -36,6 +36,8 @@ impl Plugin for SoundPlugin {
             .init_resource::<Mixings>()
             .add_systems(OnExit(crate::menu::GameState::Loading), (load_bank, load_sound_points, crate::mixer::load_rooms))
             .add_systems(PostStartup, attach_listener)
+            .add_systems(OnEnter(crate::menu::GameState::Loading), crate::mixer::reset_mixer)
+            .add_systems(OnEnter(crate::menu::GameState::MainMenu), crate::mixer::reset_mixer)
             .add_systems(
                 Update,
                 (crate::mixer::game_mixings, crate::mixer::room_mixings, mix, sound_points, play_one_shots, update_loops, ambience, hear).chain(),
