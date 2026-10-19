@@ -66,11 +66,11 @@ pub fn shared_descriptors(instance: wgpu::Instance, adapter: wgpu::Adapter, devi
 
 /// Draws into a texture made elsewhere: an sRGB one the game shows,
 /// through a plain RGBA view of it, so what Ruffle writes (sRGB already) is
-/// read back as sRGB. The texture's size is the target's; a new size wants
-/// a new texture and target.
+/// read back as sRGB. The texture's size is the target's: for a new size
+/// the game puts a new texture in the shared slot, then resizes the player.
 #[derive(Debug)]
 pub struct SharedTarget {
-    texture: wgpu::Texture,
+    texture: Arc<std::sync::Mutex<wgpu::Texture>>,
     width: u32,
     height: u32,
 }
@@ -92,8 +92,8 @@ impl SharedTarget {
     /// The view Ruffle draws through.
     pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-    pub fn new(texture: wgpu::Texture) -> Self {
-        let (width, height) = (texture.width(), texture.height());
+    pub fn new(texture: Arc<std::sync::Mutex<wgpu::Texture>>) -> Self {
+        let (width, height) = texture.lock().map_or((1, 1), |t| (t.width(), t.height()));
         Self { texture, width, height }
     }
 }
@@ -119,7 +119,8 @@ impl RenderTarget for SharedTarget {
     }
 
     fn get_next_texture(&mut self) -> Option<SharedFrame> {
-        Some(SharedFrame(self.texture.create_view(&wgpu::TextureViewDescriptor { format: Some(Self::FORMAT), ..Default::default() })))
+        let texture = self.texture.lock().ok()?;
+        Some(SharedFrame(texture.create_view(&wgpu::TextureViewDescriptor { format: Some(Self::FORMAT), ..Default::default() })))
     }
 
     fn submit<I: IntoIterator<Item = wgpu::CommandBuffer>>(
@@ -134,7 +135,7 @@ impl RenderTarget for SharedTarget {
 }
 
 /// A renderer drawing into a texture made elsewhere (see [`SharedTarget`]).
-pub fn shared_renderer(descriptors: Arc<Descriptors>, texture: wgpu::Texture) -> Result<WgpuRenderBackend<SharedTarget>> {
+pub fn shared_renderer(descriptors: Arc<Descriptors>, texture: Arc<std::sync::Mutex<wgpu::Texture>>) -> Result<WgpuRenderBackend<SharedTarget>> {
     WgpuRenderBackend::new(descriptors, SharedTarget::new(texture)).map_err(|e| anyhow!(e.to_string()))
 }
 

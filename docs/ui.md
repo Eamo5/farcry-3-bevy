@@ -292,6 +292,14 @@ adapter, device and queue). A full-window UI node shows it with
 decodes the sRGB itself. The stage is the movies' own 1280x720, shown whole
 (`STAGE`, `ShowAll`) and see-through (`transparent` window mode).
 
+The canvas follows the window (`follow_window`): when its physical size
+changes (a new resolution or window mode, a dragged edge, or the display's
+scale known only after start-up), a new image is made at that size. Once
+the render world has its texture, it goes into the slot Ruffle's target
+reads, the stage is resized to it, and the node's material is pointed at
+it. As the stage is shown whole, on screens narrower than 16:9 the HUD sits
+in the same centred band the letterbox shows.
+
 The main HUD starts as the engine starts it (`Get` answers for
 high-definition, language and platform; `SetGameMode SPHud`, `EnableHud`,
 `SetVisible`), and the game then drives its clips as the engine did, sending

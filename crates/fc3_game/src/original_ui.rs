@@ -72,7 +72,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_knives,
                     (drive_races, drive_trials).chain(),
                     (drive_pause, drive_map_page, shop::drive_shop_page).chain(),
-                    run_interface,
+                    (follow_window, run_interface).chain(),
                 )
                     .chain()
                     .after(crate::hud::HudSet)
@@ -117,6 +117,73 @@ struct Canvas {
     texture: Arc<Mutex<Option<wgpu::Texture>>>,
 }
 
+/// What the interface draws into now (the slot its renderer reads), its
+/// size, the size a new canvas is being made at as the window changes, and
+/// the node's material (pointed at the new canvas once it's drawn into).
+#[derive(Resource, Default)]
+struct CanvasTarget {
+    shared: Option<Arc<Mutex<wgpu::Texture>>>,
+    size: UVec2,
+    wanted: Option<UVec2>,
+    material: Handle<CanvasMaterial>,
+}
+
+/// The canvas image at a size (sRGB, read as stored: the shader decodes).
+fn canvas_image(w: u32, h: u32) -> Image {
+    let mut image = Image::new_target_texture(w, h, TextureFormat::Rgba8UnormSrgb, None);
+    image.texture_descriptor.usage |= TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
+    image.texture_descriptor.view_formats = &[TextureFormat::Rgba8Unorm];
+    image.texture_view_descriptor = Some(TextureViewDescriptor { format: Some(TextureFormat::Rgba8Unorm), ..default() });
+    image
+}
+
+/// Follows the window's size (a new resolution, a resized window): a new
+/// canvas at that size, handed to the interface once it's there, the
+/// player's stage resized to it, and the node shown from it.
+fn follow_window(
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut canvas: ResMut<Canvas>,
+    mut target: ResMut<CanvasTarget>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<CanvasMaterial>>,
+    state: NonSend<Interface>,
+) {
+    let Interface::Running(host) = &*state else { return };
+    let Some(shared) = target.shared.clone() else { return };
+    let Ok(window) = windows.single() else { return };
+    let now = UVec2::new(window.physical_width(), window.physical_height());
+    if now.min_element() == 0 {
+        return;
+    }
+    if now != target.size && target.wanted != Some(now) {
+        canvas.image = images.add(canvas_image(now.x, now.y));
+        if let Ok(mut slot) = canvas.texture.lock() {
+            *slot = None;
+        }
+        target.wanted = Some(now);
+        return;
+    }
+    let Some(wanted) = target.wanted else { return };
+    let Ok(mut slot) = canvas.texture.lock() else { return };
+    match slot.as_ref() {
+        Some(t) if t.width() == wanted.x && t.height() == wanted.y => {
+            if let Ok(mut s) = shared.lock() {
+                *s = t.clone();
+            }
+            host.resize(wanted.x, wanted.y);
+            if let Some(mut m) = materials.get_mut(&target.material) {
+                m.canvas = canvas.image.clone();
+            }
+            info!("original UI: drawing at {}x{}", wanted.x, wanted.y);
+            target.size = wanted;
+            target.wanted = None;
+        }
+        // (The old canvas's, handed back before the new one was made: again.)
+        Some(_) => *slot = None,
+        None => {}
+    }
+}
+
 /// The interface player, once its texture is there (or why it isn't). It
 /// isn't `Send`: a main-thread resource.
 enum Interface {
@@ -133,14 +200,11 @@ fn make_canvas(
 ) {
     let Ok(window) = windows.single() else { return };
     let (w, h) = (window.physical_width().max(1), window.physical_height().max(1));
-    let mut image = Image::new_target_texture(w, h, TextureFormat::Rgba8UnormSrgb, None);
-    image.texture_descriptor.usage |= TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
-    image.texture_descriptor.view_formats = &[TextureFormat::Rgba8Unorm];
-    // (Read as stored: the shader decodes.)
-    image.texture_view_descriptor = Some(TextureViewDescriptor { format: Some(TextureFormat::Rgba8Unorm), ..default() });
-    let handle = images.add(image);
+    let handle = images.add(canvas_image(w, h));
+    let material = materials.add(CanvasMaterial { canvas: handle.clone() });
+    commands.insert_resource(CanvasTarget { size: UVec2::new(w, h), material: material.clone(), ..default() });
     commands.spawn((
-        MaterialNode(materials.add(CanvasMaterial { canvas: handle.clone() })),
+        MaterialNode(material),
         Node { width: Val::Percent(100.0), height: Val::Percent(100.0), position_type: PositionType::Absolute, ..default() },
         // (Over the game's own HUD.)
         GlobalZIndex(50),
@@ -173,7 +237,7 @@ struct UiCalls(Vec<fc3_ui::EngineCall>);
 fn run_interface(
     mut state: NonSendMut<Interface>,
     mut calls: ResMut<UiCalls>,
-    canvas: Res<Canvas>,
+    (canvas, mut target): (Res<Canvas>, ResMut<CanvasTarget>),
     time: Res<Time<Real>>,
     info: Res<crate::data::CacheInfo>,
     instance: Option<Res<GpuInstance>>,
@@ -191,7 +255,10 @@ fn run_interface(
         };
         let size = (texture.width(), texture.height());
         let descriptors = fc3_ui::shared_descriptors(instance.0.clone(), (**adapter.0).clone(), device.wgpu_device().clone(), (**queue.0).clone());
-        let host = fc3_ui::shared_renderer(descriptors, texture).and_then(|r| fc3_ui::Host::new(r, &info.root, size));
+        let shared = Arc::new(Mutex::new(texture));
+        target.shared = Some(shared.clone());
+        target.size = UVec2::new(size.0, size.1);
+        let host = fc3_ui::shared_renderer(descriptors, shared).and_then(|r| fc3_ui::Host::new(r, &info.root, size));
         *state = match host {
             Ok(mut host) => {
                 start_hud(&mut host, size);
