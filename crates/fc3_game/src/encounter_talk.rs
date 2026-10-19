@@ -96,8 +96,10 @@ fn talk(
     bank: Option<Res<crate::sound::SoundBank>>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     mut rng: ResMut<Rng>,
+    (library, mut faces): (Option<ResMut<crate::faces::FaceLibrary>>, Query<&mut crate::faces::Face>),
     mut commands: Commands,
 ) {
+    let mut library = library;
     let Ok(pt) = players.single() else { return };
     let now = time.elapsed_secs();
     for (e, mut t) in &mut talks {
@@ -130,29 +132,37 @@ fn talk(
         // Who says it: a fighter of the encounter with a voice the line has
         // (else any of them, by turns); a victim's line, one of its
         // civilians (in a voice of their sex).
-        let speaker: Option<(Vec3, String)> = if line.iter().any(|(v, _)| fighter_voice(v)) {
-            let mut members: Vec<(Vec3, String)> = npcs
+        // (And their face, which mouths the line.)
+        let speaker: Option<(Vec3, String, Option<Entity>)> = if line.iter().any(|(v, _)| fighter_voice(v)) {
+            let mut members: Vec<(Vec3, String, Option<Entity>)> = npcs
                 .iter()
                 .filter(|(n, _, h, _)| n.marker_id == group && !h.dead)
-                .filter_map(|(_, tr, _, v)| Some((tr.translation, v?.voice.clone())))
+                .filter_map(|(n, tr, _, v)| Some((tr.translation, v?.voice.clone(), n.rig)))
                 .collect();
             members.sort_by(|a, b| a.1.cmp(&b.1));
-            let own: Vec<(Vec3, String)> = members.iter().filter(|(_, v)| line.iter().any(|(lv, _)| lv == v)).cloned().collect();
+            let own: Vec<_> = members.iter().filter(|(_, v, _)| line.iter().any(|(lv, _)| lv == v)).cloned().collect();
             let pool = if own.is_empty() { members } else { own };
             pool.get(t.line % pool.len().max(1)).cloned()
         } else {
             civilians.iter().find(|(c, _, _, h)| c.0 == group && !h.dead).map(|(_, v, tr, _)| {
                 let female = v.female();
                 let voice = line.iter().map(|(lv, _)| lv.clone()).find(|lv| lv.contains("female") == female).unwrap_or_default();
-                (tr.translation, voice)
+                (tr.translation, voice, v.rig())
             })
         };
         t.line += 1;
-        let Some((at, voice)) = speaker else { continue };
+        let Some((at, voice, rig)) = speaker else { continue };
         let Some(sound) = conv::line_for(&line, &voice, rng.f32()) else { continue };
         sfx.write(crate::sound::PlaySfx { event: sound, at: Some(at + Vec3::Y * 0.7), volume: 1.0 });
+        // The speaker's face mouths it, where the game has the lip-sync.
+        let mut mouthed = false;
+        if let (Some(lib), Some(mut face)) = (library.as_mut(), rig.and_then(|r| faces.get_mut(r).ok())) {
+            face.voice = lib.clip(&fc3_formats::facial::voice_clip_path(sound)).map(|c| (c, 0.0));
+            mouthed = face.voice.is_some();
+        }
         if std::env::var_os("FC3_ENCOUNTER_DEBUG").is_some() {
-            info!("encounter: {voice} says line {} ({sound:#x}, {:.1} s)", t.line, bank.as_ref().and_then(|b| b.length(sound)).unwrap_or(0.0));
+            let length = bank.as_ref().and_then(|b| b.length(sound)).unwrap_or(0.0);
+            info!("encounter: {voice} says line {} ({sound:#x}, {length:.1} s{})", t.line, if mouthed { ", mouthed" } else { "" });
         }
         t.next = now + bank.as_ref().and_then(|b| b.length(sound)).unwrap_or(LINE) + GAP;
     }

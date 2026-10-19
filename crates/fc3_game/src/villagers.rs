@@ -336,6 +336,11 @@ impl Villager {
     pub(crate) fn female(&self) -> bool {
         self.female
     }
+
+    /// Their character rig (whose face mouths what they say).
+    pub(crate) fn rig(&self) -> Option<Entity> {
+        self.rig
+    }
 }
 
 /// A civilian an encounter puts somewhere (dead: a body it leaves).

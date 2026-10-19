@@ -920,7 +920,9 @@ is the story's own:
   script's proximity radius (its `nearZone`, 8 to 34 m; 25 m, ours, for a
   script with none): a fighter's line by the encounter's member with that
   bark voice (else by turns), a victim's by one of its civilians in a voice
-  of their sex, each line after the last has been said (its sound's length
+  of their sex, the speaker's face mouthing it (the line's lip-sync clip on
+  their kit's face, as barks have it), each line after the last has been
+  said (its sound's length
   from the audio manifest's samples and rate, `sound::SoundBank::length`;
   `FC3_TALK_TEST` starts them from twice as far). A script's radius is the
   widest of its listeners' `nearZone`s (the narrower ones watch a civilian
