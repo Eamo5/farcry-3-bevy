@@ -423,6 +423,15 @@ fn drive_pause(
                     send_handbook(host, book, &progress, extra, arg(1).parse().unwrap_or(0), arg(2));
                 }
             }
+            // The manual's section chosen: its entries, each a title and
+            // its text.
+            "OnEmanualSectionChanged" => {
+                let id: u32 = arg(1).parse().unwrap_or(u32::MAX);
+                let book = handbook.as_deref().and_then(|b| b.0.as_ref());
+                for (title, text) in book.and_then(|b| b.manual.iter().find(|m| m.id == id)).map(|m| m.entries.as_slice()).unwrap_or_default() {
+                    host.event("SetupEmanualContent", &[title, text]);
+                }
+            }
             // Crafting: its tabs, a tab's groups, a group's recipes, a
             // recipe's ingredients, and making the one last selected.
             "CraftingPageLoaded"
@@ -1363,7 +1372,8 @@ fn open_page(host: &fc3_ui::Host, page: &str) {
 /// `WikiCategory <group>` a group's pages (`bUnlocked` as the game opens
 /// them: `progression::handbook_open`), `StatsCategory <category>` a
 /// statistics category's rows (`statistics::rows`) and `Emanual` the
-/// manual's (not answered: its own movie).
+/// manual's sections (its movie then asks for a section's entries,
+/// `OnEmanualSectionChanged`).
 fn send_handbook(
     host: &fc3_ui::Host,
     book: &fc3_formats::progression::Handbook,
@@ -1442,6 +1452,13 @@ fn send_handbook(
                 }
                 item(fields)
             })
+            .collect(),
+        // (A header shows as a group's title; the movie blanks the
+        // section's name under one.)
+        "Emanual" => book
+            .manual
+            .iter()
+            .map(|m| item(vec![("iObjectID", V::Number(m.id as f64)), ("sSection", V::String(m.section.clone())), ("sHeader", V::String(m.header.clone()))]))
             .collect(),
         _ => return,
     };

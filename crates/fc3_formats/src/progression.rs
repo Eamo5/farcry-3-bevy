@@ -807,7 +807,9 @@ pub const HANDBOOK_REL: &str = "progression/handbook.txt";
 pub const WIKI_ITEMS: &str = r"generated\databases\generic\wikiitems.lib";
 pub const WIKI_CATEGORIES: &str = r"generated\databases\generic\encyclopediacategory.lib";
 pub const WIKI_SUBCATEGORIES: &str = r"generated\databases\generic\encyclopediasubcategory.lib";
-const HANDBOOK_MAGIC: &str = "fc3-handbook 1";
+const HANDBOOK_MAGIC: &str = "fc3-handbook 2";
+/// The form before the manual (read the same, without it).
+const HANDBOOK_MAGIC_1: &str = "fc3-handbook 1";
 
 /// A handbook category and the subcategories under it.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -837,16 +839,30 @@ pub struct HandbookEntry {
     pub description: String,
 }
 
+/// One of the manual's sections (a page with `bIsEmanual`): its header (a
+/// group's title, or empty), its name in the list, and its entries (each a
+/// title and its text), in order.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ManualSection {
+    pub id: u32,
+    pub sort: u32,
+    pub header: String,
+    pub section: String,
+    pub entries: Vec<(String, String)>,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Handbook {
     pub categories: Vec<HandbookCategory>,
     pub subcategories: Vec<Category>,
     pub entries: Vec<HandbookEntry>,
+    /// The manual (the handbook's own movie, `m_emanual`).
+    pub manual: Vec<ManualSection>,
 }
 
 /// The handbook from its databases. Pages without a category of their own
 /// (the tutorials) go under the tutorial subcategory their name gives; the
-/// manual's pages (`bIsEmanual`) are left out.
+/// manual's pages (`bIsEmanual`) are its sections.
 pub fn handbook(items: &Object, categories: &Object, subcategories: &Object, strings: &dyn Fn(u32) -> String) -> Handbook {
     let mut out = Handbook { subcategories: self::categories(subcategories, strings), ..Default::default() };
     for e in &categories.children {
@@ -881,6 +897,20 @@ pub fn handbook(items: &Object, categories: &Object, subcategories: &Object, str
     };
     for e in &items.children {
         if e.bool("bIsEmanual") == Some(true) {
+            let mut entries: Vec<(u32, String, String)> = e
+                .child("EmanualContents")
+                .iter()
+                .flat_map(|c| c.children_named("EmanualContent"))
+                .map(|c| (num(c, "iSortId"), located(strings, u32f(c, "locidTitle")), located(strings, u32f(c, "locidDescription"))))
+                .collect();
+            entries.sort_by_key(|c| c.0);
+            out.manual.push(ManualSection {
+                id: u32f(e, "disId"),
+                sort: num(e, "iSortId"),
+                header: located(strings, u32f(e, "locidHeader")),
+                section: located(strings, u32f(e, "locidSection")),
+                entries: entries.into_iter().map(|(_, t, d)| (t, d)).collect(),
+            });
             continue;
         }
         let key = text(e, "text_hidName");
@@ -914,6 +944,7 @@ pub fn handbook(items: &Object, categories: &Object, subcategories: &Object, str
         });
     }
     out.entries.sort_by(|a, b| (a.category, a.subcategory, a.sort, &a.name).cmp(&(b.category, b.subcategory, b.sort, &b.name)));
+    out.manual.sort_by_key(|m| (m.sort, m.id));
     out
 }
 
@@ -942,12 +973,24 @@ impl Handbook {
                 esc(&e.description)
             );
         }
+        for m in &self.manual {
+            s += &format!("manual\t{}\t{}\t{}\t{}\n", m.id, m.sort, esc(&m.header), esc(&m.section));
+            for (title, text) in &m.entries {
+                s += &format!("manualentry\t{}\t{}\t{}\n", m.id, esc(title), esc(text));
+            }
+        }
         s
+    }
+
+    /// Whether a cached table is in this version's form (else the
+    /// converter writes it again).
+    pub fn is_current(text: &str) -> bool {
+        text.lines().next().map(str::trim) == Some(HANDBOOK_MAGIC)
     }
 
     pub fn from_text(text: &str) -> Result<Handbook> {
         let mut lines = text.lines();
-        if lines.next().map(str::trim) != Some(HANDBOOK_MAGIC) {
+        if !matches!(lines.next().map(str::trim), Some(HANDBOOK_MAGIC | HANDBOOK_MAGIC_1)) {
             bail!("not a handbook table");
         }
         let mut h = Handbook::default();
@@ -975,6 +1018,14 @@ impl Handbook {
                     name: unesc(f[9]),
                     description: unesc(f[10]),
                 }),
+                "manual" if f.len() >= 5 => {
+                    h.manual.push(ManualSection { id: n(1), sort: n(2), header: unesc(f[3]), section: unesc(f[4]), entries: Vec::new() })
+                }
+                "manualentry" if f.len() >= 4 => {
+                    if let Some(m) = h.manual.iter_mut().find(|m| m.id == n(1)) {
+                        m.entries.push((unesc(f[2]), unesc(f[3])));
+                    }
+                }
                 _ => {}
             }
         }
@@ -1738,8 +1789,18 @@ end;
                 name: "X".into(),
                 description: "Line one\nline\ttwo".into(),
             }],
+            manual: vec![ManualSection {
+                id: 1318,
+                sort: 130,
+                header: String::new(),
+                section: "Skills".into(),
+                entries: vec![("Skills".into(), "Text\nmore".into()), ("XP".into(), "Points".into())],
+            }],
         };
         assert_eq!(Handbook::from_text(&h.to_text()).unwrap(), h);
+        assert!(Handbook::is_current(&h.to_text()));
+        // (One cached before the manual still reads.)
+        assert!(Handbook::from_text("fc3-handbook 1\n").is_ok_and(|b| b.manual.is_empty()));
         assert!(Handbook::from_text("fc3-recipes 6\n").is_err());
     }
 

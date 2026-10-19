@@ -1322,8 +1322,10 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
-    // ---- the handbook
-    if opts.only_sectors.is_none() && job.should_write(fc3_formats::progression::HANDBOOK_REL) {
+    // ---- the handbook (again when cached before its manual)
+    let current =
+        std::fs::read_to_string(job.root().join(fc3_formats::progression::HANDBOOK_REL)).is_ok_and(|t| fc3_formats::progression::Handbook::is_current(&t));
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::progression::HANDBOOK_REL) || !current) {
         if let Err(e) = convert_handbook(&job) {
             job.error(format!("handbook: {e:#}"));
         }

@@ -727,7 +727,14 @@ provider from the handbook (`progression::HandbookData`): `TabCategory`
 collectibles 1, tutorials 4, the manual 6, by `iObjectID`), `SubCategory
 <tab>` (a category's groups), `WikiCategory <group>` (a group's pages:
 `sName`, `sDescription`, `bUnlocked` as `handbook_open` has it). The
-manual (`Emanual`, its own movie) isn't answered.
+manual is the handbook's pages with `bIsEmanual`, each a section with a
+header (`locidHeader`, a group's title or none) and its entries
+(`EmanualContents`: a title and its text each, in order). The converter keeps
+them with the handbook (`fc3-handbook 2`; version 1 still reads, without
+them). The handbook's request for `Emanual` gets the sections (`iObjectID`,
+`sSection`, `sHeader`). The manual's movie then names a section
+(`OnEmanualSectionChanged <id>`) and gets its entries, one
+`SetupEmanualContent <title> <text>` each.
 
 The statistics tab lists its own eight categories and asks for one's rows
 at a time, `OnEncyclopediaRequest <category> StatsCategory` (0, the
