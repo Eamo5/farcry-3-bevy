@@ -2761,7 +2761,7 @@ fn shoot(
                 Visibility::Visible,
                 crate::weapons::ProjectileModel(fx.rocket.clone()),
             ));
-            crate::particles::fx::muzzle_flash(&mut shot_fx.particles, rng, muzzle, dir, 1.8);
+            crate::weapons::flash_3p(shot_fx, rng, "RPG-7", muzzle, dir, 1.8);
             for _ in 0..4 {
                 crate::particles::fx::barrel_smoke(&mut shot_fx.particles, rng, muzzle);
             }

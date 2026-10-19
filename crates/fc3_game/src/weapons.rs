@@ -230,6 +230,19 @@ pub fn muzzle_3p(weapon: &str) -> Option<&'static str> {
     (!s.muzzle_3p.is_empty()).then(|| crate::authored_fx::intern(&s.muzzle_3p))
 }
 
+/// A third-person shot's flash where a gun has no muzzle node of its own: the
+/// weapon's muzzle effect (by its name in the game's table), else ours.
+pub fn flash_3p(shot_fx: &mut crate::particles::ShotFx, rng: &mut Rng, weapon: &str, at: Vec3, dir: Vec3, scale: f32) {
+    flash_3p_into(&mut shot_fx.commands, &mut shot_fx.particles, rng, weapon, at, dir, scale);
+}
+
+/// As [`flash_3p`], for what has the commands and particles apart.
+pub fn flash_3p_into(commands: &mut Commands, particles: &mut crate::particles::Particles, rng: &mut Rng, weapon: &str, at: Vec3, dir: Vec3, scale: f32) {
+    if !muzzle_3p(weapon).is_some_and(|m| crate::authored_fx::play_muzzle_at(commands, m, at, dir)) {
+        crate::particles::fx::muzzle_flash(particles, rng, at, dir, scale);
+    }
+}
+
 /// A flamethrower's own flame, by its name in the game's table (`LPO-50`):
 /// what the characters' flamers show.
 pub fn flame_of(weapon: &str) -> Option<crate::flamethrower::Flame> {

@@ -391,8 +391,12 @@ same way. Our flash and smoke stand in when an effect isn't cached.
 The characters' shots play the third-person muzzle of their role's weapon:
 `AK47`, the shotgunner's `M133`, the sniper's `SVD`, the heavy's `PKM`, the
 molotov thrower's `6P9`. It plays where the shot leaves, heading along it with
-its right level. Turrets, helicopters and villagers keep ours. These were only
-seen in a fight at 30 m, too far to judge their look.
+its right level. The rocket man's launch plays the `RPG-7`'s (its back blast).
+Mounted guns play their mount's: the DShK turrets `DSHK_Mounted`, the M249
+ones `M249_Mounted`. The helicopters' door guns play `Minigun230_BlackHawk`,
+and the villagers' rifles the `AK47`'s. The characters' muzzles were only seen
+in a fight at 30 m, too far to judge their look; the mounted, helicopter and
+villager ones are not seen yet.
 
 The muzzle node is the gun model's `FX_FIRE`, taken only where it lies at the
 front of the gun. The 870's chains to a pose off the gun, below and beside it,

@@ -35,6 +35,9 @@ impl Plugin for StoryHelisPlugin {
 
 /// The model a wrecked Blackhawk leaves.
 const WRECK_MODEL: &str = r"graphics\__fc3_graphics\_common\vehicles\air\blackhawk\blackhawk_destroyed.xbg";
+/// The helicopters' door gun in the game's weapons table (its muzzle's
+/// effects).
+const HELI_GUN: &str = "Minigun230_BlackHawk";
 
 /// What a helicopter archetype's own data gives it.
 #[derive(Clone, Debug, PartialEq)]
@@ -606,7 +609,7 @@ fn fly(
                             bevy::light::NotShadowCaster,
                         ));
                     }
-                    crate::particles::fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle, dir, 1.5);
+                    crate::weapons::flash_3p(&mut shot_fx, &mut rng, HELI_GUN, muzzle, dir, 1.5);
                     noises.write(crate::npc::Noise { at: muzzle, radius: 120.0, kind: crate::npc::NoiseKind::Threatening, aside: false });
                     loops.write(crate::sound::LoopSfx { key: root.to_bits(), event: crate::sound::ev::LMG_LOOP, at: Some(muzzle), volume: 1.0, ..default() });
                 }

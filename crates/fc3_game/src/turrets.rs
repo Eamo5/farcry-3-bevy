@@ -56,6 +56,16 @@ const KINDS: &[Kind] = &[
 ];
 const VEHICLE_KIND: usize = 3;
 
+impl Kind {
+    /// The gun in the game's weapons table (its muzzle's effects).
+    fn weapon(&self) -> &'static str {
+        match self.gun {
+            "M249" => "M249_Mounted",
+            _ => "DSHK_Mounted",
+        }
+    }
+}
+
 /// The kind of gun a vehicle carries, by its weapon.
 fn vehicle_kind(gun: &str) -> usize {
     (VEHICLE_KIND..KINDS.len()).find(|k| KINDS[*k].gun == gun).unwrap_or(VEHICLE_KIND)
@@ -695,7 +705,7 @@ fn drive_gunners(
                 bevy::light::NotShadowCaster,
             ));
         }
-        crate::particles::fx::muzzle_flash(&mut shot_fx.particles, &mut rng, muzzle, dir, 1.5);
+        crate::weapons::flash_3p(&mut shot_fx, &mut rng, KINDS[t.kind].weapon(), muzzle, dir, 1.5);
         noises.write(crate::npc::Noise { at: muzzle, radius: 120.0, kind: crate::npc::NoiseKind::Threatening, aside: false });
         loops.write(crate::sound::LoopSfx { key: g.turret.to_bits(), event: crate::sound::ev::LMG_LOOP, at: Some(muzzle), volume: 1.0, ..default() });
     }

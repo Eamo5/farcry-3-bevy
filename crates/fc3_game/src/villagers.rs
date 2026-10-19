@@ -749,7 +749,7 @@ fn hunt(
             npc.yaw = (-to.x).atan2(-to.z);
             let dir = to.normalize_or(Vec3::NEG_Z);
             let muzzle = from + Vec3::Y * 0.35 + Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero() * 0.7;
-            crate::particles::fx::muzzle_flash(&mut particles, &mut rng, muzzle, dir, 1.1);
+            crate::weapons::flash_3p_into(&mut commands, &mut particles, &mut rng, VILLAGER_GUN, muzzle, dir, 1.1);
             loops.write(crate::sound::LoopSfx { key: he.to_bits(), event: crate::sound::ev::RIFLE_3P, at: Some(muzzle), volume: 1.0, ..default() });
             if rng.f32() > HUNT_HIT {
                 continue;
@@ -802,6 +802,9 @@ const AT_POINT: f32 = 1.6;
 /// captive of theirs still alive. (Their own comrades take it for what it
 /// is: no alarm.)
 #[allow(clippy::too_many_arguments)]
+/// The villagers' rifle in the game's weapons table (its muzzle's effects).
+const VILLAGER_GUN: &str = "AK47";
+
 fn execute(
     time: Res<Time>,
     mut shooters: Query<(Entity, &mut Executioner, &mut crate::npc::Npc, &Transform, &Health)>,
@@ -811,6 +814,7 @@ fn execute(
     mut loops: MessageWriter<crate::sound::LoopSfx>,
     mut particles: ResMut<crate::particles::Particles>,
     mut rng: ResMut<Rng>,
+    mut commands: Commands,
 ) {
     let Ok(pt) = players.single() else { return };
     let dt = time.delta_secs();
@@ -861,7 +865,7 @@ fn execute(
         npc.yaw = (-to.x).atan2(-to.z);
         let dir = to.normalize_or(Vec3::NEG_Z);
         let muzzle = pos + Vec3::Y * 0.35 + Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero() * 0.7;
-        crate::particles::fx::muzzle_flash(&mut particles, &mut rng, muzzle, dir, 1.1);
+        crate::weapons::flash_3p_into(&mut commands, &mut particles, &mut rng, VILLAGER_GUN, muzzle, dir, 1.1);
         loops.write(crate::sound::LoopSfx { key: e.to_bits(), event: crate::sound::ev::RIFLE_3P, at: Some(muzzle), volume: 1.0, ..default() });
         damage.write(crate::combat::DamageEvent {
             target: victim,
