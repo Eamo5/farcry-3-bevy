@@ -217,6 +217,36 @@ impl Emitter {
     pub fn texture_of(&self, attribute: &str) -> Option<Result<String>> {
         self.source.attr(attribute).filter(|t| !t.is_empty()).map(archive_texture)
     }
+
+    /// Its child emitters (`PartChildEmitUnit`s): each of its particles
+    /// emits as they would. One that doesn't read is left out.
+    pub fn children(&self) -> Vec<Emitter> {
+        self.source.child("PartChildEmit").into_iter().flat_map(|c| &c.children).filter(|u| u.name == "PartChildEmitUnit")
+            .filter_map(|u| Emitter::of(u).ok()).collect()
+    }
+
+    /// An emitter (`PartEmit`, or a child's `PartChildEmitUnit`) as it's defined.
+    pub fn of(e: &Element) -> Result<Emitter> {
+        let number = |name: &str| -> Result<f32> {
+            let value = e.f32(name).with_context(|| format!("missing emitter {name}"))?;
+            ensure!(value.is_finite() && value >= 0.0, "invalid emitter {name}");
+            Ok(value)
+        };
+        // (No grid is a single image, as the glows have it.)
+        let frames = [e.u32("FrameCount").context("missing frame columns")?.max(1), e.u32("FrameCountY").context("missing frame rows")?.max(1)];
+        ensure!(frames[0].checked_mul(frames[1]).is_some(), "invalid frame grid");
+        let offset: Vec<f32> = e.attr("PosOffset").context("missing particle offset")?.split(',')
+            .map(|s| s.trim().parse()).collect::<Result<_, _>>()?;
+        ensure!(offset.len() == 3 && offset.iter().all(|v| v.is_finite()), "invalid particle offset");
+        Ok(Emitter {
+            name: e.attr("Name").context("missing emitter name")?.into(), active: e.bool("Active").unwrap_or(false),
+            texture: e.attr("DiffuseTexture").context("missing particle texture")?.into(), frames,
+            fps: number("FramePerSecond")?, fps_variant: number("FramePerSecondVariant")?,
+            duration: number("EmitDuration")?, delay: number("SpawnDelay")?, looping: e.bool("EmitLoop").unwrap_or(false),
+            initial_count: e.u32("NbInitPart").context("missing initial particle count")?,
+            offset: offset.try_into().unwrap(), source: e.clone(),
+        })
+    }
 }
 
 fn archive_texture(texture: &str) -> Result<String> {
@@ -234,11 +264,13 @@ pub struct Effect {
 }
 
 impl Effect {
-    /// The textures its active emitters draw with: each one's sheet, and a
-    /// heat haze's (`DistortionEnabled`) distortion map as well.
+    /// The textures its active emitters (and their children) draw with:
+    /// each one's sheet, and a heat haze's (`DistortionEnabled`) distortion
+    /// map as well.
     pub fn textures(&self) -> Vec<Result<String>> {
         let mut out = Vec::new();
-        for e in self.emitters.iter().filter(|e| e.active && !e.texture.is_empty()) {
+        let all: Vec<Emitter> = self.emitters.iter().flat_map(|e| std::iter::once(e.clone()).chain(e.children())).collect();
+        for e in all.iter().filter(|e| e.active && !e.texture.is_empty()) {
             out.push(e.texture_path());
             if e.source.attr("DistortionEnabled") == Some("1") {
                 out.extend(e.texture_of("DistortionTexture"));
@@ -250,27 +282,7 @@ impl Effect {
     pub fn parse(xml: &str) -> Result<Self> {
         let root = crate::xml::parse(xml).context("invalid particle XML")?;
         ensure!(root.name == "PartSys", "particle definition must be a PartSys");
-        let emitters = root.children.iter().filter(|e| e.name == "PartEmit").map(|e| -> Result<Emitter> {
-            let number = |name: &str| -> Result<f32> {
-                let value = e.f32(name).with_context(|| format!("missing emitter {name}"))?;
-                ensure!(value.is_finite() && value >= 0.0, "invalid emitter {name}");
-                Ok(value)
-            };
-            // (No grid is a single image, as the glows have it.)
-            let frames = [e.u32("FrameCount").context("missing frame columns")?.max(1), e.u32("FrameCountY").context("missing frame rows")?.max(1)];
-            ensure!(frames[0].checked_mul(frames[1]).is_some(), "invalid frame grid");
-            let offset: Vec<f32> = e.attr("PosOffset").context("missing particle offset")?.split(',')
-                .map(|s| s.trim().parse()).collect::<Result<_, _>>()?;
-            ensure!(offset.len() == 3 && offset.iter().all(|v| v.is_finite()), "invalid particle offset");
-            Ok(Emitter {
-                name: e.attr("Name").context("missing emitter name")?.into(), active: e.bool("Active").unwrap_or(false),
-                texture: e.attr("DiffuseTexture").context("missing particle texture")?.into(), frames,
-                fps: number("FramePerSecond")?, fps_variant: number("FramePerSecondVariant")?,
-                duration: number("EmitDuration")?, delay: number("SpawnDelay")?, looping: e.bool("EmitLoop").unwrap_or(false),
-                initial_count: e.u32("NbInitPart").context("missing initial particle count")?,
-                offset: offset.try_into().unwrap(), source: e.clone(),
-            })
-        }).collect::<Result<Vec<_>>>()?;
+        let emitters = root.children.iter().filter(|e| e.name == "PartEmit").map(Emitter::of).collect::<Result<Vec<_>>>()?;
         ensure!(!emitters.is_empty(), "particle definition has no emitters");
         Ok(Self { name: root.attr("Name").context("missing particle name")?.into(),
             id: root.u64("disLibItemId").context("missing particle ID")?, priority: root.u32("Priority").context("missing particle priority")?, emitters })

@@ -26,8 +26,13 @@
 //! bullet impacts' chips, explosions' debris) are its model, turned at
 //! random as they're born, sized by their size.
 //!
-//! Not played (yet): child emitters, plotted emission volumes and sounds;
-//! curves are joined linearly between their knots.
+//! A child emitter (`PartChildEmitUnit`: the trails of sparks the
+//! explosions' guide particles leave) emits from each of its parent's
+//! particles as an emitter would, its clock the particle's age, heading
+//! about the way the particle goes and taking on its speed.
+//!
+//! Not played (yet): plotted emission volumes and sounds; curves are joined
+//! linearly between their knots.
 
 use std::collections::HashMap;
 
@@ -362,6 +367,9 @@ struct Compiled {
     batch: Option<BatchKey>,
     /// A mesh emitter's model (cached), its particles shown as it.
     mesh: Option<String>,
+    /// Its child emitter (an index among the emitters), emitting from each
+    /// of its particles.
+    child: Option<usize>,
     frames: [u32; 2],
     fps: Ranged,
     random_start: bool,
@@ -503,6 +511,7 @@ impl Compiled {
         Compiled {
             batch,
             mesh,
+            child: None,
             frames: e.frames,
             fps: Ranged { value: e.fps, variant: e.fps_variant },
             random_start: on("FrameRandomStart"),
@@ -623,8 +632,15 @@ impl Library {
                 Ok(effect) => {
                     let mut ids = Vec::new();
                     for e in effect.emitters.iter().filter(|e| e.active) {
-                        ids.push(self.emitters.len());
+                        let id = self.emitters.len();
+                        ids.push(id);
                         self.emitters.push(Compiled::of(e));
+                        // (Its child emits from its particles, not on the
+                        // effect's clock.)
+                        if let Some(child) = e.children().into_iter().find(|c| c.active) {
+                            self.emitters[id].child = Some(self.emitters.len());
+                            self.emitters.push(Compiled::of(&child));
+                        }
                     }
                     debug!("authored effect {name}: {} emitters", ids.len());
                     Some(ids)
@@ -668,6 +684,70 @@ struct Particle {
     colour: Option<Vec3>,
     frame: f32,
     fps: f32,
+    /// Its child emitter's count towards its next particle, and whether
+    /// its burst has gone.
+    child_carry: f32,
+    child_burst: bool,
+}
+
+/// A particle born of an emitter, in a frame: turned `turn` at `place`
+/// (with `space` the effect's whole transform, kept for an emitter in its
+/// own space), taking on `carried`.
+#[allow(clippy::too_many_arguments)]
+fn birth(
+    em: &Compiled,
+    emitter: usize,
+    owner: Entity,
+    (turn, place, space): (Quat, Vec3, Option<bevy::math::Affine3A>),
+    facing: Mat3,
+    carried: Vec3,
+    rng: &mut crate::weapons::Rng,
+) -> Particle {
+    // A heading within the spreads, about the emitter's axis (Dunia +Y,
+    // Bevy -Z), or out from its volume.
+    let cone = Quat::from_rotation_y(em.axis_angle + rng.range(-1.0, 1.0) * em.axis_spread)
+        * Quat::from_rotation_x(em.plane_angle + rng.range(-1.0, 1.0) * em.plane_spread);
+    let v = em.volume.sample(rng, em.from_surface);
+    let born = if em.toward_camera { facing * v } else { turn * em.axis * Vec3::new(v.x, v.z, -v.y) };
+    let dir = if em.from_surface && born.length_squared() > 1e-6 { born.normalize() } else { turn * em.axis * cone * Vec3::NEG_Z };
+    let gravity = if em.local_gravity { turn * em.gravity_dir } else { em.gravity_dir } * em.gravity.roll(rng).max(0.0);
+    let frames = (em.frames[0] * em.frames[1]).max(1) as f32;
+    // (In its own space: kept in the effect's frame.)
+    let back = turn.inverse();
+    // (Dunia's Z is Bevy's local +Y.)
+    let stand = em.axis * Vec3::Y;
+    let (space, pos, dir, gravity, stand) = match space {
+        Some(space) => (Some(space), em.offset + back * born, back * dir, back * gravity, stand),
+        None => (None, place + turn * em.offset + born, dir, gravity, turn * stand),
+    };
+    Particle {
+        emitter,
+        owner,
+        space,
+        stand,
+        pos,
+        dir,
+        speed: em.speed.roll(rng),
+        carried,
+        fall: Vec3::ZERO,
+        gravity,
+        life: em.life.roll(rng).max(0.02),
+        age: 0.0,
+        size: em.size.roll(rng).max(0.0),
+        rot: em.angle.roll(rng).to_radians(),
+        spin: em.spin.roll(rng).to_radians(),
+        turn: if em.mesh.is_some() {
+            let tau = std::f32::consts::TAU;
+            Quat::from_euler(EulerRot::YXZ, rng.f32() * tau, rng.f32() * tau, rng.f32() * tau)
+        } else {
+            Quat::IDENTITY
+        },
+        colour: em.random_colour.then(|| gradient(&em.colours, rng.f32())),
+        frame: if em.random_start { (rng.f32() * frames).floor() } else { 0.0 },
+        fps: em.fps.roll(rng).max(0.0),
+        child_carry: 0.0,
+        child_burst: false,
+    }
 }
 
 impl Particle {
@@ -773,68 +853,79 @@ fn emit(
                     None => {}
                 }
             }
-            if spawn == 0 || (library.emitters[id].batch.is_none() && library.emitters[id].mesh.is_none()) {
+            let em = &library.emitters[id];
+            if spawn == 0 || (em.batch.is_none() && em.mesh.is_none() && em.child.is_none()) {
                 continue;
             }
             let alive = library.particles.iter().filter(|p| p.emitter == id && p.owner == entity).count();
             let room = library.emitters[id].max.saturating_sub(alive);
             for _ in 0..(spawn as usize).min(room) {
                 let em = &library.emitters[id];
-                // A heading within the spreads, about the emitter's axis
-                // (Dunia +Y, Bevy -Z), or out from its volume.
-                let cone = Quat::from_rotation_y(em.axis_angle + rng.range(-1.0, 1.0) * em.axis_spread)
-                    * Quat::from_rotation_x(em.plane_angle + rng.range(-1.0, 1.0) * em.plane_spread);
-                let v = em.volume.sample(&mut rng, em.from_surface);
-                let born = if em.toward_camera { facing * v } else { turn * em.axis * Vec3::new(v.x, v.z, -v.y) };
-                let dir = if em.from_surface && born.length_squared() > 1e-6 { born.normalize() } else { turn * em.axis * cone * Vec3::NEG_Z };
-                let gravity = if em.local_gravity { turn * em.gravity_dir } else { em.gravity_dir } * em.gravity.roll(&mut rng).max(0.0);
-                let frames = (em.frames[0] * em.frames[1]).max(1) as f32;
-                // (In its own space: kept in the effect's frame.)
-                let back = turn.inverse();
-                // (Dunia's Z is Bevy's local +Y.)
-                let stand = em.axis * Vec3::Y;
-                let (space, pos, dir, gravity, stand) = if em.local {
-                    (Some(at.affine()), em.offset + back * born, back * dir, back * gravity, stand)
+                // (Not in its own space: that follows the effect.)
+                let carried = if em.local {
+                    Vec3::ZERO
                 } else {
-                    (None, place + turn * em.offset + born, dir, gravity, turn * stand)
+                    let phase = ((clock.age - em.delay) / em.duration.max(1e-3)).clamp(0.0, 1.0);
+                    clock.velocity * em.ext_speed.roll(&mut rng).max(0.0) * em.ext_speed_ratio.at(phase)
                 };
-                let p = Particle {
-                    emitter: id,
-                    owner: entity,
-                    space,
-                    stand,
-                    pos,
-                    dir,
-                    speed: em.speed.roll(&mut rng),
-                    // (Not in its own space: that follows the effect.)
-                    carried: if em.local {
-                        Vec3::ZERO
-                    } else {
-                        let phase = ((clock.age - em.delay) / em.duration.max(1e-3)).clamp(0.0, 1.0);
-                        clock.velocity * em.ext_speed.roll(&mut rng).max(0.0) * em.ext_speed_ratio.at(phase)
-                    },
-                    fall: Vec3::ZERO,
-                    gravity,
-                    life: em.life.roll(&mut rng).max(0.02),
-                    age: 0.0,
-                    size: em.size.roll(&mut rng).max(0.0),
-                    rot: em.angle.roll(&mut rng).to_radians(),
-                    spin: em.spin.roll(&mut rng).to_radians(),
-                    turn: if em.mesh.is_some() {
-                        let tau = std::f32::consts::TAU;
-                        Quat::from_euler(EulerRot::YXZ, rng.f32() * tau, rng.f32() * tau, rng.f32() * tau)
-                    } else {
-                        Quat::IDENTITY
-                    },
-                    colour: em.random_colour.then(|| gradient(&em.colours, rng.f32())),
-                    frame: if em.random_start { (rng.f32() * frames).floor() } else { 0.0 },
-                    fps: em.fps.roll(&mut rng).max(0.0),
-                };
+                let p = birth(em, id, entity, (turn, place, em.local.then(|| at.affine())), facing, carried, &mut rng);
                 library.particles.push(p);
             }
         }
     }
+    // Child emitters: each of a parent's particles emits as its emitter
+    // would (a burst, then its rate over its time), its clock the
+    // particle's age, from where the particle is, heading about the way it
+    // goes (the child's +Y, Dunia's) and taking on its speed.
+    let mut born = Vec::new();
+    {
+        let Library { emitters, particles, .. } = &mut *library;
+        for p in particles.iter_mut() {
+            let Some(cid) = emitters[p.emitter].child else { continue };
+            let c = &emitters[cid];
+            let t = p.age - c.delay;
+            if t < 0.0 {
+                continue;
+            }
+            let mut n = 0;
+            if !p.child_burst {
+                p.child_burst = true;
+                n += c.burst;
+            }
+            if c.looping || t <= c.duration {
+                let phase = if c.looping { (t % c.duration) / c.duration } else { (t / c.duration).min(1.0) };
+                p.child_carry += (c.rate.roll(&mut rng) * c.rate_ratio.at(phase)).max(0.0) * dt;
+                while p.child_carry >= 1.0 {
+                    p.child_carry -= 1.0;
+                    n += 1;
+                }
+            }
+            if n > 0 {
+                let em = &emitters[p.emitter];
+                let s = (p.age / p.life).clamp(0.0, 1.0);
+                let velocity = p.world_vector(p.dir * p.speed * em.part_speed.at(s) + p.carried * em.part_ext_speed.at(s) + p.fall);
+                born.push((cid, p.owner, p.world_pos(), velocity, n));
+            }
+        }
+    }
+    for (cid, owner, at, velocity, n) in born {
+        // (As many as its pool holds for each of its parent's.)
+        let alive = library.particles.iter().filter(|p| p.emitter == cid && p.owner == owner).count();
+        let room = (library.emitters[cid].max * CHILD_POOLS).saturating_sub(alive);
+        let turn = Quat::from_rotation_arc(Vec3::NEG_Z, velocity.normalize_or(Vec3::Y));
+        for _ in 0..(n as usize).min(room) {
+            let c = &library.emitters[cid];
+            let carried = velocity * c.ext_speed.roll(&mut rng).max(0.0) * c.ext_speed_ratio.at(0.0);
+            let p = birth(c, cid, owner, (turn, at, None), facing, carried, &mut rng);
+            library.particles.push(p);
+        }
+    }
 }
+
+/// How many pools (`StaticSize`) of a child emitter's particles may live at
+/// once in one effect: each parent particle has its own in the engine, and
+/// an effect has a few parents at a time.
+const CHILD_POOLS: usize = 8;
 
 /// An authored light's intensity (the engine's units) in ours.
 const LIGHT_SCALE: f32 = 2.0e4;

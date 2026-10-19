@@ -542,8 +542,19 @@ has a size and isn't beyond its far fade. A pool of each model's entities is
 kept, as many as have lived at once, placed each frame and hidden when not
 needed. The effects' sounds are all unset (`-1`).
 
-Not yet: child emitters (`PartChildEmitUnit`, in a few) and the plotted
-discs. Curves are joined linearly between knots. `FC3_AUTHORED_FX=<name>[,<metres>]` plays one as an impact, on the ground
+Child emitters. An emitter's child (`PartChildEmitUnit`, in 12 of them:
+mostly the explosions' `SparksGuide`, whose few fast particles leave trails
+of sparks) emits from each of its particles as an emitter would. Its clock
+is the particle's age: its burst at once, then its rate over its time
+(`EmitDuration`, again and again with `EmitLoop`). Each child particle is
+born where the parent particle is, heading about the way it goes (the
+child's +Y, Dunia's, along the parent's motion, within its spreads), and
+takes on its speed by `InitExtSpdRatioKF`. A child's pool (`StaticSize`) is
+each parent particle's in the engine. Here an effect may have eight pools of
+a child's particles at once. The converter caches children's sheets with
+their parents'.
+
+Not yet: the plotted discs. Curves are joined linearly between knots. `FC3_AUTHORED_FX=<name>[,<metres>]` plays one as an impact, on the ground
 4 m (or that far) in front of the player, once he has stood 15 s.
 `FC3_AUTHORED_FX_SHOTS=<dir>` then captures the screen 0.05, 0.2, 0.5, 1, 2
 and 4 s in.
