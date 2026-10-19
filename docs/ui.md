@@ -483,7 +483,10 @@ only what changed (and everything again until the movies have loaded):
   plays at level 3; a mission's hint (`HudText`, the newest when there
   are more) goes in through the movie's own functions, `setTutorial(title,
   text, prompt)` and `showTutorial()` (it fades in), and `hideTutorial()`
-  takes it away. The shim's `call` turns null arguments into empty strings
+  takes it away. A HUD popup (`DisplayCustomUIMsg <string id> <show>
+  <seconds>`: the mission area's warning as the player leaves it, from
+  `Lib_Common.ExitZoneWarningListener`) goes in the same box, ahead of the
+  hints, until it is hidden or its seconds run out. The shim's `call` turns null arguments into empty strings
   (the host can only send a blank string as null). Checklists stay in the
   game's own text for now.
 * **Camera**: while the camera is up its viewfinder

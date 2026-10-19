@@ -717,7 +717,13 @@ impl StoryHost {
 
 enum Due {
     Sound(u64),
+    /// A HUD popup's time is up (`DisplayCustomUIMsg`'s timer).
+    HidePopup,
 }
+
+/// The hint box's key for a HUD popup (`DisplayCustomUIMsg`: the mission
+/// area's "leaving" warning), above every script's hint so it shows first.
+const POPUP_HINT: u64 = u64::MAX;
 
 /// A mission's card for the original HUD (`original_ui`): its title as
 /// it starts, its end.
@@ -1364,6 +1370,9 @@ fn run_story(
     while host.due.first().is_some_and(|d| d.0 <= now) {
         match host.due.remove(0).1 {
             Due::Sound(id) => host.story.sound_finished(id),
+            Due::HidePopup => {
+                ui.hints.remove(&POPUP_HINT);
+            }
         }
     }
     let Ok((mut t, mut p, mut health)) = players.single_mut() else { return };
@@ -2446,6 +2455,23 @@ fn run_story(
                     "HudTextHidden" => {
                         ui.hints.remove(&a(0).parse().unwrap_or(0));
                     }
+                    // A HUD popup (the mission area's warning as the player
+                    // leaves it): the game's string by its id in the hint
+                    // box, until hidden (-1) or its timer (s) runs out.
+                    "DisplayCustomUIMsg" => {
+                        let text = a(0).parse::<u32>().ok().and_then(|id| host.story.data().strings.get(id).map(plain));
+                        match text.filter(|_| a(1) == "true" || a(1) == "1") {
+                            Some(text) => {
+                                ui.hints.insert(POPUP_HINT, (String::new(), text));
+                                if let Some(secs) = a(2).parse::<f32>().ok().filter(|s| *s > 0.0) {
+                                    host.due.push((now + secs, Due::HidePopup));
+                                }
+                            }
+                            None => {
+                                ui.hints.remove(&POPUP_HINT);
+                            }
+                        }
+                    }
                     "ChecklistObjective" => {
                         let id = a(1).parse().unwrap_or(0);
                         if a(0) == "true" {
@@ -2600,6 +2626,21 @@ fn run_story(
                     }
                     "CAPI_Pawn.HealPawn" if a(0) == fc3_story::PLAYER.to_string() => {
                         heal = true;
+                    }
+                    // The player's ammunition topped up: every weapon's
+                    // (no weapon named), else that weapon's, to the count
+                    // given or its most.
+                    "CAPI_Pawn.RefillWeaponAmmo" if a(0) == fc3_story::PLAYER.to_string() => {
+                        if let Ok(mut inv) = inventory.single_mut() {
+                            let only = Some(a(1)).filter(|w| !w.is_empty()).and_then(|w| host.weapon_def(&inv, &w));
+                            let count = a(2).parse::<u32>().ok().filter(|&n| n > 0);
+                            let inv = &mut *inv;
+                            for slot in inv.slots.iter_mut().filter(|s| only.is_none_or(|d| s.def == d)) {
+                                let d = &inv.defs[slot.def];
+                                slot.mag = d.magazine;
+                                slot.reserve = count.unwrap_or(d.max_reserve).min(d.max_reserve.max(1));
+                            }
+                        }
                     }
                     "CAPI_Pawn.RemoveAllInventory" | "CAPI_Pawn.RemoveAllWeapon" if a(0) == fc3_story::PLAYER.to_string() => {
                         if let Ok(mut inv) = inventory.single_mut() {

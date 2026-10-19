@@ -4955,8 +4955,12 @@ cache as they are, and the challenge manager's template (the rewards: $250,
   nothing at that height, and the road splines stop at the banks
   (`fc3tool entities-near ... --meta`, `nav-near`, `hkx-file`,
   `preload`); the loading screen, and the other natives the trials
-  call that do nothing yet (`SwitchArmy`, tagging, `DisplayCustomUIMsg`,
-  `RefillWeaponAmmo`, `SelectThrowGadget`).
+  call that do nothing yet (`SwitchArmy`, tagging, `SelectThrowGadget`).
+  `DisplayCustomUIMsg` shows its popup (`docs/ui.md`), and the player's
+  `RefillWeaponAmmo` tops up every weapon (none named) or the one named, to
+  the count given or its most (the missions' `ManageInventory_v4` refills).
+  `FC3_TELEPORT=<s>,<x>,<y>,<z>` (tests) puts the player at a Dunia place
+  that many seconds into play (out of a mission's area, say).
 
 ### Races
 

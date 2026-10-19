@@ -216,7 +216,8 @@ impl Plugin for PlayerPlugin {
             .add_systems(OnExit(crate::menu::GameState::Loading), load_body)
             .add_systems(Startup, spawn_player.in_set(PlayerSpawn))
             .add_systems(Update, (player_look, place_on_ground, climb_course, player_move, scripted_walk_log, footsteps).chain())
-            .add_systems(PreUpdate, slide_test.after(crate::controls::update_actions));
+            .add_systems(PreUpdate, slide_test.after(crate::controls::update_actions))
+            .add_systems(Update, teleport_test.run_if(in_state(crate::menu::GameState::Playing)));
     }
 }
 
@@ -1741,4 +1742,25 @@ pub(crate) fn test_player() -> Player {
         sliding: None,
         dragging: false,
     }
+}
+
+/// `FC3_TELEPORT=<s>,<x>,<y>,<z>` (tests): that many seconds into play the
+/// player is put there (Dunia's coordinates, the feet), once: out of a
+/// mission's area, say.
+fn teleport_test(time: Res<Time>, mut done: Local<bool>, mut players: Query<(&mut Transform, &mut Player)>) {
+    if *done {
+        return;
+    }
+    let Some(v) = std::env::var("FC3_TELEPORT").ok().map(|v| v.split(',').filter_map(|n| n.trim().parse::<f32>().ok()).collect::<Vec<f32>>()) else {
+        *done = true;
+        return;
+    };
+    let (Some(&at), Ok((mut t, mut p))) = (v.first(), players.single_mut()) else { return };
+    if v.len() < 4 || time.elapsed_secs() < at {
+        return;
+    }
+    t.translation = crate::data::to_bevy([v[1], v[2], v[3]]) + Vec3::Y * HALF_HEIGHT;
+    p.velocity = Vec3::ZERO;
+    *done = true;
+    info!("teleport test: the player put at {:?}", [v[1], v[2], v[3]]);
 }
