@@ -4,9 +4,13 @@
 //! state sets parameters of the mixer's buses, fading to them and back:
 //! their levels (0 and 2, dB) and commands (13 pause, 14 resume, 15 stop).
 //! Each playing sound follows its bus and the buses above it
-//! (`sound::hear`). The states' effect units (filters) aren't applied.
+//! (`sound::hear`). A state also turns on the low-pass units on buses (under
+//! water: 800 Hz), which the sounds below them run through as they play
+//! (`sound_source`); the other kinds of unit aren't applied.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, LazyLock, RwLock};
 
 use bevy::prelude::*;
 
@@ -24,7 +28,35 @@ pub struct MixData {
     actions: HashMap<u32, Vec<(bool, u32)>>,
     /// The mixings by name: their set and remove events (0: none).
     mixings: HashMap<String, (u32, u32)>,
+    /// Each bus's low-pass units, and each unit's slot (see [`CUTOFFS`]).
+    lowpass: HashMap<u32, Vec<u32>>,
+    slots: HashMap<u32, u8>,
+    /// Each state's changes to effect units, like `states`.
+    effects: HashMap<u32, Vec<(u32, u32, f32, f32, f32)>>,
 }
+
+/// The low-pass units' cutoffs now (Hz as `f32` bits; 0: open), by slot,
+/// for the playing sounds to read.
+const SLOTS: usize = 64;
+static CUTOFFS: [AtomicU32; SLOTS] = [const { AtomicU32::new(0) }; SLOTS];
+
+/// The low-pass slots on each sound's way to the mix (its bus's and those
+/// above it), by file stem, for the sound loader.
+static FILTERS: LazyLock<RwLock<HashMap<String, Arc<[u8]>>>> = LazyLock::new(Default::default);
+
+/// The low-pass slots a sound file goes through (none until the manifest is
+/// read).
+pub fn filters_of(stem: &str) -> Arc<[u8]> {
+    FILTERS.read().ok().and_then(|m| m.get(stem).cloned()).unwrap_or_else(|| Arc::from([]))
+}
+
+/// The cutoff (Hz) for a sound going through `slots`: the lowest on, if any.
+pub fn cutoff(slots: &[u8]) -> Option<f32> {
+    slots.iter().map(|&s| f32::from_bits(CUTOFFS[s as usize].load(Ordering::Relaxed))).filter(|c| *c > 0.0).reduce(f32::min)
+}
+
+/// A low-pass unit's cutoff when open (Hz).
+const OPEN: f32 = 20_000.0;
 
 impl MixData {
     /// Reads one of the manifest's mixer records: its kind (`bus`,
@@ -41,7 +73,20 @@ impl MixData {
                     }
                 }
             }
-            "mixstate" => {
+            "fx" => {
+                // unit, bus, kind (0: a low-pass), default
+                let v: Vec<&str> = it.collect();
+                if let [unit, bus, "0", _] = v[..] {
+                    if let (Some(unit), Some(bus)) = (hex(unit), hex(bus)) {
+                        self.lowpass.entry(bus).or_default().push(unit);
+                        let next = self.slots.len();
+                        if next < SLOTS {
+                            self.slots.entry(unit).or_insert(next as u8);
+                        }
+                    }
+                }
+            }
+            "mixstate" | "mixfx" => {
                 let Some(id) = it.next().and_then(hex) else { return };
                 let sets = it
                     .filter_map(|t| {
@@ -49,7 +94,11 @@ impl MixData {
                         Some((hex(p.next()?)?, p.next()?.parse().ok()?, p.next()?.parse().ok()?, p.next()?.parse().ok()?, p.next()?.parse().ok()?))
                     })
                     .collect();
-                self.states.insert(id, sets);
+                if kind == "mixfx" {
+                    self.effects.insert(id, sets);
+                } else {
+                    self.states.insert(id, sets);
+                }
             }
             "mixevent" => {
                 let Some(id) = it.next().and_then(hex) else { return };
@@ -85,6 +134,34 @@ impl MixData {
     pub fn mixing(&self, name: &str) -> Option<(u32, u32)> {
         self.mixings.get(name).copied()
     }
+
+    /// Hands the sound loader each file's low-pass slots (by its bus).
+    pub fn publish_filters<'a>(&self, files: impl Iterator<Item = (&'a String, Option<u32>)>) {
+        let mut by_bus: HashMap<u32, Arc<[u8]>> = HashMap::new();
+        let mut out = HashMap::new();
+        for (stem, bus) in files {
+            let Some(bus) = bus else { continue };
+            let slots = by_bus
+                .entry(bus)
+                .or_insert_with(|| {
+                    let mut slots = Vec::new();
+                    let mut at = Some(bus);
+                    for _ in 0..16 {
+                        let Some(b) = at else { break };
+                        slots.extend(self.lowpass.get(&b).into_iter().flatten().filter_map(|u| self.slots.get(u)));
+                        at = self.buses.get(&b).map(|x| x.0).filter(|p| *p != b);
+                    }
+                    slots.into()
+                })
+                .clone();
+            if !slots.is_empty() {
+                out.insert(stem.clone(), slots);
+            }
+        }
+        if let Ok(mut m) = FILTERS.write() {
+            *m = out;
+        }
+    }
 }
 
 /// Mixings asked for by name (started, or stopped), from the game and its
@@ -112,6 +189,8 @@ impl Mixings {
 pub struct Mixer {
     stack: Vec<u32>,
     levels: HashMap<(u32, u32), Ramp>,
+    /// The low-pass units' cutoffs (log2 Hz) on their way.
+    cutoffs: HashMap<u32, Ramp>,
     paused: HashSet<u32>,
     stopped: HashSet<u32>,
 }
@@ -188,6 +267,46 @@ impl Mixer {
             r.now = if r.len <= 0.0 || r.t >= r.len { r.to } else { r.from + (r.to - r.from) * r.t / r.len };
         }
         self.levels.retain(|k, r| want.contains_key(k) || (r.now - mix.base(k.0, k.1)).abs() > 1e-4);
+
+        // The low-pass units: on (parameter 0) at a cutoff (1) as the latest
+        // state has them, else open.
+        let open = OPEN.log2();
+        let mut cut: HashMap<u32, (Option<bool>, Option<f32>, f32, f32)> = HashMap::new();
+        for state in &self.stack {
+            for &(unit, param, value, fade_in, fade_out) in mix.effects.get(state).into_iter().flatten() {
+                if !mix.slots.contains_key(&unit) {
+                    continue;
+                }
+                let e = cut.entry(unit).or_insert((None, None, 0.0, 0.0));
+                match param {
+                    0 => e.0 = Some(value > 0.5),
+                    1 => e.1 = Some(value),
+                    _ => continue,
+                }
+                (e.2, e.3) = (fade_in, fade_out);
+            }
+        }
+        let units: HashSet<u32> = self.cutoffs.keys().chain(cut.keys()).copied().collect();
+        for unit in units {
+            let r = self.cutoffs.entry(unit).or_insert(Ramp { now: open, from: open, to: open, t: 0.0, len: 0.0, back: 0.0 });
+            let (to, len) = match cut.get(&unit) {
+                Some(&(Some(true), Some(hz), fade_in, fade_out)) => {
+                    r.back = fade_out;
+                    (hz.clamp(20.0, OPEN).log2(), fade_in)
+                }
+                _ => (open, r.back),
+            };
+            if (r.to - to).abs() > 1e-4 {
+                *r = Ramp { from: r.now, to, t: 0.0, len, ..*r };
+            }
+            r.t += dt;
+            r.now = if r.len <= 0.0 || r.t >= r.len { r.to } else { r.from + (r.to - r.from) * r.t / r.len };
+            if let Some(&slot) = mix.slots.get(&unit) {
+                let hz = if r.now >= open - 0.01 { 0.0 } else { r.now.exp2() };
+                CUTOFFS[slot as usize].store(hz.to_bits(), Ordering::Relaxed);
+            }
+        }
+        self.cutoffs.retain(|u, r| cut.contains_key(u) || r.now < open - 0.01);
     }
 
     /// The mixer's change to the sounds of `bus` (dB, beside the levels
@@ -208,6 +327,12 @@ impl Mixer {
             at = mix.buses.get(&b).map(|x| x.0).filter(|p| *p != b);
         }
         (db, paused, stopped)
+    }
+
+    /// The low-pass units turned on now, with their cutoffs (Hz).
+    pub fn filters_on(&self) -> Vec<(u32, f32)> {
+        let open = OPEN.log2() - 0.01;
+        self.cutoffs.iter().filter(|(_, r)| r.now < open).map(|(u, r)| (*u, r.now.exp2())).collect()
     }
 
     /// Forgets this frame's stops (once every sound has heard them).

@@ -135,7 +135,7 @@ fn soundtrack(bink: &fc3_bink::Bink) -> Option<Sfx> {
     for s in &mut mix {
         *s = s.clamp(-1.0, 1.0);
     }
-    Some(Sfx::Decoded { samples: mix.into(), channels: ChannelCount::new(2)?, rate: SampleRate::new(rate)? })
+    Some(Sfx::Decoded { samples: mix.into(), channels: ChannelCount::new(2)?, rate: SampleRate::new(rate)?, filters: Arc::from([]) })
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -326,14 +326,20 @@ their `mod` records.
 
 Each audio header also sends to a mixer bus (`+0x8C`; a layered header's at
 `+0x74`). The buses are records in the project (`soundbinary\7fffffff.bao`):
-`u32 id, u32 kind (3 or 5), u32 parent, u32 count`, then `count` child ids,
-then a level (dB) at +0 or at +8 (never both). The levels add up from a bus to
+`u32 id, u32 kind (1-5), u32 parent, u32 count`, then `count` child ids,
+then a level (dB) at +0 or at +8 (never both). The children are the bus's
+effect units. Kinds 3, 4 and 5 carry levels; the four of kind 4 have
+units, and three of them have levels of their own: the world's sound
+points' bus -9 dB, other beds -3 and -6. The levels add up from a bus to
 its parents (for example rifle fire's: -9 dB, dialogue's: -2.6). One bus is
 muted outright (-96 dB at +0), and a mixer state (class 10) raises it, so
 it counts as 0. The project's other tables (the roots' own levels) aren't
 read. The manifest ends each `sound` line with its buses' level and its bus
 (`-` for none), and writes each bus as `bus <id> <parent> <level at +0>
-<level at +8>`.
+<level at +8>`. Effect units are records `u32 id, u32 type, 3, 2, 1, -1, f32
+default`. There are 22: type 0 is a low-pass (its parameter 1 the cutoff, 20,000
+Hz open; one sits at 3,080 by default), type 2 a high-pass (150 Hz). The
+manifest writes `fx <unit> <bus> <type> <default>`.
 
 ## Mixings
 
@@ -361,8 +367,14 @@ u32 parameter, u32 -1, value`. On a bus:
   Music and the interface go on.
 * parameter 4 also takes levels (-96 when muting); what it is isn't known.
 
-The effect units take parameters 0 (on), 1 (a cutoff: 300-6000 Hz, 800 under
-water) and others: the filters.
+The effect units take parameters 0 (on), 1 (the cutoff: 300-6000 Hz, 800
+under water) and others (`mixfx` records, like `mixstate`). A low-pass unit
+filters while the latest state setting it has it on: its cutoff fades there
+in log-frequency over the state's fade, and back open. Each sound file
+learns at load which units lie on its way up the buses (`mixer::filters_of`).
+As it plays (`sound_source`), each channel runs through two one-pole
+stages at the lowest cutoff on, checked every 256 samples. Under water,
+three units go to 800 Hz.
 
 The manifest writes the states' bus changes (`mixstate <id>
 <bus>:<parameter>:<value>:<fade in>:<fade out>...`), what each event pushes
@@ -381,8 +393,8 @@ play, and `RUST_LOG=farcry3::sound=debug` tallies the sounds the mixer
 pauses and lowers.
 
 The authored mix sits low: dialogue near -7 dB, the player's gun -12,
-music -12, other people's gunfire -14 to -17, ambience -14 to -20 and
-footsteps -21. The game raises the whole mix by 6 dB (`MIX_LIFT`) so that
+music -12, other people's gunfire -14 to -17, ambience -14 to -20 (the
+world's sound points 9 dB under that, by their bus) and footsteps -21. The game raises the whole mix by 6 dB (`MIX_LIFT`) so that
 dialogue plays near full scale. Music takes its gains the same way.
 
 The game (`sound::hear`) sets each playing sound's volume every frame from its distance to
@@ -735,8 +747,10 @@ are 32 kHz stereo Ogg, mostly streamed. List them with
 * Blend (type 7) volume and pitch curves are applied to loops through `LoopSfx`
   parameters, and to one-shots for distance only. Curve kinds other than volume and pitch
   aren't applied.
-* The mixer states' effect units (filters: under water, combat, the ringing
-  after a blast) and their bus parameter 4 aren't applied. Neither is
+* Of the mixer states' effect units only the low-pass is applied (not the
+  high-pass in combat, nor whatever rings after a blast), and only while a
+  state turns it on (not the unit at 3,080 Hz by default). Bus parameter 4
+  isn't applied. Neither is
   `Exclusive`/`Compatible` stacking (the latest state wins each parameter).
   The mixings the engine starts itself aren't known, except the pause and
   under water. Music plays outside the mixer. The positioning's other

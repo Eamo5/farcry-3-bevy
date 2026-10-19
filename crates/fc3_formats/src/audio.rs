@@ -1306,19 +1306,60 @@ impl Variant {
 /// mixer state) counts as 0.
 pub fn parse_buses(project: &[u8]) -> HashMap<u32, (u32, f32)> {
     let mut out = HashMap::new();
+    for b in bus_records(project) {
+        let a = if b.levels[0] <= -90.0 { 0.0 } else { b.levels[0] };
+        out.entry(b.id).or_insert((b.parent, a + b.levels[1]));
+    }
+    out
+}
+
+/// A mixer bus record of the project: `u32 id, u32 kind, u32 parent, u32
+/// count`, then `count` child ids (its effect units), then its levels (dB)
+/// at +0 and +8. Kinds 1-5 are buses (3, 4 and 5 carry levels: 4 are those
+/// with effect units, the world's beds among them).
+pub struct BusRecord {
+    pub id: u32,
+    pub parent: u32,
+    pub units: Vec<u32>,
+    pub levels: [f32; 2],
+}
+
+pub fn bus_records(project: &[u8]) -> Vec<BusRecord> {
+    let mut out: Vec<BusRecord> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     let word = |o: usize| project.get(o..o + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
     let float = |o: usize| word(o).map(f32::from_bits);
     let is_id = |v: u32| (0x1000..0x0100_0000).contains(&v);
     let mut o = BAO_HEADER_SIZE;
     while o + 0x30 <= project.len() {
         let (Some(id), Some(kind), Some(parent), Some(n)) = (word(o), word(o + 4), word(o + 8), word(o + 12)) else { break };
-        if (kind == 3 || kind == 5) && is_id(id) && is_id(parent) && n < 40 {
+        if (1..=5).contains(&kind) && is_id(id) && is_id(parent) && n < 40 {
+            let units: Option<Vec<u32>> = (0..n as usize).map(|i| word(o + 0x10 + 4 * i).filter(|c| is_id(*c))).collect();
             let base = o + 0x10 + 4 * n as usize;
-            if let (Some(a), Some(b)) = (float(base), float(base + 8)) {
-                if a.is_finite() && b.is_finite() && a.abs() < 100.0 && b.abs() < 100.0 {
-                    let a = if a <= -90.0 { 0.0 } else { a };
-                    out.entry(id).or_insert((parent, a + b));
+            if let (Some(units), Some(a), Some(b)) = (units, float(base), float(base + 8)) {
+                if a.is_finite() && b.is_finite() && a.abs() < 100.0 && b.abs() < 100.0 && seen.insert(id) {
+                    out.push(BusRecord { id, parent, units, levels: [a, b] });
                 }
+            }
+        }
+        o += 4;
+    }
+    out
+}
+
+/// The project's effect units: `u32 id, u32 type, 3, 2, 1, -1, f32 default`.
+/// Type 0 is a low-pass filter (its parameter 1 the cutoff, Hz; 20,000:
+/// open), type 2 a high-pass (150 Hz by default).
+pub fn parse_effect_units(project: &[u8]) -> HashMap<u32, (u32, f32)> {
+    let mut out = HashMap::new();
+    let word = |o: usize| project.get(o..o + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+    let mut o = BAO_HEADER_SIZE;
+    while o + 0x20 <= project.len() {
+        if let (Some(id), Some(kind), Some(3), Some(2), Some(1), Some(u32::MAX), Some(default)) =
+            (word(o), word(o + 4), word(o + 8), word(o + 12), word(o + 16), word(o + 20), word(o + 24))
+        {
+            if (0x1000..0x0100_0000).contains(&id) && kind < 8 {
+                out.entry(id).or_insert((kind, f32::from_bits(default)));
             }
         }
         o += 4;
@@ -1329,24 +1370,7 @@ pub fn parse_buses(project: &[u8]) -> HashMap<u32, (u32, f32)> {
 /// Each bus's parent and its two levels (dB, the parameters a mixer state
 /// calls 0 and 2; see [`parse_buses`]).
 pub fn parse_bus_params(project: &[u8]) -> HashMap<u32, (u32, f32, f32)> {
-    let mut out = HashMap::new();
-    let word = |o: usize| project.get(o..o + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
-    let float = |o: usize| word(o).map(f32::from_bits);
-    let is_id = |v: u32| (0x1000..0x0100_0000).contains(&v);
-    let mut o = BAO_HEADER_SIZE;
-    while o + 0x30 <= project.len() {
-        let (Some(id), Some(kind), Some(parent), Some(n)) = (word(o), word(o + 4), word(o + 8), word(o + 12)) else { break };
-        if (kind == 3 || kind == 5) && is_id(id) && is_id(parent) && n < 40 {
-            let base = o + 0x10 + 4 * n as usize;
-            if let (Some(a), Some(b)) = (float(base), float(base + 8)) {
-                if a.is_finite() && b.is_finite() && a.abs() < 100.0 && b.abs() < 100.0 {
-                    out.entry(id).or_insert((parent, a, b));
-                }
-            }
-        }
-        o += 4;
-    }
-    out
+    bus_records(project).into_iter().map(|b| (b.id, (b.parent, b.levels[0], b.levels[1]))).collect()
 }
 
 /// One parameter a mixer state sets on a bus or an effect unit: `value`
@@ -1497,6 +1521,9 @@ pub struct SoundGraph {
     /// The buses' own levels (see [`parse_bus_params`]), the mixer states
     /// (class 10) and the named mixings.
     pub bus_params: HashMap<u32, (u32, f32, f32)>,
+    /// Each bus's effect units, and each unit's type and default.
+    pub bus_units: HashMap<u32, Vec<u32>>,
+    pub effect_units: HashMap<u32, (u32, f32)>,
     pub mix_states: HashMap<u32, MixState>,
     pub mixings: Vec<Mixing>,
 }
@@ -1520,6 +1547,8 @@ impl SoundGraph {
         if let Ok(project) = vfs.read(PROJECT_PATH) {
             g.buses = parse_buses(&project);
             g.bus_params = parse_bus_params(&project);
+            g.bus_units = bus_records(&project).into_iter().filter(|b| !b.units.is_empty()).map(|b| (b.id, b.units)).collect();
+            g.effect_units = parse_effect_units(&project);
         }
         if let Ok(m) = vfs.read(MIXINGS_PATH).map_err(anyhow::Error::from).and_then(|b| parse_mixings(&b)) {
             g.mixings = m;
@@ -1975,11 +2004,27 @@ impl SoundGraph {
         for (id, (parent, a, b)) in buses {
             s += &format!("bus {id:08x} {parent:08x} {a} {b}\n");
         }
+        // Each bus's effect units: `fx <unit> <bus> <type> <default>`.
+        let mut units: Vec<(u32, u32)> = self.bus_units.iter().flat_map(|(b, us)| us.iter().map(move |u| (*u, *b))).collect();
+        units.sort_unstable();
+        for (unit, bus) in units {
+            if let Some((kind, default)) = self.effect_units.get(&unit) {
+                s += &format!("fx {unit:08x} {bus:08x} {kind} {default}\n");
+            }
+        }
         let mut states: Vec<_> = self.mix_states.iter().filter(|m| !m.1.buses.is_empty()).collect();
+        // (A state may set only effect units; `mixfx` below.)
         states.sort_by_key(|m| *m.0);
         for (id, m) in states {
             let sets: Vec<String> = m.buses.iter().map(|b| format!("{:08x}:{}:{}:{}:{}", b.target, b.param, b.value, b.fade_in, b.fade_out)).collect();
             s += &format!("mixstate {id:08x} {}\n", sets.join(" "));
+        }
+        // And what they set on effect units (`mixfx`, the same fields).
+        let mut fx: Vec<_> = self.mix_states.iter().filter(|m| !m.1.effects.is_empty()).collect();
+        fx.sort_by_key(|m| *m.0);
+        for (id, m) in fx {
+            let sets: Vec<String> = m.effects.iter().map(|b| format!("{:08x}:{}:{}:{}:{}", b.target, b.param, b.value, b.fade_in, b.fade_out)).collect();
+            s += &format!("mixfx {id:08x} {}\n", sets.join(" "));
         }
         let mut ids: Vec<&u32> = self.events.keys().collect();
         ids.sort_unstable();
@@ -2160,13 +2205,20 @@ mod tests {
         words(&[0, 0, (-3.0f32).to_bits(), 0]);
         words(&[0x5000, 3, 0x4000, 1, 0x5001]);
         words(&[(-2.0f32).to_bits(), 0, 0, 0]);
+        // A bus with an effect unit (kind 4), and the unit (a low-pass).
+        words(&[0x4000, 4, 0x3000, 1, 0x6000]);
+        words(&[0, 0, (-9.0f32).to_bits(), 0]);
+        words(&[0x6000, 0, 3, 2, 1, u32::MAX, 20000.0f32.to_bits(), 2]);
         words(&[0; 16]);
         let buses = parse_buses(&p);
         assert_eq!(buses[&0x5001], (0x5000, -3.0));
         assert_eq!(buses[&0x5000], (0x4000, -2.0));
+        assert_eq!(buses[&0x4000], (0x3000, -9.0));
+        assert_eq!(bus_records(&p).iter().find(|b| b.id == 0x4000).map(|b| b.units.clone()), Some(vec![0x6000]));
+        assert_eq!(parse_effect_units(&p)[&0x6000], (0, 20000.0));
         let mut g = SoundGraph { buses, ..Default::default() };
         g.header_bus.insert(7, 0x5001);
-        assert_eq!(g.bus_gain(7), -5.0);
+        assert_eq!(g.bus_gain(7), -14.0);
         assert_eq!(Variant { header_id: 7, weight: 0.5, gain: -4.0 }.token(), "00000007:0.5000:-4");
         assert_eq!(Variant { header_id: 7, weight: 0.5, gain: 0.0 }.token(), "00000007:0.5000");
     }
