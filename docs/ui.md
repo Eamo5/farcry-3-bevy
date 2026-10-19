@@ -330,7 +330,9 @@ only what changed (and everything again until the movies have loaded):
   radius, 78.5, being the map's reach, `map::MinimapReach`), turned with the
   player as the map is, and shown by their frame labels: `Object_<n>` (21)
   the enemies the game's own minimap shows (tagged, or on to the player,
-  `enemy`) and vehicles free to take (`vehicle`, `boat`, `glider`);
+  `enemy`), the story's companions (following, leading or waiting for the
+  player, `companion`) and vehicles free to take (`vehicle`, `boat`,
+  `glider`);
   `LocMarker_<n>` (16) places: outposts (`OutpostLocked` while held,
   `FastTravel` once taken, unless their own safehouse stands for them), the
   story's safehouses (`FastTravel` open, `SafehouseLocked` not yet), their
@@ -350,7 +352,7 @@ only what changed (and everything again until the movies have loaded):
   disc, `Outside` held on its rim, `Up` or `Down` when well above or
   below). `NorthMarkerMC` turns about the centre to the north
   (`_rotation`). The labels the movie has and the game doesn't use yet:
-  `companion`, `BeerPong`, photo spots (`PhotoOps`), ammo. `fc3tool swf-script <movie> labels [text]`
+  `BeerPong`, photo spots (`PhotoOps`), ammo. `fc3tool swf-script <movie> labels [text]`
   lists a movie's sprites' frame labels.
   The game's own minimap icons stand down meanwhile.
 

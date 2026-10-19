@@ -140,6 +140,33 @@ mod action_map_tests {
     use super::*;
 
     #[test]
+    fn using_takes_the_games_hold_once_a_hold() {
+        // Held at 60 frames a second: it uses once, 0.37 s in, then not
+        // again while held; a tap doesn't use.
+        let (mut held, mut was, mut uses) = (0.0, false, Vec::new());
+        for frame in 0..60 {
+            let (used, h) = use_step(Some(0.37), true, was, held, 1.0 / 60.0);
+            (held, was) = (h, true);
+            if used {
+                uses.push(frame);
+            }
+        }
+        assert_eq!(uses, vec![22]);
+        let tap: Vec<bool> = [true, true, false]
+            .iter()
+            .scan((0.0, false), |(h, w), &down| {
+                let (used, now) = use_step(Some(0.37), down, *w, *h, 1.0 / 60.0);
+                (*h, *w) = (now, down);
+                Some(used)
+            })
+            .collect();
+        assert!(tap.iter().all(|u| !u));
+        // Without the game's hold time, a press uses.
+        assert_eq!(use_step(None, true, false, 0.0, 0.016).0, true);
+        assert_eq!(use_step(None, true, true, 0.1, 0.016).0, false);
+    }
+
+    #[test]
     fn a_pushed_map_lets_through_only_its_signals() {
         let mut maps = ScriptActionMaps::default();
         let set = |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>();
@@ -743,14 +770,19 @@ pub fn update_actions(
             state.just_pressed.insert(*a);
         }
     }
-    // Using on foot: once the interact key has been held the game's hold
-    // time (a press without it).
-    let down = pressed.contains(&Action::Interact);
-    let held = if down { state.use_held + time.delta_secs() } else { 0.0 };
-    state.used = match state.use_hold {
-        Some(need) => down && state.use_held < need && held >= need,
-        None => down && !previous.contains(&Action::Interact),
-    };
-    state.use_held = held;
+    let (used, held) = use_step(state.use_hold, pressed.contains(&Action::Interact), previous.contains(&Action::Interact), state.use_held, time.delta_secs());
+    (state.used, state.use_held) = (used, held);
     state.pressed = pressed;
+}
+
+/// Using on foot, a frame on: whether it uses now, and how long the
+/// interact key has been down. Once the key has been held the game's hold
+/// time, once a hold; a press without it.
+fn use_step(hold: Option<f32>, down: bool, was_down: bool, held: f32, dt: f32) -> (bool, f32) {
+    let now = if down { held + dt } else { 0.0 };
+    let used = match hold {
+        Some(need) => down && held < need && now >= need,
+        None => down && !was_down,
+    };
+    (used, now)
 }

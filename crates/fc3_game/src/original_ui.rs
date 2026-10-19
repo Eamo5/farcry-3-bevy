@@ -4175,7 +4175,7 @@ fn drive_radar(
     mut last: Local<Option<Radar>>,
     (story, time, mut standing): (Option<NonSend<crate::story::StoryHost>>, Res<Time<Real>>, Local<(f32, Vec<(f64, Vec3)>)>),
     mut plants: Local<Option<std::collections::HashMap<crate::syringes::Plant, &'static str>>>,
-    mut sites: ResMut<crate::npc::EncounterSites>,
+    (mut sites, actors): (ResMut<crate::npc::EncounterSites>, Query<(&GlobalTransform, &crate::story_actors::StoryActor)>),
 ) {
     let Interface::Running(host) = &*state else { return };
     let Ok((at, player)) = players.single() else { return };
@@ -4234,6 +4234,17 @@ fn drive_radar(
             crate::vehicles::Kind::Glider => "glider",
         };
         objects.push((l.length(), marker(l, label)));
+    }
+    // The story's companions (following the player, leading him, or
+    // waiting for him).
+    let companions: std::collections::HashSet<u64> = story.as_ref().map(|h| h.story.companions().into_iter().map(|c| c.0).collect()).unwrap_or_default();
+    if !companions.is_empty() {
+        for (t, a) in &actors {
+            let l = local(t.translation());
+            if companions.contains(&a.id) && !a.dead && on_disc(l) {
+                objects.push((l.length(), marker(l, "companion")));
+            }
+        }
     }
     fill(objects, &mut now.objects);
     // Places.
