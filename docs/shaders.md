@@ -101,7 +101,11 @@ vertex streams (`TEXCOORD2`–`TEXCOORD5`). Some vertex shader families take a
   runtime can redirect particular registers (engine globals, per-object
   transforms) by substitution.
 - Sampler `s#` binds a texture at `16 + 2#` (2D), `48 + 2#` (cube) or `80 + 2#`
-  (volume), with its sampler at the next binding.
+  (volume), with its sampler at the next binding. The game drops those
+  per-slot samplers when it loads a module and samples every slot through one
+  of the material's two shared samplers (repeating, or clamping for the
+  terrain's atlas maps): Metal allows 16 samplers per shader stage, which the
+  16 slots alone would use up.
 - Vertex attributes get locations in declaration order. Varyings get fixed
   locations from their semantics (`TEXCOORD0–9` → 0–9, `COLOR0–1` → 10–11,
   `FOG` → 12, …), so any vertex shader links with any pixel shader that reads a

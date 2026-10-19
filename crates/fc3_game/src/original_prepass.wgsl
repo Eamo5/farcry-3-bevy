@@ -6,7 +6,8 @@
 #import bevy_pbr::{prepass_io, pbr_prepass_functions}
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(50) var cutout_texture: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(51) var cutout_sampler: sampler;
+// The material's shared repeating sampler (`OriginalMaterial::repeat`).
+@group(#{MATERIAL_BIND_GROUP}) @binding(55) var cutout_sampler: sampler;
 // xy: the diffuse map's tiling, z: the alpha threshold (0: not cut out).
 @group(#{MATERIAL_BIND_GROUP}) @binding(52) var<uniform> cutout: vec4<f32>;
 

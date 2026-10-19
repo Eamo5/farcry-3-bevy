@@ -28,7 +28,9 @@ use bevy::image::{ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageS
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
+use bevy::render::render_resource::{
+    AsBindGroup, Extent3d, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError, TextureDimension, TextureFormat,
+};
 use bevy::render::storage::ShaderBuffer;
 use bevy::shader::Shader;
 use bevy::shader::ShaderRef;
@@ -49,6 +51,9 @@ impl Plugin for OriginalShadersPlugin {
     fn build(&self, app: &mut App) {
         let globals = app.world_mut().resource_mut::<Assets<ShaderBuffer>>().add(ShaderBuffer::from(GlobalRegisters { f: [Vec4::ZERO; 256] }));
         let _ = GLOBALS.set(globals);
+        let mut repeat = Image::new_fill(Extent3d::default(), TextureDimension::D2, &[255; 4], TextureFormat::Rgba8Unorm, RenderAssetUsages::RENDER_WORLD);
+        repeat.sampler = repeat_sampler();
+        let _ = REPEAT.set(app.world_mut().resource_mut::<Assets<Image>>().add(repeat));
         bevy::asset::embedded_asset!(app, "original_prepass.wgsl");
         app.add_plugins(MaterialPlugin::<OriginalMaterial>::default())
             .register_asset_loader(OriginalMaterialLoader)
@@ -123,6 +128,7 @@ pub struct ShaderLibrary {
 
 static LIBRARY: OnceLock<Option<Arc<ShaderLibrary>>> = OnceLock::new();
 static GLOBALS: OnceLock<Handle<ShaderBuffer>> = OnceLock::new();
+static REPEAT: OnceLock<Handle<Image>> = OnceLock::new();
 
 /// The library from the cache, loaded on first use (None if the cache has no shaders).
 pub fn library() -> Option<Arc<ShaderLibrary>> {
@@ -220,52 +226,36 @@ pub struct OriginalMaterial {
     #[uniform(2)]
     pub vs_constants: D3dConstants,
     #[texture(16)]
-    #[sampler(17)]
     pub s0: Option<Handle<Image>>,
     #[texture(18)]
-    #[sampler(19)]
     pub s1: Option<Handle<Image>>,
     #[texture(20)]
-    #[sampler(21)]
     pub s2: Option<Handle<Image>>,
     #[texture(22)]
-    #[sampler(23)]
     pub s3: Option<Handle<Image>>,
     #[texture(24)]
-    #[sampler(25)]
     pub s4: Option<Handle<Image>>,
     #[texture(26)]
-    #[sampler(27)]
     pub s5: Option<Handle<Image>>,
     #[texture(28)]
-    #[sampler(29)]
     pub s6: Option<Handle<Image>>,
     #[texture(30)]
-    #[sampler(31)]
     pub s7: Option<Handle<Image>>,
     #[texture(32)]
-    #[sampler(33)]
     pub s8: Option<Handle<Image>>,
     #[texture(34)]
-    #[sampler(35)]
     pub s9: Option<Handle<Image>>,
     #[texture(36)]
-    #[sampler(37)]
     pub s10: Option<Handle<Image>>,
     #[texture(38)]
-    #[sampler(39)]
     pub s11: Option<Handle<Image>>,
     #[texture(40)]
-    #[sampler(41)]
     pub s12: Option<Handle<Image>>,
     #[texture(42)]
-    #[sampler(43)]
     pub s13: Option<Handle<Image>>,
     #[texture(44)]
-    #[sampler(45)]
     pub s14: Option<Handle<Image>>,
     #[texture(46)]
-    #[sampler(47)]
     pub s15: Option<Handle<Image>>,
     /// The world's horizon atlas, for shadows of distant land (`horizon`).
     #[texture(48)]
@@ -276,10 +266,17 @@ pub struct OriginalMaterial {
     /// xy tiling, z threshold, 0 when not cut out; w 1 when blended, with a
     /// threshold no alpha reaches, so overlays cast no shadow).
     #[texture(50)]
-    #[sampler(51)]
     pub cutout_texture: Option<Handle<Image>>,
     #[uniform(52)]
     pub cutout: Vec4,
+    /// Every texture is sampled through one of two shared samplers, since
+    /// Metal allows only 16 samplers per shader stage (the 16 slots alone,
+    /// before Bevy's own, would take them all). The images load with
+    /// `repeat_sampler` or `clamp_sampler`; the horizon atlas carries the
+    /// clamping one, and this 1x1 image the repeating one.
+    #[texture(54)]
+    #[sampler(55)]
+    pub repeat: Handle<Image>,
     pub key: OriginalKey,
 }
 
@@ -314,6 +311,7 @@ impl OriginalMaterial {
             horizon: Some(crate::horizon::atlas()),
             cutout_texture: None,
             cutout: Vec4::ZERO,
+            repeat: REPEAT.get().cloned().unwrap_or_default(),
             key: OriginalKey::default(),
         }
     }
@@ -733,9 +731,16 @@ struct D3dGlobals {
 @group(#{MATERIAL_BIND_GROUP}) @binding(1) var<storage, read> d3d_g: D3dGlobals;
 ";
 
+/// The material's two shared samplers (see `OriginalMaterial::repeat`).
+const SHARED_SAMPLERS: &str = "@group(#{MATERIAL_BIND_GROUP}) @binding(49) var d3d_clamp_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(55) var d3d_repeat_sampler: sampler;
+";
+
 /// Rebinds a translated module for the material bind group: constants at
-/// `constants_binding`, engine globals from the shared buffer.
-fn rebind(lib: &ShaderLibrary, e: &ShaderEntry, wgsl: &str, constants_binding: u32) -> String {
+/// `constants_binding`, engine globals from the shared buffer, and each
+/// sampler slot to the shared clamping sampler (slots set in `clamp`) or
+/// the repeating one.
+fn rebind(lib: &ShaderLibrary, e: &ShaderEntry, wgsl: &str, constants_binding: u32, clamp: u16) -> String {
     let mut s = wgsl.replace(
         "@group(0) @binding(0) var<uniform> d3d_c: D3dConstants;",
         &format!("@group(#{{MATERIAL_BIND_GROUP}}) @binding({constants_binding}) var<uniform> d3d_c: D3dConstants;"),
@@ -750,7 +755,33 @@ fn rebind(lib: &ShaderLibrary, e: &ShaderEntry, wgsl: &str, constants_binding: u
             s = s.replace(&format!("d3d_c.f[{r}]"), &format!("d3d_g.f[{r}]"));
         }
     }
-    s
+    let mut out = String::with_capacity(s.len());
+    for line in s.lines() {
+        if !(line.contains(" var d3d_s") && line.ends_with(": sampler;")) {
+            out += line;
+            out.push('\n');
+        }
+    }
+    for n in 0..16u32 {
+        let shared = if clamp & 1 << n != 0 { "d3d_clamp_sampler" } else { "d3d_repeat_sampler" };
+        out = replace_ident(&out, &format!("d3d_s{n}"), shared);
+    }
+    out
+}
+
+/// Replaces whole-identifier uses of `from` (not `d3d_s1` inside `d3d_s12`).
+fn replace_ident(s: &str, from: &str, to: &str) -> String {
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find(from) {
+        out += &rest[..i];
+        rest = &rest[i + from.len()..];
+        let whole = !out.ends_with(ident) && !rest.starts_with(ident);
+        out += if whole { to } else { from };
+    }
+    out += rest;
+    out
 }
 
 fn free_locations(used: &HashSet<u32>, n: usize) -> Vec<u32> {
@@ -805,7 +836,8 @@ fn pair_sources(lib: &ShaderLibrary, key: OriginalKey) -> anyhow::Result<(String
         vsrc += "var<private> d3d_sector: vec4<f32>;\n";
         vsrc += "fn d3d_height_bytes(y: f32) -> vec4<f32> {\n    let h = y * 64.0;\n    let hi = floor(h / 256.0);\n    let lo = h - hi * 256.0;\n    return vec4<f32>(lo, hi, lo, hi);\n}\n";
     }
-    let mut body = rebind(lib, vs, &lib.wgsl(vs)?, 2);
+    vsrc += SHARED_SAMPLERS;
+    let mut body = rebind(lib, vs, &lib.wgsl(vs)?, 2, 0);
     // Shaders translated before outputs got their D3D9 default (see
     // `d3d9_wgsl::VS_OUTPUT_DEFAULT`) declare them bare.
     for io in &vs.outputs {
@@ -929,16 +961,25 @@ fn pair_sources(lib: &ShaderLibrary, key: OriginalKey) -> anyhow::Result<(String
     let mut fsrc = String::from(
         "#import bevy_pbr::{pbr_types, pbr_functions, mesh_bindings::mesh}\n#import fc3::horizon::{remove_hidden_sun, atlas_uv, beyond_cascades}\n",
     );
-    fsrc += "@group(#{MATERIAL_BIND_GROUP}) @binding(48) var d3d_horizon: texture_2d<f32>;\n@group(#{MATERIAL_BIND_GROUP}) @binding(49) var d3d_horizon_sampler: sampler;\n";
+    fsrc += SHARED_SAMPLERS;
+    fsrc += "@group(#{MATERIAL_BIND_GROUP}) @binding(48) var d3d_horizon: texture_2d<f32>;\n";
     if needs_uv {
-        fsrc += "@group(#{MATERIAL_BIND_GROUP}) @binding(50) var d3d_cutout: texture_2d<f32>;\n@group(#{MATERIAL_BIND_GROUP}) @binding(51) var d3d_cutout_sampler: sampler;\n@group(#{MATERIAL_BIND_GROUP}) @binding(52) var<uniform> d3d_cutout_params: vec4<f32>;\n";
+        fsrc += "@group(#{MATERIAL_BIND_GROUP}) @binding(50) var d3d_cutout: texture_2d<f32>;\n@group(#{MATERIAL_BIND_GROUP}) @binding(52) var<uniform> d3d_cutout_params: vec4<f32>;\n";
     }
     fsrc += SPACE_CONSTANTS;
     fsrc += &format!(
         "const NORMAL_FROM_TARGET: bool = {};\nconst ALPHA_TEST: bool = {};\nconst UNLIT: bool = {};\nconst BLENDED: bool = {};\n",
         key.normal, key.alpha_test, key.unlit, key.blended
     );
-    let pbody = rebind(lib, ps, &lib.wgsl(ps)?, 0);
+    // The terrain's atlas maps clamp at their edges (as `terrain_material`
+    // loads them); every other map repeats.
+    let clamp = if key.terrain {
+        let atlas = [names::MASK_SAMPLER, names::COLOR_SAMPLER, names::DIFFUSE_SAMPLER].map(h);
+        ps.bindings.iter().filter(|b| b.sampler && b.register < 16 && atlas.contains(&b.name_hash)).fold(0, |m, b| m | 1 << b.register)
+    } else {
+        0
+    };
+    let pbody = rebind(lib, ps, &lib.wgsl(ps)?, 0, clamp);
     let uses_vpos = pbody.contains("var<private> d3d_vpos");
     let uses_vface = pbody.contains("var<private> d3d_vface");
     fsrc += &pbody;
@@ -972,7 +1013,7 @@ fn pair_sources(lib: &ShaderLibrary, key: OriginalKey) -> anyhow::Result<(String
     if key.alpha_test {
         // Cut out by the diffuse map's alpha (see `OriginalMaterial::cutout`).
         fsrc +=
-            "    if textureSample(d3d_cutout, d3d_cutout_sampler, in.bevy_uv.xy * d3d_cutout_params.xy).a < d3d_cutout_params.z {\n        discard;\n    }\n";
+            "    if textureSample(d3d_cutout, d3d_repeat_sampler, in.bevy_uv.xy * d3d_cutout_params.xy).a < d3d_cutout_params.z {\n        discard;\n    }\n";
     }
     // Blended: covers what is behind by the diffuse map's alpha times the
     // vertex colour's, as the game's blending shaders do (clear glass and
@@ -980,9 +1021,9 @@ fn pair_sources(lib: &ShaderLibrary, key: OriginalKey) -> anyhow::Result<(String
     // own alpha is often something else). FC3_BLEND_MAP_ALPHA=1 (debug)
     // uses the diffuse map's alpha alone.
     fsrc += if key.blended && std::env::var_os("FC3_BLEND_MAP_ALPHA").is_some() {
-        "    let coverage = textureSample(d3d_cutout, d3d_cutout_sampler, in.bevy_uv.xy * d3d_cutout_params.xy).a;\n"
+        "    let coverage = textureSample(d3d_cutout, d3d_repeat_sampler, in.bevy_uv.xy * d3d_cutout_params.xy).a;\n"
     } else if key.blended {
-        "    let coverage = textureSample(d3d_cutout, d3d_cutout_sampler, in.bevy_uv.xy * d3d_cutout_params.xy).a * in.bevy_uv.z;\n"
+        "    let coverage = textureSample(d3d_cutout, d3d_repeat_sampler, in.bevy_uv.xy * d3d_cutout_params.xy).a * in.bevy_uv.z;\n"
     } else {
         "    let coverage = 1.0;\n"
     };
@@ -1043,7 +1084,7 @@ fn pair_sources(lib: &ShaderLibrary, key: OriginalKey) -> anyhow::Result<(String
         color = pbr_functions::apply_pbr_lighting(pbr);
         // Shadows of distant land beyond the shadow cascades.
         if beyond_cascades(in.bevy_world) {
-            let horizon = textureSampleLevel(d3d_horizon, d3d_horizon_sampler, atlas_uv(in.bevy_world.xyz), 0.0).rg;
+            let horizon = textureSampleLevel(d3d_horizon, d3d_clamp_sampler, atlas_uv(in.bevy_world.xyz), 0.0).rg;
             color = remove_hidden_sun(color, pbr, horizon);
         }
     }
