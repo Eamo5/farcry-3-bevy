@@ -440,9 +440,27 @@ strikes something, and what it emitted lives out. Letting go plays the
 stopping effect. The flamers launch the third-person ones with each pulse,
 their nozzle flaring as a burst opens and dying down as it ends. Where the
 stream strikes close, its fireballs (HDR 18) pile into a white-hot blaze.
-Where the stream lands it leaves sticky fire (below). Not yet: the flame mesh
-(a textured tube along a spline). `FC3_TEST_MAG` keeps the magazines full, for a long
-burst under `--fire-test`.
+Where the stream lands it leaves sticky fire (below).
+
+The flame mesh (`FlameMesh`) glows down the middle of the stream. It is a
+tube `iRingNVertex` vertices round, built round a rope of knots sent from the
+nozzle every `fSegmentLength` at `fSpeed` for `fSize` metres, or until the
+stream strikes something. Up to `fFlameRestitutionStartDistance` the rope
+keeps straight ahead of the gun. From `fFlameRestitutionEndDistance` it goes
+its own way (in between it blends), so it swings out behind as the aim turns.
+The tube widens from `sizeGrowInterpolation`'s first width to its second over
+`fSizeGrowInterpolationDist`, narrows by `sizeShrinkInterpolation` from
+`fSizeShrinkInterpolationDist` to its end, and grows to full strength over
+`fFlameStrengthGrowthTime`. It isn't drawn nearer the nozzle than
+`fMeshRingCutoffDistance`. Its texture (`texTexture`) adds light. The texture
+tiles along the rope every `fTeselation` metres, so the flame comes in pulses
+that travel with the knots. The texture's `fTextureFrames` slices across take
+turns every `fTextureChangeTime`. The weapons' table keeps the mesh (version
+12; 11 still reads, without it), and the converter caches its texture. The
+flamers' bursts feed one too. `FC3_ROPE_GLOW` sets how brightly it glows (3).
+`FC3_TEST_MAG` keeps the magazines full, for a long burst under
+`--fire-test`. `FC3_FIRE_SWEEP=<deg>,<period s>[,<pitch deg>]` swings the
+test's aim from side to side (the stream's curve), raised so far.
 
 Grass fires. The fire manager's settings (`firesettings_default.obj`) name,
 for each kind of fire, the effects it plays and how many of each may play at

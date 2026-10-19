@@ -4,18 +4,28 @@
 //! those it sends down the stream while it fires, each launched every so
 //! often (more often as the aim swings) at its speed for its distance or
 //! until the stream strikes something, where it stops. Our flame stream
-//! stands in when none of them is cached.
+//! stands in when none of them is cached. Its flame mesh glows round the
+//! stream: a tube round a rope of knots sent from the nozzle, which keeps
+//! straight ahead of the gun near it and swings out behind as the aim
+//! turns.
+
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 use avian3d::prelude::*;
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
+use bevy::mesh::Indices;
 use bevy::prelude::*;
+use fc3_formats::weapons::FlameRope;
 
+use crate::particles::ParticleMaterial;
 use crate::weapons::{Inventory, Muzzle};
 
 pub struct FlamethrowerPlugin;
 
 impl Plugin for FlamethrowerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (player_flame, fly).chain().run_if(in_state(crate::menu::GameState::Playing)));
+        app.add_systems(Update, (player_flame, fly, ropes).chain().run_if(in_state(crate::menu::GameState::Playing)));
     }
 }
 
@@ -29,6 +39,8 @@ pub struct Flame {
     pub shoot_3p: Option<&'static str>,
     pub stop_3p: Option<&'static str>,
     pub stream: Vec<Stream>,
+    /// Its flame mesh, if it draws one.
+    pub rope: Option<Arc<FlameRope>>,
 }
 
 /// An effect sent down the stream: one every so often (s; by how fast the
@@ -55,6 +67,7 @@ impl Flame {
                 .filter(|s| s.every > 0.0 && s.speed > 0.0)
                 .map(|s| Stream { effect: name(&s.effect), effect_3p: name(&s.effect_3p), timing: s.clone() })
                 .collect(),
+            rope: f.rope.clone().map(Arc::new),
         }
     }
 
@@ -139,6 +152,9 @@ fn player_flame(
     state.aim = Some(forward.as_vec3());
     let filter = SpatialQueryFilter::from_excluded_entities([*player]);
     let reach = spatial.cast_ray(from, forward, 60.0, true, &filter).map(|h| h.distance).unwrap_or(f32::MAX);
+    if let Some(rope) = &f.rope {
+        feed_rope(&mut commands, *player, rope.clone(), from, forward.as_vec3(), *velocity, reach, 0.05);
+    }
     let frame = crate::authored_fx::muzzle_frame(forward.as_vec3());
     let mut flying = in_flight.iter().count();
     state.clocks.resize(f.stream.len(), 0.0);
@@ -188,6 +204,247 @@ pub fn launch_3p(commands: &mut Commands, flame: &Flame, from: Vec3, dir: Vec3, 
         any = true;
     }
     any
+}
+
+/// Feeds a flame's mesh for `span` seconds: from its owner's nozzle, along
+/// its aim, as far as it reaches (a new rope if the owner has none going).
+#[allow(clippy::too_many_arguments)]
+pub fn feed_rope(commands: &mut Commands, owner: Entity, def: Arc<FlameRope>, from: Vec3, dir: Vec3, velocity: Vec3, reach: f32, span: f32) {
+    commands.spawn(RopeFeed { owner, def, from, dir, velocity, reach, span });
+}
+
+/// A feed for a flame's mesh, taken up by `ropes`.
+#[derive(Component)]
+struct RopeFeed {
+    owner: Entity,
+    def: Arc<FlameRope>,
+    from: Vec3,
+    dir: Vec3,
+    velocity: Vec3,
+    reach: f32,
+    span: f32,
+}
+
+/// A flame's mesh: its owner's nozzle and aim (the last it was fed), the
+/// seconds it goes on sending knots, how long it has sent them (its
+/// strength), the time since the last, and its knots, newest first.
+#[derive(Component)]
+struct Rope {
+    owner: Entity,
+    def: Arc<FlameRope>,
+    nozzle: Vec3,
+    aim: Vec3,
+    velocity: Vec3,
+    reach: f32,
+    feeding: f32,
+    fired: f32,
+    clock: f32,
+    age: f32,
+    knots: VecDeque<Knot>,
+}
+
+/// A knot of the rope: where it is, how fast it goes, how far it has gone
+/// and will, and the flame's strength as it left.
+struct Knot {
+    at: Vec3,
+    velocity: Vec3,
+    gone: f32,
+    end: f32,
+    strength: f32,
+}
+
+impl Rope {
+    fn feed(&mut self, f: &RopeFeed) {
+        (self.nozzle, self.aim, self.velocity, self.reach) = (f.from, f.dir, f.velocity, f.reach);
+        self.feeding = self.feeding.max(f.span);
+    }
+
+    /// Its knots go on, and while it's fed a new one leaves every segment
+    /// (each from where it would be had it left on its tick).
+    fn step(&mut self, dt: f32) {
+        let d = &self.def;
+        self.age += dt;
+        for k in &mut self.knots {
+            k.at += k.velocity * dt;
+            k.gone += d.speed * dt;
+        }
+        self.knots.retain(|k| k.gone < k.end);
+        if self.feeding <= 0.0 {
+            self.fired = (self.fired - dt * 2.0).max(0.0);
+            return;
+        }
+        self.feeding -= dt;
+        self.fired += dt;
+        self.clock += dt;
+        let every = d.segment / d.speed;
+        let strength = (self.fired / d.grow_time.max(1e-3)).min(1.0);
+        while self.clock >= every {
+            self.clock -= every;
+            let gone = d.speed * self.clock;
+            let end = d.length.min(self.reach);
+            if gone < end && self.knots.len() < 256 {
+                let at = self.nozzle + self.aim * gone + self.velocity * self.clock;
+                self.knots.push_front(Knot { at, velocity: self.aim * d.speed + self.velocity, gone, end, strength });
+            }
+        }
+    }
+
+    /// The rope's points (where, how far along, the strength there): the
+    /// nozzle while it's fed, then its knots, held straight ahead of the gun
+    /// near it; from where it's drawn.
+    fn points(&self) -> Vec<(Vec3, f32, f32)> {
+        let d = &self.def;
+        let mut points = Vec::with_capacity(self.knots.len() + 1);
+        if self.feeding > 0.0 {
+            points.push((self.nozzle, 0.0, (self.fired / d.grow_time.max(1e-3)).min(1.0)));
+        }
+        for k in &self.knots {
+            let straight = self.nozzle + self.aim * k.gone;
+            let free = smoothstep(d.straight[0], d.straight[1], k.gone);
+            points.push((straight.lerp(k.at, free), k.gone, k.strength));
+        }
+        let Some(first) = points.iter().position(|p| p.1 >= d.cutoff) else { return Vec::new() };
+        if first > 0 {
+            let (a, b) = (points[first - 1], points[first]);
+            let t = ((d.cutoff - a.1) / (b.1 - a.1).max(1e-4)).clamp(0.0, 1.0);
+            points[first - 1] = (a.0.lerp(b.0, t), d.cutoff, a.2 + (b.2 - a.2) * t);
+            points.drain(..first - 1);
+        }
+        points
+    }
+}
+
+fn smoothstep(from: f32, to: f32, x: f32) -> f32 {
+    let t = ((x - from) / (to - from).max(1e-4)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// How brightly the flame mesh's texture glows (`FC3_ROPE_GLOW`, else 3).
+fn rope_glow() -> f32 {
+    static GLOW: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *GLOW.get_or_init(|| std::env::var("FC3_ROPE_GLOW").ok().and_then(|v| v.parse().ok()).unwrap_or(3.0))
+}
+
+/// The flames' meshes: fed ones send knots, all of them go on, and each is
+/// drawn as a tube round its rope (as wide as its flame says there, its
+/// texture's frames in turn, tiled along it, fading in past the nozzle and
+/// out at its tip), until its last knot has gone.
+#[allow(clippy::too_many_arguments)]
+fn ropes(
+    time: Res<Time>,
+    feeds: Query<(Entity, &RopeFeed)>,
+    mut ropes: Query<(Entity, &mut Rope, &Mesh3d, &mut Visibility)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ParticleMaterial>>,
+    server: Res<AssetServer>,
+    mut looks: Local<HashMap<String, Option<Handle<ParticleMaterial>>>>,
+    mut commands: Commands,
+) {
+    let dt = time.delta_secs();
+    for (e, f) in &feeds {
+        commands.entity(e).despawn();
+        if let Some((_, mut rope, _, _)) = ropes.iter_mut().find(|(_, r, _, _)| r.owner == f.owner) {
+            rope.feed(f);
+            continue;
+        }
+        // (Its texture, if it's cached.)
+        let look = looks.entry(f.def.texture.clone()).or_insert_with(|| {
+            let rel = fc3_formats::cache::texture_rel(&f.def.texture);
+            fc3_formats::cache::default_cache_root().join(&rel).exists().then(|| {
+                let texture = server
+                    .load_builder()
+                    .with_settings(|s: &mut bevy::image::ImageLoaderSettings| {
+                        s.is_srgb = true;
+                        s.sampler = crate::cache_assets::repeat_sampler();
+                    })
+                    .load(crate::cache_assets::cache_path(&rel));
+                materials.add(ParticleMaterial::plain(0.0, texture).soft(0.25))
+            })
+        });
+        let Some(material) = look.clone() else { continue };
+        let mut rope = Rope {
+            owner: f.owner,
+            def: f.def.clone(),
+            nozzle: f.from,
+            aim: f.dir,
+            velocity: f.velocity,
+            reach: f.reach,
+            feeding: 0.0,
+            fired: 0.0,
+            clock: 0.0,
+            age: 0.0,
+            knots: VecDeque::new(),
+        };
+        rope.feed(f);
+        commands.spawn((
+            rope,
+            Mesh3d(meshes.add(crate::particles::empty_mesh())),
+            MeshMaterial3d(material),
+            Transform::default(),
+            Visibility::Hidden,
+            NotShadowCaster,
+            NotShadowReceiver,
+            bevy::camera::visibility::NoFrustumCulling,
+            Name::new("flame mesh"),
+        ));
+    }
+    let glow = rope_glow();
+    for (e, mut rope, mesh, mut vis) in &mut ropes {
+        rope.step(dt);
+        if rope.feeding <= 0.0 && rope.knots.is_empty() {
+            meshes.remove(&mesh.0);
+            commands.entity(e).despawn();
+            continue;
+        }
+        let points = rope.points();
+        let want = if points.len() < 2 { Visibility::Hidden } else { Visibility::Inherited };
+        if *vis != want {
+            *vis = want;
+        }
+        if points.len() < 2 {
+            continue;
+        }
+        let d = &rope.def;
+        let n = d.ring.max(3) as usize;
+        let frames = d.frames.max(1);
+        let frame = if d.frame_time > 0.0 { (rope.age / d.frame_time) as u32 % frames } else { 0 };
+        let (cutoff, tip) = (d.cutoff, points[points.len() - 1].1);
+        let mut positions = Vec::with_capacity(points.len() * (n + 1));
+        let mut normals = Vec::with_capacity(positions.capacity());
+        let mut uvs = Vec::with_capacity(positions.capacity());
+        let mut colours = Vec::with_capacity(positions.capacity());
+        for (i, &(at, along, strength)) in points.iter().enumerate() {
+            let tangent = (points[(i + 1).min(points.len() - 1)].0 - points[i.saturating_sub(1)].0).normalize_or(rope.aim);
+            let up = if tangent.y.abs() < 0.95 { Vec3::Y } else { Vec3::X };
+            let side = up.cross(tangent).normalize();
+            let over = tangent.cross(side);
+            let width = d.width(along) * strength.max(0.05);
+            let fade = smoothstep(cutoff, cutoff + 1.0, along) * smoothstep(0.0, 1.5, tip - along);
+            for k in 0..=n {
+                let round = k as f32 / n as f32;
+                let angle = d.ring_angle.to_radians() + round * std::f32::consts::TAU;
+                let out = side * angle.cos() + over * angle.sin();
+                positions.push((at + out * width).to_array());
+                normals.push(out.to_array());
+                uvs.push([(frame as f32 + round) / frames as f32, along / d.tiling.max(0.01)]);
+                colours.push([glow, glow, glow, fade]);
+            }
+        }
+        let mut indices: Vec<u32> = Vec::with_capacity((points.len() - 1) * n * 6);
+        for i in 0..points.len() - 1 {
+            for k in 0..n {
+                let (a, b) = ((i * (n + 1) + k) as u32, ((i + 1) * (n + 1) + k) as u32);
+                indices.extend([a, b, a + 1, a + 1, b, b + 1]);
+            }
+        }
+        if let Some(mut m) = meshes.get_mut(&mesh.0) {
+            m.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+            m.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+            m.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+            m.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
+            m.insert_indices(Indices::U32(indices));
+        }
+    }
 }
 
 /// Stream effects go on their way until they've gone their distance or

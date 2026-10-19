@@ -19,7 +19,9 @@ use anyhow::{bail, Result};
 use crate::fcb::Object;
 
 pub const STATS_REL: &str = "weapons/stats.txt";
-const MAGIC: &str = "fc3-weapons 11";
+const MAGIC: &str = "fc3-weapons 12";
+/// The form before the flame's mesh (read the same, without it).
+const MAGIC_11: &str = "fc3-weapons 11";
 
 /// Whether a cached table is in this version's form.
 pub fn is_current(text: &str) -> bool {
@@ -93,6 +95,128 @@ pub struct Flame {
     pub tip_shoot_3p: String,
     pub tip_stop_3p: String,
     pub stream: Vec<StreamEffect>,
+    /// Its flame mesh, if it draws one.
+    pub rope: Option<FlameRope>,
+}
+
+/// A flame's mesh (`FlameMesh`): a tube round its rope, `ring` vertices
+/// round, the rope's knots sent from the nozzle `segment` metres apart at
+/// `speed` (m/s) for `length` metres. Up to `straight[0]` metres the rope
+/// keeps straight ahead of the gun, from `straight[1]` it goes its own way
+/// (in between it blends). The tube is as wide as `grow` (to so many metres,
+/// from one width to another) and `shrink` (from so many metres to its end)
+/// say, and isn't drawn nearer the nozzle than `cutoff`. The flame gets to
+/// full strength in `grow_time` seconds. Its texture has `frames` frames
+/// side by side, the next every `frame_time` seconds, tiled every `tiling`
+/// metres along the rope.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FlameRope {
+    pub texture: String,
+    pub frames: u32,
+    pub frame_time: f32,
+    pub tiling: f32,
+    pub ring: u32,
+    pub ring_angle: f32,
+    pub length: f32,
+    pub speed: f32,
+    pub segment: f32,
+    pub cutoff: f32,
+    pub straight: [f32; 2],
+    pub grow_time: f32,
+    pub grow: [f32; 3],
+    pub shrink: [f32; 3],
+}
+
+impl FlameRope {
+    /// The tube's width so far along the rope (m), easing between its
+    /// widths.
+    pub fn width(&self, d: f32) -> f32 {
+        let ease = |a: f32, b: f32, t: f32| {
+            let t = t.clamp(0.0, 1.0);
+            a + (b - a) * t * t * (3.0 - 2.0 * t)
+        };
+        let ([grow_to, g0, g1], [shrink_from, s0, s1]) = (self.grow, self.shrink);
+        if d < grow_to {
+            ease(g0, g1, d / grow_to.max(1e-3))
+        } else if d < shrink_from {
+            ease(g1, s0, (d - grow_to) / (shrink_from - grow_to).max(1e-3))
+        } else {
+            ease(s0, s1, (d - shrink_from) / (self.length - shrink_from).max(1e-3))
+        }
+    }
+
+    fn to_text(&self) -> String {
+        let n = [
+            self.frames as f32,
+            self.frame_time,
+            self.tiling,
+            self.ring as f32,
+            self.ring_angle,
+            self.length,
+            self.speed,
+            self.segment,
+            self.cutoff,
+            self.straight[0],
+            self.straight[1],
+            self.grow_time,
+            self.grow[0],
+            self.grow[1],
+            self.grow[2],
+            self.shrink[0],
+            self.shrink[1],
+            self.shrink[2],
+        ];
+        format!("{},{}", self.texture, n.map(|v| v.to_string()).join(","))
+    }
+
+    fn from_text(s: &str) -> Option<FlameRope> {
+        let (texture, rest) = s.split_once(',')?;
+        let n: Vec<f32> = rest.split(',').map(|v| v.parse().ok()).collect::<Option<_>>()?;
+        let n: [f32; 18] = n.try_into().ok()?;
+        Some(FlameRope {
+            texture: texture.to_string(),
+            frames: n[0] as u32,
+            frame_time: n[1],
+            tiling: n[2],
+            ring: n[3] as u32,
+            ring_angle: n[4],
+            length: n[5],
+            speed: n[6],
+            segment: n[7],
+            cutoff: n[8],
+            straight: [n[9], n[10]],
+            grow_time: n[11],
+            grow: [n[12], n[13], n[14]],
+            shrink: [n[15], n[16], n[17]],
+        })
+    }
+
+    /// From a flame's `FlameMesh`, if it has a texture and a length.
+    fn read(m: &Object) -> Option<FlameRope> {
+        let texture = m.str_h(ROPE_TEXTURE).map(|s| s.trim_end_matches('\0').to_string()).filter(|s| !s.is_empty())?;
+        let f = |name: &str| float(m, name).unwrap_or(0.0);
+        let ease = |group: &str, to: f32| {
+            let g = m.child(group);
+            [to, g.and_then(|g| float(g, "fValueA")).unwrap_or(0.1), g.and_then(|g| float(g, "fValueB")).unwrap_or(0.1)]
+        };
+        let rope = FlameRope {
+            texture,
+            frames: f("fTextureFrames").max(1.0) as u32,
+            frame_time: f("fTextureChangeTime"),
+            tiling: f("fTeselation"),
+            ring: uint(m, "iRingNVertex").unwrap_or(5) as u32,
+            ring_angle: f("fRingStartAngle"),
+            length: f("fSize"),
+            speed: f("fSpeed"),
+            segment: f("fSegmentLength"),
+            cutoff: f("fMeshRingCutoffDistance"),
+            straight: [f("fFlameRestitutionStartDistance"), f("fFlameRestitutionEndDistance")],
+            grow_time: f("fFlameStrengthGrowthTime"),
+            grow: ease("sizeGrowInterpolation", f("fSizeGrowInterpolationDist")),
+            shrink: ease("sizeShrinkInterpolation", f("fSizeShrinkInterpolationDist")),
+        };
+        (rope.length > 0.0 && rope.speed > 0.0 && rope.segment > 0.0).then_some(rope)
+    }
 }
 
 /// An effect sent down a flame's stream: one every so often (s), going so
@@ -137,11 +261,13 @@ impl Flame {
             })
             .collect::<Vec<_>>()
             .join(";");
-        format!("{tips}|{stream}")
+        let rope = self.rope.as_ref().map(|r| r.to_text()).unwrap_or_default();
+        format!("{tips}|{stream}|{rope}")
     }
 
     fn from_text(s: &str) -> Option<Flame> {
-        let (tips, stream) = s.split_once('|')?;
+        let mut parts = s.splitn(3, '|');
+        let (tips, stream, rope) = (parts.next()?, parts.next()?, parts.next().and_then(FlameRope::from_text));
         let t: Vec<&str> = tips.split(',').collect();
         let tip = |i: usize| t.get(i).map(|s| s.to_string()).unwrap_or_default();
         let stream = stream
@@ -156,7 +282,7 @@ impl Flame {
                 Some(StreamEffect { effect: f.first()?.to_string(), effect_3p: f.get(1)?.to_string(), every: n(2)?, speed: n(3)?, distance: n(4)?, turning })
             })
             .collect();
-        Some(Flame { tip_idle: tip(0), tip_shoot: tip(1), tip_stop: tip(2), tip_shoot_3p: tip(3), tip_stop_3p: tip(4), stream })
+        Some(Flame { tip_idle: tip(0), tip_shoot: tip(1), tip_stop: tip(2), tip_shoot_3p: tip(3), tip_stop_3p: tip(4), stream, rope })
     }
 
     /// From a weapon's `FireStrategyProperties`, if it has a flame (its
@@ -200,6 +326,7 @@ impl Flame {
         };
         if let Some(m) = mesh {
             flame.stream.extend(launched(m, "fPSSpawnTime", "fSpeed", "fSize"));
+            flame.rope = FlameRope::read(m);
         }
         for e in fire.child("FireballEffects").and_then(|f| f.child("Effects")).map(|e| e.children.as_slice()).unwrap_or_default() {
             flame.stream.extend(launched(e, "fSpawnTime", "fSpeed", "fDistance"));
@@ -211,6 +338,8 @@ impl Flame {
 /// The names of a flame's effects (beside their ids): first person, third.
 const PS_NAME: u32 = 0x93D2_AFB5;
 const PS_3P_NAME: u32 = 0xA9BA_1966;
+/// The name of a flame mesh's texture (beside its id).
+const ROPE_TEXTURE: u32 = 0x3924_E150;
 
 /// The names of the effects a weapon's `Particles` give (beside their ids).
 const MUZZLE_NAME: u32 = 0xB171_F78F;
@@ -730,7 +859,7 @@ pub fn to_text(stats: &[WeaponStats]) -> String {
 
 pub fn from_text(text: &str) -> Result<Vec<WeaponStats>> {
     let mut lines = text.lines();
-    if lines.next().map(str::trim) != Some(MAGIC) {
+    if !matches!(lines.next().map(str::trim), Some(MAGIC | MAGIC_11)) {
         bail!("not a weapon stats table");
     }
     Ok(lines
@@ -872,6 +1001,22 @@ mod tests {
                     distance: 40.0,
                     turning: vec![[0.0, 2.5], [180.0, 0.3]],
                 }],
+                rope: Some(FlameRope {
+                    texture: "graphics\\fx\\flame.xbt".into(),
+                    frames: 4,
+                    frame_time: 0.03,
+                    tiling: 1.0,
+                    ring: 5,
+                    ring_angle: 0.0,
+                    length: 15.0,
+                    speed: 15.0,
+                    segment: 0.5,
+                    cutoff: 1.5,
+                    straight: [2.0, 4.0],
+                    grow_time: 1.0,
+                    grow: [8.0, 0.075, 0.2],
+                    shrink: [10.0, 0.2, 0.075],
+                }),
             }),
             gadgets: vec![
                 Gadget { key: "acog".into(), fov: -30.0, damage: 1.0, noise: 1.0, moving_spread: 1.0, reload: 1.0, look: [1.0; 3], ..Default::default() },

@@ -25,7 +25,7 @@ impl Plugin for WeaponsPlugin {
             .init_resource::<TestScript>()
             .init_resource::<ScopeSway>()
             .init_resource::<UnlimitedAmmo>()
-            .add_systems(Update, (fire_test_setup, fire_test_log, scope_sway, test_ammo, test_empty_magazine))
+            .add_systems(Update, (fire_test_setup, fire_test_log, fire_test_sweep, scope_sway, test_ammo, test_empty_magazine))
             .add_message::<Explosion>()
             .add_message::<HitMarker>()
             .add_message::<WorldHit>()
@@ -1257,6 +1257,8 @@ pub struct TestScript {
     reloaded: bool,
     switched: bool,
     last_log: f32,
+    /// The aim it began with (yaw, pitch), for `FC3_FIRE_SWEEP`.
+    aim: (f32, f32),
 }
 
 impl TestScript {
@@ -1296,6 +1298,7 @@ fn fire_test_setup(
         at.y = ground + 1.0;
     }
     p.pitch = (at.y - eye.y).atan2(8.0);
+    script.aim = (p.yaw, p.pitch);
     let target = commands
         .spawn((
             FireTestTarget,
@@ -1311,6 +1314,19 @@ fn fire_test_setup(
     script.start = Some(time.elapsed_secs());
     script.target = Some(target);
     info!("fire-test: target spawned at {at:?}");
+}
+
+/// `FC3_FIRE_SWEEP=<deg>,<period s>[,<pitch deg>]`: the fire test's aim
+/// swings side to side so far and so often (a stream's curve), raised or
+/// lowered so far from the target.
+fn fire_test_sweep(args: Res<crate::Args>, time: Res<Time>, script: Res<TestScript>, mut players: Query<&mut Player>) {
+    let Some(t) = script.t(&time, &args) else { return };
+    let Ok(sweep) = std::env::var("FC3_FIRE_SWEEP") else { return };
+    let v: Vec<f32> = sweep.split(',').filter_map(|v| v.parse().ok()).collect();
+    let (amp, period, pitch) = (v.first().copied().unwrap_or(30.0), v.get(1).copied().unwrap_or(4.0), v.get(2).copied().unwrap_or(0.0));
+    let Ok(mut p) = players.single_mut() else { return };
+    p.yaw = script.aim.0 + amp.to_radians() * (t * std::f32::consts::TAU / period.max(0.1)).sin();
+    p.pitch = script.aim.1 + pitch.to_radians();
 }
 
 fn fire_test_log(

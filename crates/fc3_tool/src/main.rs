@@ -582,6 +582,20 @@ fn main() -> Result<()> {
             println!("texture  {}", fc3_formats::cache::texture_rel(p));
             println!("anim     {}", fc3_formats::cache::anim_rel(p));
         }
+        "weapon-stats" => {
+            // The weapons' table as the converter writes it (from the cached
+            // entity library and the shop's items), to a file: weapon-stats <out>
+            let out = args.get(1).context("usage: weapon-stats <out>")?;
+            let fcb = |bytes: Vec<u8>| -> Result<std::sync::Arc<fc3_formats::fcb::Object>> {
+                let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+                fc3_formats::fcb::parse(&bytes[at..])
+            };
+            let library = fcb(std::fs::read(fc3_formats::cache::default_cache_root().join("story/entitylibrary.fcb"))?)?;
+            let items = fcb(vfs.read(fc3_formats::shop::ITEMS_LIB)?)?;
+            let stats = fc3_formats::weapons::weapon_stats(&library, Some(&items));
+            std::fs::write(out, fc3_formats::weapons::to_text(&stats))?;
+            println!("{} weapons, {} with a flame mesh", stats.len(), stats.iter().filter(|s| s.flame.as_ref().is_some_and(|f| f.rope.is_some())).count());
+        }
         "sdat-bits" => {
             // Sectors whose height samples set a given bit in a byte of the sample
             // (with `all`, every bit of the mask): sdat-bits <byte 0-3> <mask> [all]

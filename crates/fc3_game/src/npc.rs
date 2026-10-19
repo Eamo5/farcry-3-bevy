@@ -2793,6 +2793,10 @@ fn shoot(
             if !theirs {
                 crate::particles::fx::flame_stream(&mut shot_fx.particles, rng, muzzle, dir, npc.velocity, reach);
             }
+            // (And its flame mesh, through the burst.)
+            if let Some(rope) = flame.as_ref().and_then(|f| f.rope.clone()) {
+                crate::flamethrower::feed_rope(&mut shot_fx.commands, me, rope, muzzle, dir, npc.velocity, reach, stats.interval * 1.5);
+            }
             let tip = flame.as_ref().and_then(|f| if npc.burst_left == 0 { f.stop_3p } else { f.shoot_3p.filter(|_| opening) });
             if let Some(tip) = tip {
                 crate::authored_fx::play_muzzle_at(&mut shot_fx.commands, tip, muzzle, dir);

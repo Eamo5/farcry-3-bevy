@@ -1988,6 +1988,15 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
                     optional.push(n.clone());
                 }
             }
+            // (And the texture its flame mesh draws with.)
+            for path in w.flame.iter().filter_map(|f| f.rope.as_ref()).map(|r| &r.texture) {
+                let rel = cache::texture_rel(path);
+                if job.should_write(&rel) {
+                    if let Err(e) = convert_texture_to(job, path, &rel) {
+                        job.error(format!("flame mesh {path}: {e:#}"));
+                    }
+                }
+            }
         }
     }
     match job.vfs.read(pe::MATERIAL_IMPACTS).map_err(anyhow::Error::from).and_then(|lib| pe::material_impacts(&lib, pe::BULLET_IMPACT)) {
