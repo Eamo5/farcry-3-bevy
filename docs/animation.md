@@ -887,8 +887,14 @@ impl FaceChoice { fn from_component(&fcb::Object); fn definition(head_tags) -> O
   goes on that face, when the game has the line's lip-sync clip (sounds
   that aren't speech have none). The library loads when conversion finishes, including
   on first launch.
-* Not yet: generic characters' rigs (by archetype and kit head tag),
-  gameplay `*_facial` clips.
+* A takedown's victim pulls the face the game made for their half
+  (`faces::takedown_face`): beside the body clip (`..._+000fw_facial.dpax`
+  for `..._+000fw_target.mab`) or among the takedowns' faces
+  (`facial	akedownsrdge_facial_...` for `3rdge_fulb_...`), played on
+  their kit face as a line's lip-sync is; the double takedown's second
+  victim too.
+* Not yet: generic characters' rigs by kit head tag, and the other
+  gameplay `*_facial` clips (skydives, dogs' barks).
 
 ### Tools
 

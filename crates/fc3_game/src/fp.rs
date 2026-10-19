@@ -907,6 +907,7 @@ fn start_takedowns(
     npcs: Query<&crate::npc::Npc>,
     mut held: Query<(&ChildOf, &mut Visibility), With<crate::characters::HeldWeapon>>,
     mut variant: Local<u32>,
+    (mut library, mut faces): (Option<ResMut<crate::faces::FaceLibrary>>, Query<&mut crate::faces::Face>),
 ) {
     let Some(chars) = chars else { return };
     for ev in events.read() {
@@ -934,6 +935,13 @@ fn start_takedowns(
         let load = |rel: &str| -> Handle<Fc3Clip> { server.load(cache_path(&cache::anim_rel(&format!("{ANIM_ROOT}{rel}")))) };
         // He dies into his half (the death that follows plays it), unarmed as in the clip.
         let victim_clip = load(&theirs);
+        // (His face pulls its own, where the game has one for his half.)
+        if let (Some(lib), Some(mut face)) = (library.as_mut(), npc.rig.and_then(|r| faces.get_mut(r).ok())) {
+            if let Some(clip) = crate::faces::takedown_face(lib, &format!("{ANIM_ROOT}{theirs}")) {
+                debug!("takedown: the victim's face too");
+                face.voice = Some((clip, 0.0));
+            }
+        }
         if let Some(mut r) = npc.rig.and_then(|r| rigs.get_mut(r).ok()) {
             let clip = victim_clip.clone();
             r.set_clips(Arc::new(ClipSet {
@@ -949,8 +957,12 @@ fn start_takedowns(
         // The second victim's half, the same way.
         let second = double.and_then(|(e2, left)| {
             let side = if left { "lt" } else { "rt" };
-            let clip = load(&format!(r"melee\stealthtakedown_above\3rdge_fulb_doubletakedownfront_{side}_var1_+000fw_target_2.mab"));
+            let theirs2 = format!(r"melee\stealthtakedown_above\3rdge_fulb_doubletakedownfront_{side}_var1_+000fw_target_2.mab");
+            let clip = load(&theirs2);
             let n2 = npcs.get(e2).ok()?;
+            if let (Some(lib), Some(mut face)) = (library.as_mut(), n2.rig.and_then(|r| faces.get_mut(r).ok())) {
+                face.voice = crate::faces::takedown_face(lib, &format!("{ANIM_ROOT}{theirs2}")).map(|c| (c, 0.0));
+            }
             if let Some(mut r) = n2.rig.and_then(|r| rigs.get_mut(r).ok()) {
                 r.set_clips(Arc::new(ClipSet {
                     skeleton: chars.human.skeleton.clone(),

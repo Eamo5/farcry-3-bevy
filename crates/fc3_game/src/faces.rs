@@ -202,6 +202,25 @@ fn mouth_where_said(mut said: MessageReader<crate::sound::PlaySfx>, library: Opt
     }
 }
 
+/// The face a takedown's victim pulls with their half of it (a body clip,
+/// its path): the game keeps it beside the clip (`..._+000fw_facial.dpax`
+/// for `..._+000fw_target.mab`, or the clip's own name with `_facial`) or
+/// among the takedowns' faces (`facial\takedowns\3rdge_facial_...` for
+/// `3rdge_fulb_...`).
+pub fn takedown_face(library: &mut FaceLibrary, body_clip: &str) -> Option<Arc<FaceClip>> {
+    let stem = body_clip.strip_suffix(".mab").unwrap_or(body_clip);
+    let file = stem.rsplit_once('\\').map_or(stem, |(_, f)| f);
+    let untargeted = stem.strip_suffix("_target").unwrap_or(stem);
+    let shared = file.replacen("3rdge_fulb_", "3rdge_facial_", 1);
+    let candidates = [
+        format!("{untargeted}_facial.dpax"),
+        format!("{stem}_facial.dpax"),
+        format!(r"graphics\characters\_common\facial\takedowns\{shared}.dpax"),
+        format!(r"graphics\characters\_common\facial\takedowns\{}.dpax", shared.strip_suffix("_target").unwrap_or(&shared)),
+    ];
+    candidates.iter().find_map(|c| library.clip(c))
+}
+
 /// Spoken lines whose speakers' faces should move: (story id, sound id).
 #[derive(Resource, Default)]
 pub struct Voices(pub Vec<(u64, u32)>);
