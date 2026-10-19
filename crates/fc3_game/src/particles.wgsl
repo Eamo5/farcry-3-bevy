@@ -17,7 +17,7 @@ struct ParticleParams {
 @group(#{MATERIAL_BIND_GROUP}) @binding(1) var sheet: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(2) var sheet_sampler: sampler;
 // x: the depth (m) a soft sprite fades over as it nears what's behind it
-// (0: cut hard).
+// (0: cut hard); y: 1 when it dissolves as it fades.
 @group(#{MATERIAL_BIND_GROUP}) @binding(3) var<uniform> soft: vec4<f32>;
 
 // How much of a sprite shows for its nearness to the scene behind it.
@@ -59,11 +59,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #else
     var c = vec4<f32>(1.0);
 #endif
-    c.a *= softness(in.position);
+    let near = softness(in.position);
     let mode = params.mode.x;
     if mode < 0.5 {
         // Additive: no coverage, just light.
-        return vec4<f32>(t.rgb * c.rgb * c.a, 0.0);
+        return vec4<f32>(t.rgb * c.rgb * c.a * near, 0.0);
     }
     var a = t.a;
     var rgb = t.rgb;
@@ -71,6 +71,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         a = max(max(t.r, t.g), t.b);
         rgb = vec3<f32>(1.0);
     }
-    a *= c.a;
+    if soft.y > 0.5 {
+        // Dissolving: what's left of its coverage, the thin parts gone
+        // first (all of it at full alpha, none at none).
+        a = clamp((a - (1.0 - c.a)) / max(c.a, 0.001), 0.0, 1.0);
+    } else {
+        a *= c.a;
+    }
+    a *= near;
     return vec4<f32>(rgb * c.rgb * a, a);
 }

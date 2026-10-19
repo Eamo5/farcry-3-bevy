@@ -584,7 +584,11 @@ light with its colour, intensity and radius, flickering by
 `LightFlickeringFrequency` and `LightFlickeringAmplitude`. The world's placed
 effects burn none (`NoLights`), since the converter already puts their lights
 among the world's. A soft emitter (`Soft`) fades over its `SoftRange` (m) as
-it nears what's behind it, so smoke meets the ground without a hard line. That
+it nears what's behind it, so smoke meets the ground without a hard line. One
+that dissolves (`AlphaDissolve`: splashes, blood, mist, some flames) loses
+its sheet's thin parts first as its alpha falls: the sheet's coverage from
+one less its alpha up to one is what shows, so at full alpha it is all
+there and the dense core goes last, instead of all of it fading alike. That
 needs the camera's depth prepass, there at high effects and up (for SSAO); our
 stand-in smoke and dust fade over 0.5 m.
 

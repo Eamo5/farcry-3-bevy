@@ -321,14 +321,15 @@ impl Ranged {
     }
 }
 
-/// What a batch draws: a texture, its grid, how it blends and how soft it
-/// is (`Soft`'s `SoftRange`, in cm; 0 hard); or, for heat haze, how it
-/// bends the view.
+/// What a batch draws: a texture, its grid, how it blends, how soft it is
+/// (`Soft`'s `SoftRange`, in cm; 0 hard) and whether it dissolves as it
+/// fades (`AlphaDissolve`); or, for heat haze, how it bends the view.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct BatchKey {
     texture: String,
     mode: u8,
     soft: u16,
+    dissolve: bool,
     haze: Option<HazeKey>,
 }
 
@@ -515,6 +516,7 @@ impl Compiled {
             texture: fc3_formats::cache::texture_rel(&t),
             mode,
             soft,
+            dissolve: on("AlphaDissolve") && mode != 0,
             haze,
         });
         // The gradient's points (`Knot`s), else its even samples (`Key`s).
@@ -1087,7 +1089,7 @@ fn draw(
         let (shape, soft) = (load_sheet(&server, &key.texture), key.soft as f32 / 100.0);
         match &key.haze {
             Some(haze) => batch.insert(MeshMaterial3d(hazes.add(haze.material(shape, load_map(&server, &haze.map), soft)))),
-            None => batch.insert(MeshMaterial3d(materials.add(ParticleMaterial::plain(key.mode as f32, shape).soft(soft)))),
+            None => batch.insert(MeshMaterial3d(materials.add(ParticleMaterial::plain(key.mode as f32, shape).soft(soft).dissolve(key.dissolve)))),
         };
         let e = batch.id();
         library.batches.insert(key, e);

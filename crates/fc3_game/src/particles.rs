@@ -265,7 +265,8 @@ pub struct ParticleMaterial {
     #[texture(1)]
     #[sampler(2)]
     sheet: Handle<Image>,
-    /// x: the depth (m) it fades over nearing what's behind (0: hard).
+    /// x: the depth (m) it fades over nearing what's behind (0: hard); y:
+    /// 1 when it dissolves as it fades (`AlphaDissolve`).
     #[uniform(3)]
     soft: Vec4,
 }
@@ -284,6 +285,14 @@ impl ParticleMaterial {
     /// Fading over `range` (m) as it nears what's behind it.
     pub(crate) fn soft(mut self, range: f32) -> Self {
         self.soft.x = range;
+        self
+    }
+
+    /// Dissolving as it fades: its sheet's thin parts go first, its dense
+    /// ones last (a splash or a flame eroding), instead of all of it
+    /// fading alike.
+    pub(crate) fn dissolve(mut self, on: bool) -> Self {
+        self.soft.y = if on { 1.0 } else { 0.0 };
         self
     }
 }
