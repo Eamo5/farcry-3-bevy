@@ -544,7 +544,11 @@ brightness as coverage, compressed (1 + 1.5 log10 of it: our light isn't the
 engine's). `SHLighting` sheets darken with the daylight. `NearClippingAlpha`
 fades a sprite out between `NearClippingEnd` and `NearClippingStart` from the
 camera (a flamethrower's fireballs, impacts' smoke); `FarClippingAlpha` or
-`FarClippingRate` fades it out far off. `LightActive` burns a point
+`FarClippingRate` fades it out far off. A sprite shrinks as it nears the
+camera, from its size `CameraScalingDistance` off to `CameraScaling` of it at
+the eye. The flamethrower's flames, fires and their smoke, and the sea's motes
+are set up like this, so the flames in hand stay a stream and don't white out
+the screen. `LightActive` burns a point
 light with its colour, intensity and radius, flickering by
 `LightFlickeringFrequency` and `LightFlickeringAmplitude`. The world's placed
 effects burn none (`NoLights`), since the converter already puts their lights

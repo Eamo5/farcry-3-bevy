@@ -440,6 +440,10 @@ struct Compiled {
     lit: bool,
     near: Option<(f32, f32)>,
     far: Option<(f32, f32)>,
+    /// Shrunk nearing the camera (`CameraScalingDistance`,
+    /// `CameraScaling`): from its size that far off to so much of it at the
+    /// eye (a flamethrower's flames, fires' smoke, the sea's motes).
+    camera_scale: Option<(f32, f32)>,
     light: Option<(Vec3, f32, f32, f32, f32)>,
 }
 
@@ -584,6 +588,7 @@ impl Compiled {
             // or its rate, both of which we fade.)
             near: (f("NearClippingAlpha", 0.0) > 0.0).then(|| (f("NearClippingStart", 0.0), f("NearClippingEnd", 0.0))),
             far: (f("FarClippingRate", 0.0) > 0.0 || f("FarClippingAlpha", 0.0) > 0.0).then(|| (f("FarClippingStart", 0.0), f("FarClippingEnd", 0.0))),
+            camera_scale: Some((f("CameraScalingDistance", 0.0), f("CameraScaling", 1.0))).filter(|&(d, s)| d > 0.0 && s != 1.0),
             light: on("LightActive").then(|| {
                 let colour = dunia_colour(s.attr("LightColor").unwrap_or("1,1,1")).unwrap_or(Vec3::ONE);
                 (colour, f("LightIntensity", 1.0), f("LightOuterRadius", 2.0), f("LightFlickeringFrequency", 0.0), f("LightFlickeringAmplitude", 0.0))
@@ -1006,6 +1011,12 @@ fn load_map(server: &AssetServer, rel: &str) -> Handle<Image> {
         .load(crate::cache_assets::cache_path(rel))
 }
 
+/// How much of its size a particle so far from the camera keeps (its
+/// emitter's camera scaling: all of it from that distance on).
+fn camera_scale(em: &Compiled, dist: f32) -> f32 {
+    em.camera_scale.map_or(1.0, |(d, s)| s + (1.0 - s) * (dist / d).clamp(0.0, 1.0))
+}
+
 /// A batch's mesh: its particles as quads round the camera.
 #[derive(Component)]
 struct FxBatch(BatchKey);
@@ -1084,7 +1095,8 @@ fn draw(
             // (What glows: light added, and brightness as coverage.)
             let colour = colour * light * if batch.0.mode != 1 { em.brightness } else { 1.0 };
             // (A size is the particle's half-extent, its radius.)
-            let half = (p.size * em.part_size.at(t)).max(0.005);
+            let near = camera_scale(em, dist);
+            let half = (p.size * em.part_size.at(t) * near).max(0.005);
             let mut centre = pos - origin;
             let (x, y) = if !em.uniform {
                 // Sized unevenly (sparks, streaks of smoke): its width
@@ -1100,7 +1112,7 @@ fn draw(
                 };
                 let along = (heading - view * heading.dot(view)).normalize_or(up);
                 let side = view.cross(along).normalize_or(right);
-                let (width, length) = (half.max(0.003), (p.size * em.part_length.at(t)).max(0.003));
+                let (width, length) = (half.max(0.003), (p.size * em.part_length.at(t) * near).max(0.003));
                 centre += side * (width * em.pivot.x) + along * (length * em.pivot.y);
                 (side * width, along * length)
             } else {
@@ -1138,7 +1150,7 @@ fn draw(
         let em = &library.emitters[p.emitter];
         let Some(model) = &em.mesh else { continue };
         let pos = p.world_pos();
-        let scale = p.size * em.part_size.at((p.age / p.life).clamp(0.0, 1.0));
+        let scale = p.size * em.part_size.at((p.age / p.life).clamp(0.0, 1.0)) * camera_scale(em, pos.distance(origin));
         if scale <= 0.002 || em.far.is_some_and(|(_, end)| pos.distance(origin) > end) {
             continue;
         }
