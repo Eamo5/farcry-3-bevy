@@ -596,6 +596,21 @@ fn main() -> Result<()> {
             std::fs::write(out, fc3_formats::weapons::to_text(&stats))?;
             println!("{} weapons, {} with a flame mesh", stats.len(), stats.iter().filter(|s| s.flame.as_ref().is_some_and(|f| f.rope.is_some())).count());
         }
+        "handbook" => {
+            // The handbook's table as the converter writes it, to a file: handbook <out>
+            use fc3_formats::progression as p;
+            let out = args.get(1).context("usage: handbook <out>")?;
+            let read = |path| -> Result<std::sync::Arc<fc3_formats::fcb::Object>> {
+                let bytes = vfs.read(path)?;
+                let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+                fc3_formats::fcb::parse(&bytes[at..])
+            };
+            let strings = fc3_formats::oasis::Strings::from_bytes(&vfs.read(r"languages\english\oasisstrings_compressed.bin")?)?;
+            let (items, categories, subcategories) = (read(p::WIKI_ITEMS)?, read(p::WIKI_CATEGORIES)?, read(p::WIKI_SUBCATEGORIES)?);
+            let book = p::handbook(&items, &categories, &subcategories, &|id| strings.get(id).unwrap_or_default().to_string());
+            std::fs::write(out, book.to_text())?;
+            println!("{} entries, {} manual sections", book.entries.len(), book.manual.len());
+        }
         "sdat-bits" => {
             // Sectors whose height samples set a given bit in a byte of the sample
             // (with `all`, every bit of the mask): sdat-bits <byte 0-3> <mask> [all]
