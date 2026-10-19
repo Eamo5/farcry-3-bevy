@@ -184,6 +184,176 @@ pub enum ClipKind {
         /// BlurFactor, RGBA, Direction XY, TextureAlpha, MaskOffset.
         samples: Vec<[f32; 9]>,
     },
+    /// Another post-effect over the clip: its texture (where it takes one),
+    /// settings (see [`PostClass::settings`]) and tracks sampled every
+    /// `FOV_STEP` in [`PostClass::tracks`] order.
+    Post {
+        class: PostClass,
+        texture: String,
+        settings: [f32; 4],
+        samples: Vec<Vec<f32>>,
+    },
+}
+
+/// The post-effect clips other than blur and field of view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PostClass {
+    ColorMask,
+    Desaturation,
+    ColorBurn,
+    RgbSep,
+    HueSat,
+    Noise,
+    Distortion,
+    Bloom,
+    MotionBlur,
+    Shake,
+    Slomo,
+}
+
+impl PostClass {
+    pub const ALL: [PostClass; 11] = [
+        PostClass::ColorMask,
+        PostClass::Desaturation,
+        PostClass::ColorBurn,
+        PostClass::RgbSep,
+        PostClass::HueSat,
+        PostClass::Noise,
+        PostClass::Distortion,
+        PostClass::Bloom,
+        PostClass::MotionBlur,
+        PostClass::Shake,
+        PostClass::Slomo,
+    ];
+
+    /// Its clip element and the element inside holding its texture and
+    /// switches (`""`: on the clip itself).
+    pub fn element(self) -> (&'static str, &'static str) {
+        match self {
+            PostClass::ColorMask => ("CColorMaskPostFxClip", "ColorMask"),
+            PostClass::Desaturation => ("CDesaturationPostFxClip", "Desaturation"),
+            PostClass::ColorBurn => ("CColorBurnPostFxClip", ""),
+            PostClass::RgbSep => ("CRGBSepPostFxClip", "RGBSeparation"),
+            PostClass::HueSat => ("CHUESaturationPostFxClip", "HUESaturation"),
+            PostClass::Noise => ("CNoisePostFxClip", "Noise"),
+            PostClass::Distortion => ("CSourceDistortionPostFxClip", "Distortion"),
+            PostClass::Bloom => ("CBloomPostFxClip", "Bloom"),
+            PostClass::MotionBlur => ("CMotionBlurPostFxClip", ""),
+            PostClass::Shake => ("CCameraShakeClip", "ConstantProperties"),
+            PostClass::Slomo => ("CSlomoClip", ""),
+        }
+    }
+
+    /// Its tracks, and what each holds where the clip has no keys for it
+    /// (an attribute of the clip's of that name, else this).
+    pub fn tracks(self) -> &'static [(&'static str, f32)] {
+        match self {
+            PostClass::ColorMask => &[
+                ("ColorMask_R", 1.0),
+                ("ColorMask_G", 1.0),
+                ("ColorMask_B", 1.0),
+                ("ColorMask_A", 0.0),
+                ("ScaleOffset_X", 1.0),
+                ("ScaleOffset_Y", 1.0),
+                ("ScaleOffset_Z", 0.0),
+                ("ScaleOffset_W", 0.0),
+                ("Tiling_X", 1.0),
+                ("Tiling_Y", 1.0),
+                ("AlphaOffset", 0.0),
+            ],
+            PostClass::Desaturation => &[("Color_R", 1.0), ("Color_G", 1.0), ("Color_B", 1.0), ("ColorScale", 1.0), ("DesaturationScale", 0.0)],
+            PostClass::ColorBurn => &[
+                ("Strength", 0.0),
+                ("ColorMask_R", 1.0),
+                ("ColorMask_G", 0.0),
+                ("ColorMask_B", 0.0),
+                ("Saturation", 1.0),
+                ("Threshold", 0.5),
+                ("Contrast", 1.0),
+            ],
+            PostClass::RgbSep => &[
+                ("RedScale_X", 1.0),
+                ("RedScale_Y", 1.0),
+                ("RedOffset_X", 0.0),
+                ("RedOffset_Y", 0.0),
+                ("GreenScale_X", 1.0),
+                ("GreenScale_Y", 1.0),
+                ("GreenOffset_X", 0.0),
+                ("GreenOffset_Y", 0.0),
+                ("BlueScale_X", 1.0),
+                ("BlueScale_Y", 1.0),
+                ("BlueOffset_X", 0.0),
+                ("BlueOffset_Y", 0.0),
+                ("AlphaFade", 1.0),
+                ("Opacity", 1.0),
+            ],
+            PostClass::HueSat => &[("SaturationRatio", 0.0), ("HUE_Rotation", 0.0)],
+            PostClass::Noise => &[("Intensity", 0.0), ("Tiling", 1.0)],
+            PostClass::Distortion => &[
+                ("Scale_X", 1.0),
+                ("Scale_Y", 1.0),
+                ("Offset_X", 0.0),
+                ("Offset_Y", 0.0),
+                ("Bluriness/Sharpness", 0.0),
+                ("DistortionFactor", 0.0),
+                ("Threshold", 0.0),
+            ],
+            PostClass::Bloom => &[
+                ("fIntensity", 1.0),
+                ("fExposure", 1.0),
+                ("fBlurKernelScale", 1.0),
+                ("fColorRemapRed", 1.0),
+                ("fColorRemapGreen", 1.0),
+                ("fColorRemapBlue", 1.0),
+                ("fContrast", 1.0),
+                ("fSaturation", 1.0),
+            ],
+            PostClass::MotionBlur => &[("fIntensity", 0.0), ("fMaxBlurModifier", 1.0)],
+            PostClass::Shake => &[
+                ("fAmplitude", 0.0),
+                ("fFrequency", 1.0),
+                ("fYawFactor", 0.0),
+                ("fPitchFactor", 0.0),
+                ("fRollFactor", 0.0),
+                ("fFOVFactor", 0.0),
+                ("fRumbleFactor", 0.0),
+            ],
+            PostClass::Slomo => &[("SlomoOverTime", 1.0)],
+        }
+    }
+
+    /// Its switches and settings (on the clip or its settings element),
+    /// up to four, missing ones 0.
+    pub fn settings(self) -> &'static [&'static str] {
+        match self {
+            PostClass::ColorMask => &["selBlendType", "UseTexture", "bRenderLast", "nPriority"],
+            PostClass::Distortion => &["bInfiniteOffsetLoop", "nPriority"],
+            PostClass::Bloom => &["fBlendTime", "bUseTimeOfDay"],
+            PostClass::MotionBlur => &["fBlendTime", "nPriority"],
+            PostClass::Shake => &["fFadeOutTime", "fPitchFrequency", "fRollFrequency", "fYawFrequency"],
+            _ => &["nPriority"],
+        }
+    }
+
+    pub fn code(self) -> &'static str {
+        match self {
+            PostClass::ColorMask => "mask",
+            PostClass::Desaturation => "desat",
+            PostClass::ColorBurn => "burn",
+            PostClass::RgbSep => "rgbsep",
+            PostClass::HueSat => "huesat",
+            PostClass::Noise => "noise",
+            PostClass::Distortion => "distort",
+            PostClass::Bloom => "bloom",
+            PostClass::MotionBlur => "motionblur",
+            PostClass::Shake => "shake",
+            PostClass::Slomo => "slomo",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<PostClass> {
+        PostClass::ALL.into_iter().find(|c| c.code() == code)
+    }
 }
 
 /// How a player-camera clip lets the head turn (`CPlayerCameraClip`): its
@@ -414,6 +584,35 @@ fn clip_of(e: &Element) -> Option<Clip> {
             }
             let n = ((duration / FOV_STEP).ceil() as usize).clamp(1, 20_000);
             ClipKind::Fov { samples: (0..=n).filter_map(|i| sample_bezier(&keys, i as f32 * FOV_STEP)).collect() }
+        }
+        name if PostClass::ALL.iter().any(|c| c.element().0 == name) => {
+            let class = PostClass::ALL.into_iter().find(|c| c.element().0 == name)?;
+            let inner = e.children.iter().find(|c| !class.element().1.is_empty() && c.name == class.element().1);
+            // (A setting may sit on the clip, its settings element or one
+            // beside that: the distortion's offset looping.)
+            let setting = |n: &str| {
+                let read = |el: &Element| {
+                    el.attr(n).and_then(|v| match v.trim() {
+                        "true" => Some(1.0),
+                        "false" => Some(0.0),
+                        v => v.parse::<f32>().ok(),
+                    })
+                };
+                read(e).or_else(|| inner.and_then(read)).or_else(|| e.children.iter().find_map(read)).unwrap_or(0.0)
+            };
+            let mut settings = [0.0; 4];
+            for (i, n) in class.settings().iter().enumerate() {
+                settings[i] = setting(n);
+            }
+            let tracks: Vec<(Vec<BezierKey>, f32)> =
+                class.tracks().iter().map(|(n, default)| (bezier_keys(e, n), e.f32(n).filter(|v| v.is_finite()).unwrap_or(*default))).collect();
+            let n = ((duration / FOV_STEP).ceil() as usize).clamp(1, 20_000);
+            ClipKind::Post {
+                class,
+                texture: inner.or(Some(e)).and_then(|i| i.attr("fileTexture")).unwrap_or_default().to_ascii_lowercase(),
+                settings,
+                samples: (0..=n).map(|i| tracks.iter().map(|(keys, default)| sample_bezier(keys, i as f32 * FOV_STEP).unwrap_or(*default)).collect()).collect(),
+            }
         }
         "CBlurPostFxClip" => {
             let blur = e.children.iter().find(|e| e.name == "Blur")?;
@@ -660,6 +859,12 @@ impl Sequence {
                     ClipKind::Blur { texture, kind, priority, intensity, samples } => format!("blur\t{texture}\t{kind}\t{priority}\t{},{},{}\t{}",
                         b(intensity[0]), b(intensity[1]), b(intensity[2]), samples.iter().map(|sample|
                             sample.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")).collect::<Vec<_>>().join(";")),
+                    ClipKind::Post { class, texture, settings, samples } => format!(
+                        "post\t{}\t{texture}\t{}\t{}",
+                        class.code(),
+                        settings.map(|v| v.to_string()).join(","),
+                        samples.iter().map(|s| s.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")).collect::<Vec<_>>().join(";")
+                    ),
                 };
                 out += &format!("clip\t{}\t{}\t{body}\n", c.start, c.duration);
             }
@@ -748,6 +953,19 @@ impl Sequence {
                             ClipKind::Blur { texture: g(1).to_string(), kind: g(2).parse().ok()?, priority: g(3).parse().ok()?,
                                 intensity: [switches[0] != 0, switches[1] != 0, switches[2] != 0], samples }
                         }
+                        "post" => {
+                            let class = PostClass::from_code(g(1))?;
+                            let s: Vec<f32> = g(3).split(',').filter_map(|x| x.parse().ok()).collect();
+                            let samples: Vec<Vec<f32>> = g(4)
+                                .split(';')
+                                .map(|row| row.split(',').filter_map(|x| x.parse().ok()).collect::<Vec<f32>>())
+                                .filter(|row| row.len() == class.tracks().len())
+                                .collect();
+                            if s.len() != 4 || samples.is_empty() {
+                                return None;
+                            }
+                            ClipKind::Post { class, texture: g(2).to_string(), settings: [s[0], s[1], s[2], s[3]], samples }
+                        }
                         _ => continue,
                     };
                     seq.groups.last_mut()?.clips.push(Clip { start, duration, kind });
@@ -793,6 +1011,39 @@ mod tests {
         assert!(parse_postfx_library(&xml.replace("</CinemaPostFX>",
             "<CGameplaySequence sName=\"POSTFX:EASED\"/></CinemaPostFX>")).is_err());
         assert!(parse_postfx_library("<CinemaPostFX/>").is_err());
+    }
+
+    #[test]
+    fn post_clips_keep_their_tracks_settings_and_texture() {
+        let xml = r#"<CinemaPostFX>
+          <CGameplaySequence sName="postfx:hit" bLoop="0">
+            <CSequenceTrackGroup><COverlayTrack>
+              <CColorMaskPostFxClip timeStartTime="0" timeDuration="0.3" nPriority="2">
+                <ColorMask fileTexture="graphics\postfx\Infamy.xbt" UseTexture="0" bRenderLast="1" selBlendType="4"/>
+                <AnimationTrackCollection><Tracks><Track>
+                  <Track Name="ColorMask_A"><Keys><Key Time="0" Value="0"/><Key Time="0.3" Value="1"/></Keys></Track>
+                  <Track Name="ColorMask_R"><Keys><Key Time="0" Value="0.45"/></Keys></Track>
+                </Track></Tracks></AnimationTrackCollection>
+              </CColorMaskPostFxClip>
+              <CCameraShakeClip timeStartTime="0" timeDuration="1" fAmplitude="0.5" fYawFactor="0.15">
+                <ConstantProperties fFadeOutTime="0.25" fPitchFrequency="2" fRollFrequency="3" fYawFrequency="4" bRumbleEnabled="0"/>
+              </CCameraShakeClip>
+            </COverlayTrack></CSequenceTrackGroup>
+          </CGameplaySequence>
+        </CinemaPostFX>"#;
+        let effect = &parse_postfx_library(xml).unwrap()[0];
+        let clips = &effect.groups[0].clips;
+        let ClipKind::Post { class, texture, settings, samples } = &clips[0].kind else { panic!("colour mask missing") };
+        assert_eq!((*class, texture.as_str(), *settings), (PostClass::ColorMask, r"graphics\postfx\infamy.xbt", [4.0, 0.0, 1.0, 2.0]));
+        // Its own keys, then the defaults (the green channel's 1).
+        assert_eq!(samples[0][..4], [0.45, 1.0, 1.0, 0.0]);
+        assert!((samples.last().unwrap()[3] - 1.0).abs() < 1e-4);
+        let ClipKind::Post { class, settings, samples, .. } = &clips[1].kind else { panic!("shake missing") };
+        assert_eq!((*class, *settings), (PostClass::Shake, [0.25, 2.0, 3.0, 4.0]));
+        // Untracked values come from the clip's attributes.
+        assert_eq!(samples[0][..3], [0.5, 1.0, 0.15]);
+        let back = Sequence::from_text(&effect.to_text()).unwrap();
+        assert_eq!(back.groups[0].clips, *clips);
     }
 
     #[test]

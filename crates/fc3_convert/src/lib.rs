@@ -1576,13 +1576,16 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             let sequences = fc3_formats::cinema::parse_postfx_library(std::str::from_utf8(&bytes)?)?;
             Ok(sequences.into_iter().flat_map(|s| s.groups).flat_map(|g| g.clips).filter_map(|c| {
                 match c.kind {
-                    fc3_formats::cinema::ClipKind::Blur { texture, .. } if !texture.is_empty() => Some(texture.to_ascii_lowercase()),
+                    fc3_formats::cinema::ClipKind::Blur { texture, .. } | fc3_formats::cinema::ClipKind::Post { texture, .. } if !texture.is_empty() => {
+                        Some(texture.to_ascii_lowercase())
+                    }
                     _ => None,
                 }
             }).collect())
         })();
         match effect_masks {
-            Ok(masks) => textures.extend(masks),
+            // (A few clips name textures the game doesn't ship.)
+            Ok(masks) => textures.extend(masks.into_iter().filter(|m| vfs.exists(m))),
             Err(e) => job.error(format!("post-effect masks: {e:#}")),
         }
         // The screen overlays the HUD draws (the sniper scopes, blood on the
