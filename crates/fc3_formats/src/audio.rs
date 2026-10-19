@@ -13,8 +13,12 @@
 //!   * `0x1` event - what the game triggers (points at a header BAO),
 //!   * `0x2` header - audio description (single sound, random, sequence, layers ...),
 //!   * `0x3` memory audio - encoded audio data stored inside the `.spk`,
-//!   * `0x4` project, `0x7` info - not needed for playback,
-//!   * `0x5` stream audio - the payload of a `.sbao` file.
+//!   * `0x4` project - not needed for playback,
+//!   * `0x5` stream audio - the payload of a `.sbao` file,
+//!   * `0x7` distance curve - volume by distance from the listener,
+//!   * `0x9` positioning (in `2fffffff.spk`) - whether a sound is placed in
+//!     the world (3D) and which distance curve it fades by; each playable
+//!     header names one.
 //!
 //! # Codecs (stream type of a header BAO)
 //!
@@ -41,7 +45,8 @@ pub const CLASS_HEADER: u8 = 0x2;
 pub const CLASS_MEMORY: u8 = 0x3;
 pub const CLASS_PROJECT: u8 = 0x4;
 pub const CLASS_STREAM: u8 = 0x5;
-pub const CLASS_INFO: u8 = 0x7;
+pub const CLASS_FALLOFF: u8 = 0x7;
+pub const CLASS_POSITIONING: u8 = 0x9;
 
 // ---------------------------------------------------------------------------
 // little helpers
@@ -539,6 +544,66 @@ pub fn parse_blend(bao: &Bao) -> Result<Vec<(u32, Vec<Curve>)>> {
             Ok((child, curves))
         })
         .collect()
+}
+
+/// A distance curve (class 7): `<Binary>`, the point count at +0x14, then
+/// from +0x18 16-byte points `(f32 metres, f32 dB, u32 shape, u32)`.
+pub fn parse_falloff(bao: &Bao) -> Result<Vec<(f32, f32)>> {
+    let p = bao.payload();
+    if bao.class != CLASS_FALLOFF || !p.starts_with(b"<Binary>") {
+        bail!("BAO {:08x} is not a distance curve", bao.id);
+    }
+    let n = u32_at(p, 0x14)? as usize;
+    if n == 0 || n > 64 {
+        bail!("distance curve {:08x}: {n} points", bao.id);
+    }
+    (0..n).map(|k| Ok((f32_at(p, 0x18 + k * 16)?, f32_at(p, 0x1C + k * 16)?))).collect()
+}
+
+/// How a sound is placed (a class 9 BAO).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Positioning {
+    /// Placed in the world (+0xB0); the others (menus, music, beds) play
+    /// flat, not fading with distance.
+    pub three_d: bool,
+    /// Its distance curve (+0xC0, a class 7 id).
+    pub curve: Option<u32>,
+}
+
+pub fn parse_positioning(bao: &Bao) -> Result<Positioning> {
+    let p = bao.payload();
+    if bao.class != CLASS_POSITIONING {
+        bail!("BAO {:08x} is class {} not a positioning", bao.id, bao.class);
+    }
+    Ok(Positioning { three_d: u32_at(p, 0xB0)? != 0, curve: Some(u32_at(p, 0xC0)?).filter(|c| *c != 0 && *c != u32::MAX) })
+}
+
+/// The positioning (class 9 id) a playable header's sound plays with: an
+/// audio header's at +0x88, a layered one's per layer (the last word of its
+/// table entry).
+pub fn header_positioning(bao: &Bao) -> Vec<u32> {
+    let p = bao.payload();
+    let at = |o: usize| u32_at(p, o).ok();
+    match at(4) {
+        Some(1) => at(0x88).into_iter().collect(),
+        Some(6) => {
+            let (Some(count), Some(cues), Some(labels)) = (at(0x3C), at(0x68), at(0x6C)) else { return Vec::new() };
+            let table = H_BASE + cues as usize * 8 + labels as usize;
+            (0..count.min(64) as usize).filter_map(|i| at(table + i * H_ENTRY_LAYER + 0x28)).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// How a sound fades with its distance from the listener.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Fade {
+    /// Its positioning isn't known.
+    Unknown,
+    /// Not placed in the world: no fade.
+    Flat,
+    /// By this distance curve (class 7 id).
+    Curve(u32),
 }
 
 /// A header's own gain (dB), at +0x18 of every header type.
@@ -1258,6 +1323,12 @@ pub struct SoundGraph {
     pub blends: HashMap<u32, Vec<(u32, Vec<Curve>)>>,
     /// Each header's own gain (dB), where it isn't 0.
     pub gains: HashMap<u32, f32>,
+    /// Distance curves (class 7): volume (dB) by distance (m).
+    pub falloffs: HashMap<u32, Vec<(f32, f32)>>,
+    /// Positioning settings (class 9).
+    pub positionings: HashMap<u32, Positioning>,
+    /// Each playable header's positioning ids (one per layer for layered ones).
+    pub placed: HashMap<u32, Vec<u32>>,
 }
 
 /// Every `soundbinary\*.spk` path known to the VFS (needs the filelists loaded).
@@ -1303,8 +1374,22 @@ impl SoundGraph {
                                 if gain != 0.0 {
                                     g.gains.insert(b.id, gain);
                                 }
+                                let placed = header_positioning(b);
+                                if !placed.is_empty() {
+                                    g.placed.insert(b.id, placed);
+                                }
                             }
                             g.headers.entry(b.id).or_insert(h);
+                        }
+                    }
+                    CLASS_FALLOFF => {
+                        if let Ok(points) = parse_falloff(b) {
+                            g.falloffs.entry(b.id).or_insert(points);
+                        }
+                    }
+                    CLASS_POSITIONING => {
+                        if let Ok(p) = parse_positioning(b) {
+                            g.positionings.entry(b.id).or_insert(p);
                         }
                     }
                     _ => {}
@@ -1313,6 +1398,17 @@ impl SoundGraph {
         }
         g.packages.sort_unstable();
         g
+    }
+
+    /// How `header`'s sound (`layer` of a layered one) fades with distance.
+    pub fn fade(&self, header: u32, layer: Option<u32>) -> Fade {
+        let Some(placed) = self.placed.get(&header) else { return Fade::Unknown };
+        let Some(p) = placed.get(layer.unwrap_or(0) as usize).and_then(|id| self.positionings.get(id)) else { return Fade::Unknown };
+        match p.curve {
+            _ if !p.three_d => Fade::Flat,
+            Some(c) if self.falloffs.contains_key(&c) => Fade::Curve(c),
+            _ => Fade::Unknown,
+        }
     }
 
     /// Every playable sound (deduplicated by header id), sorted by id.
@@ -1593,11 +1689,23 @@ impl SoundGraph {
     /// Events that depend on the surface or gait switches also get one record
     /// per switch state under [`switched_event`] ids; a state that plays the
     /// same as an earlier one is written as `same <id> <earlier id>`.
+    ///
+    /// Each sound ends with how it fades with distance: a curve id (written
+    /// as `falloff <id> <metres>,<dB>;...`), `2d` for none, `-` unknown.
     pub fn manifest(&self) -> String {
-        let mut s = String::from("# fc3 sound manifest v1\n");
+        let mut s = String::from("# fc3 sound manifest v2\n");
+        let mut curves = std::collections::BTreeSet::new();
         for r in self.sounds() {
+            let fade = match self.fade(r.header_id, r.layer.map(|l| l.0)) {
+                Fade::Unknown => "-".to_string(),
+                Fade::Flat => "2d".to_string(),
+                Fade::Curve(c) => {
+                    curves.insert(c);
+                    format!("{c:08x}")
+                }
+            };
             s += &format!(
-                "sound {} {} {} {} {} {} {} {}\n",
+                "sound {} {} {} {} {} {} {} {} {fade}\n",
                 r.file_stem(),
                 r.file_ext(),
                 r.codec.name(),
@@ -1607,6 +1715,10 @@ impl SoundGraph {
                 r.looping as u8,
                 r.loop_start
             );
+        }
+        for c in curves {
+            let pts: Vec<String> = self.falloffs[&c].iter().map(|(x, y)| format!("{x},{y}")).collect();
+            s += &format!("falloff {c:08x} {}\n", pts.join(";"));
         }
         let mut ids: Vec<&u32> = self.events.keys().collect();
         ids.sort_unstable();
@@ -1778,6 +1890,42 @@ mod tests {
         assert_eq!(c.at(1500.0), -3.0);
         assert_eq!(c.at(9000.0), -6.0);
         assert_eq!(Curve::from_token(&c.to_token()), Some(c));
+    }
+
+    /// A BAO of `class` around `payload`.
+    fn bao_bytes(class: u8, payload: &[u8]) -> Vec<u8> {
+        let mut b = vec![2, 0x28, 0x03, 0x05];
+        b.extend_from_slice(&0x28u32.to_le_bytes());
+        b.extend_from_slice(&[0; 24]);
+        b.extend_from_slice(&((class as u32) << 28).to_le_bytes());
+        b.extend_from_slice(&2u32.to_le_bytes());
+        b.extend_from_slice(payload);
+        b
+    }
+
+    #[test]
+    fn distance_curves_and_positioning() {
+        let mut p = b"<Binary>".to_vec();
+        p.resize(0x14, 0);
+        p.extend_from_slice(&2u32.to_le_bytes());
+        for (x, y) in [(0.0f32, -2.0f32), (200.0, -96.0)] {
+            p.extend_from_slice(&x.to_le_bytes());
+            p.extend_from_slice(&y.to_le_bytes());
+            p.extend_from_slice(&[0; 8]);
+        }
+        let bytes = bao_bytes(CLASS_FALLOFF, &p);
+        assert_eq!(parse_falloff(&Bao::parse(1, &bytes).unwrap()).unwrap(), vec![(0.0, -2.0), (200.0, -96.0)]);
+
+        let mut p = b"<Binary>".to_vec();
+        p.resize(0x11C, 0xFF);
+        p[0xB0..0xB4].copy_from_slice(&1u32.to_le_bytes());
+        p[0xC0..0xC4].copy_from_slice(&0x0045_6A81u32.to_le_bytes());
+        let bytes = bao_bytes(CLASS_POSITIONING, &p);
+        assert_eq!(parse_positioning(&Bao::parse(2, &bytes).unwrap()).unwrap(), Positioning { three_d: true, curve: Some(0x0045_6A81) });
+        p[0xB0..0xB4].copy_from_slice(&0u32.to_le_bytes());
+        p[0xC0..0xC4].copy_from_slice(&u32::MAX.to_le_bytes());
+        let bytes = bao_bytes(CLASS_POSITIONING, &p);
+        assert_eq!(parse_positioning(&Bao::parse(2, &bytes).unwrap()).unwrap(), Positioning { three_d: false, curve: None });
     }
 
     #[test]

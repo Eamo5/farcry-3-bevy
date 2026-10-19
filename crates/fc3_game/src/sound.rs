@@ -5,13 +5,19 @@
 //! `PlaySfx` (one-shots) or `LoopSfx` (refreshable loops such as automatic
 //! fire); this module resolves events to files and spawns audio players.
 //! Only effects and ambience are used here.
+//!
+//! Each sound fades with its distance from the listener by its own curve
+//! (the game's positioning, see `fc3_formats::audio::Fade`), and blends
+//! cross-fade on the distance (a gunshot's crack near, its echo far). Bevy
+//! pans the placed ones; its own fall-off is scaled out of the way.
 
 use std::collections::HashMap;
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
-use bevy::audio::{AudioSink, AudioSinkPlayback, PlaybackMode, SpatialAudioSink, SpatialListener, Volume};
+use bevy::audio::{AudioSink, AudioSinkPlayback, GlobalVolume, PlaybackMode, SpatialAudioSink, SpatialListener, SpatialScale, Volume};
 use bevy::prelude::*;
+use fc3_formats::audio::Curve;
 
 use crate::cache_assets::cache_path;
 use crate::data::CacheInfo;
@@ -27,7 +33,59 @@ impl Plugin for SoundPlugin {
             .add_message::<LoopSfx>()
             .add_systems(OnExit(crate::menu::GameState::Loading), (load_bank, load_sound_points))
             .add_systems(PostStartup, attach_listener)
-            .add_systems(Update, (sound_points, play_one_shots, update_loops, ambience).chain());
+            .add_systems(Update, (sound_points, play_one_shots, update_loops, ambience, hear).chain());
+    }
+}
+
+/// The game's distance parameter (m, 0-300): blends cross-fade on it.
+pub const DISTANCE: u32 = 0x0000_5EAB;
+
+/// Bevy's spatial sinks fade as 1/d² past a metre; placed this much nearer
+/// (a kilometre to a metre) only their panning is left, and the sound's own
+/// curve does the fading.
+const SPATIAL_SCALE: f32 = 1.0 / 1024.0;
+
+/// How a sound fades with distance from the listener.
+#[derive(Clone, Default)]
+enum Falloff {
+    /// Not known (an older manifest): [`STAND_IN`].
+    #[default]
+    Unknown,
+    /// Not placed in the world (menus, music, beds): no fade.
+    Flat,
+    /// The game's own volume (dB) by distance (m).
+    Curve(Arc<Curve>),
+}
+
+/// Fades a sound whose own curve isn't known: full to 5 m, -10 dB at 30,
+/// -20 at 60, gone at 100.
+static STAND_IN: LazyLock<Curve> =
+    LazyLock::new(|| Curve { kind: Curve::VOLUME, param: DISTANCE, points: vec![(0.0, 0.0), (5.0, 0.0), (30.0, -10.0), (60.0, -20.0), (100.0, -96.0)] });
+
+fn gain_of(db: f32) -> f32 {
+    if db <= -95.0 {
+        0.0
+    } else {
+        10f32.powf(db / 20.0)
+    }
+}
+
+impl Falloff {
+    /// Linear gain `d` metres from the listener.
+    fn gain(&self, d: f32) -> f32 {
+        match self {
+            Falloff::Flat => 1.0,
+            Falloff::Curve(c) => gain_of(c.at(d)),
+            Falloff::Unknown => gain_of(STAND_IN.at(d)),
+        }
+    }
+
+    /// How far it carries (m), where its curve is known.
+    fn reach(&self) -> Option<f32> {
+        match self {
+            Falloff::Curve(c) => c.points.last().map(|p| p.0),
+            _ => None,
+        }
     }
 }
 
@@ -78,6 +136,7 @@ struct SoundFile {
     looping: bool,
     /// How long it plays (s): its samples at its rate.
     seconds: f32,
+    falloff: Falloff,
 }
 
 #[derive(Clone)]
@@ -94,20 +153,25 @@ struct VoiceMod {
 }
 
 impl VoiceMod {
-    /// (linear volume, playback speed) at these parameter values; parameters
-    /// not given count as 0.
-    fn eval(&self, params: &[(u32, f32)]) -> (f32, f32) {
-        use fc3_formats::audio::Curve;
-        let value = |p: u32| params.iter().find(|q| q.0 == p && p != 0).map_or(0.0, |q| q.1);
+    /// (linear volume, playback speed) at these parameter values and
+    /// `distance` (m) from the listener; parameters not given count as 0
+    /// when `every`, else their curves are left out (one-shots, which the
+    /// game sends no values with).
+    fn eval(&self, params: &[(u32, f32)], distance: f32, every: bool) -> (f32, f32) {
+        let value = |p: u32| match p {
+            DISTANCE => Some(distance),
+            _ => params.iter().find(|q| q.0 == p && p != 0).map(|q| q.1).or(every.then_some(0.0)),
+        };
         let (mut db, mut semitones) = (self.gain, 0.0);
         for c in &self.curves {
+            let Some(x) = value(c.param) else { continue };
             match c.kind {
-                Curve::VOLUME => db += c.at(value(c.param)),
-                Curve::PITCH => semitones += c.at(value(c.param)),
+                Curve::VOLUME => db += c.at(x),
+                Curve::PITCH => semitones += c.at(x),
                 _ => {}
             }
         }
-        (10f32.powf(db.max(-96.0) / 20.0), 2f32.powf(semitones / 12.0))
+        (gain_of(db.max(-96.0)), 2f32.powf(semitones / 12.0))
     }
 }
 
@@ -125,6 +189,8 @@ impl SoundBank {
     fn parse(text: &str) -> SoundBank {
         let mut bank = SoundBank::default();
         let mut same: Vec<(u32, u32)> = Vec::new();
+        let mut curves: HashMap<String, Arc<Curve>> = HashMap::new();
+        let mut fades: Vec<(String, String)> = Vec::new();
         for line in text.lines() {
             let mut it = line.split_whitespace();
             match it.next() {
@@ -141,7 +207,21 @@ impl SoundBank {
                     let looping = rest.get(4) == Some(&"1");
                     let number = |i: usize| rest.get(i).and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
                     let seconds = if number(2) > 0.0 { number(3) / number(2) } else { 0.0 };
-                    bank.files.insert(stem.to_string(), SoundFile { path: format!("audio/{stem}.{ext}"), looping, seconds });
+                    let falloff = match rest.get(6) {
+                        Some(&"2d") => Falloff::Flat,
+                        Some(c) if *c != "-" => {
+                            fades.push((stem.to_string(), c.to_string()));
+                            Falloff::Unknown
+                        }
+                        _ => Falloff::Unknown,
+                    };
+                    bank.files.insert(stem.to_string(), SoundFile { path: format!("audio/{stem}.{ext}"), looping, seconds, falloff });
+                }
+                Some("falloff") => {
+                    let (Some(id), Some(points)) = (it.next(), it.next()) else { continue };
+                    if let Some(c) = Curve::from_token(&format!("0:{DISTANCE:08x}:{points}")) {
+                        curves.insert(id.to_string(), Arc::new(c));
+                    }
                 }
                 Some("mod") => {
                     let (Some(token), Some(header), Some(gain)) =
@@ -184,7 +264,25 @@ impl SoundBank {
                 bank.events.insert(id, e);
             }
         }
+        for (stem, curve) in fades {
+            if let (Some(f), Some(c)) = (bank.files.get_mut(&stem), curves.get(&curve)) {
+                f.falloff = Falloff::Curve(c.clone());
+            }
+        }
         bank
+    }
+
+    /// How far `event` carries (m) where all its sounds' curves are known:
+    /// the farthest of them.
+    fn reach(&self, event: u32) -> Option<f32> {
+        let e = self.event(event)?;
+        let mut far = 0.0f32;
+        for (h, _) in e.voices.iter().flatten() {
+            let stem = format!("{h:08x}");
+            let f = self.files.get(&stem).or_else(|| self.files.get(&format!("{stem}_l0")))?;
+            far = far.max(f.falloff.reach()?);
+        }
+        (far > 0.0).then_some(far)
     }
 
     /// The event's record, falling back from a switched id (see [`switched`])
@@ -221,8 +319,8 @@ impl SoundBank {
 
     /// Like [`SoundBank::resolve`] for `event` under a switch state (see
     /// [`loop_token`]), with each file's response to the game's parameters
-    /// for blended events.
-    fn resolve_case(&self, token: &str, event: u32, rng: &mut Rng) -> (Vec<(String, Option<Arc<VoiceMod>>, bool)>, f32) {
+    /// for blended events, whether it loops, and how it fades with distance.
+    fn resolve_case(&self, token: &str, event: u32, rng: &mut Rng) -> (Vec<(String, Option<Arc<VoiceMod>>, bool, Falloff)>, f32) {
         let (e, mods) = match self.cases.get(token) {
             Some(e) => (e, self.mods.get(token)),
             None => match self.event(event) {
@@ -230,11 +328,15 @@ impl SoundBank {
                 None => return (vec![], 0.0),
             },
         };
-        let looping = |h: u32| {
-            let stem = format!("{h:08x}");
-            self.files.get(&stem).or_else(|| self.files.get(&format!("{stem}_l0"))).is_some_and(|f| f.looping)
-        };
-        let files = Self::pick(&self.files, e, rng).into_iter().map(|(f, h)| (f, mods.and_then(|m| m.get(&h)).cloned(), looping(h))).collect();
+        let files = Self::pick(&self.files, e, rng)
+            .into_iter()
+            .map(|(path, h)| {
+                let stem = format!("{h:08x}");
+                let file = self.files.get(&stem).or_else(|| self.files.get(&format!("{stem}_l0")));
+                let (looping, falloff) = file.map_or((false, Falloff::Unknown), |f| (f.looping, f.falloff.clone()));
+                (path, mods.and_then(|m| m.get(&h)).cloned(), looping, falloff)
+            })
+            .collect();
         (files, e.volume)
     }
 
@@ -324,16 +426,51 @@ struct LoopEmitter {
     params: [(u32, f32); 4],
 }
 
-/// One track of a loop, with its mix level within the event and, in blended
-/// events, how it follows the parameters.
+/// A playing sound as heard: its mix level within the event and the
+/// sender's volume, how it fades with distance, and in blended events how it
+/// follows distance and the game's parameters.
 #[derive(Component)]
-struct LoopVoice(f32, Option<Arc<VoiceMod>>);
+struct Heard {
+    gain: f32,
+    volume: f32,
+    falloff: Falloff,
+    blend: Option<Arc<VoiceMod>>,
+    params: [(u32, f32); 4],
+    /// A loop (its parameters not sent count as 0).
+    looping: bool,
+    /// Placed in the world (else heard where the listener is).
+    placed: bool,
+}
 
-impl LoopVoice {
-    /// (volume, playback speed) for the emitter's volume and parameters.
-    fn level(&self, volume: f32, params: &[(u32, f32)]) -> (f32, f32) {
-        let (v, speed) = self.1.as_ref().map_or((1.0, 1.0), |m| m.eval(params));
-        (volume * self.0 * v, speed)
+impl Heard {
+    /// (linear volume, playback speed) `d` metres from the listener.
+    fn at(&self, d: f32) -> (f32, f32) {
+        let d = if self.placed { d } else { 0.0 };
+        let (v, speed) = self.blend.as_ref().map_or((1.0, 1.0), |m| m.eval(&self.params, d, self.looping));
+        (self.gain * self.volume * v * self.falloff.gain(d), speed)
+    }
+}
+
+/// Every playing sound's volume (and blends' pitch) at its distance from
+/// the listener, under the master volume.
+fn hear(
+    listener: Query<&GlobalTransform, With<SpatialListener>>,
+    master: Res<GlobalVolume>,
+    mut voices: Query<(&Heard, &GlobalTransform, Option<&mut AudioSink>, Option<&mut SpatialAudioSink>)>,
+) {
+    let ear = listener.single().ok().map(|t| t.translation());
+    let master = master.volume.to_linear();
+    for (heard, t, sink, spatial) in &mut voices {
+        let (v, speed) = heard.at(ear.map_or(0.0, |e| e.distance(t.translation())));
+        let v = Volume::Linear(v * master);
+        if let Some(mut s) = sink {
+            s.set_volume(v);
+            s.set_speed(speed);
+        }
+        if let Some(mut s) = spatial {
+            s.set_volume(v);
+            s.set_speed(speed);
+        }
     }
 }
 
@@ -381,8 +518,9 @@ fn load_sound_points(mut commands: Commands, info: Res<CacheInfo>) {
     commands.insert_resource(SoundPoints { points, next });
 }
 
-/// The sound points in earshot: loops kept running (fading with distance),
-/// one-offs sounded every few seconds.
+/// The sound points in earshot (as far as their sounds carry, else
+/// [`POINT_RANGE`] and fading by ours): loops kept running, one-offs
+/// sounded every few seconds.
 fn sound_points(
     time: Res<Time>,
     bank: Option<Res<SoundBank>>,
@@ -398,10 +536,11 @@ fn sound_points(
     let SoundPoints { points, next } = &mut *points;
     for (i, (event, at)) in points.iter().enumerate() {
         let d = at.distance(ear);
-        if d > POINT_RANGE {
+        let reach = bank.reach(*event);
+        if d > reach.unwrap_or(POINT_RANGE) {
             continue;
         }
-        let near = 1.0 - d / POINT_RANGE;
+        let near = if reach.is_some() { 1.0 } else { 1.0 - d / POINT_RANGE };
         if bank.loops(*event) {
             loops.write(LoopSfx { key: 0x5350_0000_0000_0000 | i as u64, event: *event, at: Some(*at), volume: near * near, ..default() });
         } else {
@@ -421,21 +560,39 @@ fn attach_listener(mut commands: Commands, cams: Query<Entity, With<crate::playe
 }
 
 fn settings(mode: PlaybackMode, volume: f32, spatial: bool) -> PlaybackSettings {
-    PlaybackSettings { mode, volume: Volume::Linear(volume), spatial, ..default() }
+    PlaybackSettings { mode, volume: Volume::Linear(volume), spatial, spatial_scale: Some(SpatialScale::new(SPATIAL_SCALE)), ..default() }
 }
 
-fn play_one_shots(mut events: MessageReader<PlaySfx>, bank: Option<Res<SoundBank>>, server: Res<AssetServer>, mut rng: ResMut<Rng>, mut commands: Commands) {
+fn play_one_shots(
+    mut events: MessageReader<PlaySfx>,
+    bank: Option<Res<SoundBank>>,
+    server: Res<AssetServer>,
+    mut rng: ResMut<Rng>,
+    mut commands: Commands,
+    listener: Query<&GlobalTransform, With<SpatialListener>>,
+) {
     let Some(bank) = bank else { return };
+    let ear = listener.single().ok().map(|t| t.translation());
     for ev in events.read() {
-        let (files, vol) = bank.resolve(ev.event, &mut rng);
+        let (files, vol) = bank.resolve_case(&loop_token(ev.event, &[]), ev.event, &mut rng);
+        let d = match (ev.at, ear) {
+            (Some(at), Some(ear)) => at.distance(ear),
+            _ => 0.0,
+        };
         // FC3_SFX_DEBUG: what each one-shot resolves to.
         if std::env::var("FC3_SFX_DEBUG").is_ok() {
-            info!("sfx {:08x}: {} file(s) at {:?}", ev.event, files.len(), ev.at.map(|a| a.round()));
+            info!("sfx {:08x}: {} file(s) at {:?}, {d:.0} m", ev.event, files.len(), ev.at.map(|a| a.round()));
         }
-        for f in files {
+        for (f, blend, _, falloff) in files {
+            let heard = Heard { gain: vol, volume: ev.volume, falloff, blend, params: [(0, 0.0); 4], looping: false, placed: ev.at.is_some() };
+            let (v, speed) = heard.at(d);
+            if std::env::var("FC3_SFX_DEBUG").is_ok() {
+                info!("  {f} at {v:.3}");
+            }
             commands.spawn((
                 AudioPlayer::<Sfx>(server.load(cache_path(&f))),
-                settings(PlaybackMode::Despawn, ev.volume * vol, ev.at.is_some()),
+                PlaybackSettings { speed, ..settings(PlaybackMode::Despawn, v, ev.at.is_some()) },
+                heard,
                 Transform::from_translation(ev.at.unwrap_or(Vec3::ZERO)),
             ));
         }
@@ -451,9 +608,11 @@ fn update_loops(
     mut rng: ResMut<Rng>,
     mut commands: Commands,
     mut emitters: Query<(Entity, &mut LoopEmitter, &mut Transform, Option<&Children>)>,
-    mut voices: Query<(&LoopVoice, Option<&mut AudioSink>, Option<&mut SpatialAudioSink>)>,
+    mut voices: Query<&mut Heard>,
+    listener: Query<&GlobalTransform, With<SpatialListener>>,
 ) {
     let Some(bank) = bank else { return };
+    let ear = listener.single().ok().map(|t| t.translation());
     for ev in events.read() {
         let token = loop_token(ev.event, &ev.switches);
         if let Some((e, mut em, mut t, children)) = emitters.iter_mut().find(|(_, em, _, _)| em.key == ev.key) {
@@ -467,16 +626,9 @@ fn update_loops(
                     em.volume = ev.volume;
                     em.params = ev.params;
                     for c in children.into_iter().flatten() {
-                        if let Ok((voice, sink, spatial)) = voices.get_mut(*c) {
-                            let (v, speed) = voice.level(ev.volume, &ev.params);
-                            if let Some(mut s) = sink {
-                                s.set_volume(Volume::Linear(v));
-                                s.set_speed(speed);
-                            }
-                            if let Some(mut s) = spatial {
-                                s.set_volume(Volume::Linear(v));
-                                s.set_speed(speed);
-                            }
+                        if let Ok(mut heard) = voices.get_mut(*c) {
+                            heard.volume = ev.volume;
+                            heard.params = ev.params;
                         }
                     }
                 }
@@ -502,14 +654,21 @@ fn update_loops(
             .id();
         // Looping voices run while the loop is refreshed; the rest (a splash
         // going under, an engine catching) play once as it starts.
-        for (f, m, looping) in files {
-            let voice = LoopVoice(vol, m);
-            let (v, speed) = voice.level(ev.volume, &ev.params);
+        let d = match (ev.at, ear) {
+            (Some(at), Some(ear)) => at.distance(ear),
+            _ => 0.0,
+        };
+        for (f, blend, looping, falloff) in files {
+            let heard = Heard { gain: vol, volume: ev.volume, falloff, blend, params: ev.params, looping: true, placed: ev.at.is_some() };
+            let (v, speed) = heard.at(d);
+            if std::env::var("FC3_SFX_DEBUG").is_ok() {
+                info!("  {f} at {v:.3}, {d:.0} m");
+            }
             let mode = if looping { PlaybackMode::Loop } else { PlaybackMode::Despawn };
             commands.spawn((
                 AudioPlayer::<Sfx>(server.load(cache_path(&f))),
                 PlaybackSettings { speed, ..settings(mode, v, ev.at.is_some()) },
-                voice,
+                heard,
                 Transform::IDENTITY,
                 ChildOf(root),
             ));

@@ -58,13 +58,17 @@ looks streams up by hash, so names aren't needed.
 | 3 | memory audio: payload is encoded data (Ogg/IMA/PCM) | 28506 |
 | 4 | project (`7fffffff.bao`) | 1 |
 | 5 | stream audio (`.sbao` payload) | 433 |
-| 7 | distance attenuation curve (`<Binary>` + float pairs) | 17189 |
-| 9, 10 | mixer states / snapshots (`2fffffff.spk`) | 383 / 206 |
+| 7 | distance curve: volume by distance (see Distance) | 17189 |
+| 9 | positioning: 3D or not, and its distance curve (`2fffffff.spk`) | 383 |
+| 10 | mixer states / snapshots (`2fffffff.spk`) | 206 |
 
 ### Header BAO (class 2). Offsets are from payload start (BAO+0x28); base size 0xBC
 
 `+0x00 id`, `+0x04 type`, `+0x18 f32 gain (dB)` (every type, for example -7 dB on an
-engine's 8 kHz layers). Tables follow the 0xBC-byte base header.
+engine's 8 kHz layers). Tables follow the 0xBC-byte base header. An audio header (type 1)
+names its positioning (class 9) at `+0x88` and its mixer bus (a project entry) at `+0x8C`;
+a layered one (type 6) names a positioning per layer, in the last word of each layer's
+table entry.
 
 | type | name | fields |
 |---|---|---|
@@ -190,9 +194,11 @@ whose `EEACC4D5` field is a u64 holding the event id. For example,
 `SoundPoint_C4_waterfall_rumble` plays `0x00015BB9`, a 2.8 s looping rumble. The
 converter writes them to `world/sound_points.txt` (`event x y z`, Bevy space). It leaves out
 voices and crowd chatter (walla), story moments, and scripted one-offs (gas explosions,
-thunder), which leaves 902. The game streams the points within 45 m. Events whose audio
-all loops (`SoundBank::loops`, from the manifest's loop flag) run as loops at
-`(1 - d/45)^2`; the rest sound every 5-14 s.
+thunder), which leaves 902. The game streams the points as far as their sounds carry
+(the farthest end of their distance curves; see Distance), where they fade by those
+curves. Points whose curves aren't known stream within 45 m at `(1 - d/45)^2`. Events
+whose audio all loops (`SoundBank::loops`, from the manifest's loop flag) run as loops;
+the rest sound every 5-14 s.
 
 A loop stops 0.15 s after its last refresh, but a single frame counts for at most 0.05 s
 of that. So a streaming hitch doesn't restart the ambience beds, and weapon loops still
@@ -279,7 +285,40 @@ For events that pass through a blend, the manifest adds a gain (dB) and curves f
 voice: `mod <token> <header> <gain dB> <kind>:<param>:<x>,<y>;...`. It also writes the
 event for every combination of the switch values under it, at most 256:
 `event <id>@<group>=<value>,<group>=<value> ...`. That adds 1,394 `mod` lines and 296
-cases, 0.8 MB. Unset parameters count as 0.
+cases, 0.8 MB. In loops, parameters not sent count as 0. One-shots are sent with no
+parameters, so they leave those curves out, except distance (below).
+
+## Distance
+
+Each playable sound fades with its distance from the listener by its own curve.
+Its header names a positioning BAO (class 9, all 383 in `2fffffff.spk`):
+
+| offset (payload) | field |
+|---|---|
+| `+0xB0` | u32: 1 = placed in the world (3D), 0 = 2D (menus, music, beds) |
+| `+0xC0` | its distance curve (class 7 id, `ffffffff` for none) |
+| `+0xC4`-`+0xCC` | three project entries, not used here |
+| `+0x108`.. | `120`, `20000`, `1` (floats; meaning unknown) |
+
+A distance curve (class 7) is `<Binary>`, then the point count at `+0x14` and from
+`+0x18` 16-byte points `(f32 metres, f32 dB, u32 shape, u32)`. The ids repeat in every
+package that uses them, and there are 173 distinct curves. They reach from 2 m to
+1,000 m. Footsteps (`004C6625`) fall to -45 dB at 18 m and are gone at 20 m. NPC rifle
+fire (`00456A81`) is -2.3 dB at 0 m, -7 dB at 100 m and gone at 200 m.
+
+Parameter `00005EAB` (0-300 in the project's table) is the distance in metres. Blends
+cross-fade on it. NPC rifle fire `00046CBF` plays a near shot (0 dB to 4 m, -22 dB at 35 m,
+gone at 44 m) and a far, echoing one (silent at 0 m, -1.6 dB at 18 m, full from 40 m).
+
+The manifest ends each `sound` line with its fade: a curve id, `2d` or `-` (unknown). It
+lists each curve once: `falloff <id> <metres>,<dB>;...`. 21,441 sounds have a curve,
+6,995 are 2D, and 7 are unknown. `fc3audio manifest` rewrites it without a full
+conversion.
+
+The game (`sound::hear`) sets each playing sound's volume every frame from its distance to
+the listener. Unknown ones fade by a stand-in curve: full to 5 m and gone at 100 m. Bevy's
+spatial sinks are kept for panning only. They fall off as 1/d² past a metre, so each
+sound's spatial scale is set to 1/1024. That leaves no fall-off within a kilometre.
 
 Each vehicle archetype in the entity library (`FC3_Vehicles:Land/4x4` and so on) names
 its sounds. `fc3tool vehicle-sounds` lists them. These field names are recovered from
@@ -624,8 +663,10 @@ are 32 kHz stereo Ogg, mostly streamed. List them with
 ## Not done / caveats
 
 * Blend (type 7) volume and pitch curves are applied to loops through `LoopSfx`
-  parameters. One-shots play blends at their parameters' zero point. Curve kinds other than
-  volume and pitch, and the attenuation curves (class 7), aren't applied.
+  parameters, and to one-shots for distance only. Curve kinds other than volume and pitch
+  aren't applied.
+* Mixer buses (each header's `+0x8C`, for example `000056E4` at -3 dB under its parent)
+  and the positioning's other entries (perhaps filtering by distance) aren't applied.
 * Event kind 4 is treated as "play both targets" (the second is often a delay
   or silence).
 * Loop points: type-1 loop start and length are exposed. Layered loops loop
