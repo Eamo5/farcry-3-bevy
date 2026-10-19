@@ -349,11 +349,11 @@ fn play_music(
     };
     debug!("music: {name} ({event:08x}), {} track(s){}", files.len(), if looping { ", looping" } else { "" });
     let mode = if looping { PlaybackMode::Loop } else { PlaybackMode::Despawn };
-    for (voice, f) in files.into_iter().enumerate() {
+    for (voice, (f, own)) in files.into_iter().enumerate() {
         commands.spawn((
             AudioPlayer::<Sfx>(server.load(cache_path(&f))),
             PlaybackSettings { mode, volume: Volume::Linear(0.0), ..default() },
-            MusicVoice { key, voice, gain, level: 0.0, target: 1.0, rate: 1.0 },
+            MusicVoice { key, voice, gain: gain * own, level: 0.0, target: 1.0, rate: 1.0 },
         ));
     }
 }

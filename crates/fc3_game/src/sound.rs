@@ -40,6 +40,11 @@ impl Plugin for SoundPlugin {
 /// The game's distance parameter (m, 0-300): blends cross-fade on it.
 pub const DISTANCE: u32 = 0x0000_5EAB;
 
+/// The authored levels sit low (dialogue near -7 dB, gunfire -12 to -17,
+/// music -12, ambience -14 to -20, footsteps -21): the whole mix is raised
+/// this much (dB) so dialogue plays near full scale.
+const MIX_LIFT: f32 = 6.0;
+
 /// Bevy's spatial sinks fade as 1/d² past a metre; placed this much nearer
 /// (a kilometre to a metre) only their panning is left, and the sound's own
 /// curve does the fading.
@@ -137,11 +142,15 @@ struct SoundFile {
     /// How long it plays (s): its samples at its rate.
     seconds: f32,
     falloff: Falloff,
+    /// Its mixer buses' level (linear).
+    bus: f32,
 }
 
 #[derive(Clone)]
 struct EventDef {
-    voices: Vec<Vec<(u32, f32)>>,
+    /// Voices that play together, each of alternatives: (header, weight,
+    /// the gain on the way to it, dB).
+    voices: Vec<Vec<(u32, f32, f32)>>,
     volume: f32,
 }
 
@@ -215,7 +224,8 @@ impl SoundBank {
                         }
                         _ => Falloff::Unknown,
                     };
-                    bank.files.insert(stem.to_string(), SoundFile { path: format!("audio/{stem}.{ext}"), looping, seconds, falloff });
+                    let bus = gain_of(number(7));
+                    bank.files.insert(stem.to_string(), SoundFile { path: format!("audio/{stem}.{ext}"), looping, seconds, falloff, bus });
                 }
                 Some("falloff") => {
                     let (Some(id), Some(points)) = (it.next(), it.next()) else { continue };
@@ -244,8 +254,10 @@ impl SoundBank {
                         .map(|v| {
                             v.split_whitespace()
                                 .filter_map(|alt| {
-                                    let (h, w) = alt.split_once(':')?;
-                                    Some((u32::from_str_radix(h, 16).ok()?, w.parse().unwrap_or(1.0)))
+                                    let mut part = alt.split(':');
+                                    let h = u32::from_str_radix(part.next()?, 16).ok()?;
+                                    let w = part.next().and_then(|w| w.parse().ok()).unwrap_or(1.0);
+                                    Some((h, w, part.next().and_then(|g| g.parse().ok()).unwrap_or(0.0)))
                                 })
                                 .collect::<Vec<_>>()
                         })
@@ -277,7 +289,7 @@ impl SoundBank {
     fn reach(&self, event: u32) -> Option<f32> {
         let e = self.event(event)?;
         let mut far = 0.0f32;
-        for (h, _) in e.voices.iter().flatten() {
+        for (h, ..) in e.voices.iter().flatten() {
             let stem = format!("{h:08x}");
             let f = self.files.get(&stem).or_else(|| self.files.get(&format!("{stem}_l0")))?;
             far = far.max(f.falloff.reach()?);
@@ -294,7 +306,7 @@ impl SoundBank {
     /// How long `event` plays (s): its first voice's first sound (a line of
     /// dialogue's length).
     pub fn length(&self, event: u32) -> Option<f32> {
-        let (h, _) = self.event(event)?.voices.first()?.first()?;
+        let (h, ..) = self.event(event)?.voices.first()?.first()?;
         let stem = format!("{h:08x}");
         self.files.get(&stem).or_else(|| self.files.get(&format!("{stem}_l0"))).map(|f| f.seconds).filter(|s| *s > 0.0)
     }
@@ -307,20 +319,42 @@ impl SoundBank {
             let stem = format!("{h:08x}");
             self.files.get(&stem).or_else(|| self.files.get(&format!("{stem}_l0"))).is_some_and(|f| f.looping)
         };
-        !e.voices.is_empty() && e.voices.iter().flatten().all(|(h, _)| looping(*h))
+        !e.voices.is_empty() && e.voices.iter().flatten().all(|(h, ..)| looping(*h))
     }
 
     /// Files to play together for one triggering of `event` (one pick per voice;
     /// layered sounds expand to all their tracks).
-    pub fn resolve(&self, event: u32, rng: &mut Rng) -> (Vec<String>, f32) {
+    /// Each file comes with its gain (linear): the authored gains on the way
+    /// to it and its mixer buses'.
+    pub fn resolve(&self, event: u32, rng: &mut Rng) -> (Vec<(String, f32)>, f32) {
         let Some(e) = self.event(event) else { return (vec![], 0.0) };
-        (Self::pick(&self.files, e, rng).into_iter().map(|f| f.0).collect(), e.volume)
+        (
+            Self::pick(&self.files, e, rng)
+                .into_iter()
+                .map(|(f, _, g)| {
+                    let gain = self.file_gain(&f, g, false);
+                    (f, gain)
+                })
+                .collect(),
+            e.volume,
+        )
+    }
+
+    /// The gain (linear) a file of header `h` plays at: the gains on the way
+    /// to it (else, in a blend, its voice's), its mixer buses' and the mix's
+    /// own lift ([`MIX_LIFT`]).
+    fn file_gain(&self, path: &str, gain_db: f32, blended: bool) -> f32 {
+        let stem = path.rsplit('/').next().unwrap_or(path).split('.').next().unwrap_or_default();
+        let bus = self.files.get(stem).map_or(1.0, |f| f.bus);
+        gain_of(MIX_LIFT) * bus * if blended { 1.0 } else { gain_of(gain_db) }
     }
 
     /// Like [`SoundBank::resolve`] for `event` under a switch state (see
     /// [`loop_token`]), with each file's response to the game's parameters
-    /// for blended events, whether it loops, and how it fades with distance.
-    fn resolve_case(&self, token: &str, event: u32, rng: &mut Rng) -> (Vec<(String, Option<Arc<VoiceMod>>, bool, Falloff)>, f32) {
+    /// for blended events, whether it loops, how it fades with distance and
+    /// its gain (the authored gains on the way to it and its buses').
+    #[allow(clippy::type_complexity)]
+    fn resolve_case(&self, token: &str, event: u32, rng: &mut Rng) -> (Vec<(String, Option<Arc<VoiceMod>>, bool, Falloff, f32)>, f32) {
         let (e, mods) = match self.cases.get(token) {
             Some(e) => (e, self.mods.get(token)),
             None => match self.event(event) {
@@ -330,36 +364,38 @@ impl SoundBank {
         };
         let files = Self::pick(&self.files, e, rng)
             .into_iter()
-            .map(|(path, h)| {
+            .map(|(path, h, gain)| {
                 let stem = format!("{h:08x}");
                 let file = self.files.get(&stem).or_else(|| self.files.get(&format!("{stem}_l0")));
                 let (looping, falloff) = file.map_or((false, Falloff::Unknown), |f| (f.looping, f.falloff.clone()));
-                (path, mods.and_then(|m| m.get(&h)).cloned(), looping, falloff)
+                let blend = mods.and_then(|m| m.get(&h)).cloned();
+                let gain = self.file_gain(&path, gain, blend.is_some());
+                (path, blend, looping, falloff, gain)
             })
             .collect();
         (files, e.volume)
     }
 
-    fn pick(files: &HashMap<String, SoundFile>, e: &EventDef, rng: &mut Rng) -> Vec<(String, u32)> {
+    fn pick(files: &HashMap<String, SoundFile>, e: &EventDef, rng: &mut Rng) -> Vec<(String, u32, f32)> {
         let mut out = Vec::new();
         for voice in &e.voices {
-            let total: f32 = voice.iter().map(|(_, w)| w.max(0.0)).sum();
+            let total: f32 = voice.iter().map(|(_, w, _)| w.max(0.0)).sum();
             let mut pick = rng.f32() * total.max(1e-6);
-            let mut chosen = voice[0].0;
-            for (h, w) in voice {
+            let (mut chosen, mut gain) = (voice[0].0, voice[0].2);
+            for (h, w, g) in voice {
                 if pick <= *w {
-                    chosen = *h;
+                    (chosen, gain) = (*h, *g);
                     break;
                 }
                 pick -= *w;
             }
             let stem = format!("{chosen:08x}");
             if let Some(f) = files.get(&stem) {
-                out.push((f.path.clone(), chosen));
+                out.push((f.path.clone(), chosen, gain));
             } else {
                 for l in 0..8 {
                     match files.get(&format!("{stem}_l{l}")) {
-                        Some(f) => out.push((f.path.clone(), chosen)),
+                        Some(f) => out.push((f.path.clone(), chosen, gain)),
                         None => break,
                     }
                 }
@@ -583,8 +619,8 @@ fn play_one_shots(
         if std::env::var("FC3_SFX_DEBUG").is_ok() {
             info!("sfx {:08x}: {} file(s) at {:?}, {d:.0} m", ev.event, files.len(), ev.at.map(|a| a.round()));
         }
-        for (f, blend, _, falloff) in files {
-            let heard = Heard { gain: vol, volume: ev.volume, falloff, blend, params: [(0, 0.0); 4], looping: false, placed: ev.at.is_some() };
+        for (f, blend, _, falloff, gain) in files {
+            let heard = Heard { gain: vol * gain, volume: ev.volume, falloff, blend, params: [(0, 0.0); 4], looping: false, placed: ev.at.is_some() };
             let (v, speed) = heard.at(d);
             if std::env::var("FC3_SFX_DEBUG").is_ok() {
                 info!("  {f} at {v:.3}");
@@ -658,8 +694,8 @@ fn update_loops(
             (Some(at), Some(ear)) => at.distance(ear),
             _ => 0.0,
         };
-        for (f, blend, looping, falloff) in files {
-            let heard = Heard { gain: vol, volume: ev.volume, falloff, blend, params: ev.params, looping: true, placed: ev.at.is_some() };
+        for (f, blend, looping, falloff, gain) in files {
+            let heard = Heard { gain: vol * gain, volume: ev.volume, falloff, blend, params: ev.params, looping: true, placed: ev.at.is_some() };
             let (v, speed) = heard.at(d);
             if std::env::var("FC3_SFX_DEBUG").is_ok() {
                 info!("  {f} at {v:.3}, {d:.0} m");

@@ -45,6 +45,9 @@ pub const CLASS_HEADER: u8 = 0x2;
 pub const CLASS_MEMORY: u8 = 0x3;
 pub const CLASS_PROJECT: u8 = 0x4;
 pub const CLASS_STREAM: u8 = 0x5;
+/// The sound project (class 4): the mixer buses among its tables.
+pub const PROJECT_PATH: &str = r"soundbinary\7fffffff.bao";
+
 pub const CLASS_FALLOFF: u8 = 0x7;
 pub const CLASS_POSITIONING: u8 = 0x9;
 
@@ -1270,12 +1273,64 @@ impl SoundRef {
     }
 }
 
-/// A playable choice behind an event: header id (play all its layers) and
-/// the relative probability of it being picked.
+/// A playable choice behind an event: header id (play all its layers), the
+/// relative probability of it being picked, and its gain (dB): the gains of
+/// the headers on the way to it and its own.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Variant {
     pub header_id: u32,
     pub weight: f32,
+    pub gain: f32,
+}
+
+impl Variant {
+    /// `hdr:weight`, then `:gain` where it isn't 0, as the manifest writes it.
+    pub fn token(&self) -> String {
+        if self.gain == 0.0 {
+            format!("{:08x}:{:.4}", self.header_id, self.weight)
+        } else {
+            format!("{:08x}:{:.4}:{}", self.header_id, self.weight, self.gain)
+        }
+    }
+}
+
+/// The project's mixer buses (`soundbinary\7fffffff.bao`): each bus's
+/// parent and its own level (dB). A bus record is `u32 id, u32 kind (3 or
+/// 5), u32 parent, u32 count, count child ids`, then two levels at +0 and
+/// +8 (never both set). A bus muted outright (-96 dB, raised only by a
+/// mixer state) counts as 0.
+pub fn parse_buses(project: &[u8]) -> HashMap<u32, (u32, f32)> {
+    let mut out = HashMap::new();
+    let word = |o: usize| project.get(o..o + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+    let float = |o: usize| word(o).map(f32::from_bits);
+    let is_id = |v: u32| (0x1000..0x0100_0000).contains(&v);
+    let mut o = BAO_HEADER_SIZE;
+    while o + 0x30 <= project.len() {
+        let (Some(id), Some(kind), Some(parent), Some(n)) = (word(o), word(o + 4), word(o + 8), word(o + 12)) else { break };
+        if (kind == 3 || kind == 5) && is_id(id) && is_id(parent) && n < 40 {
+            let base = o + 0x10 + 4 * n as usize;
+            if let (Some(a), Some(b)) = (float(base), float(base + 8)) {
+                if a.is_finite() && b.is_finite() && a.abs() < 100.0 && b.abs() < 100.0 {
+                    let a = if a <= -90.0 { 0.0 } else { a };
+                    out.entry(id).or_insert((parent, a + b));
+                }
+            }
+        }
+        o += 4;
+    }
+    out
+}
+
+/// The mixer bus a playable header sends to: an audio header's at +0x8C, a
+/// layered one's at +0x74.
+pub fn header_bus(bao: &Bao) -> Option<u32> {
+    let p = bao.payload();
+    match u32_at(p, 4).ok()? {
+        1 => u32_at(p, 0x8C).ok(),
+        6 => u32_at(p, 0x74).ok(),
+        _ => None,
+    }
+    .filter(|b| *b != 0 && *b != u32::MAX)
 }
 
 /// Switch group the game sets to the surface underfoot or at a hit (values
@@ -1329,6 +1384,9 @@ pub struct SoundGraph {
     pub positionings: HashMap<u32, Positioning>,
     /// Each playable header's positioning ids (one per layer for layered ones).
     pub placed: HashMap<u32, Vec<u32>>,
+    /// The mixer buses (see [`parse_buses`]) and each playable header's.
+    pub buses: HashMap<u32, (u32, f32)>,
+    pub header_bus: HashMap<u32, u32>,
 }
 
 /// Every `soundbinary\*.spk` path known to the VFS (needs the filelists loaded).
@@ -1347,6 +1405,9 @@ impl SoundGraph {
     /// Parses every `.spk` in the install (~24k small files, a few seconds).
     pub fn build(vfs: &Vfs) -> SoundGraph {
         let mut g = SoundGraph::default();
+        if let Ok(project) = vfs.read(PROJECT_PATH) {
+            g.buses = parse_buses(&project);
+        }
         for path in spk_paths(vfs) {
             let Ok(bytes) = vfs.read(&path) else { continue };
             let Ok(spk) = Spk::parse(&bytes) else { continue };
@@ -1378,6 +1439,9 @@ impl SoundGraph {
                                 if !placed.is_empty() {
                                     g.placed.insert(b.id, placed);
                                 }
+                                if let Some(bus) = header_bus(b) {
+                                    g.header_bus.insert(b.id, bus);
+                                }
                             }
                             g.headers.entry(b.id).or_insert(h);
                         }
@@ -1398,6 +1462,18 @@ impl SoundGraph {
         }
         g.packages.sort_unstable();
         g
+    }
+
+    /// The level `header` gets from its mixer bus and the buses above it (dB).
+    pub fn bus_gain(&self, header: u32) -> f32 {
+        let mut bus = self.header_bus.get(&header).copied();
+        let mut db = 0.0;
+        for _ in 0..16 {
+            let Some((parent, own)) = bus.and_then(|b| self.buses.get(&b)) else { break };
+            db += own;
+            bus = Some(*parent);
+        }
+        db
     }
 
     /// How `header`'s sound (`layer` of a layered one) fades with distance.
@@ -1508,8 +1584,18 @@ impl SoundGraph {
                 .collect();
         }
         let Some(h) = self.headers.get(&id) else { return Vec::new() };
+        let mut voices = self.header_voices(id, h, sw, depth);
+        // (Its own gain over all it plays.)
+        let own = self.gains.get(&id).copied().unwrap_or(0.0);
+        if own != 0.0 {
+            voices.iter_mut().flatten().for_each(|v| v.gain += own);
+        }
+        voices
+    }
+
+    fn header_voices(&self, id: u32, h: &Header, sw: &HashMap<u32, u32>, depth: usize) -> Vec<Vec<Variant>> {
         match h {
-            Header::Audio(_) | Header::Layer(_) => vec![vec![Variant { header_id: id, weight: 1.0 }]],
+            Header::Audio(_) | Header::Layer(_) => vec![vec![Variant { header_id: id, weight: 1.0, gain: 0.0 }]],
             Header::Silence { .. } => Vec::new(),
             Header::Random { children, .. } => {
                 let ids: Vec<u32> = children.iter().map(|c| c.0).collect();
@@ -1551,7 +1637,7 @@ impl SoundGraph {
                 let weight = share * v.weight / sub_total.max(f32::MIN_POSITIVE);
                 match out.iter_mut().find(|m| m.header_id == v.header_id) {
                     Some(m) => m.weight += weight,
-                    None => out.push(Variant { header_id: v.header_id, weight }),
+                    None => out.push(Variant { header_id: v.header_id, weight, gain: v.gain }),
                 }
             }
         }
@@ -1691,7 +1777,9 @@ impl SoundGraph {
     /// same as an earlier one is written as `same <id> <earlier id>`.
     ///
     /// Each sound ends with how it fades with distance: a curve id (written
-    /// as `falloff <id> <metres>,<dB>;...`), `2d` for none, `-` unknown.
+    /// as `falloff <id> <metres>,<dB>;...`), `2d` for none, `-` unknown;
+    /// then its mixer buses' level (dB). An alternative with a gain is
+    /// `hdr:weight:dB` (see [`Variant::token`]).
     pub fn manifest(&self) -> String {
         let mut s = String::from("# fc3 sound manifest v2\n");
         let mut curves = std::collections::BTreeSet::new();
@@ -1704,8 +1792,9 @@ impl SoundGraph {
                     format!("{c:08x}")
                 }
             };
+            let bus = self.bus_gain(r.header_id);
             s += &format!(
-                "sound {} {} {} {} {} {} {} {} {fade}\n",
+                "sound {} {} {} {} {} {} {} {} {fade} {bus}\n",
                 r.file_stem(),
                 r.file_ext(),
                 r.codec.name(),
@@ -1725,13 +1814,7 @@ impl SoundGraph {
         let none = HashMap::new();
         for id in ids {
             let e = &self.events[id];
-            let voices: Vec<String> = self
-                .voices(*id, &none)
-                .iter()
-                .map(|alts| {
-                    alts.iter().map(|v| format!("{:08x}:{:.4}", v.header_id, v.weight)).collect::<Vec<_>>().join(" ")
-                })
-                .collect();
+            let voices: Vec<String> = self.voices(*id, &none).iter().map(|alts| alts.iter().map(|v| v.token()).collect::<Vec<_>>().join(" ")).collect();
             s += &format!("event {:08x} {} {} {}\n", id, e.kind, e.volume, voices.join(" | "));
             if e.plays() && *id <= 0x00FF_FFFF {
                 s += &self.switched_records(*id, e);
@@ -1781,11 +1864,7 @@ impl SoundGraph {
                 let sw: HashMap<u32, u32> = combo.iter().copied().collect();
                 let state: Vec<String> = combo.iter().map(|(g, v)| format!("{g:08x}={v:08x}")).collect();
                 let token = format!("{id:08x}@{}", state.join(","));
-                let voices: Vec<String> = self
-                    .voices(id, &sw)
-                    .iter()
-                    .map(|alts| alts.iter().map(|v| format!("{:08x}:{:.4}", v.header_id, v.weight)).collect::<Vec<_>>().join(" "))
-                    .collect();
+                let voices: Vec<String> = self.voices(id, &sw).iter().map(|alts| alts.iter().map(|v| v.token()).collect::<Vec<_>>().join(" ")).collect();
                 if voices.is_empty() {
                     continue;
                 }
@@ -1818,11 +1897,7 @@ impl SoundGraph {
                 if g != 0 {
                     sw.insert(GAIT_GROUP, GAIT_VALUES[g as usize - 1]);
                 }
-                let voices: Vec<String> = self
-                    .voices(id, &sw)
-                    .iter()
-                    .map(|alts| alts.iter().map(|v| format!("{:08x}:{:.4}", v.header_id, v.weight)).collect::<Vec<_>>().join(" "))
-                    .collect();
+                let voices: Vec<String> = self.voices(id, &sw).iter().map(|alts| alts.iter().map(|v| v.token()).collect::<Vec<_>>().join(" ")).collect();
                 if voices.is_empty() {
                     continue;
                 }
@@ -1901,6 +1976,27 @@ mod tests {
         b.extend_from_slice(&2u32.to_le_bytes());
         b.extend_from_slice(payload);
         b
+    }
+
+    #[test]
+    fn buses_chain_their_levels() {
+        let mut p = vec![0u8; BAO_HEADER_SIZE];
+        let mut words = |w: &[u32]| w.iter().for_each(|w| p.extend_from_slice(&w.to_le_bytes()));
+        // A bus under another, its level in the second slot; the parent with
+        // one child, its level in the first.
+        words(&[0x5001, 5, 0x5000, 0]);
+        words(&[0, 0, (-3.0f32).to_bits(), 0]);
+        words(&[0x5000, 3, 0x4000, 1, 0x5001]);
+        words(&[(-2.0f32).to_bits(), 0, 0, 0]);
+        words(&[0; 16]);
+        let buses = parse_buses(&p);
+        assert_eq!(buses[&0x5001], (0x5000, -3.0));
+        assert_eq!(buses[&0x5000], (0x4000, -2.0));
+        let mut g = SoundGraph { buses, ..Default::default() };
+        g.header_bus.insert(7, 0x5001);
+        assert_eq!(g.bus_gain(7), -5.0);
+        assert_eq!(Variant { header_id: 7, weight: 0.5, gain: -4.0 }.token(), "00000007:0.5000:-4");
+        assert_eq!(Variant { header_id: 7, weight: 0.5, gain: 0.0 }.token(), "00000007:0.5000");
     }
 
     #[test]

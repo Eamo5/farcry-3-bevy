@@ -315,6 +315,30 @@ lists each curve once: `falloff <id> <metres>,<dB>;...`. 21,441 sounds have a cu
 6,995 are 2D, and 7 are unknown. `fc3audio manifest` rewrites it without a full
 conversion.
 
+## Gains and mixer buses
+
+Every header has its own gain (`+0x18`, dB). Random containers often lower
+theirs by 3-14 dB, layered headers by up to 17 dB, and audio headers by up
+to 13 dB. A sound plays at the sum of the gains on its way from the event,
+the containers' and its own. The manifest writes that sum on each
+alternative as `hdr:weight:dB` (where it isn't 0). Blends keep theirs in
+their `mod` records.
+
+Each audio header also sends to a mixer bus (`+0x8C`; a layered header's at
+`+0x74`). The buses are records in the project (`soundbinary\7fffffff.bao`):
+`u32 id, u32 kind (3 or 5), u32 parent, u32 count`, then `count` child ids,
+then a level (dB) at +0 or at +8 (never both). The levels add up from a bus to
+its parents (for example rifle fire's: -9 dB, dialogue's: -2.6). One bus is
+muted outright (-96 dB at +0), and a mixer state (class 10) raises it, so
+it counts as 0. The project's other tables (mixer states, the roots' own
+levels) aren't read. The manifest ends each `sound` line with its buses'
+level.
+
+The authored mix sits low: dialogue near -7 dB, the player's gun -12,
+music -12, other people's gunfire -14 to -17, ambience -14 to -20 and
+footsteps -21. The game raises the whole mix by 6 dB (`MIX_LIFT`) so that
+dialogue plays near full scale. Music takes its gains the same way.
+
 The game (`sound::hear`) sets each playing sound's volume every frame from its distance to
 the listener. Unknown ones fade by a stand-in curve: full to 5 m and gone at 100 m. Bevy's
 spatial sinks are kept for panning only. They fall off as 1/d² past a metre, so each
@@ -665,8 +689,9 @@ are 32 kHz stereo Ogg, mostly streamed. List them with
 * Blend (type 7) volume and pitch curves are applied to loops through `LoopSfx`
   parameters, and to one-shots for distance only. Curve kinds other than volume and pitch
   aren't applied.
-* Mixer buses (each header's `+0x8C`, for example `000056E4` at -3 dB under its parent)
-  and the positioning's other entries (perhaps filtering by distance) aren't applied.
+* Mixer states (class 10, pushed and popped by events of kind 6 and 10: ducking,
+  muting) and the positioning's other entries (perhaps filtering by distance)
+  aren't applied.
 * Event kind 4 is treated as "play both targets" (the second is often a delay
   or silence).
 * Loop points: type-1 loop start and length are exposed. Layered loops loop
