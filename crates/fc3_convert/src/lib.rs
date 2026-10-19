@@ -1059,7 +1059,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     // ---- authored crafting/loot metadata (runtime rules migrate separately)
     if opts.only_sectors.is_none() {
         let current = std::fs::read_to_string(job.root().join(fc3_formats::progression::RECIPES_REL))
-            .map_err(anyhow::Error::from).and_then(|text| fc3_formats::progression::Crafting::from_text(&text)).is_ok();
+            .is_ok_and(|text| fc3_formats::progression::Crafting::is_current(&text) && fc3_formats::progression::Crafting::from_text(&text).is_ok());
         if job.should_write(fc3_formats::progression::RECIPES_REL) || !current {
             if let Err(e) = convert_crafting(&job) {
                 job.error(format!("crafting metadata: {e:#}"));

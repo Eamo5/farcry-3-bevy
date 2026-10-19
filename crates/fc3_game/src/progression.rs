@@ -452,6 +452,9 @@ pub struct Progress {
     /// rewards it has paid (bits: the first money, the XP, the second
     /// money), by the trial's id.
     pub trials: std::collections::BTreeMap<u32, (u32, u8)>,
+    /// The syringes put in the two quick slots (the crafting page's: used
+    /// with `use_recipe_a`, `_b`), by recipe.
+    pub quick_slots: [Option<String>; 2],
 }
 
 impl Default for Progress {
@@ -487,6 +490,7 @@ impl Default for Progress {
             bonus_plans: Default::default(),
             removed_plans: Default::default(),
             trials: Default::default(),
+            quick_slots: Default::default(),
         }
     }
 }
@@ -587,6 +591,11 @@ impl Progress {
         s += &format!("plants {}\n", list(&self.plants));
         for (id, n) in self.potions.iter().filter(|(_, n)| **n > 0) {
             s += &format!("potion {n} {id}\n");
+        }
+        for (slot, id) in self.quick_slots.iter().enumerate() {
+            if let Some(id) = id {
+                s += &format!("quickslot {slot} {id}\n");
+            }
         }
         if self.armour > 0.0 {
             s += &format!("armour {}\n", self.armour);
@@ -702,6 +711,13 @@ impl Progress {
             "potion" => {
                 if let Some((n, id)) = rest.trim().split_once(' ').and_then(|(n, id)| Some((n.parse::<u32>().ok()?, id))) {
                     self.potions.insert(id.to_string(), n);
+                }
+            }
+            "quickslot" => {
+                if let Some((slot, id)) = rest.trim().split_once(' ').and_then(|(s, id)| Some((s.parse::<usize>().ok()?, id))) {
+                    if let Some(s) = self.quick_slots.get_mut(slot) {
+                        *s = Some(id.to_string());
+                    }
                 }
             }
             // Saves from before the game's recipes: their syringes as the

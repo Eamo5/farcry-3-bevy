@@ -107,6 +107,8 @@ fn signals(a: Action) -> &'static [&'static str] {
         Action::ThrowRock => &["throw_rock"],
         Action::C4 => &["select_IED_explosive"],
         Action::Mine => &["select_proximity_mine"],
+        Action::SyringeA => &["use_recipe_a"],
+        Action::SyringeB => &["use_recipe_b"],
     }
 }
 
@@ -231,11 +233,14 @@ pub enum Action {
     ThrowRock,
     C4,
     Mine,
+    /// The syringes in the two quick slots (`use_recipe_a`, `_b`).
+    SyringeA,
+    SyringeB,
 }
 
 impl Action {
     /// Rebindable actions, in the order the options screen lists them.
-    pub const ALL: [Action; 23] = [
+    pub const ALL: [Action; 25] = [
         Action::Forward,
         Action::Back,
         Action::Left,
@@ -259,6 +264,8 @@ impl Action {
         Action::ThrowRock,
         Action::C4,
         Action::Mine,
+        Action::SyringeA,
+        Action::SyringeB,
     ];
 
     pub fn name(self) -> &'static str {
@@ -286,6 +293,8 @@ impl Action {
             Action::ThrowRock => "Throw rock",
             Action::C4 => "C4 (hold: detonate)",
             Action::Mine => "Lay a mine",
+            Action::SyringeA => "Syringe quick slot A",
+            Action::SyringeB => "Syringe quick slot B",
         }
     }
 
@@ -315,6 +324,8 @@ impl Action {
             Action::ThrowRock => "rock",
             Action::C4 => "c4",
             Action::Mine => "mine",
+            Action::SyringeA => "syringe_a",
+            Action::SyringeB => "syringe_b",
         }
     }
 
@@ -370,7 +381,9 @@ impl Action {
             Action::C4 => &[B::DPadRight],
             Action::Map => &[B::Select],
             Action::Tag => &[B::RightTrigger],
-            Action::Forward | Action::Back | Action::Left | Action::Right => &[],
+            // (The game's quick slots are the D-pad's down and left, which
+            // throw and lay here.)
+            Action::Forward | Action::Back | Action::Left | Action::Right | Action::SyringeA | Action::SyringeB => &[],
         }
     }
 }
@@ -537,6 +550,9 @@ pub fn default_bindings() -> HashMap<Action, Binding> {
         (Action::ThrowRock, Mouse(MouseButton::Middle)),
         (Action::C4, Key(K::KeyJ)),
         (Action::Mine, Key(K::KeyK)),
+        // (The game's: `use_recipe_a` on 7, `_b` on 8.)
+        (Action::SyringeA, Key(K::Digit7)),
+        (Action::SyringeB, Key(K::Digit8)),
     ])
 }
 

@@ -292,6 +292,9 @@ pub struct Recipe {
     pub name: String,
     pub description: String,
     pub bonuses: Vec<Bonus>,
+    /// Its icon: an exported symbol of the interface movies
+    /// (`TX_CraftingSyringe_...`).
+    pub icon: String,
 }
 
 /// One of the game's loot groups. Everything in it is rolled on its own.
@@ -657,6 +660,7 @@ pub fn crafting(f: &CraftingFiles, strings: &dyn Fn(u32) -> String) -> Crafting 
             name: located(strings, u32f(e, "locidItemNameId")),
             description: located(strings, u32f(e, "locidDescriptionId")),
             bonuses: plan_bonuses(&plans, &hashes),
+            icon: text(e, "sIconName"),
         });
     }
     out.recipes.sort_by(|a, b| (a.category, a.subcategory, a.sort, &a.id).cmp(&(b.category, b.subcategory, b.sort, &b.id)));
@@ -981,7 +985,9 @@ impl Handbook {
 // ------------------------------------------------------------ text form ---
 
 const SKILLS_MAGIC: &str = "fc3-skills 1";
-const RECIPES_MAGIC: &str = "fc3-recipes 8";
+const RECIPES_MAGIC: &str = "fc3-recipes 9";
+/// The form before the recipes' icons (read the same, without them).
+const RECIPES_MAGIC_8: &str = "fc3-recipes 8";
 
 /// A string as one tab-free, newline-free field.
 fn esc(s: &str) -> String {
@@ -1165,7 +1171,7 @@ impl Crafting {
         }
         for r in &self.recipes {
             s += &format!(
-                "recipe\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "recipe\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 esc(&r.id),
                 r.kind,
                 r.category,
@@ -1181,7 +1187,8 @@ impl Crafting {
                 esc(&r.label),
                 esc(&r.name),
                 esc(&r.description),
-                r.health_slots
+                r.health_slots,
+                esc(&r.icon)
             );
             for b in &r.bonuses {
                 s += &bonus_line(&r.id, b);
@@ -1213,9 +1220,15 @@ impl Crafting {
         s
     }
 
+    /// Whether a cached table is in this version's form (else the
+    /// converter writes it again).
+    pub fn is_current(text: &str) -> bool {
+        text.lines().next().map(str::trim) == Some(RECIPES_MAGIC)
+    }
+
     pub fn from_text(text: &str) -> Result<Crafting> {
         let mut lines = text.lines();
-        if lines.next().map(str::trim) != Some(RECIPES_MAGIC) {
+        if !matches!(lines.next().map(str::trim), Some(RECIPES_MAGIC | RECIPES_MAGIC_8)) {
             bail!("not a recipes table");
         }
         let mut c = Crafting::default();
@@ -1273,6 +1286,7 @@ impl Crafting {
                         description: unesc(f[15]),
                         health_slots: f.get(16).and_then(|v| v.parse().ok()).unwrap_or(0),
                         bonuses: Vec::new(),
+                        icon: f.get(17).map(|v| unesc(v)).unwrap_or_default(),
                     };
                     index.insert(r.id.clone(), c.recipes.len());
                     c.recipes.push(r);

@@ -20,7 +20,7 @@ impl Plugin for SyringesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Boosts>().init_resource::<Breath>().add_systems(
             Update,
-            (tick_boosts, breath.before(crate::hud::HudSet), syringe_key.before(crate::hud::HudSet), hunter_marks)
+            (tick_boosts, breath.before(crate::hud::HudSet), syringe_key.before(crate::hud::HudSet), use_quick_slots.before(crate::hud::HudSet), hunter_marks)
                 .chain()
                 .run_if(in_state(crate::menu::GameState::Playing)),
         );
@@ -187,6 +187,33 @@ impl Boosts {
 
 /// Injects one of the syringes made from `recipe`, for as long as the recipe
 /// says (and the skills stretch).
+/// The quick slots (the game's `use_recipe_a`, `_b`): the syringe put in
+/// one (on the crafting page) is injected as its key is pressed, if one is
+/// carried.
+pub fn use_quick_slots(
+    actions: Res<crate::controls::ActionState>,
+    catalog: Option<Res<crate::crafting::CraftCatalog>>,
+    mut progress: ResMut<Progress>,
+    mut boosts: ResMut<Boosts>,
+    mut hud: ResMut<crate::hud::HudState>,
+    mut sfx: MessageWriter<crate::sound::PlaySfx>,
+) {
+    use crate::controls::Action;
+    let Some(catalog) = catalog else { return };
+    for (slot, action) in [Action::SyringeA, Action::SyringeB].into_iter().enumerate() {
+        if !actions.just_pressed(action) {
+            continue;
+        }
+        let Some(id) = progress.quick_slots[slot].clone() else { continue };
+        let Some(recipe) = catalog.recipes.iter().find(|r| r.id == id) else { continue };
+        if inject(&mut progress, &mut boosts, recipe) {
+            info!("syringes: quick slot {slot} injects {id}");
+            hud.notify(format!("{}: {}", recipe.name, recipe.description));
+            sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 0.6 });
+        }
+    }
+}
+
 pub fn inject(p: &mut Progress, boosts: &mut Boosts, recipe: &fc3_formats::progression::Recipe) -> bool {
     let Some(effect) = Syringe::of(&recipe.id) else { return false };
     let Some(n) = p.potions.get_mut(&recipe.id).filter(|n| **n > 0) else { return false };

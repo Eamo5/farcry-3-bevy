@@ -430,6 +430,7 @@ fn drive_pause(
             | "CraftingRecipeSubTypeChanged"
             | "CraftingRecipeSelected"
             | "CraftingRecipeCrafted"
+            | "CraftingRecipeAssigned"
             | "CraftingRecipeUsed" => {
                 let (Some(catalog), Some(loot)) = (crafting.as_deref(), loot.as_deref()) else { continue };
                 let mut stats = players.single_mut().ok();
@@ -444,6 +445,19 @@ fn drive_pause(
                         let n = perks.arrow_cap.to_string();
                         host.event("BagSizes", &[&perks.medkit_cap.to_string(), &n, &n]);
                         send_craft_types(host, catalog);
+                        send_quick_slots(host, catalog, &progress, &settings);
+                    }
+                    // A syringe put in a quick slot (by its place in the
+                    // catalog), out of the other one if it was there.
+                    "CraftingRecipeAssigned" => {
+                        let (recipe, slot) = (arg(1).parse::<usize>().ok().and_then(|i| catalog.recipes.get(i)), arg(2).parse::<usize>().unwrap_or(9));
+                        if let (Some(r), true) = (recipe, slot < progress.quick_slots.len()) {
+                            for s in progress.quick_slots.iter_mut().filter(|s| s.as_deref() == Some(r.id.as_str())) {
+                                *s = None;
+                            }
+                            progress.quick_slots[slot] = Some(r.id.clone());
+                        }
+                        send_quick_slots(host, catalog, &progress, &settings);
                     }
                     "CraftingRecipeTypeChanged" => {
                         page.category = arg(1).parse().unwrap_or(0);
@@ -1685,6 +1699,28 @@ fn craft_done(progress: &crate::progression::Progress, recipe: &fc3_formats::pro
     recipe.kind == fc3_formats::progression::KIND_GEAR && progress.recipes.contains(&recipe.id)
 }
 
+/// The syringes in the quick slots (`AssignedSlots`): each one's icon,
+/// name, place in the catalog (-1 none) and how many are carried, then the
+/// keys the page shows for the camera (none here), the rock and the slots.
+fn send_quick_slots(
+    host: &fc3_ui::Host,
+    catalog: &crate::crafting::CraftCatalog,
+    progress: &crate::progression::Progress,
+    settings: &crate::settings::Settings,
+) {
+    use crate::controls::Action;
+    let slot = |s: usize| {
+        progress.quick_slots[s]
+            .as_deref()
+            .and_then(|id| catalog.recipes.iter().enumerate().find(|(_, r)| r.id == id))
+            .map(|(i, r)| (r.icon.clone(), r.name.clone(), i.to_string(), progress.potions.get(&r.id).copied().unwrap_or(0).to_string()))
+    };
+    let [a, b] = [0, 1].map(|s| slot(s).unwrap_or_else(|| (String::new(), String::new(), "-1".into(), "0".into())));
+    let key = |a: Action| settings.binding(a).map(|b| b.label()).unwrap_or_default();
+    let (rock, slot_a, slot_b) = (key(Action::ThrowRock), key(Action::SyringeA), key(Action::SyringeB));
+    host.event("AssignedSlots", &[&a.0, &b.0, &a.1, &b.1, &a.2, &b.2, &a.3, &b.3, "", &rock, &slot_a, &slot_b]);
+}
+
 /// The crafting page's tabs (`DataRecipesTypes`), in menu order: syringes,
 /// equipment, ammo, arrows (the page's own `C_CAT_*` are their places).
 fn send_craft_types(host: &fc3_ui::Host, catalog: &crate::crafting::CraftCatalog) {
@@ -1769,6 +1805,8 @@ fn send_craft_recipes(
                 ("iObjectID", V::Number(i as f64)),
                 ("sName", V::String(r.name.clone())),
                 ("sDescription", V::String(r.description.clone())),
+                // (Its icon, which the quick slots show.)
+                ("sImage", V::String(r.icon.clone())),
                 ("iUnlocked", V::Number(if catalog.available(progress, r) || craft_done(progress, r) { 1.0 } else { 0.0 })),
                 ("bCraftable", V::Bool(craftable)),
                 ("iFinishedCrafting", V::Number(if craft_done(progress, r) { 1.0 } else { 0.0 })),

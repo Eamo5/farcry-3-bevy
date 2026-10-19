@@ -701,9 +701,17 @@ ingredient's `sName`, `iNeeded`, `iPossessed`, `sImage`). The page sends
 `CraftingRecipeCrafted` with no id, so the game makes the recipe last
 selected (`CraftCatalog::craft`) and sends the groups, recipes and
 ingredients again; `CraftingRecipeUsed` injects the selected syringe
-(`syringes::inject`) and answers `CraftingUseResult` 1 or 0. Assigning
-syringes to the quick slots (`CraftingRecipeAssigned`, `AssignedSlots`)
-and crafting arrows aren't there yet, and the 3D
+(`syringes::inject`) and answers `CraftingUseResult` 1 or 0. The two quick
+slots: as the page loads, and again whenever a syringe is put in one, the
+game sends `AssignedSlots`. It carries each slot's icon (the recipe's
+`sIconName`, which `DataRecipes` also carries as `sImage`), its name, its
+place in the catalog (-1 when empty) and how many are carried. Then come the
+keys the page shows: the camera (none here), the rock and the two slots.
+`CraftingRecipeAssigned <id> <slot>` puts the recipe in the slot and takes
+it out of the other. The slots are saved (`quickslot`), and their keys
+(`use_recipe_a` and `_b`, the game's 7 and 8, rebindable) inject the
+syringe in each if one is carried. The narrative action maps switch them off
+as they do the game's signals. Crafting arrows isn't there yet, and the 3D
 item views (`3D_Crafting_MC` and the like, which the engine draws) are
 hidden: their stand-ins are plain white and blue sheets. Blank data fields
 go to the movie as null, which the shim makes blank again (a blank string
