@@ -51,6 +51,7 @@ pub mod moves;
 pub mod reader;
 pub mod realtree;
 pub mod rml;
+pub mod rooms;
 pub mod scripts;
 pub mod senses;
 pub mod shakes;

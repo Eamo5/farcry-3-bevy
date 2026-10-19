@@ -34,9 +34,12 @@ impl Plugin for SoundPlugin {
             .add_message::<LoopSfx>()
             .init_resource::<Mixer>()
             .init_resource::<Mixings>()
-            .add_systems(OnExit(crate::menu::GameState::Loading), (load_bank, load_sound_points))
+            .add_systems(OnExit(crate::menu::GameState::Loading), (load_bank, load_sound_points, crate::mixer::load_rooms))
             .add_systems(PostStartup, attach_listener)
-            .add_systems(Update, (crate::mixer::game_mixings, mix, sound_points, play_one_shots, update_loops, ambience, hear).chain());
+            .add_systems(
+                Update,
+                (crate::mixer::game_mixings, crate::mixer::room_mixings, mix, sound_points, play_one_shots, update_loops, ambience, hear).chain(),
+            );
     }
 }
 
@@ -563,8 +566,11 @@ fn hear(
 
 /// Plays the events of the mixings asked for, and moves the mixer's levels.
 fn mix(time: Res<Time<Real>>, bank: Option<Res<SoundBank>>, mut asked: ResMut<Mixings>, mut mixer: ResMut<Mixer>, mut sfx: MessageWriter<PlaySfx>) {
-    let asked = asked.take();
+    let (asked, sounds) = (asked.take(), asked.take_sounds());
     let Some(bank) = bank else { return };
+    for event in sounds {
+        sfx.write(PlaySfx { event, at: None, volume: 1.0 });
+    }
     for (name, on) in asked {
         match bank.mix.mixing(&name) {
             Some((set, remove)) => {

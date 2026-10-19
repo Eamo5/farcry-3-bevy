@@ -2015,6 +2015,77 @@ fn main() -> Result<()> {
             }
             println!("{n} matches");
         }
+        "rooms" => {
+            // The rooms' sound volumes as the converter writes them: rooms <out.txt>
+            let out = args.get(1).context("usage: rooms <out.txt>")?;
+            let mut text = String::new();
+            for (h, name) in &vfs.names {
+                if !name.starts_with("worlds\\fc3_main\\") || !name.contains("worldsectors") || !name.ends_with(".data.fcb") { continue; }
+                let Ok(bytes) = vfs.read_hash(*h) else { continue };
+                let Ok(sector) = fc3_formats::world::parse_sector(&bytes) else { continue };
+                for e in sector.entities.iter().filter(|e| e.mission_layer == fc3_formats::world::DEFAULT_MISSION_LAYER) {
+                    if let Some(room) = &e.room {
+                        let placed = room.place(e.pos, e.angles);
+                        let odd = placed.min[2] > 0.0 || placed.max[0] - placed.min[0] > 300.0;
+                        if odd && std::env::var_os("FC3_ROOMS_ODD").is_some() { eprintln!("odd {} {} pos {:?} angles {:?} scale {:?} v0 {:?} {}", e.name, e.class, e.pos, e.angles, room.scale, room.vertices.first(), name); }
+                        text += &(placed.to_line() + "\n");
+                    }
+                }
+            }
+            std::fs::write(out, &text)?;
+            println!("{} rooms", text.lines().count());
+        }
+        "bytes-find" => {
+            // Files (by path filter) holding any of the given little-endian u64s (hex): bytes-find <filter> <hex>...
+            let filter = args.get(1).context("usage: bytes-find <path filter> <hex u64>...")?.to_ascii_lowercase();
+            let needles: Vec<(String, [u8; 8])> = args[2..].iter().filter_map(|h| u64::from_str_radix(h.trim_start_matches("0x"), 16).ok().map(|v| (h.clone(), v.to_le_bytes()))).collect();
+            let mut hits = 0;
+            for (h, name) in &vfs.names {
+                if !name.to_ascii_lowercase().contains(&filter) { continue; }
+                let Ok(bytes) = vfs.read_hash(*h) else { continue };
+                for (label, n) in &needles {
+                    let count = bytes.windows(8).filter(|w| *w == n).count();
+                    if count > 0 { println!("{label} x{count} {name}"); hits += 1; }
+                }
+            }
+            println!("{hits} hits");
+        }
+        "component-find" => {
+            // Entities carrying a component (by name), counted, the first few dumped: component-find <Component> [max] [path filter]
+            let comp = args.get(1).context("usage: component-find <Component> [max] [path filter]")?;
+            let max: usize = args.get(2).map(|s| s.parse()).transpose()?.unwrap_or(3);
+            let filter = args.get(3).cloned().unwrap_or_else(|| "worlds\\fc3_main\\".into());
+            let hash = fc3_formats::hash::crc32(comp.as_bytes());
+            let mut names = fc3_formats::fcb::NameDb::default();
+            for n in KNOWN_NAMES { names.add(n); }
+            if let Ok(dll) = std::fs::read(data.parent().unwrap_or(&data).join("bin").join("FC3.dll")) { names.add_identifiers_from(&dll); }
+            let (mut n, mut shown) = (0usize, 0usize);
+            for (h, name) in &vfs.names {
+                if !name.contains(&filter) || !name.ends_with(".fcb") { continue; }
+                let Ok(bytes) = vfs.read_hash(*h) else { continue };
+                let start = bytes.windows(4).position(|w| w == b"nbCF").unwrap_or(0);
+                let Ok(root) = fc3_formats::fcb::parse(&bytes[start..]) else { continue };
+                let mut found = Vec::new();
+                root.walk(&mut |o, _| {
+                    if o.is("Entity") {
+                        let mut has = false;
+                        o.walk(&mut |c, _| has |= c.name_hash == hash);
+                        if has { found.push(o.clone()); }
+                    }
+                });
+                for e in found {
+                    n += 1;
+                    println!("{} {:?} {}", e.str("hidName").unwrap_or_default(), e.vec3("hidPos").unwrap_or_default(), name);
+                    if shown < max {
+                        let mut out = String::new();
+                        fc3_formats::fcb::dump(&e, &names, 64, &mut out);
+                        println!("{out}");
+                        shown += 1;
+                    }
+                }
+            }
+            println!("{n} entities with {comp}");
+        }
         "entity-dump" => {
             // Full FCB tree of entities whose name contains a substring, or
             // with that decimal id, in world sectors (mission layers too) and

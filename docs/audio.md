@@ -391,7 +391,29 @@ while the player's head is under water (it mutes the above-water beds and
 low-passes the world at 800 Hz). `Compatible/Health_Low` runs while health
 is in its last bar (the world at 1 kHz, a bed 10 dB down), and
 `Compatible/In_Vehicles` in a vehicle (10 kHz). The scripts' mixings go by
-name. `FC3_MIXING_TEST=<name>[,<s>]` starts one into
+name.
+
+### Rooms
+
+Caves and buildings carry a `CRoomComponent`: a convex volume
+(`hidConvexVolume`: `hidVertices` and `hidFacesDefs`, vertex index lists)
+in the entity's own axes, with `vectorScale` already in the vertices.
+It names a mixing by its `hidKey` (`mixRoomSoundPreset`), and has an
+ambience sound region (`sndregSoundRegion` while `bUseRoomSoundRegion`), a
+reverb (`sndReverb`), sounds of going in and out (`sndInSound`,
+`sndOutSound`) and roll-off distances. The world has 1,752 of them:
+
+* the huts' and houses' `Room_More_Occluded_*` and `Room_Less_Occluded_*`;
+* the caves' `Cave_Med` and `Cave_Deep`;
+* the village store, churches, the mansion and others.
+
+The converter places each room as its entity's model is placed. It writes
+the faces' planes, the bounds and the settings to `world/rooms.txt`
+(`rooms::Room::to_line`; `fc3tool rooms <out>` writes the same file
+without a conversion). The manifest's `mixing` lines carry each mixing's
+key. The game (`mixer::room_mixings`) finds the smallest room the listener
+is in (by 64 m cell), starts its mixing while inside and plays its sounds
+of going in and out. The rooms' regions and reverbs aren't applied. `FC3_MIXING_TEST=<name>[,<s>]` starts one into
 play, and `RUST_LOG=farcry3::sound=debug` tallies the sounds the mixer
 pauses and lowers.
 
@@ -755,8 +777,8 @@ are 32 kHz stereo Ogg, mostly streamed. List them with
   state turns it on (not the unit at 3,080 Hz by default). Bus parameter 4
   isn't applied. Neither is
   `Exclusive`/`Compatible` stacking (the latest state wins each parameter).
-  The mixings the engine starts itself aren't known beyond these four. Its
-  rooms and caves (sound zones) and the takedowns go unmixed. Music plays outside the mixer. The positioning's other
+  Beyond the rooms and these four, the mixings the engine starts itself
+  aren't known (the takedowns go unmixed). Music plays outside the mixer. The positioning's other
   entries (perhaps filtering by distance) aren't applied.
 * Event kind 4 is treated as "play both targets" (the second is often a delay
   or silence).

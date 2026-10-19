@@ -583,6 +583,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     let mut anchors = Vec::new();
     let mut traversal = fc3_formats::traversal::Traversal::default();
     let mut sound_points: Vec<(u32, [f32; 3])> = Vec::new();
+    let mut rooms: Vec<fc3_formats::rooms::Room> = Vec::new();
     let mut effects: Vec<(&'static str, [f32; 3], [f32; 4], String)> = Vec::new();
     let mut guard_spots: Vec<(String, [f32; 3], [f32; 4])> = Vec::new();
     let mut world_moves: BTreeSet<String> = BTreeSet::new();
@@ -597,6 +598,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         world_moves.extend(r.stp_moves.iter().cloned());
         villager_spots.extend(r.villager_spots.iter().copied());
         sound_points.extend(r.sound_points.iter().copied());
+        rooms.extend(r.rooms.iter().cloned());
         effects.extend(r.effects.iter().cloned());
         object_ids.push(r.id);
         model_paths.extend(r.models);
@@ -684,6 +686,12 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         let text = format!("{}\n{lines}", cache::WORLD_FX_HEADER);
         if let Err(e) = write_atomic(job.root(), cache::WORLD_FX_REL, text.as_bytes(), job.ctx) {
             job.error(format!("effects: {e:#}"));
+        }
+    }
+    if opts.only_sectors.is_none() && job.should_write(cache::ROOMS_REL) {
+        let text: String = rooms.iter().map(|r| r.to_line() + "\n").collect();
+        if let Err(e) = write_atomic(job.root(), cache::ROOMS_REL, text.as_bytes(), job.ctx) {
+            job.error(format!("rooms: {e:#}"));
         }
     }
     if opts.only_sectors.is_none() && job.should_write(cache::SOUND_POINTS_REL) {
@@ -3081,6 +3089,8 @@ struct SectorResult {
     climbs: Vec<fc3_formats::traversal::Climb>,
     /// Sound points: event and position (Bevy space).
     sound_points: Vec<(u32, [f32; 3])>,
+    /// Rooms' sound volumes.
+    rooms: Vec<fc3_formats::rooms::Room>,
     /// Placed effects the game plays: kind, position, rotation and name.
     effects: Vec<(&'static str, [f32; 3], [f32; 4], String)>,
     /// Guard spots: kind, position and orientation.
@@ -3138,6 +3148,7 @@ fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool, reorder: bool) ->
     let mut lights = Vec::new();
     let (mut anchors, mut ladders, mut towers, mut climbs) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut sound_points = Vec::new();
+    let mut rooms = Vec::new();
     let mut effects = Vec::new();
     let mut guard_spots = Vec::new();
     let mut stp_moves = Vec::new();
@@ -3160,6 +3171,9 @@ fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool, reorder: bool) ->
             }
             if let Some(event) = e.sound_event.filter(|_| cache::sound_point_kept(&e.name)) {
                 sound_points.push((event, translation));
+            }
+            if let Some(room) = &e.room {
+                rooms.push(room.place(e.pos, e.angles));
             }
             if let Some((kind, name)) = e.effect.as_deref().and_then(|n| Some((cache::world_fx_kind(n)?, n))) {
                 effects.push((kind, translation, rotation, name.to_ascii_lowercase()));
@@ -3322,6 +3336,7 @@ fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool, reorder: bool) ->
         towers,
         climbs,
         sound_points,
+        rooms,
         effects,
         guard_spots,
         stp_moves,

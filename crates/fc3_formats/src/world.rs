@@ -122,6 +122,8 @@ pub struct WorldEntity {
     pub spline: Option<crate::splines::SplinePrimitive>,
     /// A smart terrain point's moves (its contextual action's parameters).
     pub stp_moves: Vec<String>,
+    /// A room's sound volume (caves, buildings).
+    pub room: Option<crate::rooms::RoomVolume>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -149,6 +151,7 @@ pub fn parse_entity(e: &Object) -> WorldEntity {
     };
     let Some(components) = e.child("Components") else { return out };
     out.light = crate::lights::parse_light(components);
+    out.room = crate::rooms::parse_room(components);
     out.cable = crate::traversal::parse_anchor(components);
     out.ladder_animation_package = components.child("CLadder").and_then(|c| c.u64("sAnimationPackage")).unwrap_or(0);
     out.ladder_type = components.child("CLadder").and_then(|c| c.u32("selLadderType")).unwrap_or(0);

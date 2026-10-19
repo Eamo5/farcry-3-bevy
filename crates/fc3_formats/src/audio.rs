@@ -1426,6 +1426,8 @@ pub fn parse_mix_state(bao: &Bao) -> Result<MixState> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mixing {
     pub name: String,
+    /// `hidKey`: what rooms name it by.
+    pub key: u64,
     pub priority: u32,
     pub stacks_with_self: bool,
     pub stacks_with_others: bool,
@@ -1442,6 +1444,7 @@ pub fn parse_mixings(bytes: &[u8]) -> Result<Vec<Mixing>> {
         .filter_map(|m| {
             Some(Mixing {
                 name: m.str("hidName").filter(|n| !n.is_empty())?,
+                key: m.u64("hidKey").unwrap_or(0),
                 priority: m.u32("uiPriority").unwrap_or(10),
                 stacks_with_self: m.bool("bCanStackWithSelf").unwrap_or(false),
                 stacks_with_others: m.bool("bCanStackWithOthers").unwrap_or(true),
@@ -1996,7 +1999,8 @@ impl SoundGraph {
     /// `mixstate <id> <bus>:<parameter>:<value>:<fade in>:<fade out>...`
     /// for each state's bus changes, `mixevent <event> +<state> -<state>...`
     /// for each event that pushes or pops one, and `mixing <priority>
-    /// <stacks with itself> <with others> <set event> <remove event> <name>`.
+    /// <stacks with itself> <with others> <set event> <remove event> <key>
+    /// <name>`.
     fn mix_records(&self) -> String {
         let mut s = String::new();
         let mut buses: Vec<_> = self.bus_params.iter().collect();
@@ -2036,7 +2040,10 @@ impl SoundGraph {
             }
         }
         for m in &self.mixings {
-            s += &format!("mixing {} {} {} {:08x} {:08x} {}\n", m.priority, m.stacks_with_self as u8, m.stacks_with_others as u8, m.set, m.remove, m.name);
+            s += &format!(
+                "mixing {} {} {} {:08x} {:08x} {:016x} {}\n",
+                m.priority, m.stacks_with_self as u8, m.stacks_with_others as u8, m.set, m.remove, m.key, m.name
+            );
         }
         s
     }

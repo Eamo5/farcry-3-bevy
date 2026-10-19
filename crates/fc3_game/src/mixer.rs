@@ -26,8 +26,10 @@ pub struct MixData {
     states: HashMap<u32, Vec<(u32, u32, f32, f32, f32)>>,
     /// The states each event pushes (true) and pops.
     actions: HashMap<u32, Vec<(bool, u32)>>,
-    /// The mixings by name: their set and remove events (0: none).
+    /// The mixings by name: their set and remove events (0: none); and the
+    /// names by key (what rooms name them by).
     mixings: HashMap<String, (u32, u32)>,
+    keys: HashMap<u64, String>,
     /// Each bus's low-pass units, and each unit's slot (see [`CUTOFFS`]).
     lowpass: HashMap<u32, Vec<u32>>,
     slots: HashMap<u32, u8>,
@@ -107,13 +109,18 @@ impl MixData {
             }
             "mixing" => {
                 // priority, stacking with itself and with others, set,
-                // remove, then the name (which may have spaces).
-                let parts: Vec<&str> = rest.splitn(6, ' ').collect();
-                let (Some(set), Some(remove), Some(name)) = (parts.get(3).and_then(|s| hex(s)), parts.get(4).and_then(|s| hex(s)), parts.get(5)) else {
-                    return;
-                };
+                // remove, the key (newer manifests), then the name (which
+                // may have spaces).
+                let parts: Vec<&str> = rest.splitn(7, ' ').collect();
+                let (Some(set), Some(remove)) = (parts.get(3).and_then(|s| hex(s)), parts.get(4).and_then(|s| hex(s))) else { return };
+                let key = parts.get(5).filter(|k| k.len() == 16).and_then(|k| u64::from_str_radix(k, 16).ok());
+                let name = if key.is_some() { parts.get(6).map(|n| n.to_string()) } else { rest.splitn(6, ' ').nth(5).map(|n| n.to_string()) };
+                let Some(name) = name.map(|n| n.trim().to_string()) else { return };
                 let event = |e: u32| if e == u32::MAX { 0 } else { e };
-                self.mixings.insert(name.trim().to_string(), (event(set), event(remove)));
+                self.mixings.insert(name.clone(), (event(set), event(remove)));
+                if let Some(key) = key {
+                    self.keys.insert(key, name);
+                }
             }
             _ => {}
         }
@@ -130,8 +137,13 @@ impl MixData {
         }
     }
 
-    /// The events that set and remove a mixing.
+    /// The events that set and remove a mixing, by its name (or `#` and
+    /// its key in hex, as rooms name it).
     pub fn mixing(&self, name: &str) -> Option<(u32, u32)> {
+        let name = match name.strip_prefix('#').and_then(|k| u64::from_str_radix(k, 16).ok()) {
+            Some(key) => self.keys.get(&key)?.as_str(),
+            None => name,
+        };
         self.mixings.get(name).copied()
     }
 
@@ -165,9 +177,10 @@ impl MixData {
 }
 
 /// Mixings asked for by name (started, or stopped), from the game and its
-/// scripts; the sound module plays their events.
+/// scripts, and sounds to play with them (a room's going in and out); the
+/// sound module plays their events.
 #[derive(Resource, Default)]
-pub struct Mixings(Vec<(String, bool)>);
+pub struct Mixings(Vec<(String, bool)>, Vec<u32>);
 
 impl Mixings {
     pub fn start(&mut self, name: &str) {
@@ -181,6 +194,74 @@ impl Mixings {
     pub fn take(&mut self) -> Vec<(String, bool)> {
         std::mem::take(&mut self.0)
     }
+
+    pub fn take_sounds(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.1)
+    }
+}
+
+/// The world's rooms (`fc3_formats::rooms`), by 64 m cell, and the one the
+/// listener is in.
+#[derive(Resource, Default)]
+pub struct Rooms {
+    rooms: Vec<fc3_formats::rooms::Room>,
+    cells: HashMap<(i32, i32), Vec<usize>>,
+    inside: Option<usize>,
+}
+
+const ROOM_CELL: f32 = 64.0;
+
+pub fn load_rooms(mut commands: Commands, info: Res<crate::data::CacheInfo>) {
+    let text = std::fs::read_to_string(info.root.join(fc3_formats::cache::ROOMS_REL)).unwrap_or_default();
+    let rooms: Vec<fc3_formats::rooms::Room> = text.lines().filter_map(fc3_formats::rooms::Room::from_line).collect();
+    let mut cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+    for (i, r) in rooms.iter().enumerate() {
+        let cell = |v: f32| (v / ROOM_CELL).floor() as i32;
+        for x in cell(r.min[0])..=cell(r.max[0]) {
+            for z in cell(r.min[2])..=cell(r.max[2]) {
+                cells.entry((x, z)).or_default().push(i);
+            }
+        }
+    }
+    info!("{} rooms", rooms.len());
+    commands.insert_resource(Rooms { rooms, cells, inside: None });
+}
+
+/// A room's mixing (`#` and its key), unless it has none.
+fn room_mixing_name(r: &fc3_formats::rooms::Room) -> Option<String> {
+    (r.mixing != 0 && r.mixing != u64::from(u32::MAX)).then(|| format!("#{:016x}", r.mixing))
+}
+
+/// The room the listener is in (the smallest of those it is in): its
+/// mixing on while inside, and its sounds of going in and out.
+pub fn room_mixings(rooms: Option<ResMut<Rooms>>, listener: Query<&GlobalTransform, With<crate::player::PlayerCamera>>, mut mixings: ResMut<Mixings>) {
+    let (Some(mut rooms), Ok(ear)) = (rooms, listener.single()) else { return };
+    let p = ear.translation().to_array();
+    let cell = ((p[0] / ROOM_CELL).floor() as i32, (p[2] / ROOM_CELL).floor() as i32);
+    let now = rooms
+        .cells
+        .get(&cell)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|&i| rooms.rooms[i].contains(p))
+        .min_by(|&a, &b| rooms.rooms[a].size().total_cmp(&rooms.rooms[b].size()));
+    if now == rooms.inside {
+        return;
+    }
+    let (was, is) = (rooms.inside.map(|i| &rooms.rooms[i]), now.map(|i| &rooms.rooms[i]));
+    let (was_mix, is_mix) = (was.and_then(room_mixing_name), is.and_then(room_mixing_name));
+    if was_mix != is_mix {
+        if let Some(m) = &was_mix {
+            mixings.stop(m);
+        }
+        if let Some(m) = &is_mix {
+            mixings.start(m);
+        }
+    }
+    mixings.1.extend(was.map(|r| r.exit).into_iter().chain(is.map(|r| r.enter)).filter(|e| *e != 0));
+    debug!("room: {:?} -> {:?} ({was_mix:?} -> {is_mix:?})", rooms.inside, now);
+    rooms.inside = now;
 }
 
 /// The states pushed (the latest last), each bus level's way to what they

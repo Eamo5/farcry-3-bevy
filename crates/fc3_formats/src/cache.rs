@@ -1504,6 +1504,8 @@ pub fn world_fx_kind(name: &str) -> Option<&'static str> {
 /// The world's sound points, one per line: `event x y z` (hex event id,
 /// Bevy-space position).
 pub const SOUND_POINTS_REL: &str = "world/sound_points.txt";
+/// The rooms' sound volumes (`rooms::Room::to_line`, one a line).
+pub const ROOMS_REL: &str = "world/rooms.txt";
 
 /// Sound points left out: voices and crowd chatter, story moments and
 /// scripted one-offs (explosions, thunder claps).
