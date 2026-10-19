@@ -18,6 +18,7 @@ mod explosives;
 mod far_terrain;
 mod fire;
 mod fish;
+mod flamethrower;
 mod fp;
 mod freefall;
 mod grade;
@@ -501,6 +502,7 @@ fn main() {
         .add_plugins(vine_puff::VinePuffPlugin)
         .add_plugins(authored_fx::AuthoredFxPlugin)
         .add_plugins(burning::BurningPlugin)
+        .add_plugins(flamethrower::FlamethrowerPlugin)
         .add_plugins(OriginalUi)
         .insert_resource(original_shaders::OriginalShaders { enabled: args.original_shaders })
         .add_systems(Startup, setup);

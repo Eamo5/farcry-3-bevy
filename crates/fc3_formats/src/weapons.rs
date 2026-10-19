@@ -19,7 +19,7 @@ use anyhow::{bail, Result};
 use crate::fcb::Object;
 
 pub const STATS_REL: &str = "weapons/stats.txt";
-const MAGIC: &str = "fc3-weapons 9";
+const MAGIC: &str = "fc3-weapons 11";
 
 /// Whether a cached table is in this version's form.
 pub fn is_current(text: &str) -> bool {
@@ -78,7 +78,139 @@ pub struct WeaponStats {
     pub muzzle: String,
     pub muzzle_3p: String,
     pub barrel_smoke: String,
+    /// A flamethrower's flame, if it is one.
+    pub flame: Option<Flame>,
 }
+
+/// A flamethrower's flame (`FireStrategyProperties`): the effects its nozzle
+/// plays (alight and idle, shooting, stopping; first person and third) and
+/// those it sends down the stream (`FlameMesh`'s, `FireballEffects`).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Flame {
+    pub tip_idle: String,
+    pub tip_shoot: String,
+    pub tip_stop: String,
+    pub tip_shoot_3p: String,
+    pub tip_stop_3p: String,
+    pub stream: Vec<StreamEffect>,
+}
+
+/// An effect sent down a flame's stream: one every so often (s), going so
+/// fast (m/s) so far (m); first person and third. The wait between them
+/// is so many times as long for how fast the aim turns (deg/s, its
+/// `arkSpawnTimeAngularSpeedRatioCurve`'s points).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct StreamEffect {
+    pub effect: String,
+    pub effect_3p: String,
+    pub every: f32,
+    pub speed: f32,
+    pub distance: f32,
+    pub turning: Vec<[f32; 2]>,
+}
+
+impl StreamEffect {
+    /// The wait's multiplier when the aim turns so fast (deg/s), between
+    /// its curve's points (1 without one).
+    pub fn turning_ratio(&self, turn: f32) -> f32 {
+        let c = &self.turning;
+        match c.iter().position(|p| p[0] > turn) {
+            None => c.last().map_or(1.0, |p| p[1]),
+            Some(0) => c[0][1],
+            Some(i) => {
+                let (a, b) = (c[i - 1], c[i]);
+                a[1] + (b[1] - a[1]) * (turn - a[0]) / (b[0] - a[0]).max(1e-6)
+            }
+        }
+    }
+}
+
+impl Flame {
+    fn to_text(&self) -> String {
+        let tips = [&self.tip_idle, &self.tip_shoot, &self.tip_stop, &self.tip_shoot_3p, &self.tip_stop_3p].map(|s| s.as_str()).join(",");
+        let stream = self
+            .stream
+            .iter()
+            .map(|e| {
+                let turning = e.turning.iter().map(|p| format!("{}:{}", p[0], p[1])).collect::<Vec<_>>().join("/");
+                format!("{},{},{},{},{},{turning}", e.effect, e.effect_3p, e.every, e.speed, e.distance)
+            })
+            .collect::<Vec<_>>()
+            .join(";");
+        format!("{tips}|{stream}")
+    }
+
+    fn from_text(s: &str) -> Option<Flame> {
+        let (tips, stream) = s.split_once('|')?;
+        let t: Vec<&str> = tips.split(',').collect();
+        let tip = |i: usize| t.get(i).map(|s| s.to_string()).unwrap_or_default();
+        let stream = stream
+            .split(';')
+            .filter_map(|e| {
+                let f: Vec<&str> = e.split(',').collect();
+                let n = |i: usize| f.get(i).and_then(|v| v.parse().ok());
+                let turning = f
+                    .get(5)
+                    .map(|c| c.split('/').filter_map(|p| p.split_once(':')).filter_map(|(x, y)| Some([x.parse().ok()?, y.parse().ok()?])).collect())
+                    .unwrap_or_default();
+                Some(StreamEffect { effect: f.first()?.to_string(), effect_3p: f.get(1)?.to_string(), every: n(2)?, speed: n(3)?, distance: n(4)?, turning })
+            })
+            .collect();
+        Some(Flame { tip_idle: tip(0), tip_shoot: tip(1), tip_stop: tip(2), tip_shoot_3p: tip(3), tip_stop_3p: tip(4), stream })
+    }
+
+    /// From a weapon's `FireStrategyProperties`, if it has a flame (its
+    /// curves among `curves`, by library id).
+    fn read(fire: &Object, curves: &HashMap<u64, Vec<[f32; 2]>>) -> Option<Flame> {
+        let mesh = fire.child("FlameMesh");
+        let tips = fire.child("TipEffects").and_then(|t| t.child("Effects"));
+        if mesh.is_none() && tips.is_none() {
+            return None;
+        }
+        let mut flame = Flame::default();
+        for t in tips.map(|t| t.children.as_slice()).unwrap_or_default() {
+            let name = effect_name(t, PS_NAME);
+            if name.is_empty() {
+                continue;
+            }
+            let first = t.bool("bFirstPerson").unwrap_or(true);
+            // (`selType`: 0 alight and idle, 1 shooting, 4 stopping.)
+            let slot = match (uint(t, "selType").unwrap_or(99), first) {
+                (0, true) => &mut flame.tip_idle,
+                (1, true) => &mut flame.tip_shoot,
+                (4, true) => &mut flame.tip_stop,
+                (1, false) => &mut flame.tip_shoot_3p,
+                (4, false) => &mut flame.tip_stop_3p,
+                _ => continue,
+            };
+            if slot.is_empty() {
+                *slot = name;
+            }
+        }
+        let launched = |o: &Object, every: &str, speed: &str, distance: &str| {
+            let effect = effect_name(o, PS_NAME);
+            (!effect.is_empty() && !o.bool("bRemove").unwrap_or(false)).then(|| StreamEffect {
+                effect_3p: effect_name(o, PS_3P_NAME),
+                effect,
+                every: float(o, every).unwrap_or(0.0),
+                speed: float(o, speed).unwrap_or(0.0),
+                distance: float(o, distance).unwrap_or(0.0),
+                turning: uint(o, "arkSpawnTimeAngularSpeedRatioCurve").and_then(|id| curves.get(&id)).cloned().unwrap_or_default(),
+            })
+        };
+        if let Some(m) = mesh {
+            flame.stream.extend(launched(m, "fPSSpawnTime", "fSpeed", "fSize"));
+        }
+        for e in fire.child("FireballEffects").and_then(|f| f.child("Effects")).map(|e| e.children.as_slice()).unwrap_or_default() {
+            flame.stream.extend(launched(e, "fSpawnTime", "fSpeed", "fDistance"));
+        }
+        Some(flame)
+    }
+}
+
+/// The names of a flame's effects (beside their ids): first person, third.
+const PS_NAME: u32 = 0x93D2_AFB5;
+const PS_3P_NAME: u32 = 0xA9BA_1966;
 
 /// The names of the effects a weapon's `Particles` give (beside their ids).
 const MUZZLE_NAME: u32 = 0xB171_F78F;
@@ -402,12 +534,22 @@ pub fn weapon_stats(library: &Object, shop_items: Option<&Object>) -> Vec<Weapon
     let mut projectiles: HashMap<u64, f32> = HashMap::new();
     // Library item id -> an attachment gadget's modifiers.
     let mut gadget_by_id: HashMap<u64, Gadget> = HashMap::new();
+    // Library item id -> a curve's points (`Curves:`).
+    let mut curves: HashMap<u64, Vec<[f32; 2]>> = HashMap::new();
     library.walk(&mut |o, _| {
         if !o.is("EntityPrototype") {
             return;
         }
         let Some(e) = o.child("Entity") else { return };
         let Some(name) = e.str("hidName") else { return };
+        if let (true, Some(id)) = (name.starts_with("Curves:"), uint(o, "disLibItemId")) {
+            let knots = e.child("curveCurve").and_then(|c| c.child("Knots")).map(|k| k.children.as_slice()).unwrap_or_default();
+            let point = |k: &Object| {
+                let v = k.field("Value")?;
+                Some([f32::from_le_bytes(v.get(0..4)?.try_into().ok()?), f32::from_le_bytes(v.get(4..8)?.try_into().ok()?)])
+            };
+            curves.insert(id, knots.iter().filter_map(|k| point(k)).collect());
+        }
         if let Some(id) = uint(o, "disLibItemId") {
             let mut damage = None;
             e.walk(&mut |c, _| {
@@ -489,7 +631,17 @@ pub fn weapon_stats(library: &Object, shop_items: Option<&Object>) -> Vec<Weapon
             muzzle: String::new(),
             muzzle_3p: String::new(),
             barrel_smoke: String::new(),
+            flame: None,
         });
+        let mut flame = None;
+        p.walk(&mut |c, _| {
+            if flame.is_none() && c.is("FireStrategyProperties") {
+                flame = Flame::read(c, &curves);
+            }
+        });
+        if let Some(w) = out.last_mut() {
+            w.flame = flame;
+        }
         let mut particles = None;
         p.walk(&mut |c, _| {
             if particles.is_none() && c.is("Particles") && c.field_h(MUZZLE_NAME).is_some() {
@@ -555,8 +707,9 @@ pub fn to_text(stats: &[WeaponStats]) -> String {
         let spread = w.spread.map(|s| s.to_text()).unwrap_or_default();
         let aim = w.aim.map(|a| a.to_text()).unwrap_or_default();
         let gadgets = w.gadgets.iter().map(|g| g.to_text()).collect::<Vec<_>>().join(";");
+        let flame = w.flame.as_ref().map(|f| f.to_text()).unwrap_or_default();
         s += &format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{attachments}\t{ranges}\t{spread}\t{aim}\t{gadgets}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{attachments}\t{ranges}\t{spread}\t{aim}\t{gadgets}\t{}\t{}\t{}\t{flame}\n",
             w.name,
             w.model,
             w.damage,
@@ -618,6 +771,7 @@ pub fn from_text(text: &str) -> Result<Vec<WeaponStats>> {
                 muzzle: f.get(15).map(|s| s.to_string()).unwrap_or_default(),
                 muzzle_3p: f.get(16).map(|s| s.to_string()).unwrap_or_default(),
                 barrel_smoke: f.get(17).map(|s| s.to_string()).unwrap_or_default(),
+                flame: f.get(18).and_then(|s| Flame::from_text(s)),
                 ranges: f
                     .get(11)
                     .map(|r| {
@@ -644,6 +798,16 @@ pub fn model_key(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stream_waits_by_how_fast_the_aim_turns() {
+        let s = StreamEffect { turning: vec![[0.0, 2.5], [180.0, 0.3], [180.0, 0.3], [500.0, 0.1]], ..Default::default() };
+        assert_eq!(s.turning_ratio(0.0), 2.5);
+        assert!((s.turning_ratio(90.0) - 1.4).abs() < 1e-5);
+        assert!((s.turning_ratio(340.0) - 0.2).abs() < 1e-5);
+        assert_eq!(s.turning_ratio(900.0), 0.1);
+        assert_eq!(StreamEffect::default().turning_ratio(50.0), 1.0);
+    }
 
     #[test]
     fn round_trips_and_matches_models() {
@@ -694,6 +858,21 @@ mod tests {
             muzzle: "fx.ak.muzzle".into(),
             muzzle_3p: "fx.ak.muzzle_3p".into(),
             barrel_smoke: "fx.ak.after".into(),
+            flame: Some(Flame {
+                tip_idle: "fx.flame.idle".into(),
+                tip_shoot: "fx.flame.shoot".into(),
+                tip_stop: String::new(),
+                tip_shoot_3p: "fx.flame.shoot_3rd".into(),
+                tip_stop_3p: "fx.flame.stop_3rd".into(),
+                stream: vec![StreamEffect {
+                    effect: "fx.flame.ball".into(),
+                    effect_3p: "fx.flame.ball_3rd".into(),
+                    every: 0.01,
+                    speed: 20.0,
+                    distance: 40.0,
+                    turning: vec![[0.0, 2.5], [180.0, 0.3]],
+                }],
+            }),
             gadgets: vec![
                 Gadget { key: "acog".into(), fov: -30.0, damage: 1.0, noise: 1.0, moving_spread: 1.0, reload: 1.0, look: [1.0; 3], ..Default::default() },
                 Gadget {

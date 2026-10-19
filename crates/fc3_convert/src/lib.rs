@@ -1940,9 +1940,9 @@ const SKY_MOON: &str = r"graphics\__fc3_graphics\singleplayer\_textures\skybox\n
 fn convert_authored_effects(job: &Job) -> Result<()> {
     use fc3_formats::particle_effects as pe;
     let mut names: Vec<String> = pe::AUTHORED_EFFECTS.iter().map(|n| n.to_string()).collect();
-    // (The world's placed effects, by the names its list keeps, and the fire
-    // manager's: one the library lacks, or keeps empty, plays our stand-in
-    // or nothing, no error.)
+    // (The world's placed effects, by the names its list keeps, the fire
+    // manager's and the flamethrowers': one the library lacks, or keeps
+    // empty, plays our stand-in or nothing, no error.)
     let mut optional: Vec<String> = Vec::new();
     if let Ok(list) = std::fs::read_to_string(job.root().join(cache::WORLD_FX_REL)) {
         for name in list.lines().filter(|l| !l.starts_with('#')).filter_map(|l| l.split_whitespace().nth(8)) {
@@ -1957,9 +1957,26 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
     {
         for w in &stats {
             let gadgets = w.gadgets.iter().map(|g| &g.muzzle);
+            // (A flamethrower's nozzle and stream effects.)
+            let flame: Vec<&String> = w
+                .flame
+                .iter()
+                .flat_map(|f| {
+                    [&f.tip_idle, &f.tip_shoot, &f.tip_stop, &f.tip_shoot_3p, &f.tip_stop_3p]
+                        .into_iter()
+                        .chain(f.stream.iter().flat_map(|s| [&s.effect, &s.effect_3p]))
+                })
+                .collect();
             for n in [&w.muzzle, &w.muzzle_3p, &w.barrel_smoke].into_iter().chain(gadgets) {
                 if !n.is_empty() && !names.contains(n) {
                     names.push(n.clone());
+                }
+            }
+            // (One the library lacks is left out, no error.)
+            for n in flame {
+                if !n.is_empty() && !names.contains(n) {
+                    names.push(n.clone());
+                    optional.push(n.clone());
                 }
             }
         }

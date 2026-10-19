@@ -139,6 +139,13 @@ pub fn play_muzzle(commands: &mut Commands, name: &'static str, muzzle: Entity) 
     true
 }
 
+/// Plays an effect on a gun's muzzle for as long as it's kept (a
+/// flamethrower's nozzle): despawning what it returns stops it. None when
+/// it isn't cached.
+pub fn attach_muzzle(commands: &mut Commands, name: &'static str, muzzle: Entity) -> Option<Entity> {
+    available(name).then(|| commands.spawn((Transform::from_rotation(MUZZLE_FRAME), AuthoredFx(name), ChildOf(muzzle))).id())
+}
+
 /// Plays a weapon's muzzle effect once where a shot leaves a gun that isn't
 /// drawn with its own muzzle node (the characters'), heading `forward`, its
 /// right level. False when it isn't cached.
@@ -146,11 +153,16 @@ pub fn play_muzzle_at(commands: &mut Commands, name: &'static str, at: Vec3, for
     if !available(name) {
         return false;
     }
+    commands.spawn((Transform::from_translation(at).with_rotation(muzzle_frame(forward)), AuthoredFx(name), Once));
+    true
+}
+
+/// A muzzle effect's frame for a shot heading `forward`, its right level:
+/// Dunia's +Z down the barrel, its +Y to the right.
+pub fn muzzle_frame(forward: Vec3) -> Quat {
     let forward = forward.normalize_or(Vec3::NEG_Z);
     let right = forward.cross(Vec3::Y).try_normalize().unwrap_or(Vec3::X);
-    let frame = Mat3::from_cols(right.cross(forward), forward, -right);
-    commands.spawn((Transform::from_translation(at).with_rotation(Quat::from_mat3(&frame)), AuthoredFx(name), Once));
-    true
+    Quat::from_mat3(&Mat3::from_cols(right.cross(forward), forward, -right))
 }
 
 /// A muzzle effect's frame in its gun's: Bevy's local +Y (Dunia's +Z) down
@@ -237,6 +249,10 @@ struct FxClock {
     carry: Vec<f32>,
     burst: Vec<bool>,
     lights: Vec<Option<Entity>>,
+    /// Where the effect was last frame, and so how fast it goes (what its
+    /// particles take on: `InitExtSpdRatioKF`).
+    last: Option<Vec3>,
+    velocity: Vec3,
 }
 
 /// A light an effect burns.
@@ -321,6 +337,11 @@ struct Compiled {
     from_surface: bool,
     rate: Ranged,
     rate_ratio: Lut,
+    /// How much of the effect's own speed a particle takes on at birth (its
+    /// share, over the emitter's time) and keeps over its life.
+    ext_speed: Ranged,
+    ext_speed_ratio: Lut,
+    part_ext_speed: Lut,
     life: Ranged,
     speed: Ranged,
     size: Ranged,
@@ -417,6 +438,7 @@ impl Compiled {
         let colours = if colours.is_empty() { vec![(0.0, initial)] } else { colours.into_iter().map(|(p, c)| (p, c * initial)).collect() };
         let hdr = crate::vine_puff::curve(s, "EmitterHDRMulKF", 0.0, 1.0).max(0.0);
         let rate_ratio = s.child("EmitRateKF").and_then(|k| k.child("ValueKF")).map_or(Lut([1.0; 33]), |v| Lut::of(v, "RatioUI", 1.0));
+        let ext_speed_ratio = s.child("InitExtSpdRatioKF").and_then(|k| k.child("ValueKF")).map_or(Lut([1.0; 33]), |v| Lut::of(v, "RatioUI", 1.0));
         Compiled {
             batch,
             frames: e.frames,
@@ -448,6 +470,9 @@ impl Compiled {
             from_surface: s.child("EmitFlag").is_some_and(|e| e.bool("DirFromVolumeSurface") == Some(true)),
             rate: Ranged::of(e, "EmitRateKF"),
             rate_ratio,
+            ext_speed: Ranged::of(e, "InitExtSpdRatioKF"),
+            ext_speed_ratio,
+            part_ext_speed: Lut::of(s, "PartExtSpdRatioKF", 1.0),
             life: Ranged::of(e, "InitLifeTimeKF"),
             speed: Ranged::of(e, "InitSpeedKF"),
             size: Ranged::of(e, "InitSizeKF"),
@@ -474,8 +499,11 @@ impl Compiled {
             local: s.child("Flags").is_some_and(|f| f.bool("LocalEmitterSpace") == Some(true)),
             oriented: s.child("Flags").is_some_and(|f| f.bool("Orientation") == Some(true)),
             lit: on("SHLighting") && mode != 0,
-            near: (f("NearClippingRate", 0.0) > 0.0 && f("NearClippingAlpha", 0.0) > 0.0).then(|| (f("NearClippingStart", 0.0), f("NearClippingEnd", 0.0))),
-            far: (f("FarClippingRate", 0.0) > 0.0).then(|| (f("FarClippingStart", 0.0), f("FarClippingEnd", 0.0))),
+            // (Faded near the camera by its alpha (`NearClippingAlpha`: a
+            // flamethrower's fireballs, impacts' smoke); far off by its alpha
+            // or its rate, both of which we fade.)
+            near: (f("NearClippingAlpha", 0.0) > 0.0).then(|| (f("NearClippingStart", 0.0), f("NearClippingEnd", 0.0))),
+            far: (f("FarClippingRate", 0.0) > 0.0 || f("FarClippingAlpha", 0.0) > 0.0).then(|| (f("FarClippingStart", 0.0), f("FarClippingEnd", 0.0))),
             light: on("LightActive").then(|| {
                 let colour = dunia_colour(s.attr("LightColor").unwrap_or("1,1,1")).unwrap_or(Vec3::ONE);
                 (colour, f("LightIntensity", 1.0), f("LightOuterRadius", 2.0), f("LightFlickeringFrequency", 0.0), f("LightFlickeringAmplitude", 0.0))
@@ -561,6 +589,8 @@ struct Particle {
     pos: Vec3,
     dir: Vec3,
     speed: f32,
+    /// The effect's own motion it took on (`InitExtSpdRatioKF`).
+    carried: Vec3,
     fall: Vec3,
     gravity: Vec3,
     life: f32,
@@ -604,10 +634,19 @@ fn emit(
     for (entity, fx, at, clock, once, unlit) in &mut effects {
         let Some(ids) = library.effect(fx.0).cloned() else { continue };
         let Some(mut clock) = clock else {
-            commands.entity(entity).insert(FxClock { carry: vec![0.0; ids.len()], burst: vec![false; ids.len()], lights: vec![None; ids.len()], ..default() });
+            commands.entity(entity).insert(FxClock {
+                carry: vec![0.0; ids.len()],
+                burst: vec![false; ids.len()],
+                lights: vec![None; ids.len()],
+                last: Some(at.translation()),
+                ..default()
+            });
             continue;
         };
         clock.age += dt;
+        let here = at.translation();
+        clock.velocity = clock.last.map_or(Vec3::ZERO, |last| (here - last) / dt);
+        clock.last = Some(here);
         // A one-off done: what it emitted lives out on its own.
         let looping = |em: &Compiled| em.looping && !once;
         if ids.iter().all(|&id| !looping(&library.emitters[id]) && clock.age > library.emitters[id].delay + library.emitters[id].duration) {
@@ -700,6 +739,13 @@ fn emit(
                     pos,
                     dir,
                     speed: em.speed.roll(&mut rng),
+                    // (Not in its own space: that follows the effect.)
+                    carried: if em.local {
+                        Vec3::ZERO
+                    } else {
+                        let phase = ((clock.age - em.delay) / em.duration.max(1e-3)).clamp(0.0, 1.0);
+                        clock.velocity * em.ext_speed.roll(&mut rng).max(0.0) * em.ext_speed_ratio.at(phase)
+                    },
                     fall: Vec3::ZERO,
                     gravity,
                     life: em.life.roll(&mut rng).max(0.02),
@@ -746,7 +792,7 @@ fn simulate(time: Res<Time>, mut library: ResMut<Library>, effects: Query<&Autho
         let em = &emitters[p.emitter];
         let t = p.age / p.life;
         p.fall += p.gravity * em.part_gravity.at(t) * dt;
-        p.pos += (p.dir * p.speed * em.part_speed.at(t) + p.fall) * dt;
+        p.pos += (p.dir * p.speed * em.part_speed.at(t) + p.carried * em.part_ext_speed.at(t) + p.fall) * dt;
         p.rot += p.spin * em.part_spin.at(t) * dt;
         true
     });

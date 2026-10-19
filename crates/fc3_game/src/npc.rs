@@ -2618,6 +2618,9 @@ const SPARE_RADIUS: f32 = 8.0;
 /// Bullets passing within this distance (m) of the listener whizz by.
 const PASS_BY_RANGE: f32 = 2.2;
 
+/// The flamers' weapon in the game's table.
+const FLAMER_WEAPON: &str = "LPO-50";
+
 fn shoot(
     npc: &mut Npc,
     me: Entity,
@@ -2711,6 +2714,8 @@ fn shoot(
     }
     npc.burst_left -= 1;
     npc.fire_cooldown = stats.interval;
+    // (A burst's opening shot: a flamer's nozzle flares up.)
+    let opening = npc.since_fired > stats.interval * 3.0;
     npc.since_fired = 0.0;
     npc.mag = npc.mag.saturating_sub(1);
     if npc.mag == 0 {
@@ -2771,14 +2776,19 @@ fn shoot(
             let Ok(d3) = Dir3::new(dir) else { return };
             let filter = SpatialQueryFilter::from_excluded_entities([me]);
             let hit = spatial.cast_ray(muzzle, d3, stats.reach, true, &filter);
-            crate::particles::fx::flame_stream(
-                &mut shot_fx.particles,
-                rng,
-                muzzle,
-                dir,
-                npc.velocity,
-                hit.map(|h| if h.entity == tgt.entity { (h.distance - 1.2).max(0.5) } else { h.distance }).unwrap_or(stats.reach),
-            );
+            let reach = hit.map(|h| if h.entity == tgt.entity { (h.distance - 1.2).max(0.5) } else { h.distance }).unwrap_or(stats.reach);
+            // The game's own flame from outside (the `LPO-50`'s): its nozzle
+            // flaring as a burst opens and dying down as it ends. Else ours.
+            let flame = crate::weapons::flame_of(FLAMER_WEAPON);
+            let theirs =
+                flame.as_ref().is_some_and(|f| crate::flamethrower::launch_3p(&mut shot_fx.commands, f, muzzle, dir, npc.velocity, reach, stats.interval));
+            if !theirs {
+                crate::particles::fx::flame_stream(&mut shot_fx.particles, rng, muzzle, dir, npc.velocity, reach);
+            }
+            let tip = flame.as_ref().and_then(|f| if npc.burst_left == 0 { f.stop_3p } else { f.shoot_3p.filter(|_| opening) });
+            if let Some(tip) = tip {
+                crate::authored_fx::play_muzzle_at(&mut shot_fx.commands, tip, muzzle, dir);
+            }
             if let Some(h) = hit {
                 if h.entity == tgt.entity {
                     damage.write(DamageEvent {

@@ -417,6 +417,25 @@ the wounded grunts. A death by fire falls with one of the three
 moves again. `FC3_BURN_TEST=<s>` sets everyone within 40 m alight that long
 after the start; `--npc-test guards` gives two who run, `idle` one who stays.
 
+Flamethrowers. A flamethrower's `FireStrategyProperties` name its nozzle's
+effects (`TipEffects`, by `selType`: 0 alight, 1 shooting, 4 stopping; first
+person and third). They also name those it sends down the stream: its
+`FlameMesh`'s and its `FireballEffects`, one every `fSpawnTime`, going at
+`fSpeed` for `fDistance`. A curve of how fast the aim turns scales the wait
+between them (`arkSpawnTimeAngularSpeedRatioCurve`, a `Curves:` prototype:
+2.5 times as long at rest, a tenth as long swung fast). The weapons' table
+keeps them (version 11) and the converter caches the effects, though
+`fireball1` isn't in the library. The LPO-50 in hand burns its pilot flame on
+the muzzle. Firing, it plays its shooting effect there and launches the
+stream effects along the aim. Each goes its distance, or stops where it
+strikes something, and what it emitted lives out. Letting go plays the
+stopping effect. The flamers launch the third-person ones with each pulse,
+their nozzle flaring as a burst opens and dying down as it ends. Where the
+stream strikes close, its fireballs (HDR 18) pile into a white-hot blaze.
+Not yet: the flame mesh (a textured tube along a spline) and the sticky
+stream where it lands. `FC3_TEST_MAG` keeps the magazines full, for a long
+burst under `--fire-test`.
+
 Grass fires. The fire manager's settings (`firesettings_default.obj`) name,
 for each kind of fire, the effects it plays and how many of each may play at
 once (`iPoolMaxSize`). The converter keeps them (`particles/fire-settings.txt`)
@@ -458,10 +477,15 @@ hang from their point by `PartSizeOffsetX` (across) and `PartSizeOffsetY`
 (along). One oriented in its effect's frame (`Flags` `Orientation`) that hardly
 moves (a flame, a standing wisp) stands along the frame's Z (Dunia's) instead.
 An emitter in its own space (`Flags` `LocalEmitterSpace`) keeps its particles in
-its effect's frame, following the effect while it lasts. `EmitterHDRMulKF` brightens what adds or takes
+its effect's frame, following the effect while it lasts. A particle takes on
+its effect's own motion by `InitExtSpdRatioKF` (its share over the emitter's
+time), and keeps it over its life by `PartExtSpdRatioKF`: a flamethrower's
+fireballs fly with the stream. `EmitterHDRMulKF` brightens what adds or takes
 brightness as coverage, compressed (1 + 1.5 log10 of it: our light isn't the
-engine's). `SHLighting` sheets darken
-with the daylight. The near and far fades apply. `LightActive` burns a point
+engine's). `SHLighting` sheets darken with the daylight. `NearClippingAlpha`
+fades a sprite out between `NearClippingEnd` and `NearClippingStart` from the
+camera (a flamethrower's fireballs, impacts' smoke); `FarClippingAlpha` or
+`FarClippingRate` fades it out far off. `LightActive` burns a point
 light with its colour, intensity and radius, flickering by
 `LightFlickeringFrequency` and `LightFlickeringAmplitude`. The world's placed
 effects burn none (`NoLights`), since the converter already puts their lights

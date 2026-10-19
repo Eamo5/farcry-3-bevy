@@ -114,6 +114,8 @@ pub struct WeaponDef {
     /// The game's effects at its muzzle when it fires, and the smoke after.
     pub muzzle: Option<&'static str>,
     pub barrel_smoke: Option<&'static str>,
+    /// A flamethrower's own flame (`flamethrower`).
+    pub flame: Option<crate::flamethrower::Flame>,
 }
 
 const MODEL_ROOT: &str = r"graphics\__fc3_graphics\_common\weapons\";
@@ -216,6 +218,7 @@ pub fn apply_stats(defs: &mut [WeaponDef], stats: &[fc3_formats::weapons::Weapon
         let effect = |n: &str| (!n.is_empty()).then(|| crate::authored_fx::intern(n));
         d.muzzle = effect(&s.muzzle);
         d.barrel_smoke = effect(&s.barrel_smoke);
+        d.flame = s.flame.as_ref().map(crate::flamethrower::Flame::from_stats);
     }
     n
 }
@@ -225,6 +228,13 @@ pub fn apply_stats(defs: &mut [WeaponDef], stats: &[fc3_formats::weapons::Weapon
 pub fn muzzle_3p(weapon: &str) -> Option<&'static str> {
     let s = WEAPON_STATS.get()?.iter().find(|s| s.name.eq_ignore_ascii_case(weapon))?;
     (!s.muzzle_3p.is_empty()).then(|| crate::authored_fx::intern(&s.muzzle_3p))
+}
+
+/// A flamethrower's own flame, by its name in the game's table (`LPO-50`):
+/// what the characters' flamers show.
+pub fn flame_of(weapon: &str) -> Option<crate::flamethrower::Flame> {
+    let s = WEAPON_STATS.get()?.iter().find(|s| s.name.eq_ignore_ascii_case(weapon))?;
+    s.flame.as_ref().map(crate::flamethrower::Flame::from_stats)
 }
 
 /// A shot's flash: the weapon's own muzzle effect on its muzzle, else ours
@@ -279,6 +289,7 @@ fn base_weapon_defs() -> Vec<WeaponDef> {
         noise: 1.0,
         muzzle: None,
         barrel_smoke: None,
+        flame: None,
     };
     // Hand positions by kind of weapon.
     let pistol = Vec3::new(0.16, -0.17, -0.42);
@@ -1377,10 +1388,15 @@ fn test_ammo(mut players: Query<&mut Inventory, With<Player>>, unlimited: Res<Un
     if std::env::var("FC3_TEST_AMMO").is_err() && !unlimited.0 {
         return;
     }
+    // `FC3_TEST_MAG`: the magazines kept full too (a long burst, no reloads).
+    let full = std::env::var_os("FC3_TEST_MAG").is_some();
     for slot in &mut inv.slots {
         let d = &inv.defs[slot.def];
         if d.class != WeaponClass::Melee {
             slot.reserve = slot.reserve.max(d.max_reserve.max(d.magazine * 3));
+            if full {
+                slot.mag = slot.mag.max(d.magazine);
+            }
         }
     }
 }
@@ -1811,7 +1827,11 @@ fn fire(
         // A stream of flame: burns what it reaches and lights the ground.
         let reach = spatial.cast_ray(muzzle_pos, Dir3::new(forward).unwrap_or(Dir3::NEG_Z), d.range, true, &filter);
         let end = muzzle_pos + forward * reach.map(|h| h.distance).unwrap_or(d.range);
-        fx::flame_stream(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, player.velocity, muzzle_pos.distance(end));
+        // (The game's own stream where it's cached: `flamethrower`.)
+        if !d.flame.as_ref().is_some_and(|f| f.streams(false)) {
+            fx::flame_stream(&mut shot_fx.particles, &mut rng, muzzle_pos, forward, player.velocity, muzzle_pos.distance(end));
+        }
+        inv.since_shot = 0.0;
         if let Some(h) = reach {
             if let Some(target) = damage_target(h.entity, &healths, &parents) {
                 damage.write(DamageEvent {
