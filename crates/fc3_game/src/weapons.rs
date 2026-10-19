@@ -1861,6 +1861,9 @@ fn fire(
             if rng.f32() < 0.2 {
                 shot_fx.ignite.write(crate::fire::Ignite { at: end, radius: 1.5, instigator: Some(player_e) });
             }
+            // (And it sticks, burning on where it lands.)
+            let profile = fc3_formats::fire_settings::FLAMETHROWER;
+            shot_fx.sticky.write(crate::sticky_fire::StickyFire { at: end, normal: h.normal, profile, instigator: Some(player_e) });
         }
         crate::npc::player_noise(&mut noise, origin, 40.0, crate::npc::NoiseKind::Threatening);
         return;
@@ -2223,7 +2226,7 @@ fn update_projectiles(
     mut commands: Commands,
     mut q: Query<(Entity, &mut Projectile, &mut Transform, Option<&ProjectileModel>, Option<&Children>)>,
     mut explosions: MessageWriter<Explosion>,
-    mut ignite: MessageWriter<crate::fire::Ignite>,
+    (mut ignite, mut sticky): (MessageWriter<crate::fire::Ignite>, MessageWriter<crate::sticky_fire::StickyFire>),
     mut particles: ResMut<crate::particles::Particles>,
     mut rng: ResMut<Rng>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
@@ -2306,6 +2309,9 @@ fn update_projectiles(
                 }
                 if p.incendiary {
                     ignite.write(crate::fire::Ignite { at: point, radius: p.radius, instigator: Some(p.owner) });
+                    // The fire it leaves burning where it broke.
+                    let profile = fc3_formats::fire_settings::MOLOTOV;
+                    sticky.write(crate::sticky_fire::StickyFire { at: point, normal: hit.normal, profile, instigator: Some(p.owner) });
                     // The bottle's own burst (else ours).
                     if !p.effect.is_some_and(|fx| crate::authored_fx::play(&mut commands, fx, point)) {
                         crate::particles::fx::fire_burst(&mut particles, &mut rng, point);

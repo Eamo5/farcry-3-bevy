@@ -2812,6 +2812,9 @@ fn shoot(
                 if rng.f32() < 0.12 {
                     shot_fx.ignite.write(crate::fire::Ignite { at: muzzle + dir * h.distance, radius: 1.5, instigator: Some(me) });
                 }
+                // (And it sticks, burning on where it lands.)
+                let profile = fc3_formats::fire_settings::FLAMETHROWER_NPC;
+                shot_fx.sticky.write(crate::sticky_fire::StickyFire { at: muzzle + dir * h.distance, normal: h.normal, profile, instigator: Some(me) });
             }
             noises.write(Noise { at: muzzle, radius: 40.0, kind: NoiseKind::Threatening, aside: !tgt.is_player });
             return;

@@ -9,7 +9,9 @@
 //! scares animals off, kept as [`FIRE_REGIONS_REL`]. And its object
 //! profiles (`fireobject.lib`), how a burnable object burns, with the models
 //! that burn as each (`burnablesettings_default.obj`), kept as
-//! [`FIRE_OBJECTS_REL`].
+//! [`FIRE_OBJECTS_REL`]. And its sticky streams (`firestickystream.lib`),
+//! the fire a flamethrower's stream or a molotov leaves where it lands,
+//! kept as [`FIRE_STICKY_REL`].
 
 use anyhow::{Context, Result};
 
@@ -242,6 +244,83 @@ pub fn objects_from_text(text: &str) -> (Vec<ObjectProfile>, Vec<Burnable>) {
     (profiles, burnables)
 }
 
+pub const FIRE_STICKY: &str = r"generated\databases\generic\firestickystream.lib";
+pub const FIRE_STICKY_REL: &str = "particles/fire-sticky.txt";
+/// The sticky fires' effects (a flamethrower's, then a molotov's: by their
+/// kind, `selTypeOfStickyFlames`).
+pub const STICKY: &str = "FireStickyStreamSettings";
+/// The player's flamethrower's, the flamers' and a molotov's sticky streams.
+pub const FLAMETHROWER: &str = "Weapon/Flamethrower";
+pub const FLAMETHROWER_NPC: &str = "Weapon/Flamethrower_NPC";
+pub const MOLOTOV: &str = "Weapon/Molotov";
+
+/// A sticky stream: the fire a weapon leaves where it lands.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct StickyProfile {
+    pub name: String,
+    /// Seconds its fire takes to grow, burns, takes to die down, then
+    /// smoulders.
+    pub starting: f32,
+    pub alive: f32,
+    pub extinction: f32,
+    pub dying: f32,
+    /// How near (m) it burns what's about it (`Fire_BurnStim`).
+    pub burn: f32,
+    /// Its flames' kind (`selTypeOfStickyFlames`: 0 a flamethrower's, 1 a
+    /// molotov's), and how far (m) apart they stand (`fResolution`).
+    pub kind: u32,
+    pub resolution: f32,
+}
+
+pub fn parse_sticky(lib: &[u8]) -> Result<Vec<StickyProfile>> {
+    let root = fcb_root(lib)?;
+    // (A zero is stored as a single byte.)
+    let f = |o: Option<&std::sync::Arc<crate::fcb::Object>>, n: &str| o.and_then(|o| o.f32(n)).unwrap_or(0.0);
+    Ok(root
+        .children
+        .iter()
+        .filter_map(|p| {
+            Some(StickyProfile {
+                name: p.str("hidName")?,
+                starting: f(Some(p), "fStartingTime"),
+                alive: f(Some(p), "fAliveTime"),
+                extinction: f(Some(p), "fExtinctionTime"),
+                dying: f(Some(p), "fDyingTime"),
+                burn: f(p.child("Fire_BurnStim"), "fRadius"),
+                kind: p.field("selTypeOfStickyFlames").and_then(|b| b.first()).copied().unwrap_or(0) as u32,
+                resolution: f(p.child("BurnParams"), "fResolution"),
+            })
+        })
+        .collect())
+}
+
+/// As cached ([`FIRE_STICKY_REL`]): name and numbers per line.
+pub fn sticky_to_text(profiles: &[StickyProfile]) -> String {
+    profiles
+        .iter()
+        .map(|p| format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", p.name, p.starting, p.alive, p.extinction, p.dying, p.burn, p.kind, p.resolution))
+        .collect()
+}
+
+pub fn sticky_from_text(text: &str) -> Vec<StickyProfile> {
+    text.lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            let n = |i: usize| f.get(i).and_then(|v| v.parse::<f32>().ok());
+            Some(StickyProfile {
+                name: f.first()?.to_string(),
+                starting: n(1)?,
+                alive: n(2)?,
+                extinction: n(3)?,
+                dying: n(4)?,
+                burn: n(5)?,
+                kind: f.get(6)?.parse().ok()?,
+                resolution: n(7)?,
+            })
+        })
+        .collect()
+}
+
 /// One of a kind of fire's effects, and how many of it may play at once.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FireEffect {
@@ -291,6 +370,13 @@ mod tests {
             FireEffect { kind: REGION_SMOKE.into(), effect: "a.b.smoke".into(), pool: 20 },
         ];
         assert_eq!(from_text(&to_text(&effects)), effects);
+    }
+
+    #[test]
+    fn sticky_profiles_read_back() {
+        let profiles =
+            vec![StickyProfile { name: MOLOTOV.into(), starting: 0.3, alive: 6.0, extinction: 0.0, dying: 1.0, burn: 2.0, kind: 1, resolution: 0.7 }];
+        assert_eq!(sticky_from_text(&sticky_to_text(&profiles)), profiles);
     }
 
     #[test]

@@ -96,6 +96,7 @@ mod sound;
 mod sound_source;
 mod splines;
 mod stealth;
+mod sticky_fire;
 mod story;
 mod story_actors;
 mod story_alarms;
@@ -504,6 +505,7 @@ fn main() {
         .add_plugins(authored_fx::AuthoredFxPlugin)
         .add_plugins(burning::BurningPlugin)
         .add_plugins(burnables::BurnablesPlugin)
+        .add_plugins(sticky_fire::StickyFirePlugin)
         .add_plugins(flamethrower::FlamethrowerPlugin)
         .add_plugins(OriginalUi)
         .insert_resource(original_shaders::OriginalShaders { enabled: args.original_shaders })

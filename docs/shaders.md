@@ -440,8 +440,8 @@ strikes something, and what it emitted lives out. Letting go plays the
 stopping effect. The flamers launch the third-person ones with each pulse,
 their nozzle flaring as a burst opens and dying down as it ends. Where the
 stream strikes close, its fireballs (HDR 18) pile into a white-hot blaze.
-Not yet: the flame mesh (a textured tube along a spline) and the sticky
-stream where it lands. `FC3_TEST_MAG` keeps the magazines full, for a long
+Where the stream lands it leaves sticky fire (below). Not yet: the flame mesh
+(a textured tube along a spline). `FC3_TEST_MAG` keeps the magazines full, for a long
 burst under `--fire-test`.
 
 Grass fires. The fire manager's settings (`firesettings_default.obj`) name,
@@ -474,7 +474,23 @@ bolts this way and that until it's out. Without the profiles, a patch burns
 when nothing is cached. Not yet: picking the profile by the zone painted on
 the ground (`zoneLogicZone` in `burnablesettings_default.obj`, Jungle
 against Savannah), the profiles' damage (`fFireDmg`, `fDmgBuffer`: their
-units are unknown), the flamethrower's sticky stream.
+units are unknown).
+
+Sticky fire (`sticky_fire`). The fire manager's sticky streams
+(`firestickystream.lib`, kept as `particles/fire-sticky.txt`) say what fire a
+weapon leaves where it lands: its times, how near it burns
+(`Fire_BurnStim`), its flames' kind (`selTypeOfStickyFlames`: a
+flamethrower's or a molotov's) and their spacing (`fResolution`). The
+player's flamethrower (`Weapon/Flamethrower`), the flamers'
+(`Weapon/Flamethrower_NPC`) and a molotov (`Weapon/Molotov`) lay one where
+they land, on any surface, turned to it. It plays the sticky stream effect
+for its kind (`FireStickyStreamSettings`: `fire_cyltree_a`, then
+`molotov_impact`) for its fire's growing, burning and dying-down time. While
+it burns it sets fire about it every half second as far as its burn reaches,
+lighting the grass and burning whoever stands in it. The stream landing again
+within its spacing keeps it burning instead of laying another. As many burn
+at once as the effect's pool allows, and the oldest gives way. A molotov now
+leaves fire burning some six seconds even on bare ground or rock.
 
 Burning objects (`burnables`). The fire manager's object profiles
 (`fireobject.lib`) say how a burnable object burns: its fire's times, its

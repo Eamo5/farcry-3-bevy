@@ -612,6 +612,8 @@ pub struct ShotFx<'w, 's> {
     pub particles: ResMut<'w, Particles>,
     pub decals: ResMut<'w, Decals>,
     pub ignite: MessageWriter<'w, crate::fire::Ignite>,
+    /// The fire a flamethrower's stream leaves where it lands.
+    pub sticky: MessageWriter<'w, crate::sticky_fire::StickyFire>,
     terrain: Query<'w, 's, (), With<crate::physics::TerrainCollider>>,
     vehicles: Query<'w, 's, (), With<crate::vehicles::Vehicle>>,
     parents: Query<'w, 's, &'static ChildOf>,

@@ -2018,6 +2018,13 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
             }
             Err(e) => job.error(format!("fire settings: {e:#}")),
         }
+        // (And the fire weapons leave where they land.)
+        if job.should_write(fs::FIRE_STICKY_REL) {
+            match job.vfs.read(fs::FIRE_STICKY).map_err(anyhow::Error::from).and_then(|lib| fs::parse_sticky(&lib)) {
+                Ok(profiles) => write_atomic(job.root(), fs::FIRE_STICKY_REL, fs::sticky_to_text(&profiles).as_bytes(), job.ctx)?,
+                Err(e) => job.error(format!("fire sticky streams: {e:#}")),
+            }
+        }
         // (And how burnable objects burn, and which.)
         if job.should_write(fs::FIRE_OBJECTS_REL) {
             let read = |path: &str| job.vfs.read(path).map_err(anyhow::Error::from);

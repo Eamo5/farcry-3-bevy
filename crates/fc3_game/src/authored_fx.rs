@@ -130,9 +130,18 @@ pub fn play_along(commands: &mut Commands, name: &'static str, at: Vec3, normal:
     if !available(name) {
         return false;
     }
-    let turn = if normal.y > 0.999 { IMPACT_FRAME } else { Quat::from_rotation_arc(Vec3::NEG_Z, normal.normalize_or(Vec3::Y)) };
-    commands.spawn((Transform::from_translation(at).with_rotation(turn), AuthoredFx(name), Once));
+    commands.spawn((Transform::from_translation(at).with_rotation(surface_turn(normal)), AuthoredFx(name), Once));
     true
+}
+
+/// An effect's turn on a surface with normal `normal`, as an impact's: its
+/// +Y (Dunia's) along the normal.
+pub fn surface_turn(normal: Vec3) -> Quat {
+    if normal.y > 0.999 {
+        IMPACT_FRAME
+    } else {
+        Quat::from_rotation_arc(Vec3::NEG_Z, normal.normalize_or(Vec3::Y))
+    }
 }
 
 /// Plays a weapon's muzzle effect once on its muzzle (`muzzle`, the gun's
