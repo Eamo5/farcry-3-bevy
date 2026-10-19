@@ -52,7 +52,7 @@ pub struct HudParams(pub fc3_formats::body::Hud);
 
 impl Default for HudParams {
     fn default() -> Self {
-        HudParams(fc3_formats::body::Hud { tag_range: 180.0, collectibles: 0.0, skill_reminder: 0.0 })
+        HudParams(fc3_formats::body::Hud { tag_range: 180.0, collectibles: 0.0, skill_reminder: 0.0, encounters: 0.0 })
     }
 }
 

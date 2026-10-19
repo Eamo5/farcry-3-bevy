@@ -4175,6 +4175,7 @@ fn drive_radar(
     mut last: Local<Option<Radar>>,
     (story, time, mut standing): (Option<NonSend<crate::story::StoryHost>>, Res<Time<Real>>, Local<(f32, Vec<(f64, Vec3)>)>),
     mut plants: Local<Option<std::collections::HashMap<crate::syringes::Plant, &'static str>>>,
+    mut sites: ResMut<crate::npc::EncounterSites>,
 ) {
     let Interface::Running(host) = &*state else { return };
     let Ok((at, player)) = players.single() else { return };
@@ -4291,6 +4292,18 @@ fn drive_radar(
             if Vec2::new(d.x, d.z).length() <= hud.0.collectibles && on_disc(l) && !twin {
                 shown.push((t.translation(), label));
                 places.push((l.length(), marker(l, label)));
+            }
+        }
+    }
+    // Encounters near enough (the game's radius) while their people live.
+    let living: std::collections::HashSet<u64> = npcs.iter().filter(|(_, _, h, _)| !h.dead).map(|(_, n, _, _)| n.marker_id).collect();
+    sites.0.retain(|(id, _)| living.contains(id));
+    if hud.0.encounters > 0.0 {
+        for (_, site) in &sites.0 {
+            let d = *site - at.translation;
+            let l = local(*site);
+            if Vec2::new(d.x, d.z).length() <= hud.0.encounters && on_disc(l) {
+                places.push((l.length(), marker(l, "Encounters")));
             }
         }
     }

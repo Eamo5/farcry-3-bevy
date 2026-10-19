@@ -407,6 +407,9 @@ pub struct Hud {
     pub tag_range: f32,
     pub collectibles: f32,
     pub skill_reminder: f32,
+    /// How near (m) an encounter shows on the radar (`fEncounterDisplayRadius`;
+    /// 0 in an older cache).
+    pub encounters: f32,
 }
 
 pub const HUD_REL: &str = "characters/hud.txt";
@@ -414,7 +417,10 @@ const HUD_MAGIC: &str = "fc3-hud 1";
 
 impl Hud {
     pub fn to_text(&self) -> String {
-        format!("{HUD_MAGIC}\ntag_range {}\ncollectibles {}\nskill_reminder {}\n", self.tag_range, self.collectibles, self.skill_reminder)
+        format!(
+            "{HUD_MAGIC}\ntag_range {}\ncollectibles {}\nskill_reminder {}\nencounters {}\n",
+            self.tag_range, self.collectibles, self.skill_reminder, self.encounters
+        )
     }
 
     pub fn from_text(text: &str) -> Result<Hud> {
@@ -430,6 +436,7 @@ impl Hud {
                 "tag_range" => h.tag_range = v,
                 "collectibles" => h.collectibles = v,
                 "skill_reminder" => h.skill_reminder = v,
+                "encounters" => h.encounters = v,
                 _ => {}
             }
         }
@@ -447,11 +454,12 @@ pub fn hud(library: &Object) -> Option<Hud> {
         let Some(c) = o.child("Entity").filter(|e| e.str("hidName").as_deref() == Some(PLAYER)).and_then(|e| e.child("Components")) else { return };
         let hud = c.child("CFCXPawnHudComponent");
         let f = |o: Option<&std::sync::Arc<Object>>, n: &str| o.and_then(|o| float(o, n)).unwrap_or(0.0);
-        let pickable = hud.and_then(|h| h.child("MiniMap")).and_then(|m| m.child("SinglePlayer")).and_then(|s| s.child("Pickable"));
+        let minimap = hud.and_then(|h| h.child("MiniMap")).and_then(|m| m.child("SinglePlayer"));
         out = Some(Hud {
             tag_range: f(c.child("CFCXTaggingComponentPawn"), "fTaggingRange"),
-            collectibles: f(pickable, "fCollectibleDisplayRadius"),
+            collectibles: f(minimap.and_then(|s| s.child("Pickable")), "fCollectibleDisplayRadius"),
             skill_reminder: f(hud.and_then(|h| h.child("PopupReminder")), "fSkillPointReminderTimer"),
+            encounters: f(minimap.and_then(|s| s.child("Encounter")), "fEncounterDisplayRadius"),
         });
     });
     out
@@ -488,7 +496,7 @@ mod tests {
         assert_eq!((fall.share(2.0), fall.share(4.0), fall.share(5.0), fall.share(9.0), fall.share(12.0)), (0.0, 0.0, 0.3, 0.6, 1.0));
         let m = Minimap { radius: 40.0, vehicle_radius: 100.0, vehicle_from: 10.0, vehicle_to: 15.0, glider_radius: 100.0 };
         assert_eq!(Minimap::from_text(&m.to_text()).unwrap(), m);
-        let h = Hud { tag_range: 300.0, collectibles: 30.0, skill_reminder: 600.0 };
+        let h = Hud { tag_range: 300.0, collectibles: 30.0, skill_reminder: 600.0, encounters: 40.0 };
         assert_eq!(Hud::from_text(&h.to_text()).unwrap(), h);
         assert_eq!(m.radius_at(true, false, 12.5), 70.0);
         assert_eq!(m.radius_at(false, false, 50.0), 40.0);

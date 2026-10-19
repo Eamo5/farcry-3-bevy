@@ -30,6 +30,7 @@ impl Plugin for NpcPlugin {
             .init_resource::<AimTable>()
             .add_systems(Startup, (setup_npc_assets, load_melee_clips))
             .init_resource::<EncounterMarkers>()
+            .init_resource::<EncounterSites>()
             .add_systems(OnExit(crate::menu::GameState::Loading), (load_injury_clips, load_senses, load_aim, load_encounter_markers))
             .add_systems(
                 Update,
@@ -341,6 +342,11 @@ impl Role {
 /// (`fc3_formats::encounters::Markers`), once read from the cache.
 #[derive(Resource, Default)]
 pub struct EncounterMarkers(Option<fc3_formats::encounters::Markers>);
+
+/// The encounters placed in the world: each site's id (what its people's
+/// `marker_id` is) and where it is (the radar shows it while they live).
+#[derive(Resource, Default)]
+pub struct EncounterSites(pub Vec<(u64, Vec3)>);
 
 fn load_encounter_markers(info: Option<Res<crate::data::CacheInfo>>, mut table: ResMut<EncounterMarkers>) {
     let Some(info) = info else { return };
@@ -966,9 +972,9 @@ fn spawn_from_sectors(
     server: Res<AssetServer>,
     mut outposts: ResMut<crate::outposts::Outposts>,
     roads: Option<Res<crate::splines::RoadGraph>>,
-    (area, encounters, mut park, mut set_out, mut props, mut beasts, mut civilians, mut circling, mut fires, mut talks): (
+    (area, (encounters, mut sites), mut park, mut set_out, mut props, mut beasts, mut civilians, mut circling, mut fires, mut talks): (
         Res<crate::story::MissionArea>,
-        Res<EncounterMarkers>,
+        (Res<EncounterMarkers>, ResMut<EncounterSites>),
         MessageWriter<crate::vehicles::PlaceVehicle>,
         MessageWriter<crate::guard_spots::AddGuardSpot>,
         MessageWriter<crate::objects::PlaceProp>,
@@ -1055,6 +1061,8 @@ fn spawn_from_sectors(
             // FC3_ENCOUNTER_PREFAB=<id> (tests): every marker spawns that prefab.
             let pick = std::env::var("FC3_ENCOUNTER_PREFAB").ok().and_then(|p| p.parse().ok()).unwrap_or(pick);
             let Some(pawns) = table.prefabs.get(&pick) else { continue };
+            sites.0.retain(|(s, _)| *s != id);
+            sites.0.push((id, pos));
             let (yaw0, _, _) = rot.to_euler(EulerRot::YXZ);
             if std::env::var_os("FC3_ENCOUNTER_DEBUG").is_some() {
                 let who: Vec<String> = pawns.iter().filter_map(|p| pawn_identity(&p.archetype)).map(|(f, r)| format!("{f:?} {r:?}")).collect();

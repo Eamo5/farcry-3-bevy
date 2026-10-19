@@ -344,11 +344,13 @@ only what changed (and everything again until the movies have loaded):
   `Shop`, `Poker`, `KnifeThrowing`, `ShootingChallenge`,
   `RacingChallenge`, `ChallengeBoard`, `MissionGiver`, `Quest`,
   `SideQuest`, `HuntingQuest`, `SpeedQuest`, `WantedQuest`,
-  `ULCLostExpeditions`); `ObjMarker_<n>` (11) the objectives (`Inside` the
+  `ULCLostExpeditions`), and the encounters placed about the world while
+  their people live, within the game's radius (`Encounters`; the player's
+  `MiniMap` `Encounter` `fEncounterDisplayRadius`, 40 m); `ObjMarker_<n>` (11) the objectives (`Inside` the
   disc, `Outside` held on its rim, `Up` or `Down` when well above or
   below). `NorthMarkerMC` turns about the centre to the north
   (`_rotation`). The labels the movie has and the game doesn't use yet:
-  `companion`, `BeerPong`, photo spots, ammo, encounters. `fc3tool swf-script <movie> labels [text]`
+  `companion`, `BeerPong`, photo spots (`PhotoOps`), ammo. `fc3tool swf-script <movie> labels [text]`
   lists a movie's sprites' frame labels.
   The game's own minimap icons stand down meanwhile.
 

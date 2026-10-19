@@ -1254,7 +1254,9 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     }
 
     // ---- the player's HUD: tagging, collectibles on the minimap, reminders
-    if opts.only_sectors.is_none() && job.should_write(fc3_formats::body::HUD_REL) {
+    // (Again where an older cache lacks the encounters' radius.)
+    let hud_old = std::fs::read_to_string(job.root().join(fc3_formats::body::HUD_REL)).map_or(true, |t| !t.contains("\nencounters "));
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::body::HUD_REL) || hud_old) {
         let result = (|| -> Result<()> {
             let bytes = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
             let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
