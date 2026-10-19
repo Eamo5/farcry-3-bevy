@@ -35,6 +35,7 @@ mod menu;
 mod mesh_slabs;
 mod metal;
 mod mission_layers;
+mod mixer;
 mod music;
 mod nav;
 mod npc;

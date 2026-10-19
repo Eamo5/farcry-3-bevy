@@ -330,9 +330,55 @@ Each audio header also sends to a mixer bus (`+0x8C`; a layered header's at
 then a level (dB) at +0 or at +8 (never both). The levels add up from a bus to
 its parents (for example rifle fire's: -9 dB, dialogue's: -2.6). One bus is
 muted outright (-96 dB at +0), and a mixer state (class 10) raises it, so
-it counts as 0. The project's other tables (mixer states, the roots' own
-levels) aren't read. The manifest ends each `sound` line with its buses'
-level.
+it counts as 0. The project's other tables (the roots' own levels) aren't
+read. The manifest ends each `sound` line with its buses' level and its bus
+(`-` for none), and writes each bus as `bus <id> <parent> <level at +0>
+<level at +8>`.
+
+## Mixings
+
+The game and its scripts change the mix by name:
+`generated\databases\generic\soundmixing.lib` (FCB) holds 96 mixings.
+Each has an `hidName` (`Exclusive/Pause`, `Exclusive/Underwater`,
+`Compatible/Health_Low`, a mission's moment...), a `uiPriority`, whether it
+stacks with itself and with others, and the two events that set and remove
+it (`sndPresetEventSet`, `sndPresetEventRemove`, hex strings;
+`0xFFFFFFFF` none). The scripts' `Domino/System/SoundMixing.lua` box calls
+`StartSoundMixingFromLua(name)` and `StopSoundMixingFromLua(name)`.
+
+Those events push (kind 6) or pop (kind 10) a mixer state (class 10,
+206 in `2fffffff.spk`), directly or through a group (kind 9). A state's
+payload, from +0x20, is two lists: effect units, then buses. Each list is a
+`u32` count, and per target a `u32 id, u32 count`, then that many 0x28-byte
+changes: `u32, f32 fade in, f32 hold, u32 curve, f32 fade out, u32, u32,
+u32 parameter, u32 -1, value`. On a bus:
+
+* parameters 0 and 2 are the two levels (dB), set outright (the default-muted
+  bus is raised this way);
+* 13, 14 and 15 are commands, with an integer value (1): pause the bus's
+  sounds, resume them, stop them. The pause pushes one state that pauses
+  every gameplay bus, and its removal pushes another that resumes them.
+  Music and the interface go on.
+* parameter 4 also takes levels (-96 when muting); what it is isn't known.
+
+The effect units take parameters 0 (on), 1 (a cutoff: 300-6000 Hz, 800 under
+water) and others: the filters.
+
+The manifest writes the states' bus changes (`mixstate <id>
+<bus>:<parameter>:<value>:<fade in>:<fade out>...`), what each event pushes
+and pops (`mixevent <event> +<state> -<state>...`), and the mixings
+(`mixing <priority> <with itself> <with others> <set> <remove> <name>`).
+The game (`mixer`) keeps the pushed states in order, the latest winning a
+parameter. Each bus level fades to what they set (real time, so the pause's
+own fades run) and back over the state's fade out. Every playing sound
+follows its bus and the buses above it: the levels' change on top of its
+gain, paused, or stopped. Any event played that pushes or pops a state does
+so (cinema clips, groups). The game starts `Exclusive/Pause` over the pause
+menu, the map, the handbook and the shop. It starts `Exclusive/Underwater`
+while the player's head is under water (it mutes the above-water beds). The
+scripts' mixings go by name. `FC3_MIXING_TEST=<name>[,<s>]` starts one into
+play, and `RUST_LOG=farcry3::sound=debug` tallies the sounds the mixer
+pauses and lowers.
 
 The authored mix sits low: dialogue near -7 dB, the player's gun -12,
 music -12, other people's gunfire -14 to -17, ambience -14 to -20 and
@@ -689,9 +735,12 @@ are 32 kHz stereo Ogg, mostly streamed. List them with
 * Blend (type 7) volume and pitch curves are applied to loops through `LoopSfx`
   parameters, and to one-shots for distance only. Curve kinds other than volume and pitch
   aren't applied.
-* Mixer states (class 10, pushed and popped by events of kind 6 and 10: ducking,
-  muting) and the positioning's other entries (perhaps filtering by distance)
-  aren't applied.
+* The mixer states' effect units (filters: under water, combat, the ringing
+  after a blast) and their bus parameter 4 aren't applied. Neither is
+  `Exclusive`/`Compatible` stacking (the latest state wins each parameter).
+  The mixings the engine starts itself aren't known, except the pause and
+  under water. Music plays outside the mixer. The positioning's other
+  entries (perhaps filtering by distance) aren't applied.
 * Event kind 4 is treated as "play both targets" (the second is often a delay
   or silence).
 * Loop points: type-1 loop start and length are exposed. Layered loops loop

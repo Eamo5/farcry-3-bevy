@@ -1266,11 +1266,12 @@ fn run_story(
         Res<crate::progression::ShopCatalog>, ResMut<crate::progression::ShopOverride>,
         ResMut<crate::progression::PauseMenu>, ResMut<NextState<GameState>>, ResMut<StoryMenuEvents>,
     ),
-    (mut area, mut cinema, mut placements, original_hud): (
+    (mut area, mut cinema, mut placements, original_hud, mut mixings): (
         ResMut<MissionArea>,
         ResMut<crate::cinema::Cinema>,
         ResMut<EntityPlacements>,
         Res<crate::hud::OriginalHud>,
+        ResMut<crate::mixer::Mixings>,
     ),
     (actions, mut markers, heights, mut voices, driving, vehicle_views, mut seat_requests, mut vehicle_paths, mut drive, guns, helis): (
         Res<crate::controls::ActionState>,
@@ -2442,6 +2443,9 @@ fn run_story(
                         gallery.cancelled.push(id);
                         races.cancelled.push(id);
                     }
+                    // The scripts' sound mixings, by name.
+                    "StartSoundMixingFromLua" => mixings.start(&a(0)),
+                    "StopSoundMixingFromLua" => mixings.stop(&a(0)),
                     "StopBinkVideo" => videos.stops.push(false),
                     "StopFullscreenVideo" => videos.stops.push(true),
                     "PlaySound" => {

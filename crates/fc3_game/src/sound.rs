@@ -21,6 +21,7 @@ use fc3_formats::audio::Curve;
 
 use crate::cache_assets::cache_path;
 use crate::data::CacheInfo;
+use crate::mixer::{Mixer, Mixings};
 use crate::sound_source::{Sfx, SoundSourcePlugin};
 use crate::weapons::Rng;
 
@@ -31,9 +32,11 @@ impl Plugin for SoundPlugin {
         app.add_plugins(SoundSourcePlugin)
             .add_message::<PlaySfx>()
             .add_message::<LoopSfx>()
+            .init_resource::<Mixer>()
+            .init_resource::<Mixings>()
             .add_systems(OnExit(crate::menu::GameState::Loading), (load_bank, load_sound_points))
             .add_systems(PostStartup, attach_listener)
-            .add_systems(Update, (sound_points, play_one_shots, update_loops, ambience, hear).chain());
+            .add_systems(Update, (crate::mixer::game_mixings, mix, sound_points, play_one_shots, update_loops, ambience, hear).chain());
     }
 }
 
@@ -144,6 +147,8 @@ struct SoundFile {
     falloff: Falloff,
     /// Its mixer buses' level (linear).
     bus: f32,
+    /// Its mixer bus (for the mixings).
+    bus_id: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -186,6 +191,8 @@ impl VoiceMod {
 
 #[derive(Resource, Default)]
 pub struct SoundBank {
+    /// The mixer's buses, states and mixings (see `mixer`).
+    mix: crate::mixer::MixData,
     files: HashMap<String, SoundFile>,
     events: HashMap<u32, EventDef>,
     /// Blended events under a switch state, by `id@group=value,...` token.
@@ -225,8 +232,10 @@ impl SoundBank {
                         _ => Falloff::Unknown,
                     };
                     let bus = gain_of(number(7));
-                    bank.files.insert(stem.to_string(), SoundFile { path: format!("audio/{stem}.{ext}"), looping, seconds, falloff, bus });
+                    let bus_id = rest.get(8).and_then(|b| u32::from_str_radix(b, 16).ok());
+                    bank.files.insert(stem.to_string(), SoundFile { path: format!("audio/{stem}.{ext}"), looping, seconds, falloff, bus, bus_id });
                 }
+                Some(kind @ ("bus" | "mixstate" | "mixevent" | "mixing")) => bank.mix.read(kind, line.split_once(' ').map_or("", |x| x.1)),
                 Some("falloff") => {
                     let (Some(id), Some(points)) = (it.next(), it.next()) else { continue };
                     if let Some(c) = Curve::from_token(&format!("0:{DISTANCE:08x}:{points}")) {
@@ -354,7 +363,7 @@ impl SoundBank {
     /// for blended events, whether it loops, how it fades with distance and
     /// its gain (the authored gains on the way to it and its buses').
     #[allow(clippy::type_complexity)]
-    fn resolve_case(&self, token: &str, event: u32, rng: &mut Rng) -> (Vec<(String, Option<Arc<VoiceMod>>, bool, Falloff, f32)>, f32) {
+    fn resolve_case(&self, token: &str, event: u32, rng: &mut Rng) -> (Vec<(String, Option<Arc<VoiceMod>>, bool, Falloff, f32, Option<u32>)>, f32) {
         let (e, mods) = match self.cases.get(token) {
             Some(e) => (e, self.mods.get(token)),
             None => match self.event(event) {
@@ -367,10 +376,10 @@ impl SoundBank {
             .map(|(path, h, gain)| {
                 let stem = format!("{h:08x}");
                 let file = self.files.get(&stem).or_else(|| self.files.get(&format!("{stem}_l0")));
-                let (looping, falloff) = file.map_or((false, Falloff::Unknown), |f| (f.looping, f.falloff.clone()));
+                let (looping, falloff, bus) = file.map_or((false, Falloff::Unknown, None), |f| (f.looping, f.falloff.clone(), f.bus_id));
                 let blend = mods.and_then(|m| m.get(&h)).cloned();
                 let gain = self.file_gain(&path, gain, blend.is_some());
-                (path, blend, looping, falloff, gain)
+                (path, blend, looping, falloff, gain, bus)
             })
             .collect();
         (files, e.volume)
@@ -476,6 +485,8 @@ struct Heard {
     looping: bool,
     /// Placed in the world (else heard where the listener is).
     placed: bool,
+    /// Its mixer bus, which the mixings change.
+    bus: Option<u32>,
 }
 
 impl Heard {
@@ -488,26 +499,85 @@ impl Heard {
 }
 
 /// Every playing sound's volume (and blends' pitch) at its distance from
-/// the listener, under the master volume.
+/// the listener, under the master volume and the mixer (its bus's level
+/// now, paused, stopped).
+#[allow(clippy::type_complexity)]
 fn hear(
     listener: Query<&GlobalTransform, With<SpatialListener>>,
     master: Res<GlobalVolume>,
-    mut voices: Query<(&Heard, &GlobalTransform, Option<&mut AudioSink>, Option<&mut SpatialAudioSink>)>,
+    (bank, mut mixer): (Option<Res<SoundBank>>, ResMut<Mixer>),
+    mut commands: Commands,
+    mut voices: Query<(Entity, &Heard, &GlobalTransform, Option<&mut AudioSink>, Option<&mut SpatialAudioSink>)>,
+    (time, mut shown): (Res<Time<Real>>, Local<f32>),
 ) {
     let ear = listener.single().ok().map(|t| t.translation());
     let master = master.volume.to_linear();
-    for (heard, t, sink, spatial) in &mut voices {
+    // (RUST_LOG=farcry3::sound=debug: what the mixer does to the playing
+    // sounds, every few seconds.)
+    *shown += time.delta_secs();
+    let tally = *shown > 3.0;
+    let (mut held, mut lowered, mut all) = (0, 0, 0);
+    for (e, heard, t, sink, spatial) in &mut voices {
+        let (db, paused, stopped) = match (heard.bus, bank.as_deref()) {
+            (Some(bus), Some(bank)) => mixer.on_bus(&bank.mix, bus),
+            _ => (0.0, false, false),
+        };
+        all += 1;
+        held += paused as u32;
+        lowered += (db < -0.5) as u32;
+        if stopped {
+            commands.entity(e).despawn();
+            continue;
+        }
         let (v, speed) = heard.at(ear.map_or(0.0, |e| e.distance(t.translation())));
-        let v = Volume::Linear(v * master);
+        let v = Volume::Linear(v * master * gain_of(db));
         if let Some(mut s) = sink {
             s.set_volume(v);
             s.set_speed(speed);
+            if paused != s.is_paused() {
+                if paused {
+                    s.pause()
+                } else {
+                    s.play()
+                }
+            }
         }
         if let Some(mut s) = spatial {
             s.set_volume(v);
             s.set_speed(speed);
+            if paused != s.is_paused() {
+                if paused {
+                    s.pause()
+                } else {
+                    s.play()
+                }
+            }
         }
     }
+    mixer.clear_stops();
+    if tally {
+        *shown = 0.0;
+        debug!("mixer: {all} sounds, {held} paused, {lowered} lowered");
+    }
+}
+
+/// Plays the events of the mixings asked for, and moves the mixer's levels.
+fn mix(time: Res<Time<Real>>, bank: Option<Res<SoundBank>>, mut asked: ResMut<Mixings>, mut mixer: ResMut<Mixer>, mut sfx: MessageWriter<PlaySfx>) {
+    let asked = asked.take();
+    let Some(bank) = bank else { return };
+    for (name, on) in asked {
+        match bank.mix.mixing(&name) {
+            Some((set, remove)) => {
+                let event = if on { set } else { remove };
+                debug!("mixing {name}: {} ({event:08x})", if on { "start" } else { "stop" });
+                if event != 0 {
+                    sfx.write(PlaySfx { event, at: None, volume: 1.0 });
+                }
+            }
+            None => debug!("mixing {name}: not in the manifest"),
+        }
+    }
+    mixer.advance(&bank.mix, time.delta_secs());
 }
 
 fn load_bank(mut commands: Commands, info: Res<CacheInfo>) {
@@ -601,7 +671,7 @@ fn settings(mode: PlaybackMode, volume: f32, spatial: bool) -> PlaybackSettings 
 
 fn play_one_shots(
     mut events: MessageReader<PlaySfx>,
-    bank: Option<Res<SoundBank>>,
+    (bank, mut mixer): (Option<Res<SoundBank>>, ResMut<Mixer>),
     server: Res<AssetServer>,
     mut rng: ResMut<Rng>,
     mut commands: Commands,
@@ -610,6 +680,8 @@ fn play_one_shots(
     let Some(bank) = bank else { return };
     let ear = listener.single().ok().map(|t| t.translation());
     for ev in events.read() {
+        // (Its pushes and pops of mixer states.)
+        mixer.apply(&bank.mix, ev.event);
         let (files, vol) = bank.resolve_case(&loop_token(ev.event, &[]), ev.event, &mut rng);
         let d = match (ev.at, ear) {
             (Some(at), Some(ear)) => at.distance(ear),
@@ -619,8 +691,8 @@ fn play_one_shots(
         if std::env::var("FC3_SFX_DEBUG").is_ok() {
             info!("sfx {:08x}: {} file(s) at {:?}, {d:.0} m", ev.event, files.len(), ev.at.map(|a| a.round()));
         }
-        for (f, blend, _, falloff, gain) in files {
-            let heard = Heard { gain: vol * gain, volume: ev.volume, falloff, blend, params: [(0, 0.0); 4], looping: false, placed: ev.at.is_some() };
+        for (f, blend, _, falloff, gain, bus) in files {
+            let heard = Heard { gain: vol * gain, volume: ev.volume, falloff, blend, params: [(0, 0.0); 4], looping: false, placed: ev.at.is_some(), bus };
             let (v, speed) = heard.at(d);
             if std::env::var("FC3_SFX_DEBUG").is_ok() {
                 info!("  {f} at {v:.3}");
@@ -646,6 +718,7 @@ fn update_loops(
     mut emitters: Query<(Entity, &mut LoopEmitter, &mut Transform, Option<&Children>)>,
     mut voices: Query<&mut Heard>,
     listener: Query<&GlobalTransform, With<SpatialListener>>,
+    mut mixer: ResMut<Mixer>,
 ) {
     let Some(bank) = bank else { return };
     let ear = listener.single().ok().map(|t| t.translation());
@@ -674,6 +747,7 @@ fn update_loops(
             em.key = u64::MAX;
             commands.entity(e).despawn();
         }
+        mixer.apply(&bank.mix, ev.event);
         let (files, vol) = bank.resolve_case(&token, ev.event, &mut rng);
         if std::env::var("FC3_SFX_DEBUG").is_ok() {
             info!("loop {token}: {} file(s) at {:?}", files.len(), ev.at.map(|a| a.round()));
@@ -694,8 +768,8 @@ fn update_loops(
             (Some(at), Some(ear)) => at.distance(ear),
             _ => 0.0,
         };
-        for (f, blend, looping, falloff, gain) in files {
-            let heard = Heard { gain: vol * gain, volume: ev.volume, falloff, blend, params: ev.params, looping: true, placed: ev.at.is_some() };
+        for (f, blend, looping, falloff, gain, bus) in files {
+            let heard = Heard { gain: vol * gain, volume: ev.volume, falloff, blend, params: ev.params, looping: true, placed: ev.at.is_some(), bus };
             let (v, speed) = heard.at(d);
             if std::env::var("FC3_SFX_DEBUG").is_ok() {
                 info!("  {f} at {v:.3}, {d:.0} m");

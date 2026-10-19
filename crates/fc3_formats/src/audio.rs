@@ -50,6 +50,11 @@ pub const PROJECT_PATH: &str = r"soundbinary\7fffffff.bao";
 
 pub const CLASS_FALLOFF: u8 = 0x7;
 pub const CLASS_POSITIONING: u8 = 0x9;
+/// Mixer states (`2fffffff.spk`), pushed and popped by events of kind 6
+/// and 10.
+pub const CLASS_MIXER: u8 = 0xA;
+/// The named sound mixings the game and its scripts start and stop.
+pub const MIXINGS_PATH: &str = r"generated\databases\generic\soundmixing.lib";
 
 // ---------------------------------------------------------------------------
 // little helpers
@@ -1321,6 +1326,108 @@ pub fn parse_buses(project: &[u8]) -> HashMap<u32, (u32, f32)> {
     out
 }
 
+/// Each bus's parent and its two levels (dB, the parameters a mixer state
+/// calls 0 and 2; see [`parse_buses`]).
+pub fn parse_bus_params(project: &[u8]) -> HashMap<u32, (u32, f32, f32)> {
+    let mut out = HashMap::new();
+    let word = |o: usize| project.get(o..o + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+    let float = |o: usize| word(o).map(f32::from_bits);
+    let is_id = |v: u32| (0x1000..0x0100_0000).contains(&v);
+    let mut o = BAO_HEADER_SIZE;
+    while o + 0x30 <= project.len() {
+        let (Some(id), Some(kind), Some(parent), Some(n)) = (word(o), word(o + 4), word(o + 8), word(o + 12)) else { break };
+        if (kind == 3 || kind == 5) && is_id(id) && is_id(parent) && n < 40 {
+            let base = o + 0x10 + 4 * n as usize;
+            if let (Some(a), Some(b)) = (float(base), float(base + 8)) {
+                if a.is_finite() && b.is_finite() && a.abs() < 100.0 && b.abs() < 100.0 {
+                    out.entry(id).or_insert((parent, a, b));
+                }
+            }
+        }
+        o += 4;
+    }
+    out
+}
+
+/// One parameter a mixer state sets on a bus or an effect unit: `value`
+/// over `fade_in` s, and back over `fade_out` s once the state goes. On a
+/// bus, parameters 0 and 2 are its levels (dB); 13, 14 and 15 are commands
+/// (an integer, 1): pause its sounds, resume them, stop them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MixSet {
+    pub target: u32,
+    pub param: u32,
+    pub value: f32,
+    pub fade_in: f32,
+    pub fade_out: f32,
+}
+
+/// A mixer state (class 10): what it sets on effect units (filters) and on
+/// buses.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MixState {
+    pub effects: Vec<MixSet>,
+    pub buses: Vec<MixSet>,
+}
+
+/// From payload +0x20, two lists (effect units, then buses), each a `u32`
+/// count and per target `u32 id, u32 count` then that many 0x28-byte
+/// changes: `u32, f32 fade in, f32 hold, u32 curve, f32 fade out, u32, u32,
+/// u32 parameter, u32 -1, f32 value`.
+pub fn parse_mix_state(bao: &Bao) -> Result<MixState> {
+    let p = bao.payload();
+    let mut o = 0x20;
+    let mut lists = [Vec::new(), Vec::new()];
+    for list in &mut lists {
+        let n = u32_at(p, o)?.min(256);
+        o += 4;
+        for _ in 0..n {
+            let (target, m) = (u32_at(p, o)?, u32_at(p, o + 4)?.min(64));
+            o += 8;
+            for _ in 0..m {
+                let param = u32_at(p, o + 0x1C)?;
+                // (The commands' values are integers.)
+                let value = if (13..=15).contains(&param) { u32_at(p, o + 0x24)? as f32 } else { f32_at(p, o + 0x24)? };
+                list.push(MixSet { target, param, value, fade_in: f32_at(p, o + 4)?, fade_out: f32_at(p, o + 0x10)? });
+                o += 0x28;
+            }
+        }
+    }
+    let [effects, buses] = lists;
+    Ok(MixState { effects, buses })
+}
+
+/// A named sound mixing (`soundmixing.lib`): the events that set and remove
+/// it (0: none), its priority and whether it stacks.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mixing {
+    pub name: String,
+    pub priority: u32,
+    pub stacks_with_self: bool,
+    pub stacks_with_others: bool,
+    pub set: u32,
+    pub remove: u32,
+}
+
+pub fn parse_mixings(bytes: &[u8]) -> Result<Vec<Mixing>> {
+    let root = crate::fcb::parse(bytes).context("the sound mixings")?;
+    let event = |o: &crate::fcb::Object, f: &str| o.str(f).and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok()).unwrap_or(0);
+    Ok(root
+        .children
+        .iter()
+        .filter_map(|m| {
+            Some(Mixing {
+                name: m.str("hidName").filter(|n| !n.is_empty())?,
+                priority: m.u32("uiPriority").unwrap_or(10),
+                stacks_with_self: m.bool("bCanStackWithSelf").unwrap_or(false),
+                stacks_with_others: m.bool("bCanStackWithOthers").unwrap_or(true),
+                set: event(m, "sndPresetEventSet"),
+                remove: event(m, "sndPresetEventRemove"),
+            })
+        })
+        .collect())
+}
+
 /// The mixer bus a playable header sends to: an audio header's at +0x8C, a
 /// layered one's at +0x74.
 pub fn header_bus(bao: &Bao) -> Option<u32> {
@@ -1387,6 +1494,11 @@ pub struct SoundGraph {
     /// The mixer buses (see [`parse_buses`]) and each playable header's.
     pub buses: HashMap<u32, (u32, f32)>,
     pub header_bus: HashMap<u32, u32>,
+    /// The buses' own levels (see [`parse_bus_params`]), the mixer states
+    /// (class 10) and the named mixings.
+    pub bus_params: HashMap<u32, (u32, f32, f32)>,
+    pub mix_states: HashMap<u32, MixState>,
+    pub mixings: Vec<Mixing>,
 }
 
 /// Every `soundbinary\*.spk` path known to the VFS (needs the filelists loaded).
@@ -1407,6 +1519,10 @@ impl SoundGraph {
         let mut g = SoundGraph::default();
         if let Ok(project) = vfs.read(PROJECT_PATH) {
             g.buses = parse_buses(&project);
+            g.bus_params = parse_bus_params(&project);
+        }
+        if let Ok(m) = vfs.read(MIXINGS_PATH).map_err(anyhow::Error::from).and_then(|b| parse_mixings(&b)) {
+            g.mixings = m;
         }
         for path in spk_paths(vfs) {
             let Ok(bytes) = vfs.read(&path) else { continue };
@@ -1456,12 +1572,33 @@ impl SoundGraph {
                             g.positionings.entry(b.id).or_insert(p);
                         }
                     }
+                    CLASS_MIXER => {
+                        if let Ok(m) = parse_mix_state(b) {
+                            g.mix_states.entry(b.id).or_insert(m);
+                        }
+                    }
                     _ => {}
                 }
             }
         }
         g.packages.sort_unstable();
         g
+    }
+
+    /// The mixer states `event` pushes (true) and pops (false), through the
+    /// groups and pairs it triggers.
+    pub fn mix_actions(&self, event: u32) -> Vec<(bool, u32)> {
+        fn walk(g: &SoundGraph, id: u32, out: &mut Vec<(bool, u32)>, depth: u32) {
+            let Some(e) = g.events.get(&id).filter(|_| depth < 8) else { return };
+            match e.kind {
+                6 | 10 => out.extend(e.targets.first().filter(|t| g.mix_states.contains_key(t)).map(|&t| (e.kind == 6, t))),
+                4 | 9 => e.targets.iter().for_each(|&t| walk(g, t, out, depth + 1)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        walk(self, event, &mut out, 0);
+        out
     }
 
     /// The level `header` gets from its mixer bus and the buses above it (dB).
@@ -1793,8 +1930,9 @@ impl SoundGraph {
                 }
             };
             let bus = self.bus_gain(r.header_id);
+            let bus_id = self.header_bus.get(&r.header_id).map_or_else(|| "-".to_string(), |b| format!("{b:08x}"));
             s += &format!(
-                "sound {} {} {} {} {} {} {} {} {fade} {bus}\n",
+                "sound {} {} {} {} {} {} {} {} {fade} {bus} {bus_id}\n",
                 r.file_stem(),
                 r.file_ext(),
                 r.codec.name(),
@@ -1809,6 +1947,7 @@ impl SoundGraph {
             let pts: Vec<String> = self.falloffs[&c].iter().map(|(x, y)| format!("{x},{y}")).collect();
             s += &format!("falloff {c:08x} {}\n", pts.join(";"));
         }
+        s += &self.mix_records();
         let mut ids: Vec<&u32> = self.events.keys().collect();
         ids.sort_unstable();
         let none = HashMap::new();
@@ -1820,6 +1959,39 @@ impl SoundGraph {
                 s += &self.switched_records(*id, e);
                 s += &self.blend_records(*id, e);
             }
+        }
+        s
+    }
+
+    /// The mixer: `bus <id> <parent> <level 0> <level 2>` for each bus,
+    /// `mixstate <id> <bus>:<parameter>:<value>:<fade in>:<fade out>...`
+    /// for each state's bus changes, `mixevent <event> +<state> -<state>...`
+    /// for each event that pushes or pops one, and `mixing <priority>
+    /// <stacks with itself> <with others> <set event> <remove event> <name>`.
+    fn mix_records(&self) -> String {
+        let mut s = String::new();
+        let mut buses: Vec<_> = self.bus_params.iter().collect();
+        buses.sort_by_key(|b| *b.0);
+        for (id, (parent, a, b)) in buses {
+            s += &format!("bus {id:08x} {parent:08x} {a} {b}\n");
+        }
+        let mut states: Vec<_> = self.mix_states.iter().filter(|m| !m.1.buses.is_empty()).collect();
+        states.sort_by_key(|m| *m.0);
+        for (id, m) in states {
+            let sets: Vec<String> = m.buses.iter().map(|b| format!("{:08x}:{}:{}:{}:{}", b.target, b.param, b.value, b.fade_in, b.fade_out)).collect();
+            s += &format!("mixstate {id:08x} {}\n", sets.join(" "));
+        }
+        let mut ids: Vec<&u32> = self.events.keys().collect();
+        ids.sort_unstable();
+        for id in ids {
+            let actions = self.mix_actions(*id);
+            if !actions.is_empty() {
+                let a: Vec<String> = actions.iter().map(|(push, st)| format!("{}{st:08x}", if *push { '+' } else { '-' })).collect();
+                s += &format!("mixevent {id:08x} {}\n", a.join(" "));
+            }
+        }
+        for m in &self.mixings {
+            s += &format!("mixing {} {} {} {:08x} {:08x} {}\n", m.priority, m.stacks_with_self as u8, m.stacks_with_others as u8, m.set, m.remove, m.name);
         }
         s
     }
@@ -1997,6 +2169,31 @@ mod tests {
         assert_eq!(g.bus_gain(7), -5.0);
         assert_eq!(Variant { header_id: 7, weight: 0.5, gain: -4.0 }.token(), "00000007:0.5000:-4");
         assert_eq!(Variant { header_id: 7, weight: 0.5, gain: 0.0 }.token(), "00000007:0.5000");
+    }
+
+    #[test]
+    fn mixer_states_set_bus_parameters() {
+        let mut p = b"<Binary>".to_vec();
+        p.resize(0x20, 0);
+        let mut words = |w: &[u32]| w.iter().for_each(|w| p.extend_from_slice(&w.to_le_bytes()));
+        // No effect units; one bus with two changes: its level to -10 dB
+        // over half a second (back over 4), and a pause.
+        words(&[0, 1, 0x5699, 2]);
+        words(&[0, 0.5f32.to_bits(), f32::MAX.to_bits(), 9, 4.0f32.to_bits(), 0, 2, 0, u32::MAX, (-10.0f32).to_bits()]);
+        words(&[0, 0, 0, 0, 0, 1, 2, 13, u32::MAX, 1]);
+        let bytes = bao_bytes(CLASS_MIXER, &p);
+        let m = parse_mix_state(&Bao::parse(3, &bytes).unwrap()).unwrap();
+        assert!(m.effects.is_empty());
+        assert_eq!(m.buses[0], MixSet { target: 0x5699, param: 0, value: -10.0, fade_in: 0.5, fade_out: 4.0 });
+        assert_eq!((m.buses[1].param, m.buses[1].value), (13, 1.0));
+        let mut g = SoundGraph::default();
+        g.mix_states.insert(3, m);
+        let event = |id, kind, targets: Vec<u32>| Event { id, kind, targets, volume: 1.0, switch: None };
+        g.events.insert(10, event(10, 6, vec![3]));
+        g.events.insert(11, event(11, 10, vec![3]));
+        g.events.insert(12, event(12, 9, vec![10, 0x1234]));
+        assert_eq!(g.mix_actions(12), vec![(true, 3)]);
+        assert_eq!(g.mix_actions(11), vec![(false, 3)]);
     }
 
     #[test]
