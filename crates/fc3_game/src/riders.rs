@@ -21,7 +21,10 @@ impl Plugin for RidersPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_clips)
             .add_systems(PostUpdate, (sit_riders, get_out).chain().after(crate::patrols::carry_crew).before(bevy::transform::TransformSystems::Propagate))
-            .add_systems(PostUpdate, seat_story_riders.after(crate::vehicles::seat_story_actors).before(bevy::transform::TransformSystems::Propagate));
+            .add_systems(
+                PostUpdate,
+                (seat_story_riders, story_get_out).chain().after(crate::vehicles::seat_story_actors).before(bevy::transform::TransformSystems::Propagate),
+            );
     }
 }
 
@@ -67,6 +70,32 @@ const BOAT: [Place; 3] = [
     Place { sit: r"boat\zodiac\alert\idles\3rdge_fulbst_passright01_idlealert_zodiac_+000fw_nowep.mab", exit: None },
     Place { sit: r"boat\zodiac\alert\idles\3rdge_fulbst_passright02_idlealert_zodiac_+000fw_nowep.mab", exit: None },
 ];
+
+/// The move out of a story vehicle's seat, by its kind and index (the
+/// cab's: the wheel and the seat beside it), where the game has one.
+fn seat_exit(vehicle: &str, kind: i32, index: i32) -> Option<&'static str> {
+    match (vehicle, kind, index) {
+        ("4x4" | "Technical", 1, 0) => Some(r"truck\4x4\alert\exits\3rdge_fulbst_alert_driverexit4x4_v00_-090lt_ak74.mab"),
+        ("4x4" | "Technical", 3, 0) => Some(r"truck\4x4\alert\exits\3rdge_fulbst_alert_passengerexit4x4_v00_+090rt_ak74.mab"),
+        ("Truck", 1, 0) => Some(r"truck\bigtruck\alert\exits\3rdge_fulbst_driveralert_driverexitbigtruck_v01_090lt_ak74.mab"),
+        ("Truck", 3, 0) => Some(r"truck\bigtruck\alert\exits\3rdge_fulbst_passengeralert_passengerexitbigtruck_v01_090rt_ak74.mab"),
+        ("Sedan" | "Hatchback", 1, 0) => Some(r"car\alert\exits\3rdge_fulbst_alert_driverexitcivcar_v00_000lt_ak74.mab"),
+        ("Sedan" | "Hatchback", 3, 0) => Some(r"car\alert\exits\3rdge_fulbst_alert_passengerexitcivcar_v00_000rt_ak74.mab"),
+        _ => None,
+    }
+}
+
+/// The frame a move out plays in: from the seat for one whose root starts
+/// at nought (the 4x4's, the technical's bed's), else the vehicle's own (the
+/// big truck's and the car's start at the seat already).
+fn exit_frame(seat: Transform, exit: &fc3_formats::anim::Clip) -> Transform {
+    let start = exit.root_motion.as_ref().map_or(Vec3::ZERO, |r| Vec3::from_array(r.start_translation));
+    if start.length() < 0.05 {
+        seat
+    } else {
+        Transform::IDENTITY
+    }
+}
 
 /// A vehicle's places by its name (ours, `vehicles::DEFS`).
 pub fn places(vehicle: &str) -> &'static [Place] {
@@ -118,6 +147,25 @@ fn load_clips(mut commands: Commands, server: Res<AssetServer>) {
 /// frame (where the move starts), the move, and how far into it.
 #[derive(Component)]
 pub struct GettingOut {
+    vehicle: Entity,
+    seat: Transform,
+    clip: Handle<Fc3Clip>,
+    t: f32,
+}
+
+/// A story character in a seat: its vehicle, where it sits (the seated
+/// clip's root, in the vehicle's frame) and the seat's move out, for when it
+/// leaves.
+#[derive(Component)]
+pub struct StorySeat {
+    vehicle: Entity,
+    seat: Transform,
+    exit: Option<Handle<Fc3Clip>>,
+}
+
+/// A story character getting out of its seat on its move: as `GettingOut`.
+#[derive(Component)]
+pub struct StoryGettingOut {
     vehicle: Entity,
     seat: Transform,
     clip: Handle<Fc3Clip>,
@@ -193,44 +241,55 @@ fn seat_story_riders(
     server: Res<AssetServer>,
     rider_clips: Option<Res<RiderClips>>,
     clips: Res<Assets<Fc3Clip>>,
-    vehicles: Query<(&Transform, &Vehicle)>,
-    mut actors: Query<(Entity, &mut Transform, &crate::story_actors::StoryActor, Has<Sitting>), Without<Vehicle>>,
-    mut seated: Local<std::collections::HashMap<&'static str, Handle<Fc3Clip>>>,
+    vehicles: Query<(Entity, &Transform, &Vehicle)>,
+    mut actors: Query<(Entity, &mut Transform, &crate::story_actors::StoryActor, Has<Sitting>, Option<&StorySeat>), Without<Vehicle>>,
+    mut seated: Local<std::collections::HashMap<String, Handle<Fc3Clip>>>,
     mut commands: Commands,
 ) {
     let Some(rider_clips) = rider_clips else { return };
-    for (e, mut at, actor, sitting) in &mut actors {
+    let mut load = |path: String| seated.entry(path.clone()).or_insert_with(|| server.load(cache_path(&fc3_formats::cache::anim_rel(&path)))).clone();
+    for (e, mut at, actor, sitting, story_seat) in &mut actors {
         let seat = (!actor.dead && !actor.in_scene)
-            .then(|| vehicles.iter().find_map(|(vt, v)| v.seat_of(actor.id).map(|(i, kind, pose)| (*vt, v, i, kind, pose))))
+            .then(|| vehicles.iter().find_map(|(ve, vt, v)| v.seat_of(actor.id).map(|(i, kind, pose)| (ve, *vt, v, i, kind, pose))))
             .flatten()
             // (A gun's seat is its gunner's business: `turrets`.)
             .filter(|(.., kind, _)| *kind != 2);
-        let Some((vt, v, i, _, pose)) = seat else {
-            // Out of the seat (or in a scene's hands, or dead): its own clips.
+        let Some((ve, vt, v, i, _, pose)) = seat else {
+            // Out of the seat: by its move, where it has one (not dead, nor
+            // taken by a scene); else its own clips again.
+            let out = story_seat.filter(|_| !actor.dead && !actor.in_scene).and_then(|s| s.exit.clone().map(|clip| (s, clip)));
+            if let Some((s, clip)) = out.filter(|(_, clip)| clips.contains(clip)) {
+                commands.entity(e).insert((StoryGettingOut { vehicle: s.vehicle, seat: s.seat, clip, t: 0.0 }, avian3d::prelude::ColliderDisabled)).remove::<(
+                    StorySeat,
+                    Sitting,
+                )>(
+                );
+                continue;
+            }
             if sitting {
                 if let (Some(rig), false) = (actor.rig, actor.in_scene) {
                     commands.entity(rig).remove::<ClipOverride>();
                 }
-                commands.entity(e).remove::<Sitting>();
+                commands.entity(e).remove::<(Sitting, StorySeat)>();
             }
             continue;
         };
-        let handle = match v.first_person_clip(i) {
-            Some(path) => Some(
-                seated
-                    .entry(path)
-                    .or_insert_with(|| server.load(cache_path(&fc3_formats::cache::anim_rel(&format!(r"graphics\characters\_common\animations\{path}")))))
-                    .clone(),
-            ),
-            None => places(v.name())
-                .iter()
-                .filter_map(|p| rider_clips.clips.get(p.sit))
-                .filter_map(|h| clips.get(h).map(|c| (h, crate::cinema::clip_root(&c.0, 0.0).translation.distance(pose.translation))))
-                .filter(|(_, d)| *d < SAME_SEAT)
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(h, _)| h.clone()),
+        let occupant = v.occupant(i);
+        let place = places(v.name())
+            .iter()
+            .filter_map(|p| rider_clips.clips.get(p.sit).map(|h| (p, h)))
+            .filter_map(|(p, h)| clips.get(h).map(|c| (p, h, crate::cinema::clip_root(&c.0, 0.0).translation.distance(pose.translation))))
+            .filter(|(.., d)| *d < SAME_SEAT)
+            .min_by(|a, b| a.2.total_cmp(&b.2));
+        let (handle, exit) = match v.first_person_clip(i) {
+            Some(path) => (Some(load(format!(r"graphics\characters\_common\animations\{path}"))), occupant.and_then(|o| seat_exit(v.name(), o.kind, o.index))),
+            None => (place.map(|(_, h, _)| h.clone()), place.and_then(|(p, ..)| p.exit)),
         };
+        let exit = exit.map(|path| load(format!("{PREFIX}{path}")));
         let Some((handle, clip)) = handle.and_then(|h| clips.get(&h).map(|c| (h.clone(), c))) else { continue };
+        if story_seat.is_none_or(|s| s.vehicle != ve) {
+            commands.entity(e).insert(StorySeat { vehicle: ve, seat: crate::cinema::clip_root(&clip.0, 0.0), exit });
+        }
         let length = clip.0.duration.max(0.1);
         let t = (time.elapsed_secs() + (e.to_bits() % 16) as f32 * 0.37).rem_euclid(length);
         *at = capsule(vt * crate::cinema::clip_root(&clip.0, t));
@@ -255,8 +314,8 @@ pub fn begin_exit(
 ) -> bool {
     let (Some(place), Some(rider_clips)) = (place_of(vehicle.1, ride), rider_clips) else { return false };
     let (Some(sit), Some(exit)) = (rider_clips.clips.get(place.sit), place.exit.and_then(|p| rider_clips.clips.get(p))) else { return false };
-    let (Some(seated), true) = (clips.get(sit), clips.contains(exit)) else { return false };
-    let seat = crate::cinema::clip_root(&seated.0, 0.0);
+    let (Some(seated), Some(out)) = (clips.get(sit), clips.get(exit)) else { return false };
+    let seat = exit_frame(crate::cinema::clip_root(&seated.0, 0.0), &out.0);
     commands.entity(rider).insert(GettingOut { vehicle: vehicle.0, seat, clip: exit.clone(), t: 0.0 }).remove::<Sitting>();
     true
 }
@@ -315,6 +374,51 @@ fn get_out(
     }
 }
 
+/// The story's characters getting out follow their seat's move; at its end
+/// they stand on the ground clear of the vehicle, theirs to move again.
+#[allow(clippy::type_complexity)]
+fn story_get_out(
+    time: Res<Time>,
+    heights: Res<crate::terrain::Heightfield>,
+    rider_clips: Option<Res<RiderClips>>,
+    clips: Res<Assets<Fc3Clip>>,
+    vehicles: Query<(&Transform, &Vehicle), Without<StoryGettingOut>>,
+    mut out: Query<(Entity, &mut StoryGettingOut, &mut Transform, &crate::story_actors::StoryActor), Without<Vehicle>>,
+    mut commands: Commands,
+) {
+    let Some(rider_clips) = rider_clips else { return };
+    let dt = time.delta_secs();
+    for (e, mut g, mut at, actor) in &mut out {
+        g.t += dt;
+        let clip = clips.get(&g.clip);
+        let length = clip.map_or(0.0, |c| c.0.duration);
+        let vehicle = vehicles.get(g.vehicle).ok();
+        if let (Some(clip), Some((vt, _))) = (clip, vehicle) {
+            *at = capsule(*vt * exit_frame(g.seat, &clip.0) * crate::cinema::clip_root(&clip.0, g.t.min(length)));
+        }
+        let done = actor.dead || actor.in_scene || vehicle.is_none() || g.t >= length;
+        if !done {
+            if let Some(rig) = actor.rig {
+                commands.entity(rig).insert(ClipOverride { clip: g.clip.clone(), skeleton: rider_clips.skeleton.clone(), time: g.t });
+            }
+            continue;
+        }
+        if let (Some(rig), false) = (actor.rig, actor.in_scene) {
+            commands.entity(rig).remove::<ClipOverride>();
+        }
+        let mut feet = at.translation - Vec3::Y * HALF_HEIGHT;
+        if let Some((vt, v)) = vehicle {
+            let local = vt.rotation.inverse() * (feet - vt.translation);
+            feet = vt.translation + vt.rotation * clear_of(local, v.bounds());
+        }
+        feet.y = heights.height_at(feet).unwrap_or(feet.y);
+        at.translation = feet + Vec3::Y * HALF_HEIGHT;
+        let (yaw, ..) = at.rotation.to_euler(EulerRot::YXZ);
+        at.rotation = Quat::from_rotation_y(yaw);
+        commands.entity(e).remove::<(StoryGettingOut, avian3d::prelude::ColliderDisabled)>();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,6 +428,15 @@ mod tests {
         assert!(places("Technical").iter().all(|p| p.exit.is_some()));
         assert!(places("Boat").iter().all(|p| p.exit.is_none()));
         assert!(places("Hang glider").is_empty());
+    }
+
+    #[test]
+    fn the_cab_seats_have_their_moves_out_and_a_gun_has_none() {
+        assert!(seat_exit("4x4", 1, 0).is_some_and(|p| p.contains("driverexit4x4")));
+        assert!(seat_exit("Truck", 3, 0).is_some_and(|p| p.contains("passengerexitbigtruck")));
+        assert!(seat_exit("Sedan", 1, 0).is_some_and(|p| p.contains("driverexitcivcar")));
+        assert_eq!(seat_exit("4x4", 2, 0), None);
+        assert_eq!(seat_exit("Jet ski", 1, 0), None);
     }
 
     #[test]

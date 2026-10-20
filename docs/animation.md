@@ -557,9 +557,21 @@ the seat has one (`vehicles::seated_clip`: the wheel, the seat beside it,
 a 4x4's back seats). Otherwise it takes the place whose seat is within
 0.75 m of the seat's bone. A gun's seat is left to its gunner, and a
 character a scene plays is left to the scene. Not seen in a run yet, since
-no checkpoint with a story crew aboard was at hand. Not yet: the story
-crews' moves out of their seats (they leave as before), and anyone's
-moves into a vehicle.
+no checkpoint with a story crew aboard was at hand.
+
+A story character that leaves its seat gets out on the seat's move
+(`story_get_out`), with its collider off until it is clear. The moves come
+from `seat_exit` (the 4x4's or technical's cab, the big truck's and the
+car's wheel and the seat beside it) or the matched place's. The moves out
+come in two kinds:
+* The 4x4's and the technical's bed's start at the root's origin, so they
+  play from the seat.
+* The big truck's and the car's start at the seat in the vehicle's frame
+  (a big truck driver's 1.42 m up, ending 2.74 m to the left on the
+  ground), so they play from the vehicle (`exit_frame`).
+
+Not seen in a run yet, for the same reason. Not yet: anyone's moves into
+a vehicle.
 
 ### Guard spots
 
