@@ -494,10 +494,16 @@ rows flipped or turned), `0xFF` where none is painted. The converter keeps
 them as `world/logic_zones.bin` (laid out as the sound regions' map:
 `sound_regions::RegionMap`). `burnablesettings_default.obj`'s `Regions_SP`
 gives each zone its profile (`zoneLogicZone`, `fireregProfile_SP`), kept
-as `particles/fire-zones.txt`. Zones 0-2 burn as `Region/Jungle`, 3-5, 8,
-10, 11 and 16-21 as `Region/Savannah`, 89 and 94 as `Region/Cannabis`. The
-rest have none and don't burn: zone 90 (the shores), and the cells painted
-with no zone (roads, paths, rivers, villages). So fire spreads only into
+as `particles/fire-zones.txt`. The zones are `logiczones.lib`'s (`disId`;
+each also names an environment zone template, but the outdoor ones share
+their presets). Zones 0-2 (`Logic/JungleLight`, `Medium`, `Dense`) burn as
+`Region/Jungle`; 3-5 and 8 (`Default`, `Desert`, `DefaultMedium`,
+`DefaultDense`), 10 and 11 (`DesertMedium`, `DesertDense`), 16-18 (the
+`Coastal` ones) and 19-21 (the `Grasslands` ones) as `Region/Savannah`; 89
+(`VegetationMediumFire`) and 94 (`Cannabis`) as `Region/Cannabis`. The rest
+have none and don't burn: zone 90 (`VegetationNonBurnable`, the shores),
+and the cells painted with no zone (roads, paths, rivers, villages). The
+main map paints 0-4, 16-21, 90 and 94. So fire spreads only into
 cells whose ground burns, with that ground's profile, and stops at a road.
 A splash on ground that doesn't burn still flares up for 3-5 s. One island
 is mostly savannah zones, the other jungle. Without the zone map the ground
