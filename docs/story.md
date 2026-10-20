@@ -3249,7 +3249,8 @@ completes as the call ends. Four things were missing:
   its archetype under the story's id, where the vehicle's path (or the
   point) first meets land toward the battlefield, searching toward the
   battlefield. Engine-spawned ids now count as loaded for the scripts until
-  removed. The boat ride itself isn't played: the mercs start ashore.
+  removed. (The boat ride came later: see "Reinforcements by vehicle"
+  under JAS_130.)
 * **The army's diary** (`LogEventInAIDiary` on a `CAIEventPoint`): for the
   event's lifetime (here 25 s), soldiers of its army (1, Red: pirates and
   privateers) within its reach (150 m) take its state about its threat
