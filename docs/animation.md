@@ -560,8 +560,8 @@ The story's characters in a vehicle's seats sit the same way
 the seat has one (`vehicles::seated_clip`: the wheel, the seat beside it,
 a 4x4's back seats). Otherwise it takes the place whose seat is within
 0.75 m of the seat's bone. A gun's seat is left to its gunner, and a
-character a scene plays is left to the scene. Not seen in a run yet, since
-no checkpoint with a story crew aboard was at hand.
+character a scene plays is left to the scene. Seen: JAS_080 B40's Dennis at
+the technical's wheel, hands on it (below).
 
 A story character that leaves its seat gets out on the seat's move
 (`story_get_out`), with its collider off until it is clear. The moves come
@@ -574,8 +574,46 @@ come in two kinds:
   (a big truck driver's 1.42 m up, ending 2.74 m to the left on the
   ground), so they play from the vehicle (`exit_frame`).
 
-Not seen in a run yet, for the same reason. Not yet: anyone's moves into
-a vehicle.
+Not seen in a run yet, for the same reason.
+
+A story character the story puts in a seat gets in on the seat's move
+(`com_enter_vehicle`) when the script asks for it. `VehicleUse`'s
+`TakeSeat` passes `SkipEntryAnimation` as its eighth argument. 47 of the
+graphs' calls set it; the rest (JAS_080 B40's Dennis at the wheel, JAS_190's
+boat crew, JAS_200 B40's VIP, SAM_015 B40, WIL_050 B10's convoy) leave it
+off, and a ride's crew (`story_rides`) boards without it too. The seat is
+the character's at once, as before, so the story and the vehicle see it
+seated, but `riders` plays the way in:
+
+* Each place lists its moves in (`Place::entry`; the cab seats by
+  `seat_entries`): the 4x4's (and the technical's cab's) driver and
+  passenger from either side, armed or not; the technical's bed's four
+  reinforcement climbs; the big truck's; the car's armed and relaxed ones;
+  the zodiac's wheel and right benches. Those made for the character's
+  hands are taken (`for_hands`: an unarmed one takes the `nowep` moves).
+* Like the moves out, they come in two frames. One ending at the root's
+  origin (the 4x4's, the bed's) plays from the seat; the others (the big
+  truck's, the car's, the zodiac's) end at the seat in the vehicle's frame
+  (`entry_frame`).
+* Of the moves, the one facing most along the last stretch of the way to
+  its start is chosen, so the turn at the door is least.
+* The character walks there (runs, beyond 8 m) on its own walk clip, round
+  the vehicle's footprint by its corners when the vehicle is in the way
+  (`route_round`), turns to the move's facing, then follows the move into
+  the seat, where the seated loop takes over (`story_get_in`).
+* One standing in the footprint (put there to board, as a reloaded
+  mission's crew is) or more than 30 m round is put in the seat as before.
+  So is one whose way takes over 30 s.
+* A vehicle on a script's path waits while one of its own still gets in
+  (`vehicle_paths::drive_paths`).
+* `FC3_ENTRY_TEST=<s>` asks the story character nearest the player to the
+  wheel of the nearest story vehicle with a move in there, and captures
+  the walk and the move (`--screenshot`).
+
+Seen (`FC3_ENTRY_SHOTS`, JAS_080 B40's checkpoint): Dennis, asked to the
+technical's wheel, walks 0.6 m to the driver's door, reaches for it, climbs
+in over the step and ends at the wheel on the seated loop, in about five
+seconds, before the player gets in beside him.
 
 ### Guard spots
 

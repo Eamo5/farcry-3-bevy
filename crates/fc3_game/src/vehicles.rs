@@ -1144,6 +1144,8 @@ struct SeatRequest {
     alternate: bool,
     exit: bool,
     forced: bool,
+    /// Into the seat at once, not by its move in (`SkipEntryAnimation`).
+    skip_entry: bool,
 }
 
 impl StorySeatRequests {
@@ -1153,8 +1155,16 @@ impl StorySeatRequests {
         let flag = |i: usize| args.get(i).is_some_and(|a| a == "true" || a == "1");
         let kinds = [(3, 1), (4, 2), (5, 3)].into_iter().filter_map(|(i, k)| flag(i).then_some(k)).collect();
         self.0.retain(|r| r.pawn != pawn);
-        self.0.push(SeatRequest { vehicle, pawn, index: args.get(2).and_then(|a| a.parse().ok()).unwrap_or(-1), kinds,
-            alternate: flag(6), exit, forced: false });
+        self.0.push(SeatRequest {
+            vehicle,
+            pawn,
+            index: args.get(2).and_then(|a| a.parse().ok()).unwrap_or(-1),
+            kinds,
+            alternate: flag(6),
+            exit,
+            forced: false,
+            skip_entry: flag(7),
+        });
     }
 
     /// The vehicle a character waits to board (a script's `TakeSeat`).
@@ -1172,13 +1182,13 @@ impl StorySeatRequests {
     pub(crate) fn board(&mut self, vehicle: u64, pawn: u64, driver: bool) {
         self.0.retain(|r| r.pawn != pawn);
         let kinds = if driver { vec![1] } else { vec![3] };
-        self.0.push(SeatRequest { vehicle, pawn, index: -1, kinds, alternate: !driver, exit: false, forced: false });
+        self.0.push(SeatRequest { vehicle, pawn, index: -1, kinds, alternate: !driver, exit: false, forced: false, skip_entry: false });
     }
 
     /// ... and gets out.
     pub(crate) fn leave(&mut self, vehicle: u64, pawn: u64) {
         self.0.retain(|r| r.pawn != pawn);
-        self.0.push(SeatRequest { vehicle, pawn, index: -1, kinds: Vec::new(), alternate: false, exit: true, forced: false });
+        self.0.push(SeatRequest { vehicle, pawn, index: -1, kinds: Vec::new(), alternate: false, exit: true, forced: false, skip_entry: true });
     }
 
     pub(crate) fn force_player(&mut self, args: &[String]) {
@@ -1187,7 +1197,7 @@ impl StorySeatRequests {
             args.get(2).and_then(|a| a.parse::<i32>().ok()), args.get(3).and_then(|a| a.parse::<u64>().ok())) else { return };
         if pawn != fc3_story::PLAYER || !(1..=3).contains(&kind) || index < 0 { return; }
         self.0.retain(|r| r.pawn != pawn);
-        self.0.push(SeatRequest { vehicle, pawn, index, kinds: vec![kind], alternate: false, exit: false, forced: true });
+        self.0.push(SeatRequest { vehicle, pawn, index, kinds: vec![kind], alternate: false, exit: false, forced: true, skip_entry: true });
     }
 }
 
@@ -1308,7 +1318,13 @@ fn story_seats(
             if request.pawn == fc3_story::PLAYER {
                 if let Ok((_, _, mut p)) = players.get_mut(pawn) { p.driving = true; p.yaw = vt.rotation.to_euler(EulerRot::YXZ).0; }
                 driving.vehicle = Some(ve); driving.seat = seat; driving.last_yaw = vt.rotation.to_euler(EulerRot::YXZ).0; driving.first_person = true;
-            } else if let Ok((_, _, mut a)) = actors.get_mut(pawn) { a.seated = true; }
+            } else if let Ok((_, at_pose, mut a)) = actors.get_mut(pawn) {
+                // (Standing in the world: in by the seat's move, from there.)
+                if !a.seated && !a.in_scene && !request.skip_entry {
+                    commands.entity(pawn).insert(crate::riders::WillGetIn { from: *at_pose, since: now });
+                }
+                a.seated = true;
+            }
             commands.entity(pawn).insert(ColliderDisabled);
             info!("vehicle: pawn {} boarded {} seat type {} index {}", request.pawn, request.vehicle, v.seats[seat].kind, v.seats[seat].index);
         }
@@ -2213,7 +2229,7 @@ mod story_vehicle_tests {
     fn the_player_moves_over_for_a_character_given_his_seat() {
         let mut v = vehicle();
         v.seats[0].pawn = Some(fc3_story::PLAYER);
-        let request = SeatRequest { vehicle: 100, pawn: 200, kinds: Vec::new(), index: 0, alternate: false, exit: false, forced: false };
+        let request = SeatRequest { vehicle: 100, pawn: 200, kinds: Vec::new(), index: 0, alternate: false, exit: false, forced: false, skip_entry: false };
         assert_eq!(requested_seat(&v, &request), None);
         assert_eq!(move_over(&v, &request), Some((0, 1)));
         v.seats[1].pawn = Some(999);
@@ -2230,7 +2246,7 @@ mod story_vehicle_tests {
         assert_eq!(v.available_seat(&rules), Some(0));
         rules.locked.insert((1, 0));
         assert_eq!(v.available_seat(&rules), Some(1));
-        let request = SeatRequest { vehicle: 100, pawn: 200, kinds: vec![1], index: 0, alternate: false, exit: false, forced: false };
+        let request = SeatRequest { vehicle: 100, pawn: 200, kinds: vec![1], index: 0, alternate: false, exit: false, forced: false, skip_entry: false };
         assert_eq!(requested_seat(&v, &request), Some(0)); // script can put Dennis in player-locked seat
         v.seats[0].pawn = Some(999);
         assert_eq!(requested_seat(&v, &request), None);

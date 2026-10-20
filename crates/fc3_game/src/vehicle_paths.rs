@@ -306,6 +306,7 @@ pub(crate) fn drive_paths(
         Query<&Name>,
         Query<&CollidingEntities>,
     ),
+    entering: Query<&crate::riders::StoryGettingIn>,
 ) {
     let mut interrupted = Vec::new();
     for (entity, pose, velocity, spin, body, mut vehicle, health) in &mut vehicles {
@@ -314,6 +315,8 @@ pub(crate) fn drive_paths(
         if health.is_some_and(|h| h.dead) { vehicle.control(0.0, 0.0, true); interrupted.push(id); continue; }
         if *body != RigidBody::Dynamic || cinema.owns_entity(id) { continue; }
         let Some(driver) = vehicle.driver() else { vehicle.control(0.0, 0.0, true); continue };
+        // (Not while one of its own still gets in.)
+        if entering.iter().any(|g| g.vehicle == entity) { vehicle.control(0.0, 0.0, true); continue; }
         if driver == fc3_story::PLAYER && path.interruptible { interrupted.push(id); continue; }
         let previous = path.next;
         path.advance(pose.translation, pose.rotation * Vec3::NEG_Z);
