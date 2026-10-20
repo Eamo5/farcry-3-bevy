@@ -807,6 +807,13 @@ calls play. The rain (`clouds::rain`) is the region's, its parameter
 loop sent with no parameter (as before) wasn't heard. `FC3_REGION_DEBUG`
 logs the region, whether it was painted, and the bands' intensities.
 
+The template's `Inibition` (`fDuration` 12, `fRange` 200; its sound type, 24,
+is the calls' own) is how long and how far round a disturbance silences the
+calls (the table's `inhibit` line): gunfire or a blast within 200 m of the
+listener (the AI's threatening noises) hushes them for 12 s from the last one.
+In a test the grassland's calls stopped from the first shot and came back
+within 26 s of the last, where they otherwise come about every 5 s.
+
 The regions' template (`Thunder`'s `sndThunder`, `001A4A01`: six claps of 4 to
 7 s, kept as the table's `thunder` line) is the storms' thunder: one clap
 after each lightning flash, 0.5 to 4 s later, quieter indoors.

@@ -24,7 +24,7 @@ pub const TABLE_REL: &str = "world/sound_regions.txt";
 /// The logic zones' map.
 pub const ZONES_REL: &str = "world/logic_zones.bin";
 const MAP_MAGIC: &[u8; 8] = b"FC3SRM02";
-const TABLE_MAGIC: &str = "fc3-sound-regions 2";
+const TABLE_MAGIC: &str = "fc3-sound-regions 3";
 /// A sector's cells a side: in its sound region map, in its logic zone map.
 pub const CELLS: usize = 32;
 pub const ZONE_CELLS: usize = 64;
@@ -163,12 +163,15 @@ pub struct Region {
 }
 
 /// The regions, how much each band calls by hour (hour, the bands'
-/// intensities), and the template's thunder (an event; 0: none).
+/// intensities), the template's thunder (an event; 0: none), and how long
+/// (s) and how far round (m) a disturbance silences the calls
+/// (`Inibition`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Ambiences {
     pub regions: Vec<Region>,
     pub times: Vec<(f32, [f32; 4])>,
     pub thunder: u32,
+    pub inhibition: (f32, f32),
 }
 
 fn event(o: &Object, name: &str) -> u32 {
@@ -245,7 +248,8 @@ pub fn parse(bytes: &[u8]) -> Result<Ambiences> {
         })
         .collect();
     let thunder = root.child("Thunder").map_or(0, |t| event(t, "sndThunder"));
-    Ok(Ambiences { regions, times, thunder })
+    let inhibition = root.child("Inibition").map_or((0.0, 0.0), |i| (i.f32("fDuration").unwrap_or(0.0), i.f32("fRange").unwrap_or(0.0)));
+    Ok(Ambiences { regions, times, thunder, inhibition })
 }
 
 impl Ambiences {
@@ -275,6 +279,9 @@ impl Ambiences {
         let mut s = format!("{TABLE_MAGIC}\n");
         if self.thunder != 0 {
             s += &format!("thunder {:08x}\n", self.thunder);
+        }
+        if self.inhibition.0 > 0.0 {
+            s += &format!("inhibit {} {}\n", self.inhibition.0, self.inhibition.1);
         }
         for (h, i) in &self.times {
             s += &format!("time {h} {} {} {} {}\n", i[0], i[1], i[2], i[3]);
@@ -310,6 +317,10 @@ impl Ambiences {
             let mut it = line.splitn(10, ' ');
             match it.next() {
                 Some("thunder") => out.thunder = hex(it.next().context("thunder line")?)?,
+                Some("inhibit") => {
+                    let mut f = || it.next().context("inhibit line").and_then(|v| Ok(v.parse::<f32>()?));
+                    out.inhibition = (f()?, f()?);
+                }
                 Some("time") => {
                     let v: Vec<f32> = it.map(|v| v.parse::<f32>()).collect::<Result<_, _>>()?;
                     if v.len() != 5 {
@@ -402,7 +413,7 @@ mod tests {
             ..Default::default()
         };
         r.calls[3] = Calls { events: vec![0xA6BA5, 0x159609], per_minute: 1.5, polyphony: 2, radius: (30.0, 120.0) };
-        let a = Ambiences { regions: vec![r], times: vec![(1.0, [0.0, 0.0, 1.0, 0.5])], thunder: 0x1A4A01 };
+        let a = Ambiences { regions: vec![r], times: vec![(1.0, [0.0, 0.0, 1.0, 0.5])], thunder: 0x1A4A01, inhibition: (12.0, 200.0) };
         assert_eq!(Ambiences::from_text(&a.to_text()).unwrap(), a);
     }
 }

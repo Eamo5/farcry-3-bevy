@@ -1023,7 +1023,7 @@ fn ambience(
     (mut due, mut recent, mut thunder): (Local<[f32; 4]>, Local<[Vec<f32>; 4]>, Local<(u32, Vec<f32>)>),
     mut rng: ResMut<Rng>,
     (probe, tod, driving, rooms): (crate::surfaces::SurfaceProbe, Res<crate::sky::TimeOfDay>, Res<crate::vehicles::Driving>, Option<Res<crate::mixer::Rooms>>),
-    (mut regions, weather): (ResMut<SoundRegions>, Option<Res<crate::clouds::Weather>>),
+    (mut regions, weather, mut noises, mut hushed): (ResMut<SoundRegions>, Option<Res<crate::clouds::Weather>>, MessageReader<crate::npc::Noise>, Local<f32>),
 ) {
     use crate::sky::SEA_LEVEL;
     if *state.get() == crate::menu::GameState::Paused {
@@ -1106,10 +1106,17 @@ fn ambience(
         }
         return;
     }
+    // A disturbance near (gunfire, a blast) silences the calls a while
+    // (the template's `Inibition`: 12 s within 200 m).
+    let (hush, reach) = regions.table.inhibition;
+    if noises.read().any(|n| matches!(n.kind, crate::npc::NoiseKind::Threatening | crate::npc::NoiseKind::Explosion) && n.at.distance(p.translation) < reach) {
+        *hushed = hush;
+    }
+    *hushed = (*hushed - dt).max(0.0);
     // Its calls: each band now and then, as often as the hour has it,
     // somewhere round about, no more at once than it allows (a room's own,
     // else the outside's while not under a roof).
-    let calling = if room_bed.is_some() { inside } else { region.filter(|_| !roofed) };
+    let calling = if room_bed.is_some() { inside } else { region.filter(|_| !roofed && *hushed <= 0.0) };
     let now = time.elapsed_secs();
     let intensity = regions.table.intensity(tod.hours);
     for b in 0..4 {
