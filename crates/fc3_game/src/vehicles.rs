@@ -3481,7 +3481,7 @@ fn vehicle_sounds(
         };
         let (engine, case) = if mine { (set.engine, snd::PLAYER_ENGINE) } else { (set.ai_engine, snd::AI_ENGINE) };
         let volume = if mine { 0.7 } else { 1.0 };
-        loops.write(LoopSfx { key: e.to_bits() ^ 0xE1, event: engine, at, volume, switches: [(snd::ENGINE_GROUP, case), (0, 0)], params });
+        loops.write(LoopSfx { key: e.to_bits() ^ 0xE1, event: engine, at, volume, switches: [(snd::ENGINE_GROUP, case), (0, 0)], params, tracks: None });
         if boat {
             continue;
         }
@@ -3524,6 +3524,7 @@ fn vehicle_sounds(
                 volume: if mine { 0.8 } else { 1.0 },
                 switches: [(crate::surfaces::SURFACE_GROUP, surface), (snd::ROLL_GROUP, roll)],
                 params: [(snd::SPEED, speed), (snd::SLIP, slip), (0, 0.0), (0, 0.0)],
+                tracks: None,
             });
         }
         // Landing hard after a jump or a drop.

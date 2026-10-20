@@ -455,6 +455,7 @@ fn rain(
     mut particles: ResMut<Particles>,
     mut carry: Local<f32>,
     mut loops: MessageWriter<crate::sound::LoopSfx>,
+    regions: Option<Res<crate::sound::SoundRegions>>,
 ) {
     let dt = time.delta_secs();
     let Ok(cam) = cameras.single() else { return };
@@ -462,9 +463,13 @@ fn rain(
     let underwater = crate::water::submerged(c, &heights, 0.0);
     let intensity = if underwater { 0.0 } else { smoothstep(0.3, 1.0, weather.storm()) };
     if intensity > 0.01 {
+        // The sound region's rain (else the coast's or the forest's), its
+        // layers as heavy as the rain (its parameter, 0..1).
         let ground = heights.height_at(c).unwrap_or(0.0);
-        let event = if ground < SEA_LEVEL + 6.0 { crate::sound::ev::RAIN_COAST } else { crate::sound::ev::RAIN_FOREST };
-        loops.write(crate::sound::LoopSfx { key: 0x5241_494E, event, at: None, volume: 0.8 * intensity, ..default() });
+        let fallback = if ground < SEA_LEVEL + 6.0 { crate::sound::ev::RAIN_COAST } else { crate::sound::ev::RAIN_FOREST };
+        let event = regions.as_deref().and_then(|r| r.here()).map(|r| r.rain).filter(|e| *e != 0).unwrap_or(fallback);
+        let params = [(crate::sound::RAIN_LEVEL, intensity), (0, 0.0), (0, 0.0), (0, 0.0)];
+        loops.write(crate::sound::LoopSfx { key: 0x5241_494E, event, at: None, volume: 0.8, params, ..default() });
     }
     // Drops per second, slanted by the wind; each falls for about a second.
     *carry += intensity * 1500.0 * dt;

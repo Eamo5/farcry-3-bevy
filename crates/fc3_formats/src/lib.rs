@@ -57,6 +57,7 @@ pub mod scripts;
 pub mod senses;
 pub mod shakes;
 pub mod shop;
+pub mod sound_regions;
 pub mod story;
 pub mod splines;
 pub mod terrain;

@@ -1065,6 +1065,33 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
+    // ---- the ambience's sound regions: where each sector paints them, and
+    // what each plays
+    {
+        use fc3_formats::sound_regions as sr;
+        let current = std::fs::read_to_string(job.root().join(sr::TABLE_REL)).is_ok_and(|t| sr::Ambiences::is_current(&t));
+        if opts.only_sectors.is_none() && (job.should_write(sr::TABLE_REL) || !current) {
+            match job.vfs.read(fc3_formats::rooms::REGIONS_PATH).map_err(anyhow::Error::from).and_then(|b| sr::parse(&b)) {
+                Ok(table) => {
+                    if let Err(e) = write_atomic(job.root(), sr::TABLE_REL, table.to_text().as_bytes(), job.ctx) {
+                        job.error(format!("sound regions: {e:#}"));
+                    }
+                }
+                Err(e) => job.error(format!("sound regions: {e:#}")),
+            }
+        }
+        if opts.only_sectors.is_none() && (job.should_write(sr::MAP_REL) || !job.root().join(sr::MAP_REL).exists()) {
+            let w = ft::WORLD_SECTORS;
+            let sectors = (0..w * w).map(|id| SectorCoord::from_id(id as u32)).filter_map(|c| job.vfs.read(&sr::srl_path(&opts.world, c)).ok().map(|b| (c, b)));
+            let map = sr::RegionMap::from_sectors(sectors);
+            if map.counts().0 == 0 {
+                job.error(format!("sound region map: no sector of {} has one", opts.world));
+            } else if let Err(e) = write_atomic(job.root(), sr::MAP_REL, &map.to_bytes(), job.ctx) {
+                job.error(format!("sound region map: {e:#}"));
+            }
+        }
+    }
+
     // ---- the maps the shops sell, and what each shows
     if opts.only_sectors.is_none() {
         let current = std::fs::read_to_string(job.root().join(fc3_formats::shop::TREASURE_MAPS_REL))

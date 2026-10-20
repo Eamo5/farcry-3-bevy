@@ -209,7 +209,7 @@ about 150 grass materials in view at once, each a batch of its own.
 
 | file | content |
 |---|---|
-| `sector<id>.srl` | 1024 bytes: 32×32 `u8` region ids, 2 m cells (large uniform areas; likely sound or ambient regions) |
+| `sector<id>.srl` | 1024 bytes: 32×32 `u8` sound region ids, 2 m cells (the ambience's regions: see `docs/audio.md`, Ambience) |
 | `zonesector<id>.zsr` | 4096 bytes: 64×64 `u8` zone ids, 1 m cells, `0xFF` = none (gameplay zones) |
 | `sector<id>.desc.fcb` | sector descriptor: minimap path, lists of related sector and metasector ids |
 | `metasectors\worldsector_*.data.fcb` | spline collections and similar, no plant instances |

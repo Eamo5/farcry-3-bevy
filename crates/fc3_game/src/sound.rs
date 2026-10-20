@@ -34,7 +34,8 @@ impl Plugin for SoundPlugin {
             .add_message::<LoopSfx>()
             .init_resource::<Mixer>()
             .init_resource::<Mixings>()
-            .add_systems(OnExit(crate::menu::GameState::Loading), (load_bank, load_sound_points, crate::mixer::load_rooms))
+            .init_resource::<SoundRegions>()
+            .add_systems(OnExit(crate::menu::GameState::Loading), (load_bank, load_sound_points, load_regions, crate::mixer::load_rooms))
             .add_systems(PostStartup, attach_listener)
             .add_systems(OnEnter(crate::menu::GameState::Loading), crate::mixer::reset_mixer)
             .add_systems(OnEnter(crate::menu::GameState::MainMenu), crate::mixer::reset_mixer)
@@ -47,6 +48,8 @@ impl Plugin for SoundPlugin {
 
 /// The game's distance parameter (m, 0-300): blends cross-fade on it.
 pub const DISTANCE: u32 = 0x0000_5EAB;
+/// The rain loops' parameter: how heavy the rain is (0..1).
+pub const RAIN_LEVEL: u32 = 0x004B_194E;
 
 /// The authored levels sit low (dialogue near -7 dB, gunfire -12 to -17,
 /// music -12, ambience -14 to -20, footsteps -21): the whole mix is raised
@@ -462,6 +465,32 @@ pub struct LoopSfx {
     pub switches: [(u32, u32); 2],
     /// `(parameter id, value)`, e.g. engine RPM; id 0 = unused.
     pub params: [(u32, f32); 4],
+    /// A multitrack bed's day and night tracks (its first `day` tracks by
+    /// day, the next `night` by night) and the daylight (0..1).
+    pub tracks: Option<(u32, u32, f32)>,
+}
+
+/// A layer's share of a bed whose first tracks play by day and the next by
+/// night (see [`LoopSfx::tracks`]).
+fn track_share(tracks: Option<(u32, u32, f32)>, layer: Option<u32>) -> f32 {
+    match (tracks, layer) {
+        (Some((day, night, light)), Some(l)) if day > 0 && night > 0 => {
+            if l < day {
+                light
+            } else if l < day + night {
+                1.0 - light
+            } else {
+                1.0
+            }
+        }
+        _ => 1.0,
+    }
+}
+
+/// A multitrack's layer (`<header>_l<n>`) from its file's path.
+fn layer_of(path: &str) -> Option<u32> {
+    let stem = path.rsplit('/').next()?.split('.').next()?;
+    stem.rsplit_once("_l")?.1.parse().ok()
 }
 
 /// A loop stops this long (s) after its last refresh. A slow frame
@@ -476,6 +505,7 @@ struct LoopEmitter {
     volume: f32,
     token: String,
     params: [(u32, f32); 4],
+    tracks: Option<(u32, u32, f32)>,
 }
 
 /// A playing sound as heard: its mix level within the event and the
@@ -494,6 +524,9 @@ struct Heard {
     placed: bool,
     /// Its mixer bus, which the mixings change.
     bus: Option<u32>,
+    /// A bed's layer, and its share now (day and night tracks).
+    layer: Option<u32>,
+    share: f32,
 }
 
 impl Heard {
@@ -501,7 +534,7 @@ impl Heard {
     fn at(&self, d: f32) -> (f32, f32) {
         let d = if self.placed { d } else { 0.0 };
         let (v, speed) = self.blend.as_ref().map_or((1.0, 1.0), |m| m.eval(&self.params, d, self.looping));
-        (self.gain * self.volume * v * self.falloff.gain(d), speed)
+        (self.gain * self.volume * self.share * v * self.falloff.gain(d), speed)
     }
 }
 
@@ -707,7 +740,18 @@ fn play_one_shots(
             info!("sfx {:08x}: {} file(s) at {:?}, {d:.0} m", ev.event, files.len(), ev.at.map(|a| a.round()));
         }
         for (f, blend, _, falloff, gain, bus) in files {
-            let heard = Heard { gain: vol * gain, volume: ev.volume, falloff, blend, params: [(0, 0.0); 4], looping: false, placed: ev.at.is_some(), bus };
+            let heard = Heard {
+                gain: vol * gain,
+                volume: ev.volume,
+                falloff,
+                blend,
+                params: [(0, 0.0); 4],
+                looping: false,
+                placed: ev.at.is_some(),
+                bus,
+                layer: None,
+                share: 1.0,
+            };
             let (v, speed) = heard.at(d);
             if std::env::var("FC3_SFX_DEBUG").is_ok() {
                 info!("  {f} at {v:.3}");
@@ -745,14 +789,16 @@ fn update_loops(
                 if let Some(at) = ev.at {
                     t.translation = at;
                 }
-                // Follow volume (fades) and parameter changes.
-                if (em.volume - ev.volume).abs() > 0.01 || em.params != ev.params {
+                // Follow volume (fades), parameter and daylight changes.
+                if (em.volume - ev.volume).abs() > 0.01 || em.params != ev.params || em.tracks != ev.tracks {
                     em.volume = ev.volume;
                     em.params = ev.params;
+                    em.tracks = ev.tracks;
                     for c in children.into_iter().flatten() {
                         if let Ok(mut heard) = voices.get_mut(*c) {
                             heard.volume = ev.volume;
                             heard.params = ev.params;
+                            heard.share = track_share(ev.tracks, heard.layer);
                         }
                     }
                 }
@@ -772,7 +818,7 @@ fn update_loops(
         }
         let root = commands
             .spawn((
-                LoopEmitter { key: ev.key, ttl: LOOP_TTL, volume: ev.volume, token, params: ev.params },
+                LoopEmitter { key: ev.key, ttl: LOOP_TTL, volume: ev.volume, token, params: ev.params, tracks: ev.tracks },
                 Transform::from_translation(ev.at.unwrap_or(Vec3::ZERO)),
                 Visibility::Visible,
             ))
@@ -784,7 +830,19 @@ fn update_loops(
             _ => 0.0,
         };
         for (f, blend, looping, falloff, gain, bus) in files {
-            let heard = Heard { gain: vol * gain, volume: ev.volume, falloff, blend, params: ev.params, looping: true, placed: ev.at.is_some(), bus };
+            let layer = layer_of(&f);
+            let heard = Heard {
+                gain: vol * gain,
+                volume: ev.volume,
+                falloff,
+                blend,
+                params: ev.params,
+                looping: true,
+                placed: ev.at.is_some(),
+                bus,
+                layer,
+                share: track_share(ev.tracks, layer),
+            };
             let (v, speed) = heard.at(d);
             if std::env::var("FC3_SFX_DEBUG").is_ok() {
                 info!("  {f} at {v:.3}, {d:.0} m");
@@ -804,17 +862,48 @@ fn update_loops(
     let dt = time.delta_secs().min(LOOP_TTL_STEP);
     for (e, mut em, _, _) in &mut emitters {
         em.ttl -= dt;
-        if em.ttl <= 0.0 {
+        // (Not one started over this frame: it's gone already.)
+        if em.ttl <= 0.0 && em.key != u64::MAX {
             commands.entity(e).despawn();
         }
     }
 }
 
-/// The island's sound regions (`soundregions_default.obj`): each has a
-/// layered bed and pools of one-off calls (birds, insects, animals) for day
-/// and night. Where the game paints them isn't recovered, so the region
-/// comes from the ground: the terrain layer underfoot, the shore, the
-/// heights, the open sea.
+/// The ambience's sound regions (`fc3_formats::sound_regions`): where the
+/// world paints them, what each plays, and the one the listener is in.
+#[derive(Resource, Default)]
+pub struct SoundRegions {
+    map: Option<fc3_formats::sound_regions::RegionMap>,
+    table: fc3_formats::sound_regions::Ambiences,
+    here: Option<u8>,
+}
+
+impl SoundRegions {
+    /// The region the listener is in.
+    pub fn here(&self) -> Option<&fc3_formats::sound_regions::Region> {
+        self.table.region(self.here?)
+    }
+}
+
+fn load_regions(mut commands: Commands, info: Res<CacheInfo>) {
+    use fc3_formats::sound_regions as sr;
+    let map = match std::fs::read(info.root.join(sr::MAP_REL)) {
+        Ok(b) => sr::RegionMap::from_bytes(&b).map_err(|e| warn!("sound region map: {e:#}")).ok(),
+        Err(_) => None,
+    };
+    let table = match std::fs::read_to_string(info.root.join(sr::TABLE_REL)) {
+        Ok(t) => sr::Ambiences::from_text(&t).map_err(|e| warn!("sound regions: {e:#}")).unwrap_or_default(),
+        Err(_) => sr::Ambiences::default(),
+    };
+    match &map {
+        Some(m) => info!("sound regions: {} ({} sectors painted, {} with several)", table.regions.len(), m.counts().0, m.counts().1),
+        None => info!("sound regions: {}, no map (picked from the ground)", table.regions.len()),
+    }
+    commands.insert_resource(SoundRegions { map, table, here: None });
+}
+
+/// Where the cache has no region map, a region picked from the ground: the
+/// terrain layer underfoot, the shore, the heights, the open sea.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Region {
     Jungle,
@@ -826,6 +915,18 @@ enum Region {
 }
 
 impl Region {
+    /// The game's region it stands for (`disUniqueId`).
+    fn index(self) -> u8 {
+        match self {
+            Region::Jungle => 44,
+            Region::Forest => 12,
+            Region::Field => 18,
+            Region::Beach => 6,
+            Region::Ocean => 13,
+            Region::Peak => 39,
+        }
+    }
+
     /// (bed, day calls, night calls); 0 = none.
     fn sounds(self) -> (u32, u32, u32) {
         match self {
@@ -872,7 +973,43 @@ const REGION_FADE: f32 = 0.35;
 const INDOOR_ROOF: f32 = 8.0;
 const INDOOR_LEVEL: f32 = 0.3;
 
-/// Background jungle loop plus occasional birdsong and surf near the coast.
+/// The wind loops' parameter: the wind's speed (km/h).
+const WIND_SPEED: u32 = 0x0044_025C;
+/// A region's calls are counted against its band's polyphony this long (s).
+const CALL_LENGTH: f32 = 4.0;
+
+/// Loops fading in and out as the region changes: each event's level and
+/// its gain.
+#[derive(Default)]
+struct Fades(Vec<(u32, f32, f32)>);
+
+impl Fades {
+    /// Fades `now` in (at `gain`) and the rest out; those still heard, at
+    /// their level.
+    fn step(&mut self, now: u32, gain: f32, dt: f32) -> Vec<(u32, f32)> {
+        if now != 0 && !self.0.iter().any(|b| b.0 == now) {
+            self.0.push((now, 0.0, gain));
+        }
+        let rate = REGION_FADE * dt;
+        for (event, level, g) in self.0.iter_mut() {
+            let target = if *event == now {
+                *g = gain;
+                1.0
+            } else {
+                0.0
+            };
+            *level += (target - *level).clamp(-rate, rate);
+        }
+        self.0.retain(|b| b.1 > 0.0 || b.0 == now);
+        self.0.iter().filter(|b| b.1 > 0.01).map(|b| (b.0, b.1 * b.2)).collect()
+    }
+}
+
+/// The ambience of the region painted where the listener is (else one
+/// picked from the ground): its bed, by day or night, its wind and its
+/// calls (birds, insects, animals) round about, as often as the hour has
+/// them. Inside a room with a region of its own (a cave, a bunker), that
+/// region's, at full.
 #[allow(clippy::too_many_arguments)]
 fn ambience(
     time: Res<Time>,
@@ -882,10 +1019,13 @@ fn ambience(
     spatial: avian3d::prelude::SpatialQuery,
     mut loops: MessageWriter<LoopSfx>,
     mut sfx: MessageWriter<PlaySfx>,
-    (mut next_bird, mut outdoors, mut beds): (Local<f32>, Local<Option<f32>>, Local<Vec<(u32, f32)>>),
+    (mut next_bird, mut outdoors, mut beds, mut winds): (Local<f32>, Local<Option<f32>>, Local<Fades>, Local<Fades>),
+    (mut due, mut recent): (Local<[f32; 4]>, Local<[Vec<f32>; 4]>),
     mut rng: ResMut<Rng>,
     (probe, tod, driving, rooms): (crate::surfaces::SurfaceProbe, Res<crate::sky::TimeOfDay>, Res<crate::vehicles::Driving>, Option<Res<crate::mixer::Rooms>>),
+    (mut regions, weather): (ResMut<SoundRegions>, Option<Res<crate::clouds::Weather>>),
 ) {
+    use crate::sky::SEA_LEVEL;
     if *state.get() == crate::menu::GameState::Paused {
         return;
     }
@@ -895,49 +1035,120 @@ fn ambience(
         return;
     }
     // No terrain loaded under the player: out at sea.
-    let ground = heights.height_at(p.translation).unwrap_or(crate::sky::SEA_LEVEL - 50.0);
-    let near_sea = ground < crate::sky::SEA_LEVEL + 6.0;
+    let ground = heights.height_at(p.translation).unwrap_or(SEA_LEVEL - 50.0);
     // Under a roof (a hut, a cave), the outside is muffled.
     let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([pe]);
     let roofed = spatial.cast_ray(p.translation + Vec3::Y * 0.8, Dir3::Y, INDOOR_ROOF, true, &filter).is_some();
     let out = outdoors.get_or_insert(1.0);
     let target = if roofed { INDOOR_LEVEL } else { 1.0 };
     *out += (target - *out) * (time.delta_secs() * 2.0).min(1.0);
-    // The region's bed, faded in as the last one fades out; inside a room
-    // with a region of its own (a cave, a bunker), its bed, at full and
-    // with no calls from outside.
-    let region = Region::at(ground, probe.terrain_layer(p.translation), driving.vehicle.is_some() || p.translation.y < crate::sky::SEA_LEVEL + 3.0);
+    let picked = || Region::at(ground, probe.terrain_layer(p.translation), driving.vehicle.is_some() || p.translation.y < SEA_LEVEL + 3.0);
+    let painted = regions.map.as_ref().and_then(|m| m.region_at(p.translation.x, -p.translation.z));
+    let index = painted.unwrap_or_else(|| picked().index());
+    regions.here = Some(index);
+    let regions = &*regions;
+    let region = regions.table.region(index);
+    let room = rooms.as_deref().and_then(|r| r.region());
+    let inside = room.and_then(|i| u8::try_from(i).ok()).and_then(|i| regions.table.region(i));
     let room_bed = rooms.as_deref().and_then(|r| r.bed());
-    let (bed, day_calls, night_calls) = room_bed.map_or_else(|| region.sounds(), |b| (b, 0, 0));
-    let out = if room_bed.is_some() { 1.0 } else { *out };
     let dt = time.delta_secs();
-    if !beds.iter().any(|b| b.0 == bed) {
-        beds.push((bed, 0.0));
+    // The bed (a room's at full), faded in as the last one fades out.
+    let heard = inside.or(region.filter(|_| room_bed.is_none()));
+    let (bed, gain) = match (heard, room_bed) {
+        (Some(r), _) => (r.bed, gain_of(r.volume)),
+        (None, Some(b)) => (b, 1.0),
+        (None, None) => (picked().sounds().0, 1.0),
+    };
+    let out = if room_bed.is_some() { 1.0 } else { *out };
+    let light = tod.daylight();
+    for (event, level) in beds.step(bed, gain, dt) {
+        let tracks = regions.table.regions.iter().find(|r| r.bed == event).map(|r| (r.day_tracks, r.night_tracks, light));
+        loops.write(LoopSfx { key: 0x5245_0000_0000_0000 | event as u64, event, at: None, volume: out * level * 0.35, tracks, ..default() });
     }
-    for (event, level) in beds.iter_mut() {
-        let target = if *event == bed { 1.0 } else { 0.0 };
-        *level = (*level + (target - *level).signum() * REGION_FADE * dt).clamp(0.0, 1.0);
+    // Its wind, as strong as the weather's.
+    let wind = heard.map_or(0, |r| r.wind);
+    let kmh = weather.as_deref().map_or(10.0, |w| w.wind().length() * 3.6);
+    for (event, level) in winds.step(wind, 1.0, dt) {
+        let params = [(WIND_SPEED, kmh), (0, 0.0), (0, 0.0), (0, 0.0)];
+        loops.write(LoopSfx { key: 0x5749_0000_0000_0000 | event as u64, event, at: None, volume: out * level * 0.35, params, ..default() });
     }
-    beds.retain(|b| b.1 > 0.0 || b.0 == bed);
-    for &(event, level) in beds.iter() {
-        if level > 0.01 {
-            loops.write(LoopSfx { key: 0x5245_0000_0000_0000 | event as u64, event, at: None, volume: out * level * 0.35, ..default() });
+    if regions.table.regions.is_empty() {
+        // (An older cache: the ground's pick, the surf and its calls.)
+        if ground < SEA_LEVEL + 6.0 {
+            loops.write(LoopSfx { key: 2, event: ev::WAVES, at: None, volume: out * 0.4, ..default() });
         }
-    }
-    if near_sea {
-        loops.write(LoopSfx { key: 2, event: ev::WAVES, at: None, volume: out * 0.4, ..default() });
-    }
-    // Its calls now and then, somewhere round about; the night has its own.
-    let calls = if tod.daylight() > 0.3 { day_calls } else { night_calls };
-    *next_bird -= dt;
-    if *next_bird <= 0.0 && !roofed {
-        *next_bird = rng.range(4.0, 12.0);
-        if calls != 0 {
-            let offset = Vec3::new(rng.range(-30.0, 30.0), rng.range(5.0, 15.0), rng.range(-30.0, 30.0));
-            sfx.write(PlaySfx { event: calls, at: Some(p.translation + offset), volume: 0.5 });
+        let (_, day_calls, night_calls) = picked().sounds();
+        let calls = if light > 0.3 { day_calls } else { night_calls };
+        *next_bird -= dt;
+        if *next_bird <= 0.0 && !roofed {
+            *next_bird = rng.range(4.0, 12.0);
+            if calls != 0 && room_bed.is_none() {
+                let offset = Vec3::new(rng.range(-30.0, 30.0), rng.range(5.0, 15.0), rng.range(-30.0, 30.0));
+                sfx.write(PlaySfx { event: calls, at: Some(p.translation + offset), volume: 0.5 });
+            }
         }
+        return;
+    }
+    // Its calls: each band now and then, as often as the hour has it,
+    // somewhere round about, no more at once than it allows (a room's own,
+    // else the outside's while not under a roof).
+    let calling = if room_bed.is_some() { inside } else { region.filter(|_| !roofed) };
+    let now = time.elapsed_secs();
+    let intensity = regions.table.intensity(tod.hours);
+    for b in 0..4 {
+        recent[b].retain(|t| now - t < CALL_LENGTH);
+        let Some(c) = calling.map(|r| &r.calls[b]).filter(|c| !c.events.is_empty()) else { continue };
+        let rate = c.per_minute * intensity[b] / 60.0;
+        if rate <= 0.0 {
+            continue;
+        }
+        // (Each after an exponential wait: they come at random.)
+        let mut wait = || -rng.f32().max(1e-4).ln();
+        if due[b] == 0.0 {
+            due[b] = wait();
+        }
+        due[b] -= dt * rate;
+        if due[b] > 0.0 {
+            continue;
+        }
+        due[b] = wait();
+        if recent[b].len() >= c.polyphony.max(1) as usize {
+            continue;
+        }
+        recent[b].push(now);
+        let event = c.events[(rng.f32() * c.events.len() as f32) as usize % c.events.len()];
+        let (near, far) = if c.radius.1 > 0.0 { c.radius } else { (20.0, 60.0) };
+        let (angle, d) = (rng.range(0.0, std::f32::consts::TAU), rng.range(near, far.max(near)));
+        let mut at = p.translation + Vec3::new(angle.cos() * d, 0.0, angle.sin() * d);
+        at.y = heights.height_at(at).map_or(p.translation.y, |g| g.max(SEA_LEVEL)) + rng.range(1.0, 10.0);
+        sfx.write(PlaySfx { event, at: Some(at), volume: 0.5 });
     }
     if std::env::var("FC3_REGION_DEBUG").is_ok() && (time.elapsed_secs() % 2.0) < dt {
-        info!("sound region {region:?} (layer {:?}, ground {ground:.0})", probe.terrain_layer(p.translation));
+        let name = |r: Option<&fc3_formats::sound_regions::Region>| r.map(|r| r.name.clone());
+        info!(
+            "sound region {index} {:?} ({}), room {:?}, bands {intensity:?}",
+            name(region),
+            if painted.is_some() { "painted" } else { "from the ground" },
+            name(inside)
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_beds_day_tracks_give_way_to_its_night_ones() {
+        assert_eq!(layer_of("audio/ogg/001133b8_l4.ogg"), Some(4));
+        assert_eq!(layer_of("audio/ogg/000d3348.ogg"), None);
+        // Four day tracks and two night ones, at dusk (a quarter light).
+        let tracks = Some((4, 2, 0.25));
+        assert_eq!(track_share(tracks, Some(3)), 0.25);
+        assert_eq!(track_share(tracks, Some(4)), 0.75);
+        // Past them, or with no night tracks, every track plays.
+        assert_eq!(track_share(tracks, Some(6)), 1.0);
+        assert_eq!(track_share(Some((2, 0, 0.0)), Some(1)), 1.0);
+        assert_eq!(track_share(None, Some(1)), 1.0);
     }
 }

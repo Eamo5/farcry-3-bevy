@@ -321,6 +321,12 @@ pub struct Rooms {
 }
 
 impl Rooms {
+    /// The region of the room the listener is in, where it has one of its
+    /// own (a cave, a bunker).
+    pub fn region(&self) -> Option<u32> {
+        self.rooms.get(self.inside?)?.region
+    }
+
     /// The bed of the room the listener is in, where it has a region of its
     /// own (a cave, a bunker).
     pub fn bed(&self) -> Option<u32> {
@@ -361,7 +367,12 @@ fn room_mixing_name(r: &fc3_formats::rooms::Room) -> Option<String> {
 
 /// The room the listener is in (the smallest of those it is in): its
 /// mixing on while inside, and its sounds of going in and out.
-pub fn room_mixings(rooms: Option<ResMut<Rooms>>, listener: Query<&GlobalTransform, With<crate::player::PlayerCamera>>, mut mixings: ResMut<Mixings>) {
+pub fn room_mixings(
+    rooms: Option<ResMut<Rooms>>,
+    listener: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
+    mut mixings: ResMut<Mixings>,
+    regions: Option<Res<crate::sound::SoundRegions>>,
+) {
     let (Some(mut rooms), Ok(ear)) = (rooms, listener.single()) else { return };
     let p = ear.translation().to_array();
     let cell = ((p[0] / ROOM_CELL).floor() as i32, (p[2] / ROOM_CELL).floor() as i32);
@@ -374,9 +385,11 @@ pub fn room_mixings(rooms: Option<ResMut<Rooms>>, listener: Query<&GlobalTransfo
         .filter(|&i| rooms.rooms[i].contains(p))
         .min_by(|&a, &b| rooms.rooms[a].size().total_cmp(&rooms.rooms[b].size()));
     // The reverb preset: the room's own while inside one that has it, else
-    // the outdoors' (its event pushes the mixer's reverb state; the latest
-    // pushed wins).
-    let reverb = now.map(|i| rooms.rooms[i].reverb).filter(|r| *r != 0 && *r != u32::MAX).unwrap_or(rooms.outdoors);
+    // the sound region's the listener is in, else the outdoors' (its event
+    // pushes the mixer's reverb state; the latest pushed wins).
+    let set = |r: &u32| *r != 0 && *r != u32::MAX;
+    let outside = regions.as_deref().and_then(|r| r.here()).map(|r| r.reverb).filter(set).unwrap_or(rooms.outdoors);
+    let reverb = now.map(|i| rooms.rooms[i].reverb).filter(set).unwrap_or(outside);
     if reverb != 0 && rooms.reverb != Some(reverb) {
         debug!("room: reverb preset {reverb:08x}");
         mixings.1.push(reverb);

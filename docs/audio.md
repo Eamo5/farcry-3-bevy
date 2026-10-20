@@ -462,8 +462,9 @@ Parameters 3 and 5 (density and the treble's decay ratio, it seems) and
 10, 11, 13 and 14 aren't used. A small room's preset decays in 1.5 s.
 
 The game (`mixer::room_mixings`) pushes the preset of the room the
-listener is in, else the outdoors' (the one most regions have, `0x470ED`:
-our ambience picks its region from the ground, not the game's region map).
+listener is in, else that of the sound region the listener is in (see
+Ambience), else the outdoors' (the one most regions have, `0x470ED`). The
+grassland's (`0x18F693`) and the mountain peaks' (`0x1A6DD8`) differ.
 The mixer publishes the latest preset's parameters and each bus's send.
 Each sound (`sound_source::Reverb`) rings its own reverb, after its
 filters and before its volume and panning, so a distant sound's reverb is
@@ -742,9 +743,9 @@ for reloading are under Barks below.
 
 ### Ambience (`soundregions_default.obj`)
 
-Each region has a looping multitrack (layered; play all tracks), wind and rain
-loops, and a pool of random one-shots (birds, insects, animals) that are
-scheduled around the listener.
+Each region has a looping multitrack (its first `iDayTrackCount` tracks play by
+day, the next `iNightTrackCount` by night), wind and rain loops, and calls
+(birds, insects, animals) placed around the listener.
 
 | region | multitrack loop | wind | rain | random one-shots |
 |---|---|---|---|---|
@@ -763,9 +764,50 @@ scheduled around the listener.
 Bird/animal one-shot pools that are shared across regions:
 `000A6BA9` (63 v, forest/village day), `000A6BA5` (23 v, night).
 
-Where the game paints these regions isn't recovered. None of the world entities, the
-sector descriptions or `game.xml` names them. So `sound::Region` picks one from the
-ground:
+Each world sector paints its regions in `sector<id>.srl` (next to its other
+generated files): 1,024 bytes, 32×32 cells of 2 m, row by row from the sector's
+south-west corner (x east, then y north), each a region's `disUniqueId`. The
+row order was checked against the seams: with it, 3.5% of the cells along
+sector edges differ from their neighbours', against 28-49% with the rows
+flipped or turned. In `fc3_main` the ocean levels read `MEM_OpenOcean_LP` (and
+`GYM Ocean` far out), the shores `STR_BeachWaves` and `MEM_BeachWaves`, the
+north island `STR_Jungle_North_Island` and `MEM_Grassland_Field`, the south
+island `MEM_Grassland_Field` and `STR_Jungle_South_Island`, and the levels of
+the dream and Shanghai sequences their own (`SHA_*`, `MEM_INT_Subpen`,
+`SHA_MEM_Temple`, `MEM_INT_Cave`). 9,128 of the 12,800 sectors are one region
+throughout.
+
+The converter writes the map to `world/sound_regions.bin`
+(`sound_regions::RegionMap`: per sector its region, or its cells) and the
+regions to `world/sound_regions.txt` (`sound_regions::Ambiences`):
+
+* `region <index> <bed> <day tracks> <night tracks> <volume> <wind> <rain>
+  <reverb> <name>`: the volume is the quietest `Level`'s `MainStream`
+  `fVolume` (dB), the reverb its `sndReverb`;
+* `calls <index> <band> <per minute> <polyphony> <min> <max> <events>`: the
+  four bands are `DayMediumPerspective`, `DayNearPerspective`,
+  `NightMediumPerspective` and `NightNearPerspective`. The events are the
+  `RandomFxContainer`'s `sndSoundId`s; the rate (`fFrequency`, read as calls
+  a minute), the most at once (`iPolyphony`) and the distance from the
+  listener (`fMinRadius`, `fMaxRadius`) are the `Level`'s;
+* `time <hour> <intensities>`: the template's `TimeCurve`, how much each band
+  calls at that hour (at 1:00 the night bands, at 7:00 the day bands, at
+  20:00 the night bands again).
+
+The game (`sound::ambience`) reads the region painted under the listener. It
+crossfades the region's bed, weighting the day tracks by the daylight and
+the night tracks by the dark. The bed's level is the region's volume. The
+region's wind loop follows the weather's wind (its parameter `0x44025C`, read
+as km/h). Each band calls at its rate times the hour's intensity, at random
+(an exponential wait), no more than its polyphony within 4 s, between its
+two distances and 1-10 m over the ground. Under a roof the outside's calls
+stop; inside a room with a region of its own, that region's bed, wind and
+calls play. The rain (`clouds::rain`) is the region's, its parameter
+(`0x4B194E`) the rain's strength: at 0 its curve is at -96 dB, so a rain
+loop sent with no parameter (as before) wasn't heard. `FC3_REGION_DEBUG`
+logs the region, whether it was painted, and the bands' intensities.
+
+With no map in the cache, `sound::Region` picks one from the ground:
 
 | condition | region |
 |---|---|
@@ -777,8 +819,8 @@ ground:
 | coastal and cliff layers | island forest |
 
 The terrain layer is the strongest in the atlas mask under the player. Region beds
-crossfade at 0.35 per second. Every 4-12 s one of the region's day or night calls plays
-somewhere within 30 m (`FC3_REGION_DEBUG` logs the region).
+crossfade at 0.35 per second. With no region table either, every 4-12 s one of the
+region's day or night calls plays somewhere within 30 m.
 
 ### Music (`CFCXMusicService` states)
 
