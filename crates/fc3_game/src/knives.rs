@@ -16,7 +16,8 @@
 //! challenger calls the player over, cheers and curses the throws and wins
 //! or loses in their own lines. Places are the anchor's (the moves are made
 //! about it): the throwing spot, where the player watches, where the
-//! challenger talks.
+//! challenger talks and where the player talks to them. The player walks
+//! between them by their own moves, the view in the moves' camera.
 
 use std::collections::HashMap;
 
@@ -48,6 +49,9 @@ impl Plugin for KnivesPlugin {
 const THROW_SPOT: [f32; 3] = [-3.891, -4.636, -0.128];
 const WATCH_SPOT: [f32; 3] = [-4.510, -7.224, -0.128];
 const TALK_SPOT: [f32; 3] = [-3.840, -4.587, -0.121];
+/// Where the player stands talking to them (the wager, the result): where
+/// their walk to watch starts and their walk at the game's end ends.
+const PLAYER_TALK_SPOT: [f32; 3] = [-4.174, -5.784, -0.128];
 /// The wheel's turn (radians a second: 360 degrees in 24 s), its radius,
 /// and its painted face (in front of its centre, m).
 const SPIN: f32 = std::f32::consts::TAU / 24.0;
@@ -92,6 +96,13 @@ const TO_THROW_MOVE: &str = "ex_knife_throw_npc_move_to_throw.mab";
 const TO_START_MOVE: &str = "ex_knife_throw_npc_move_to_start.mab";
 /// How long the walk in takes (its move's length): the first throw after.
 const NPC_WALK_IN: f32 = 5.067;
+/// The player's walks (`Move_Player_MoveToStart`, `..._MoveToThrow`,
+/// `..._GameEnd`): from where they talk to where they watch as the game
+/// starts, from there to the throwing spot as their turn does, and back to
+/// talk at its end.
+const PLAYER_TO_WATCH: &str = "ex_knife_throw_player_move_to_spectate.mab";
+const PLAYER_TO_THROW: &str = "ex_knife_throw_player_move_to_throw.mab";
+const PLAYER_END: &str = "ex_knife_throw_player_game_end.mab";
 /// The challenger's throw's whoosh (the player's comes with their arms'
 /// throw).
 const NPC_THROW_SOUND: u32 = 0x0015_911F;
@@ -255,6 +266,10 @@ struct Game {
     clock: f32,
     /// The view the player was put at (the stage's place and what it faces).
     view: u8,
+    /// The player's walk playing (its scene and when it ends), and the last
+    /// one played this game.
+    walk: Option<(String, f32)>,
+    walked: Option<&'static str>,
     /// A test's captures.
     shot: (String, f32, Vec<String>),
     left: bool,
@@ -262,7 +277,8 @@ struct Game {
 
 impl Game {
     /// Where the player stands on their turn: walking first from where they
-    /// watched to the throwing spot.
+    /// watched to the throwing spot (a glide, when their walk's move can't
+    /// play).
     fn thrower_at(&self) -> Vec3 {
         let (from, to) = (self.site.at(WATCH_SPOT), self.site.at(THROW_SPOT));
         match self.stage {
@@ -377,7 +393,7 @@ fn play_knives(
             scale: Vec3::ONE,
         })
     };
-    let sites: Vec<Site> = host
+    let mut sites: Vec<Site> = host
         .story
         .gameplays()
         .into_iter()
@@ -393,6 +409,17 @@ fn play_knives(
             })
         })
         .collect();
+    // (FC3_KNIFE_SITE=<anchor>,<wheel>,<challenger> (tests): a site by its
+    // entities, before its script starts the game, which it does only out
+    // of the story's exclusive missions.)
+    if let Some([anchor, wheel, challenger]) = std::env::var("FC3_KNIFE_SITE").ok().and_then(|v| {
+        let ids: Vec<u64> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        <[u64; 3]>::try_from(ids).ok()
+    }) {
+        if let (true, Some(anchor)) = (sites.is_empty(), anchor_of(anchor)) {
+            sites.push(Site { gameplay: 0, challenger, wheel, anchor });
+        }
+    }
     let nearest = sites.iter().min_by(|a, b| a.anchor.translation.distance(player_at).total_cmp(&b.anchor.translation.distance(player_at))).copied();
     if knives.game.as_ref().is_some_and(|g| nearest.is_none_or(|n| n.gameplay != g.site.gameplay) && g.stage == Stage::Away) {
         knives.game = None;
@@ -427,6 +454,8 @@ fn play_knives(
             called: 0.0,
             clock: 0.0,
             view: 0,
+            walk: None,
+            walked: None,
             shot: Default::default(),
             left: false,
         });
@@ -643,10 +672,13 @@ fn play_knives(
             say(game, line, &mut sfx);
         }
     }
+    // The player's walks between their places.
+    let walking = walk_player(game, &mut cinema, &server, &clips, &mut clip_handles);
     // The player's place: facing the challenger for the wager and the
     // result, watching their throws, then throwing.
     let place = match game.stage {
-        Stage::Betting | Stage::Result(_) => Some((site.at(WATCH_SPOT), talk_at, 1)),
+        _ if walking => None,
+        Stage::Betting | Stage::Result(_) => Some((site.at(PLAYER_TALK_SPOT), talk_at, 1)),
         Stage::Challenger(..) => Some((site.at(WATCH_SPOT), wheel_centre, 2)),
         Stage::Thrower(..) => Some((game.thrower_at(), wheel_centre, 3)),
         Stage::Away => None,
@@ -740,6 +772,7 @@ fn play_knives(
             }
             Stage::Thrower(n, Some(_), _) if n >= 2 => "thrower".into(),
             Stage::Thrower(3, None, _) => "landed".into(),
+            Stage::Thrower(0, None, wait) if wait > DRAW => "walk".into(),
             Stage::Thrower(0, None, _) => "drawn".into(),
             Stage::Thrower(..) => String::new(),
             Stage::Result(_) => "result".into(),
@@ -751,7 +784,8 @@ fn play_knives(
         let moment = match game.shot.0.as_str() {
             "thrower" => 0.4,
             "landed" => 0.35,
-            "drawn" => TO_THROW + 0.95,
+            "walk" => TO_THROW * 0.5,
+            "drawn" => 0.95,
             _ => 1.0,
         };
         if !game.shot.0.is_empty() && game.shot.1 > moment && !game.shot.2.contains(&game.shot.0) {
@@ -840,6 +874,83 @@ fn pose_challenger(
     if let Some((old, ..)) = game.pose.replace((name, want, until)) {
         cinema.stop_built(&old);
     }
+}
+
+/// The player's walk for the stage, once as it starts: to where they watch
+/// as the game does (`Move_Player_MoveToStart`), to the throwing spot as
+/// their turn does (`Move_Player_MoveToThrow`) and back to where they talk
+/// at its end (`Move_Player_GameEnd`). Each is a scene of their own move
+/// about the anchor: the view in its camera, carried along by its root. The
+/// stage's place takes them again after. True while one plays (and the
+/// frame it ends, the scene's view let go first).
+fn walk_player(
+    game: &mut Game,
+    cinema: &mut crate::cinema::Cinema,
+    server: &AssetServer,
+    clips: &Assets<Fc3Clip>,
+    handles: &mut HashMap<String, Handle<Fc3Clip>>,
+) -> bool {
+    use fc3_formats::cinema::{Clip, ClipKind, Group, GroupKind, Sequence};
+    let mut load = |m: &str| {
+        let path = format!("{MOVES}{m}");
+        let handle = handles.entry(path.clone()).or_insert_with(|| server.load(crate::cache_assets::cache_path(&fc3_formats::cache::anim_rel(&path))));
+        (path, handle.clone())
+    };
+    let want = match game.stage {
+        Stage::Challenger(..) => Some(PLAYER_TO_WATCH),
+        Stage::Thrower(0, None, wait) if wait > DRAW => Some(PLAYER_TO_THROW),
+        Stage::Thrower(..) => None,
+        Stage::Result(_) => Some(PLAYER_END),
+        // (A new game's walks loaded while the wager is chosen.)
+        Stage::Betting => {
+            game.walked = None;
+            for m in [PLAYER_TO_WATCH, PLAYER_TO_THROW, PLAYER_END] {
+                load(m);
+            }
+            None
+        }
+        Stage::Away => {
+            game.walked = None;
+            None
+        }
+    };
+    // Its time out, or the game left.
+    let mut ended = false;
+    if let Some((name, until)) = &game.walk {
+        if game.clock >= *until || game.stage == Stage::Away {
+            cinema.stop_built(name);
+            game.walk = None;
+            game.view = 0;
+            ended = true;
+        }
+    }
+    if let Some(want) = want.filter(|w| game.walked != Some(*w)) {
+        let (path, handle) = load(want);
+        if crate::cache_assets::done(server, handle.id()) {
+            game.walked = Some(want);
+            if let Some(length) = clips.get(&handle).map(|c| c.0.duration).filter(|l| *l > 0.0) {
+                let name = format!("knives_player_{}", game.poses);
+                game.poses += 1;
+                let anim = Clip {
+                    start: 0.0,
+                    duration: length,
+                    kind: ClipKind::Animation { source: path, from: 0, to: (length * 30.0) as u32, blend: 0.2, anchored: false },
+                };
+                let groups = vec![Group { uid: 1, kind: GroupKind::Player, name: "player".into(), archetype: 0, clips: vec![anim] }];
+                cinema.play_built(crate::cinema::Built {
+                    name: name.clone(),
+                    seq: Sequence { name: name.clone(), duration: length, looping: false, groups, ..Default::default() },
+                    origin: game.site.anchor,
+                    bindings: HashMap::new(),
+                });
+                if let Some((old, _)) = game.walk.replace((name, game.clock + length)) {
+                    cinema.stop_built(&old);
+                }
+                info!("knives: the player walks ({want}, {length:.1} s)");
+            }
+        }
+    }
+    game.walk.is_some() || ended
 }
 
 /// A knife in the air or stuck in the wheel.
@@ -1007,11 +1118,13 @@ fn hold_controls(mut knives: ResMut<KnifeGame>, mut actions: ResMut<ActionState>
     }
 }
 
-/// The player kept where the game puts them.
+/// The player kept where the game puts them (their walks carrying them
+/// meanwhile).
 fn hold_place(knives: Res<KnifeGame>, mut players: Query<(&mut Transform, &mut Player)>) {
-    let Some(game) = knives.game.as_ref() else { return };
+    let Some(game) = knives.game.as_ref().filter(|g| g.walk.is_none()) else { return };
     let at = match game.stage {
-        Stage::Betting | Stage::Challenger(..) | Stage::Result(_) => game.site.at(WATCH_SPOT),
+        Stage::Betting | Stage::Result(_) => game.site.at(PLAYER_TALK_SPOT),
+        Stage::Challenger(..) => game.site.at(WATCH_SPOT),
         Stage::Thrower(..) => game.thrower_at(),
         Stage::Away => return,
     };

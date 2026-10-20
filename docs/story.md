@@ -5120,7 +5120,13 @@ wager rows and their difficulty, the rings' worth, the lines):
   `FC3_KNIFE_SHOTS=<dir>` captures the wager box, the challenger's throws,
   the knife drawn, the player's throw (held, and the third's points), the
   leave box and the result. `FC3_KNIFE_SKIP` skips the challenger's throws and
-  `FC3_KNIFE_LEAVE` leaves before the player's third. Seen at G4's site (a kept checkpoint with
+  `FC3_KNIFE_LEAVE` leaves before the player's third.
+  `FC3_KNIFE_SITE=<anchor>,<wheel>,<challenger>` makes a site of those
+  entities before its script starts the game (it does so only when the
+  player uses the challenger outside the story's exclusive missions): C4's
+  is `2077732623953708516,2077732623953708519,2077732623953708523`, its
+  layer (`C4_Amanaki_KnivesThrow_main`) put in a checkpoint's copy as
+  active. Seen at G4's site (a kept checkpoint with
   G3's outpost taken, the player placed south of the wheel): row 1 ($50),
   the challenger's five throws, the player's five in the middle, won
   500 to 60 and paid $100, the knives stuck in the turning wheel.
@@ -5129,11 +5135,18 @@ wager rows and their difficulty, the rings' worth, the lines):
   track): drawn once, held ready, the throw held back, thrown and put away
   after the last. The knife leaves the hand 0.37 s into the throw, when
   the flying one sets off; the throw's whoosh is the move's own.
-* **Changing places.** The challenger walks in from where they talk to
-  the throwing spot (their own move, 5.1 s) before the first throw. After
-  their throws they walk off to watch (their own move) while the player
-  walks from where they watched to the throwing spot over their move's
-  4.3 s and draws the knife there; the result has the challenger's game-end
-  move, their walk back to where they talk (3.1 s), then their talk.
-* **Not yet.** The player's walks are glides (their full-body moves aren't
-  played).
+* **Changing places.** The player talks to the challenger (the wager, the
+  result) from where the game's moves have them stand for it, a little
+  before the throwing spot. The challenger walks in from where they talk to
+  the throwing spot (their own move, 5.1 s) before the first throw, while
+  the player walks off to watch (`Move_Player_MoveToStart`, 3.1 s). After
+  the challenger's throws they walk off to watch (their own move) and the
+  player walks to the throwing spot (`Move_Player_MoveToThrow`, 4.3 s) and
+  draws the knife there; at the result the player walks back to talk
+  (`Move_Player_GameEnd`, 4.6 s) while the challenger plays their game-end
+  move, walks back to where they talk (3.1 s) and talks. The player's walks
+  are their own moves in scenes at the anchor, as the challenger's are:
+  the view rides the move's camera and its root carries them, and the
+  stage's place takes them again after (a glide stands in should a move
+  not load). Seen at C4's site: the three walks, then five throws in the
+  middle, won 500 to 130.
