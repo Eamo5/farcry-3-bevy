@@ -20,7 +20,8 @@ pub struct RidersPlugin;
 impl Plugin for RidersPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, load_clips)
-            .add_systems(PostUpdate, (sit_riders, get_out).chain().after(crate::patrols::carry_crew).before(bevy::transform::TransformSystems::Propagate));
+            .add_systems(PostUpdate, (sit_riders, get_out).chain().after(crate::patrols::carry_crew).before(bevy::transform::TransformSystems::Propagate))
+            .add_systems(PostUpdate, seat_story_riders.after(crate::vehicles::seat_story_actors).before(bevy::transform::TransformSystems::Propagate));
     }
 }
 
@@ -171,6 +172,70 @@ fn sit_riders(
         }
         if let Some(rig) = npc.rig {
             commands.entity(rig).insert(ClipOverride { clip: handle.clone(), skeleton: rider_clips.skeleton.clone(), time: t });
+        }
+        if !sitting {
+            commands.entity(e).insert(Sitting);
+        }
+    }
+}
+
+/// How near (m) a place's seat must be to a story seat's bone to stand for
+/// it.
+const SAME_SEAT: f32 = 0.75;
+
+/// The story's characters in a vehicle's seats sit there on the seat's own
+/// clip: the first-person seated one where the seat has it (the wheel, the
+/// seat beside it, a 4x4's back seats), else the place whose seat is that
+/// one (`places`, nearest the seat's bone). Not while a scene plays them.
+#[allow(clippy::type_complexity)]
+fn seat_story_riders(
+    time: Res<Time>,
+    server: Res<AssetServer>,
+    rider_clips: Option<Res<RiderClips>>,
+    clips: Res<Assets<Fc3Clip>>,
+    vehicles: Query<(&Transform, &Vehicle)>,
+    mut actors: Query<(Entity, &mut Transform, &crate::story_actors::StoryActor, Has<Sitting>), Without<Vehicle>>,
+    mut seated: Local<std::collections::HashMap<&'static str, Handle<Fc3Clip>>>,
+    mut commands: Commands,
+) {
+    let Some(rider_clips) = rider_clips else { return };
+    for (e, mut at, actor, sitting) in &mut actors {
+        let seat = (!actor.dead && !actor.in_scene)
+            .then(|| vehicles.iter().find_map(|(vt, v)| v.seat_of(actor.id).map(|(i, kind, pose)| (*vt, v, i, kind, pose))))
+            .flatten()
+            // (A gun's seat is its gunner's business: `turrets`.)
+            .filter(|(.., kind, _)| *kind != 2);
+        let Some((vt, v, i, _, pose)) = seat else {
+            // Out of the seat (or in a scene's hands, or dead): its own clips.
+            if sitting {
+                if let (Some(rig), false) = (actor.rig, actor.in_scene) {
+                    commands.entity(rig).remove::<ClipOverride>();
+                }
+                commands.entity(e).remove::<Sitting>();
+            }
+            continue;
+        };
+        let handle = match v.first_person_clip(i) {
+            Some(path) => Some(
+                seated
+                    .entry(path)
+                    .or_insert_with(|| server.load(cache_path(&fc3_formats::cache::anim_rel(&format!(r"graphics\characters\_common\animations\{path}")))))
+                    .clone(),
+            ),
+            None => places(v.name())
+                .iter()
+                .filter_map(|p| rider_clips.clips.get(p.sit))
+                .filter_map(|h| clips.get(h).map(|c| (h, crate::cinema::clip_root(&c.0, 0.0).translation.distance(pose.translation))))
+                .filter(|(_, d)| *d < SAME_SEAT)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(h, _)| h.clone()),
+        };
+        let Some((handle, clip)) = handle.and_then(|h| clips.get(&h).map(|c| (h.clone(), c))) else { continue };
+        let length = clip.0.duration.max(0.1);
+        let t = (time.elapsed_secs() + (e.to_bits() % 16) as f32 * 0.37).rem_euclid(length);
+        *at = capsule(vt * crate::cinema::clip_root(&clip.0, t));
+        if let Some(rig) = actor.rig {
+            commands.entity(rig).insert(ClipOverride { clip: handle, skeleton: rider_clips.skeleton.clone(), time: t });
         }
         if !sitting {
             commands.entity(e).insert(Sitting);

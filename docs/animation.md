@@ -549,9 +549,17 @@ long after; with `--screenshot` it captures them seated and 0.7, 1.5 and
 Seen: the driver with hands on the wheel, the bed's riders sitting with
 their rifles, and all four out beside the vehicle. A pirate crew fired
 through the technical at the player and wrecked it, so the test crew are
-rebels. Not yet: the story's characters in a vehicle's seats (put at the
-seat's bone, on their own clips) don't take these loops, and nobody plays
-the moves into a vehicle.
+rebels.
+
+The story's characters in a vehicle's seats sit the same way
+(`seat_story_riders`). One takes the seat's first-person seated clip where
+the seat has one (`vehicles::seated_clip`: the wheel, the seat beside it,
+a 4x4's back seats). Otherwise it takes the place whose seat is within
+0.75 m of the seat's bone. A gun's seat is left to its gunner, and a
+character a scene plays is left to the scene. Not seen in a run yet, since
+no checkpoint with a story crew aboard was at hand. Not yet: the story
+crews' moves out of their seats (they leave as before), and anyone's
+moves into a vehicle.
 
 ### Guard spots
 

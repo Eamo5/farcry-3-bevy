@@ -1041,6 +1041,12 @@ impl Vehicle {
         Some(to)
     }
 
+    /// The seat a pawn has, its kind (1 the wheel, 2 a gun, 3 a
+    /// passenger's), and where it is (its bone, in the vehicle's frame).
+    pub(crate) fn seat_of(&self, pawn: u64) -> Option<(usize, i32, Transform)> {
+        self.seats.iter().position(|s| s.pawn == Some(pawn)).map(|i| (i, self.seats[i].kind, self.seats[i].pose))
+    }
+
     /// Never play a driver pose for a passenger, gunner or unsupported seat.
     pub(crate) fn first_person_clip(&self, seat: usize) -> Option<&'static str> {
         let s = self.seats.get(seat)?;
@@ -1611,7 +1617,7 @@ const ON_FOOT_REACH: f32 = 150.0;
 const FIGHT_FROM_GUN: f32 = 400.0;
 const GUN_PATIENCE: f32 = 60.0;
 
-fn seat_story_actors(
+pub(crate) fn seat_story_actors(
     mut vehicles: Query<(&Transform, &mut Vehicle), Without<crate::story_actors::StoryActor>>,
     mut actors: Query<(Entity, &mut Transform, &mut crate::story_actors::StoryActor), Without<Vehicle>>,
     mut commands: Commands,
