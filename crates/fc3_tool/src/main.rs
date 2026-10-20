@@ -3190,6 +3190,15 @@ fn main() -> Result<()> {
             for event in &clip.sounds { println!("sound {:.3}s {:#x}", event.0, event.1); }
             for attachment in &clip.attachments { println!("attachment {attachment:?}"); }
             for sub in &clip.sub_clips { println!("sub-clip: skeleton {:#x}, {} tracks", sub.skeleton_id, sub.tracks.len()); }
+            // FC3_CLIP_TRACKS: each track's bone and how far it turns over the clip (degrees).
+            if std::env::var_os("FC3_CLIP_TRACKS").is_some() {
+                for t in &clip.tracks {
+                    let first = t.rotations.first().copied().unwrap_or([0.0, 0.0, 0.0, 1.0]);
+                    let turn = t.rotations.iter().map(|q| { let d = (first[0] * q[0] + first[1] * q[1] + first[2] * q[2] + first[3] * q[3]).abs().min(1.0); 2.0 * d.acos().to_degrees() }).fold(0.0f32, f32::max);
+                    let moved = t.translations.first().map_or(0.0, |f| t.translations.iter().map(|v| ((v[0] - f[0]).powi(2) + (v[1] - f[1]).powi(2) + (v[2] - f[2]).powi(2)).sqrt()).fold(0.0f32, f32::max));
+                    println!("track bone {} hash {:#010x}: turns {turn:.1} deg, moves {moved:.3} m, {} keys", t.bone, t.bone_hash, t.rotations.len());
+                }
+            }
         }
         "moves" => {
             // The engine's named moves, their states and clips: moves [name

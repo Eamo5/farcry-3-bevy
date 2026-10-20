@@ -30,6 +30,9 @@ impl Plugin for WildlifePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AnimalTable>()
             .init_resource::<WildlifeRegions>()
+            .init_resource::<Barks>()
+            .add_systems(Update, start_barks.after(animal_ai).run_if(in_state(crate::menu::GameState::Playing)))
+            .add_systems(PostUpdate, pose_barks.after(crate::characters::animate_characters).before(bevy::transform::TransformSystems::Propagate))
             .add_systems(OnExit(crate::menu::GameState::Loading), (load_animals, load_animal_table, load_wildlife_regions))
             .add_message::<PlaceAnimal>()
             .add_systems(Update, place_animals.run_if(in_state(crate::menu::GameState::Playing)))
@@ -55,6 +58,79 @@ impl Plugin for WildlifePlugin {
 
 /// Animals alive near the player at once.
 const MAX_ANIMALS: usize = 12;
+
+/// The dogs' rigs barking this frame (their alarm, a yelp, barks while
+/// they hunt): each gets one of the pitbull's facial bark clips over its
+/// body's pose.
+#[derive(Resource, Default)]
+pub struct Barks(Vec<Entity>);
+
+/// A bark on a dog's face: the clip and how far into it.
+#[derive(Component)]
+pub struct BarkFace {
+    clip: Handle<crate::cache_assets::Fc3Clip>,
+    t: f32,
+}
+
+/// The pitbull's facial barks (they move its jaw alone).
+const BARK_CLIPS: [&str; 3] = [
+    r"animals\pitbull\dog_fulb_facial_alertbark_1bark_+000fw_nowep_i1.mab",
+    r"animals\pitbull\dog_fulb_facial_alertbark_2barks_+000fw_nowep_i1.mab",
+    r"animals\pitbull\dog_fulb_facial_alertbark_3barks_+000fw_nowep_i1.mab",
+];
+/// How often a hunting dog barks (s).
+const HUNT_BARKS: (f32, f32) = (2.0, 4.5);
+
+fn start_barks(mut barks: ResMut<Barks>, server: Res<AssetServer>, mut rng: ResMut<Rng>, mut commands: Commands) {
+    for rig in barks.0.drain(..) {
+        let path = BARK_CLIPS[(rng.f32() * BARK_CLIPS.len() as f32) as usize % BARK_CLIPS.len()];
+        let clip = server.load(cache_path(&cache::anim_rel(&format!("{}{path}", crate::characters::CLIP_ROOT))));
+        commands.entity(rig).try_insert(BarkFace { clip, t: 0.0 });
+        debug!("animal: a dog barks ({path})");
+    }
+}
+
+/// Lays a bark's jaw over the dog's pose (only the nodes the clip moves),
+/// until it's through.
+#[allow(clippy::type_complexity)]
+fn pose_barks(
+    time: Res<Time>,
+    skeletons: Res<Assets<crate::cache_assets::Fc3Skeleton>>,
+    clips: Res<Assets<crate::cache_assets::Fc3Clip>>,
+    mut rigs: Query<(Entity, &crate::characters::CharacterRig, &mut BarkFace)>,
+    mut joints: Query<&mut Transform>,
+    mut moving: Local<std::collections::HashMap<AssetId<crate::cache_assets::Fc3Clip>, Vec<usize>>>,
+    mut commands: Commands,
+) {
+    for (e, rig, mut bark) in &mut rigs {
+        let (Some(skel), Some(clip)) = (skeletons.get(&rig.clips().skeleton), clips.get(&bark.clip)) else { continue };
+        let d = clip.0.duration.max(0.05);
+        // (The nodes it moves: those whose pose changes over it.)
+        let nodes = moving.entry(bark.clip.id()).or_insert_with(|| {
+            let poses: Vec<_> = (0..6).map(|k| rig.pose_of(&skel.0, &clip.0, d * k as f32 / 5.0)).collect();
+            let r = |m: &fc3_formats::anim::Mat4| Mat4::from_cols_array(m).to_scale_rotation_translation().1;
+            let nodes: Vec<usize> = (0..poses[0].len()).filter(|&i| poses.iter().any(|p| r(&p[i]).angle_between(r(&poses[0][i])) > 0.02)).collect();
+            let most = nodes
+                .iter()
+                .flat_map(|&i| poses.iter().map(move |p| (i, p)))
+                .map(|(i, p)| r(&p[i]).angle_between(r(&poses[0][i])).to_degrees())
+                .fold(0.0, f32::max);
+            debug!("animal: a bark moves {} of {} nodes, up to {most:.0} degrees", nodes.len(), poses[0].len());
+            nodes
+        });
+        let pose = rig.pose_of(&skel.0, &clip.0, bark.t.min(d));
+        for &i in nodes.iter() {
+            let (Some(&j), Some(m)) = (rig.joint_entities().get(i), pose.get(i)) else { continue };
+            if let Ok(mut t) = joints.get_mut(j) {
+                t.rotation = Mat4::from_cols_array(m).to_scale_rotation_translation().1;
+            }
+        }
+        bark.t += time.delta_secs();
+        if bark.t >= d {
+            commands.entity(e).remove::<BarkFace>();
+        }
+    }
+}
 
 /// How an animal reacts to the player.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1836,7 +1912,7 @@ fn animal_ai(
         Option<Res<AnimalAssets>>,
         Res<Assets<crate::cache_assets::Fc3Clip>>,
     ),
-    (fires, aflame): (Option<Res<crate::fire::Fires>>, Query<(), With<crate::burning::Aflame>>),
+    (fires, aflame, mut barks): (Option<Res<crate::fire::Fires>>, Query<(), With<crate::burning::Aflame>>, Option<ResMut<Barks>>),
 ) {
     let dt = time.delta_secs();
     let Ok((pe, pt, player, ph, inventory)) = players.single() else { return };
@@ -1876,8 +1952,16 @@ fn animal_ai(
         // A cry when hurt (the death call is the death's; health set from
         // the game's counters is no hurt).
         let hurt_now = h.current < a.health_seen && h.current < h.max && a.health_seen != f32::MAX;
+        // (A dog's mouth goes with its yelps and barks.)
+        let dog = s.animal == Animal::Dog;
+        let mut bark = |rig: Option<Entity>| {
+            if let (true, Some(rig), Some(b)) = (dog, rig, barks.as_deref_mut()) {
+                b.0.push(rig);
+            }
+        };
         if hurt_now {
             call(voice.hurt, pos, 1.0);
+            bark(a.rig);
         }
         a.health_seen = h.current;
         // Now and then, a call from one near enough to hear.
@@ -1886,6 +1970,12 @@ fn animal_ai(
             a.call_in = rng.range(CALL_EVERY.0, CALL_EVERY.1);
             if pos.distance(pt.translation) < CALL_RANGE && matches!(a.mood, Mood::Graze | Mood::Wander | Mood::Hunt) {
                 call(voice.idle, pos, 0.8);
+            }
+            // A dog on the hunt barks as it goes.
+            if dog && matches!(a.mood, Mood::Hunt | Mood::Attack) && pos.distance(pt.translation) < CALL_RANGE {
+                call(voice.alarm, pos, 1.0);
+                bark(a.rig);
+                a.call_in = rng.range(HUNT_BARKS.0, HUNT_BARKS.1);
             }
         }
         // The nearest one it could notice: the player, or a soldier (sea
@@ -2137,6 +2227,10 @@ fn animal_ai(
         // Bolting, or going for someone: the alarm call.
         if a.mood != mood_before && matches!(a.mood, Mood::Flee | Mood::Hunt) && !matches!(mood_before, Mood::Flee | Mood::Hunt | Mood::Attack) {
             call(voice.alarm, pos, 1.0);
+            bark(a.rig);
+            if dog {
+                a.call_in = rng.range(HUNT_BARKS.0, HUNT_BARKS.1);
+            }
         }
         // FC3_ANIMAL_DEBUG: each change of mood and what it sensed.
         if debug && a.mood != mood_before {
@@ -2721,7 +2815,8 @@ fn animal_test(
     let mut placed = 0.0;
     let mut shown = 0usize;
     for (i, s) in SPECIES.iter().enumerate() {
-        if hunt && s.animal != Animal::Tiger {
+        // (`hunt:<species>`: that one instead.)
+        if hunt && only.is_none() && s.animal != Animal::Tiger {
             continue;
         }
         if herd && (s.behaviour == Behaviour::Predator || s.habitat != Habitat::Land) {

@@ -833,8 +833,8 @@ are 32 kHz stereo Ogg, mostly streamed. List them with
 * Of the mixer states' effect units the low- and high-passes are applied
   (a high-pass is what is left over a one-pole low-pass at its cutoff), not
   whatever rings after a blast, and only while a state turns them on (not
-  the low-pass at 3,080 Hz by default). Bus parameter 4
-  isn't applied. Neither is
+  the low-pass at 3,080 Hz by default); and the reverb unit (see Reverb),
+  whose send is bus parameter 4. Not applied either:
   `Exclusive`/`Compatible` stacking (the latest state wins each parameter).
   Beyond the rooms and these four, the mixings the engine starts itself
   aren't known (the takedowns go unmixed). Music plays outside the mixer. The positioning's other

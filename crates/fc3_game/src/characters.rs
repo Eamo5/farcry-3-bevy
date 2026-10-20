@@ -383,6 +383,17 @@ pub struct CharacterRig {
 }
 
 impl CharacterRig {
+    /// A clip's pose of the rig's nodes at `t` (each node's local
+    /// transform), to lay part of it over the rig's own (a dog's bark).
+    pub fn pose_of(&self, skel: &anim::Skeleton, clip: &anim::Clip, t: f32) -> Vec<anim::Mat4> {
+        sample(self, skel, clip, t)
+    }
+
+    /// The joint entity of each node.
+    pub fn joint_entities(&self) -> &[Entity] {
+        &self.joints
+    }
+
     /// A line for logs: node and joint counts, the clip and its time.
     pub fn summary(&self) -> String {
         format!("{} nodes, {} joints, {:?} at {:.2}s", self.nodes.len(), self.joints.len(), self.current, self.time)

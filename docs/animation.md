@@ -893,8 +893,15 @@ impl FaceChoice { fn from_component(&fcb::Object); fn definition(head_tags) -> O
   (`facial\takedowns\3rdge_facial_...` for `3rdge_fulb_...`), played on
   their kit face as a line's lip-sync is; the double takedown's second
   victim too.
-* Not yet: generic characters' rigs by kit head tag, and the other
-  gameplay `*_facial` clips (skydives, dogs' barks).
+* A dog's mouth goes with its barks: the pitbull's facial clips
+  (`animals\pitbull\dog_fulb_facial_alertbark_{1bark,2barks,3barks}`, one
+  at random) move three of its 42 nodes, the jaw's, up to 25 degrees, and
+  the rest hold still. `wildlife::pose_barks` lays those three over its
+  body's pose (after `animate_characters`) as it barks: its alarm, a yelp
+  when hurt, and every 2 to 4.5 s while it hunts or attacks within 70 m
+  (its alarm call with each). `--animal-test hunt:dog` lets one loose.
+* Not yet: generic characters' rigs by kit head tag, and the skydives'
+  `*_facial` clips (a face the player doesn't see).
 
 ### Tools
 
