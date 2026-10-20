@@ -163,7 +163,14 @@ is the story's own:
   notices something (a thrown rock, the player, a body) its action is broken
   off (`CA_Interrupt`) and its AI takes over. Its AI state goes back to the
   scripts' state listeners. At an action's spot, the action's looping clip
-  stands in for the idle.
+  stands in for the idle. A character at rest (no action, its AI calm) takes
+  up the relax point it was placed by, as the AI's rest does: a
+  `Relax/SimpleAnimation.*` contextual action on its own layer within 2.5 m
+  (leaning on a wall, a guard's idles, smoking, looting crates;
+  `story_actors::actor_relax`). It keeps it until something breaks it off,
+  and the story hears nothing of it (no script asked). A script's action
+  takes over from it. In the opening, three of the camp's pirates rest this
+  way (`RUST_LOG=farcry3::story_actors=debug`: `rests at`).
 * **Objective markers** show on screen, at its edge when off it, on the
   minimap's rim and on the map; the GPS leads to the objective when the
   player has set no waypoint.
@@ -4970,7 +4977,12 @@ cache as they are, and the challenge manager's template (the rewards: $250,
   entity puts anything there, the sector collision (`sectcol*.hkx`) has
   nothing at that height, and the road splines stop at the banks
   (`fc3tool entities-near ... --meta`, `nav-near`, `hkx-file`,
-  `preload`); the loading screen, and the other natives the trials
+  `preload`). Nor do the roadblock 20 m off (`RoadblockEncounter_9`: its
+  prefabs are mercs and trucks), the patch archive (it replaces only
+  terrain atlases) or an unnamed file (every `fc3_main` file is named). The
+  trial's own scripts spawn only the technical, at
+  `F4_SC_14_StrategicPoint_PlayerVehicle` (Dunia -815.8, -517.1, 105.0)
+  over a 10 m deep river bed; the loading screen, and the other natives the trials
   call that do nothing yet (`SwitchArmy`, tagging, `SelectThrowGadget`).
   `DisplayCustomUIMsg` shows its popup (`docs/ui.md`), and the player's
   `RefillWeaponAmmo` tops up every weapon (none named) or the one named, to
@@ -5034,9 +5046,12 @@ are played now (`races`):
   on the race's base layer, so they come in with the track: seen at C3's
   jet ski race (`RMG_C3_WaypointRace_main`), whose three ramps were put in
   their sectors as the race started.
+* **The D6 track's pirates** (`RMG_D6_WaypointRace_main`: two
+  `Pirate_Assaulter`s by `ActiveLootingCrates_0` and `_1`) loot the crates
+  as characters at rest take up their relax points (see "In the game").
+  Not seen in a run: no checkpoint by D6.
 * **Not yet.** The racing voice of the player and the keepers' lines go
-  out, but not the D6 track's looting pirates, nor the saved best times
-  and medals.
+  out, but not the saved best times and medals.
 
 ### Knife throwing
 

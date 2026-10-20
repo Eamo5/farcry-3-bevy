@@ -14,6 +14,11 @@
 //! AI starting under script control) it still sees and hears; once it
 //! notices something its action is broken off, as the engine does, and the
 //! AI takes it from there.
+//!
+//! A character at rest takes up the relax point it was placed by (a
+//! `Relax/SimpleAnimation.*` contextual action on its own layer: looting
+//! crates, smoking, leaning on a wall), as the AI's rest does, until
+//! something breaks it off. The story isn't told: no script asked.
 
 use std::collections::{HashMap, HashSet};
 
@@ -39,6 +44,7 @@ impl Plugin for StoryActorsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<StoryKits>()
             .init_resource::<CaMoves>()
+            .init_resource::<RelaxOrders>()
             .init_resource::<DressedEntities>()
             .add_systems(Update, note_dressed)
             .add_systems(OnExit(crate::menu::GameState::Loading), (load_story_kits, load_ca_moves))
@@ -51,6 +57,7 @@ impl Plugin for StoryActorsPlugin {
                     land_reinforcements,
                     spawn_actors,
                     despawn_actors,
+                    actor_relax,
                     actor_tasks,
                     companions,
                     actor_alerts,
@@ -437,12 +444,70 @@ pub struct Task {
     /// A path to walk (a patrol-path action): it starts as the walk does and
     /// ends at the path's end.
     pub patrol: Option<Vec<Vec3>>,
+    /// Taken up by the character itself (a relax point it rests at), not
+    /// the story's: the story hears nothing of it, and it lasts until
+    /// broken off.
+    pub own: bool,
 }
 
 /// The contextual action the story gave each character (by id; `None`:
 /// stop), applied when they are in the world.
 #[derive(Resource, Default)]
 pub struct ActorOrders(pub HashMap<u64, Option<u64>>);
+
+/// The relax points characters at rest take up (character, point), and
+/// those already looked for.
+#[derive(Resource, Default)]
+pub struct RelaxOrders {
+    orders: HashMap<u64, u64>,
+    tried: HashSet<u64>,
+    /// The relax points (id, layer, place), read once.
+    points: Option<Vec<(u64, u64, Vec3)>>,
+}
+
+/// How near (m, across the ground) a character must stand to the relax
+/// point it takes up.
+const RELAX_REACH: f32 = 2.5;
+
+/// Characters at rest by a relax point take it up (once each: one broken
+/// off stays with its AI).
+fn actor_relax(
+    host: Option<NonSendMut<StoryHost>>,
+    mut relax: ResMut<RelaxOrders>,
+    orders: Res<ActorOrders>,
+    actors: Query<(&StoryActor, &Transform, Option<&crate::npc::Npc>)>,
+) {
+    let Some(host) = host else { return };
+    let data = host.story.data();
+    let relax = &mut *relax;
+    let points = relax.points.get_or_insert_with(|| {
+        data.entities
+            .values()
+            .filter(|e| e.name.starts_with("Relax/SimpleAnimation.") && e.component("CAIContextualActionComponent").is_some())
+            .map(|e| (e.id, e.layer, to_bevy(e.pos)))
+            .collect()
+    });
+    let taken: HashSet<u64> = actors.iter().filter_map(|(a, ..)| a.task.as_ref().map(|t| t.action)).chain(relax.orders.values().copied()).collect();
+    for (a, t, npc) in &actors {
+        if relax.tried.contains(&a.id) || a.dead || a.seated || a.in_scene || a.task.is_some() || orders.0.contains_key(&a.id) || a.rig.is_none() {
+            continue;
+        }
+        if npc.is_some_and(|n| n.state != crate::npc::NpcState::Idle || n.awareness > 0.0) {
+            continue;
+        }
+        relax.tried.insert(a.id);
+        let Some(layer) = data.entities.get(&a.id).map(|e| e.layer) else { continue };
+        let feet = t.translation - Vec3::Y * HALF_HEIGHT;
+        let near = points
+            .iter()
+            .filter(|(id, l, at)| *l == layer && !taken.contains(id) && at.with_y(0.0).distance(feet.with_y(0.0)) < RELAX_REACH && (at.y - feet.y).abs() < 2.0)
+            .min_by(|x, y| x.2.distance_squared(feet).total_cmp(&y.2.distance_squared(feet)));
+        if let Some(&(point, ..)) = near {
+            debug!("story actor {}: rests at {}", a.id, data.name_of(point).unwrap_or("?"));
+            relax.orders.insert(a.id, point);
+        }
+    }
+}
 
 fn load_story_kits(info: Res<CacheInfo>, mut kits: ResMut<StoryKits>) {
     let text = std::fs::read_to_string(info.root.join(fc3_formats::cache::ALL_KITS_REL)).unwrap_or_default();
@@ -723,7 +788,7 @@ fn task_for(data: &fc3_story::data::StoryData, action: u64) -> Option<Task> {
         .and_then(|p| shape_points(&p.fields))
         .filter(|pts| pts.len() >= 2);
     let target = patrol.as_ref().and_then(|p| p.last().copied()).unwrap_or(to_bevy(e.pos));
-    Some(Task { action, target, yaw: e.angles[2].to_radians(), run, duration, arrived: false, time: 0.0, clips: (None, None), patrol })
+    Some(Task { action, target, yaw: e.angles[2].to_radians(), run, duration, arrived: false, time: 0.0, clips: (None, None), patrol, own: false })
 }
 
 /// A shape entity's points (`hidShapePoints`: a count, then x, y, z each),
@@ -751,6 +816,7 @@ fn actor_tasks(
     (mut rigs, moves, server, clips): (Query<&mut crate::characters::CharacterRig>, Res<CaMoves>, Res<AssetServer>, Res<Assets<crate::cache_assets::Fc3Clip>>),
     mut debug_actor: Local<Option<Option<u64>>>,
     (spatial, bodies): (SpatialQuery, Query<(), Or<(With<crate::npc::Npc>, With<StoryActor>, With<Player>)>>),
+    mut relax: ResMut<RelaxOrders>,
 ) {
     let Some(mut host) = host else { return };
     let dt = time.delta_secs();
@@ -766,14 +832,20 @@ fn actor_tasks(
             continue;
         }
         let id = a.id;
-        if let Some(order) = orders.0.remove(&id) {
-            a.task = None;
+        // The story's order, else a relax point taken up.
+        let order = orders.0.remove(&id).map(|o| (o, false)).or_else(|| relax.orders.remove(&id).map(|p| (Some(p), true)));
+        if let Some((order, own)) = order {
+            if a.task.take().is_some_and(|t| t.own) && !own {
+                debug!("story actor {id}: leaves its rest for the story's action");
+            }
             a.path.clear();
             restore_clips(&mut *a, &mut rigs);
             if let (Some(mut npc), Some(_)) = (npc, order) {
                 if npc.state == crate::npc::NpcState::Combat {
                     // Busy fighting: the action is broken off at once.
-                    host.story.action_interrupted(id);
+                    if !own {
+                        host.story.action_interrupted(id);
+                    }
                     continue;
                 }
                 if !scripted {
@@ -784,13 +856,20 @@ fn actor_tasks(
                 npc.last_known = None;
             }
             if let Some(mut task) = order.and_then(|action| task_for(&data, action)) {
+                // (A rest lasts until broken off.)
+                if own {
+                    task.own = true;
+                    task.duration = 0.0;
+                }
                 let load = |c: Option<String>| c.map(|c| server.load(crate::cache_assets::cache_path(&fc3_formats::cache::anim_rel(&c))));
                 let (start, looped) = action_clips(&data, task.action, &moves, a.armed);
                 task.clips = (load(start), load(looped));
                 a.path = match &task.patrol {
                     // A patrol starts as the walk does.
                     Some(points) => {
-                        host.story.action_started(id);
+                        if !task.own {
+                            host.story.action_started(id);
+                        }
                         points.clone()
                     }
                     // (A path stopping short of the spot, off the
@@ -840,7 +919,9 @@ fn actor_tasks(
                     task.arrived = true;
                     debug!("story actor {id}: arrived at {}", data.name_of(task.action).unwrap_or("?"));
                     t.rotation = Quat::from_rotation_y(task.yaw);
-                    host.story.action_started(id);
+                    if !task.own {
+                        host.story.action_started(id);
+                    }
                     // The action's start plays, then its loop stands in for
                     // the idle while it lasts.
                     if let Some(mut r) = rig.and_then(|r| rigs.get_mut(r).ok()) {
@@ -897,9 +978,11 @@ fn actor_tasks(
             }
         }
         if end {
-            a.task = None;
+            let own = a.task.take().is_some_and(|t| t.own);
             restore_clips(a, &mut rigs);
-            host.story.action_finished(id);
+            if !own {
+                host.story.action_finished(id);
+            }
         }
         if let Some(mut r) = rig.and_then(|rig| anims.get_mut(rig).ok()) {
             if r.kind != kind && r.kind != AnimKind::Death {
@@ -1079,7 +1162,7 @@ fn actor_alerts(
         npc.yaw = npc.post_yaw;
         a.path.clear();
         restore_clips(&mut *a, &mut rigs);
-        if a.task.take().is_some() {
+        if a.task.take().is_some_and(|t| !t.own) {
             host.story.action_interrupted(a.id);
         }
     }
