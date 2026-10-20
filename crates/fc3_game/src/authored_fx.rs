@@ -459,6 +459,17 @@ struct Compiled {
     /// people's, heat haze over them): turned only about the vertical to
     /// face the camera, so it stays standing when seen from above.
     upright: bool,
+    /// Facing along its emitter's axis, standing along the frame's Z
+    /// (`Orientation` 131072: blood spurting back along a shot, a boat's
+    /// wake turned to lie on the water): fixed, not turned to the view.
+    sheet: bool,
+    /// Lying in its emitter's plane turned by its `OrientationX`, `Y`, `Z`
+    /// (degrees) (`Orientation` 262144: embers on the ground, ripples on a
+    /// river, god rays crossed upright): fixed, not turned to the view.
+    fixed: bool,
+    /// The emitter's frame for these: its whole `RotOffset` (X, then Y,
+    /// then Z, the Y about its axis), and a fixed one's `Orientation`.
+    basis: Quat,
     /// Fading out as it's seen edge-on (`FadeAngle`, degrees): one lying in
     /// the frame's plane as the view nears the plane, a stretched one as it
     /// nears its heading (sparks coming at the camera).
@@ -615,6 +626,19 @@ impl Compiled {
             local: s.child("Flags").is_some_and(|f| f.bool("LocalEmitterSpace") == Some(true)),
             oriented: s.child("Flags").is_some_and(|f| f.bool("Orientation") == Some(true)),
             upright: s.child("Flags").and_then(|f| f.f32("Orientation")) == Some(16.0),
+            sheet: s.child("Flags").and_then(|f| f.f32("Orientation")) == Some(131072.0),
+            fixed: s.child("Flags").and_then(|f| f.f32("Orientation")) == Some(262144.0),
+            basis: {
+                // (Dunia's X, Y, Z turned as `axis` is: X the other way, Y
+                // about Bevy's -Z, Z about Bevy's Y.)
+                let turned = |[x, y, z]: [f32; 3]| {
+                    Quat::from_rotation_y(z.to_radians()) * Quat::from_rotation_z(-y.to_radians()) * Quat::from_rotation_x(-x.to_radians())
+                };
+                let offset: Vec<f32> = s.attr("RotOffset").map(|r| r.split(',').filter_map(|v| v.trim().parse().ok()).collect()).unwrap_or_default();
+                let offset = turned([0, 1, 2].map(|i| offset.get(i).copied().unwrap_or(0.0)));
+                let fixed = s.child("Flags").and_then(|f| f.f32("Orientation")) == Some(262144.0);
+                offset * if fixed { turned(["OrientationX", "OrientationY", "OrientationZ"].map(|n| f(n, 0.0))) } else { Quat::IDENTITY }
+            },
             fade_angle: f("FadeAngle", 0.0).clamp(0.0, 90.0),
             lit: on("SHLighting") && mode != 0,
             // (Faded near the camera by its alpha (`NearClippingAlpha`: a
@@ -721,6 +745,9 @@ struct Particle {
     /// Its effect's Z (Dunia's; in the effect's frame for one in its own
     /// space), what an oriented one stands along.
     stand: Vec3,
+    /// Its emitter's frame (`Compiled::basis`; in the effect's for one in
+    /// its own space).
+    basis: Quat,
     pos: Vec3,
     dir: Vec3,
     speed: f32,
@@ -770,15 +797,17 @@ fn birth(
     let back = turn.inverse();
     // (Dunia's Z is Bevy's local +Y.)
     let stand = em.axis * Vec3::Y;
-    let (space, pos, dir, gravity, stand) = match space {
-        Some(space) => (Some(space), em.offset + back * born, back * dir, back * gravity, stand),
-        None => (None, place + turn * em.offset + born, dir, gravity, turn * stand),
+    let basis = em.basis;
+    let (space, pos, dir, gravity, stand, basis) = match space {
+        Some(space) => (Some(space), em.offset + back * born, back * dir, back * gravity, stand, basis),
+        None => (None, place + turn * em.offset + born, dir, gravity, turn * stand, turn * basis),
     };
     Particle {
         emitter,
         owner,
         space,
         stand,
+        basis,
         pos,
         dir,
         speed: em.speed.roll(rng),
@@ -1163,6 +1192,20 @@ fn draw(
             } else if em.upright {
                 let (s, c) = p.rot.sin_cos();
                 (level * (c * half) + Vec3::Y * (s * half), Vec3::Y * (c * half) - level * (s * half))
+            } else if em.fixed || em.sheet {
+                // Fixed in its emitter's frame: its width along the frame's
+                // X; its height (or length) along the frame's Y (Dunia's,
+                // lying in the plane) or Z (Dunia's, facing along the
+                // axis); turned by its own angle, hung from its point by its
+                // pivot.
+                let a = p.world_vector(p.basis * Vec3::X).normalize_or(right);
+                let b = p.world_vector(p.basis * if em.fixed { Vec3::NEG_Z } else { Vec3::Y }).normalize_or(up);
+                edge = Some((a.cross(b), true));
+                let (width, length) = if em.uniform { (half, half) } else { (half.max(0.003), (p.size * em.part_length.at(t) * near).max(0.003)) };
+                let (s, c) = p.rot.sin_cos();
+                let (x, y) = (a * c + b * s, b * c - a * s);
+                centre += x * (width * em.pivot.x) + y * (length * em.pivot.y);
+                (x * width, y * length)
             } else if !em.uniform {
                 // Sized unevenly (sparks, streaks of smoke): its width
                 // across and its length (`PartSizeZKF`) along its heading as

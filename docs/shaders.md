@@ -593,8 +593,18 @@ drips, a wall of water), 65536 (30: clouds, lights), 131072 (102: blood
 sprays), 262144 (150: splashes, distortion rings).) One with 16 stands upright:
 turned only about the vertical to face the camera (its width levelled, its
 length or height straight up), so a fire's flames stay standing seen from
-above instead of tipping toward the camera. The rest beyond 1 and 16 aren't
-read. `FadeAngle` fades a flat one out as the line of sight nears its plane,
+above instead of tipping toward the camera. Two more are fixed in the
+emitter's frame, not turned to the view, the frame turned by the emitter's
+whole `RotOffset` (X, then Y, then Z): one with 262144 lies in the
+emitter's plane turned by its `OrientationX`, `Y`, `Z` (degrees): a ground
+fire's embers on the ground, a river's ripples (their `RotOffset` Y -90 and
+`OrientationY` 90 undo each other), god rays as two upright sheets crossed
+at 45 degrees either way, a vehicle's splash sheets. One with 131072 faces
+along the emitter's axis and stands along the frame's Z: a shot's blood
+spurt facing back along the shot, a boat's wake turned (`RotOffset` X 90)
+to lie on the water. Their `FadeAngle` (a takedown's blood splat, the
+embers) fades them edge-on as for the flat ones. 4 and 65536 (the sky's
+clouds) aren't read. `FadeAngle` fades a flat one out as the line of sight nears its plane,
 and a stretched one as it nears its heading, over that many degrees, so
 neither shows edge-on as a sliver.
 An emitter in its own space (`Flags` `LocalEmitterSpace`) keeps its particles in
