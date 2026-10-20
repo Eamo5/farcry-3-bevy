@@ -4985,9 +4985,8 @@ cache as they are, and the challenge manager's template (the rewards: $250,
   (`D4_SC_06`, from the stone: board, start, 90 s with the autopilot
   fighting: 695 points, the three rewards, the result page, the area clear
   and the gear back after).
-* **Not yet.** F4's start, the technical's spot, is a bridge over the
-  river our world doesn't have: the technical drops into the river and
-  the trial fails as the player is off its spot. The roads end on both
+* **F4's bridge.** F4's start, the technical's spot, is a bridge over the
+  river whose model isn't in the data. The roads end on both
   banks and the sector's navmesh has a deck 8 m wide at the spot's height
   across the water, but no sector, metasector, encounter prefab or story
   entity puts anything there, the sector collision (`sectcol*.hkx`) has
@@ -4998,7 +4997,22 @@ cache as they are, and the challenge manager's template (the rewards: $250,
   terrain atlases) or an unnamed file (every `fc3_main` file is named). The
   trial's own scripts spawn only the technical, at
   `F4_SC_14_StrategicPoint_PlayerVehicle` (Dunia -815.8, -517.1, 105.0)
-  over a 10 m deep river bed; the loading screen, and the other natives the trials
+  over a 10 m deep river bed. So the deck is made from the navmesh
+  (`nav_decks`): each nav sector near the player has its polygons that lie
+  over water and 1.5 m or more above it looked under, and those no collider
+  holds up get a static collider at once (a collider alone at first, so a
+  vehicle set down there has its ground), then a floor of the game's planks
+  (`woodplank_06`, weathered darker) with a beam's edge once the objects
+  around have come in (5 s), and again at 15 s; what a real bridge or pier
+  then holds up is taken out, and a polygon inside a placed model's bounds
+  (a truss bridge drawn without a collider of its own) is only collided
+  with. A scripted vehicle (`story_props`) now waits, as the world's do, for
+  the ground under it before it is made. Seen: F4's deck, 191 m2 across the
+  river, the technical on it at the spot and the trial's 90 s played out
+  from its gun; a small stream crossing between guard rails (Dunia 105,
+  2004) gets one too. `trial_run.ps1` (job tmp) starts a trial from a
+  checkpoint with the player first placed near it.
+* **Not yet.** The loading screen, and the other natives the trials
   call that do nothing yet (`SwitchArmy`, tagging, `SelectThrowGadget`).
   `DisplayCustomUIMsg` shows its popup (`docs/ui.md`), and the player's
   `RefillWeaponAmmo` tops up every weapon (none named) or the one named, to

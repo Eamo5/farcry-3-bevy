@@ -38,6 +38,7 @@ mod mission_layers;
 mod mixer;
 mod music;
 mod nav;
+mod nav_decks;
 mod npc;
 mod objects;
 mod options;

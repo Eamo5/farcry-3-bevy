@@ -1760,6 +1760,12 @@ fn place_vehicles(
     });
 }
 
+/// Whether a vehicle of a definition waits for the ground under it before
+/// it is made (all but boats).
+pub fn needs_ground(def: usize) -> bool {
+    DEFS[def].kind != Kind::Boat
+}
+
 /// Spawns a drivable vehicle of a definition at a pose; returns its root.
 pub fn build_vehicle(commands: &mut Commands, def: usize, model: &Fc3Model, at: Vec3, rotation: Quat, spawn_id: u64) -> Entity {
     build_vehicle_inner(commands, def, model, at, rotation, spawn_id, None)

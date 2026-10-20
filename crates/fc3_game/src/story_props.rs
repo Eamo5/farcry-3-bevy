@@ -52,14 +52,16 @@ fn spawned_pickup(entry: &fc3_story::data::Entry, archetype: &str) -> Option<cra
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_props(
     host: Option<NonSendMut<StoryHost>>,
     server: Res<AssetServer>,
     models: Res<Assets<Fc3Model>>,
     info: Res<crate::data::CacheInfo>,
     mut pending: Local<Vec<(u64, Handle<Fc3Model>, Transform, Vec<Handle<StandardMaterial>>, Option<crate::pickups::PickupKind>)>>,
-    mut vehicles: Local<Vec<(u64, Handle<Fc3Model>, Transform, usize, fc3_story::vehicles::Layout)>>,
+    mut vehicles: Local<Vec<(u64, Handle<Fc3Model>, Transform, usize, fc3_story::vehicles::Layout, f32)>>,
     mut wearing: Local<Option<std::collections::HashMap<u64, Vec<String>>>>,
+    (time, spatial): (Res<Time>, avian3d::prelude::SpatialQuery),
     mut commands: Commands,
 ) {
     let Some(mut host) = host else { return };
@@ -87,7 +89,7 @@ fn spawn_props(
                 Transform { translation: to_bevy(at), rotation: Quat::from_array(fc3_formats::world::angles_to_bevy_quat(angles)), scale: Vec3::ONE };
             let layout = crate::story_rides::layout_of(&data, entry);
             info!("story prop {id}: {archetype} is a vehicle ({} seats)", layout.seats.len());
-            vehicles.push((id, crate::weapons::model_handle(&server, &path), transform, def, layout));
+            vehicles.push((id, crate::weapons::model_handle(&server, &path), transform, def, layout, time.elapsed_secs()));
             continue;
         }
         let slots = wearing
@@ -111,12 +113,26 @@ fn spawn_props(
         }
         false
     });
-    vehicles.retain(|(id, handle, transform, def, layout)| {
+    let now = time.elapsed_secs();
+    vehicles.retain(|(id, handle, transform, def, layout, since)| {
         let Some(model) = models.get(handle) else { return true };
+        // (Set down only once the ground under it has its collider, as the
+        // world's vehicles are: F4's trial's technical, on a bridge deck
+        // that comes in with the navmesh, fell into the river.)
+        let ground = || {
+            let filter = avian3d::prelude::SpatialQueryFilter::default();
+            spatial.cast_ray(transform.translation + Vec3::Y * 1.5, Dir3::NEG_Y, 6.0, true, &filter).is_some()
+        };
+        if crate::vehicles::needs_ground(*def) && now - *since < VEHICLE_GROUND_WAIT && !ground() {
+            return true;
+        }
         crate::vehicles::build_story_vehicle(&mut commands, *def, model, transform.translation, transform.rotation, *id, layout);
         false
     });
 }
+
+/// The longest a scripted vehicle waits for the ground under it (s).
+const VEHICLE_GROUND_WAIT: f32 = 15.0;
 
 #[cfg(test)]
 mod tests {

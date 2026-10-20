@@ -22,7 +22,7 @@ pub struct NavPlugin;
 
 impl Plugin for NavPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<NavMesh>().add_systems(Update, stream_nav);
+        app.init_resource::<NavMesh>().add_systems(Update, stream_nav).add_plugins(crate::nav_decks::NavDecksPlugin);
     }
 }
 
@@ -311,6 +311,11 @@ impl NavMesh {
             }
         }
         out
+    }
+
+    /// The sector meshes loaded around the player.
+    pub fn sector_meshes(&self) -> impl Iterator<Item = (SectorCoord, &Arc<CachedNav>)> {
+        self.sectors.iter().map(|(c, m)| (*c, m))
     }
 
     /// Whether any navigation mesh is loaded around the player.
