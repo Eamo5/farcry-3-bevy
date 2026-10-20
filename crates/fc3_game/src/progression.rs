@@ -1195,7 +1195,7 @@ fn award_kills(
                 killed.write(PlayerKilled { victim: d.entity, headshot, takedown: how.takedown, unaware: how.unaware });
             }
         }
-        if d.killer != Some(player) || d.entity == player || !npcs.get(d.entity).is_ok_and(|n| n.faction.hostile_to_player()) {
+        if d.killer != Some(player) || d.entity == player || !npcs.get(d.entity).is_ok_and(|n| n.hostile()) {
             continue;
         }
         let Ok(npc) = npcs.get(d.entity) else { continue };

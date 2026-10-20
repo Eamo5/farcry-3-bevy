@@ -14,9 +14,16 @@ use crate::settings::Settings;
 
 pub struct ControlsPlugin;
 
+/// The throwable in hand for the HUD (`ThrowableIcon`): the one last thrown
+/// or laid, or the one a script chose (`CAPI_Player.SelectThrowGadget`: a
+/// trial's molotovs); a grenade until then.
+#[derive(Resource, Default)]
+pub struct ThrowChoice(pub Option<Action>);
+
 impl Plugin for ControlsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActionState>()
+            .init_resource::<ThrowChoice>()
             .init_resource::<ScriptActionMaps>()
             .add_systems(OnExit(crate::menu::GameState::Loading), load_action_maps)
             .add_systems(PreUpdate, (update_actions.after(InputSystems), apply_action_maps.after(update_actions)));

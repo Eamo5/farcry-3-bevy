@@ -61,10 +61,88 @@ impl Plugin for StoryPlugin {
             .add_systems(Update, run_story.in_set(StorySet).run_if(|state: Res<State<GameState>>| {
                 matches!(state.get(), GameState::Playing | GameState::Paused | GameState::Map | GameState::Journal | GameState::Shop)
             }))
-            .add_systems(Update, show_story_ui);
+            .add_systems(Update, show_story_ui)
+            .add_systems(Update, apply_sides.after(StorySet));
         if std::env::var_os("FC3_STORY_RETRY_TEST").is_some() {
             app.add_systems(Update, retry_inventory_test.after(StorySet).run_if(in_state(GameState::Playing)));
         }
+    }
+}
+
+/// The sides scripts choose: each character's army (`CAPI_NPC.SwitchArmy`):
+/// red the player's foes (back to its own side, if it was his), grey his
+/// side, neutral out of the fight (G3_SC_05's sitting ducks until the player
+/// comes near: their reinforcement points', passed to the mercs they call
+/// in; blue and green aren't the player's business); and the throwable they
+/// choose for the HUD.
+fn apply_sides(
+    host: Option<NonSendMut<StoryHost>>,
+    mut npcs: Query<(&crate::story_actors::StoryActor, &mut crate::npc::Npc)>,
+    mut thrown: ResMut<crate::controls::ThrowChoice>,
+) {
+    use crate::npc::Faction;
+    let Some(mut host) = host else { return };
+    if let Some(choice) = host.throw_choice.take() {
+        thrown.0 = Some(choice);
+    }
+    if host.armies.is_empty() {
+        return;
+    }
+    for (actor, mut npc) in &mut npcs {
+        // (Its own, else its reinforcement point's.)
+        let army = host.armies.get(&actor.id).or_else(|| host.called_from.get(&actor.id).and_then(|p| host.armies.get(p)));
+        let Some((faction, neutral)) = army.and_then(|&a| side_for(a, npc.faction)) else { continue };
+        if npc.faction != faction || npc.neutral != neutral {
+            info!(
+                "story: {} now {}",
+                actor.id,
+                if neutral {
+                    "neutral"
+                } else if faction == Faction::Rebel {
+                    "on the player's side"
+                } else {
+                    "the player's foe"
+                }
+            );
+            npc.faction = faction;
+            npc.neutral = neutral;
+            // (Out of the fight: what it was after is forgotten.)
+            if neutral {
+                npc.foe = None;
+                npc.awareness = 0.0;
+                npc.state = crate::npc::NpcState::Idle;
+            }
+        }
+    }
+}
+
+/// The side an army (`CAPI_NPC.SwitchArmy`'s number) puts a character of a
+/// faction on, and whether it is out of the fight: red the player's foes
+/// (a pirate, if it was on his side), grey his side, neutral as it was but
+/// out of it; none for blue and green.
+fn side_for(army: u8, faction: crate::npc::Faction) -> Option<(crate::npc::Faction, bool)> {
+    use crate::npc::Faction;
+    match army {
+        1 if faction == Faction::Rebel => Some((Faction::Pirate, false)),
+        1 => Some((faction, false)),
+        2 => Some((Faction::Rebel, false)),
+        3 => Some((faction, true)),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod side_tests {
+    use super::side_for;
+    use crate::npc::Faction;
+
+    #[test]
+    fn armies_put_characters_on_sides() {
+        assert_eq!(side_for(3, Faction::Pirate), Some((Faction::Pirate, true)));
+        assert_eq!(side_for(1, Faction::Privateer), Some((Faction::Privateer, false)));
+        assert_eq!(side_for(1, Faction::Rebel), Some((Faction::Pirate, false)));
+        assert_eq!(side_for(2, Faction::Pirate), Some((Faction::Rebel, false)));
+        assert_eq!(side_for(0, Faction::Pirate), None);
     }
 }
 
@@ -562,6 +640,13 @@ pub struct StoryHost {
     /// Each specific gameplay's parameters (`CreateSpecificGameplay`'s,
     /// by its id), for the minigames that read them.
     pub gameplay_params: std::collections::HashMap<u64, Vec<(String, String)>>,
+    /// The armies scripts put their characters in (`CAPI_NPC.SwitchArmy`:
+    /// 1 red, 2 grey, 3 neutral), by story id, and the throwable a script
+    /// chose for the player (`CAPI_Player.SelectThrowGadget`).
+    pub armies: std::collections::HashMap<u64, u8>,
+    pub throw_choice: Option<crate::controls::Action>,
+    /// The reinforcement point each called-in merc came from.
+    pub called_from: std::collections::HashMap<u64, u64>,
     /// The game is over: the end credits are due (`PopUpEndOfGame`; the
     /// story waits for `CreditsFinished`).
     pub end_of_game: bool,
@@ -707,6 +792,9 @@ impl StoryHost {
             detonations: Vec::new(),
             gsf_events: Vec::new(),
             gameplay_params: Default::default(),
+            armies: Default::default(),
+            throw_choice: None,
+            called_from: Default::default(),
             end_of_game: false,
             damages: Vec::new(),
             spawned_props: Vec::new(),
@@ -1990,10 +2078,7 @@ fn run_story(
                 let counted = host.story.counted_members();
                 host.quiet > NEAR_DESPITE_FIGHT
                     || !actors.iter().any(|(a, at, npc)| {
-                        !a.dead
-                            && counted.contains(&a.id)
-                            && npc.is_some_and(|n| n.faction.hostile_to_player())
-                            && at.translation.distance(t.translation) < 200.0
+                        !a.dead && counted.contains(&a.id) && npc.is_some_and(|n| n.hostile()) && at.translation.distance(t.translation) < 200.0
                     })
             })
         {
@@ -2262,11 +2347,15 @@ fn run_story(
                             let (id, ark) = m.split_once('=')?;
                             Some((id.parse().ok()?, u64::from_str_radix(ark, 16).ok()?))
                         };
+                        let point = a(0).parse().unwrap_or(0);
+                        let mercs: Vec<(u64, u64)> = args.iter().skip(4).filter_map(pair).collect();
+                        // (A point's army is its mercs': G3_SC_05's ducks.)
+                        host.called_from.extend(mercs.iter().map(|(id, _)| (*id, point)));
                         host.reinforcements.push(crate::story_actors::Reinforcement {
-                            point: a(0).parse().unwrap_or(0),
+                            point,
                             battlefield: a(2).parse().ok().filter(|&b| b != u64::MAX),
                             vehicle: args.get(3).and_then(pair),
-                            mercs: args.iter().skip(4).filter_map(pair).collect(),
+                            mercs,
                             relaxed: a(1) == "0",
                         });
                     }
@@ -2736,6 +2825,25 @@ fn run_story(
                             p.yaw = (-d.x).atan2(-d.z);
                             p.pitch = d.y.atan2(Vec2::new(d.x, d.z).length());
                         }
+                    }
+                    // A character's army: the player's foe (red), on his
+                    // side (grey) or out of the fight (neutral).
+                    "CAPI_NPC.SwitchArmy" => {
+                        if let (Ok(id), Ok(army)) = (a(0).parse::<u64>(), a(1).parse::<u8>()) {
+                            debug!("story: {id} to army {army}");
+                            host.armies.insert(id, army);
+                        }
+                    }
+                    // The throwable the player holds ready: a trial's.
+                    "CAPI_Player.SelectThrowGadget" if a(0) == fc3_story::PLAYER.to_string() => {
+                        let gadget = a(1).to_ascii_lowercase();
+                        host.throw_choice = if gadget.contains("molotov") {
+                            Some(crate::controls::Action::Molotov)
+                        } else if gadget.contains("grenade") {
+                            Some(crate::controls::Action::Grenade)
+                        } else {
+                            host.throw_choice
+                        };
                     }
                     "CAPI_Entity.DestroyCompoundObject" => {
                         if let Ok(id) = a(0).parse::<u64>() {
@@ -3784,9 +3892,8 @@ fn autopilot_loot(
     if let Some((id, fc3_story::Companion::Lead { distance, .. })) = leading {
         if let Some((t, _, _)) = story_actors.iter().find(|(_, a, _)| a.id == id && !a.dead) {
             let flat = (at.translation - t.translation).with_y(0.0);
-            let fight = npcs.iter().any(|q| {
-                !q.1.dead && q.5.faction.hostile_to_player() && q.5.state != crate::npc::NpcState::Idle && q.0.translation.distance(at.translation) < 80.0
-            });
+            let fight =
+                npcs.iter().any(|q| !q.1.dead && q.5.hostile() && q.5.state != crate::npc::NpcState::Idle && q.0.translation.distance(at.translation) < 80.0);
             let keep = if fight { ESCORT_IN_FIGHT.min(distance) } else { distance.min(12.0) };
             if flat.length() > keep {
                 if *last != Some((id, "escort")) {
@@ -3858,7 +3965,7 @@ fn autopilot_loot(
     // goes to fight is kept `KEEP_CLEAR` from them (the foes' grenades come
     // where the player is).
     let kept: Vec<Vec3> = {
-        let hostile: std::collections::HashSet<u64> = npcs.iter().filter(|q| q.5.faction.hostile_to_player()).map(|q| q.4.id).collect();
+        let hostile: std::collections::HashSet<u64> = npcs.iter().filter(|q| q.5.hostile()).map(|q| q.4.id).collect();
         story_actors.iter().filter(|(_, a, creature)| !a.dead && !creature && !hostile.contains(&a.id)).map(|(t, _, _)| t.translation).collect()
     };
     let clear_of_kept = |mut feet: Vec3| {
@@ -3884,7 +3991,7 @@ fn autopilot_loot(
                     // boss, fleeing in his 4x4, is shot at the wheel.)
                     && (!actor.seated || counted.contains(&actor.id))
                     && !skipped.contains_key(&actor.id)
-                    && npc.faction.hostile_to_player()
+                    && npc.hostile()
                     && (to_kill.contains(&actor.id) || wanted.contains(&actor.id) || npc.state != crate::npc::NpcState::Idle || sniping)
                     && (near(t) < FIGHT_REACH || wanted.contains(&actor.id) || (to_kill.contains(&actor.id) && host.quiet > FAR_FOE_AFTER))
             })
@@ -3895,11 +4002,8 @@ fn autopilot_loot(
     });
     // (In a sniping challenge, every two seconds: whom it might shoot.)
     if sniping && (now * 0.5) as u32 != ((now - time.delta_secs()) * 0.5) as u32 {
-        let foes: Vec<(u64, f32, bool, bool)> = npcs
-            .iter()
-            .filter(|q| !q.1.dead && q.5.faction.hostile_to_player())
-            .map(|q| (q.4.id, near(q.0), q.4.seated, skipped.contains_key(&q.4.id)))
-            .collect();
+        let foes: Vec<(u64, f32, bool, bool)> =
+            npcs.iter().filter(|q| !q.1.dead && q.5.hostile()).map(|q| (q.4.id, near(q.0), q.4.seated, skipped.contains_key(&q.4.id))).collect();
         info!("story autopilot: sniping: camera {}, target {:?}, foes (id, m, seated, skipped) {foes:?}", scripted.camera_drawn, quest.map(|q| q.4.id));
     }
     // (Held in the camera by a script, the player watches: a scene plays out
@@ -4019,7 +4123,7 @@ fn autopilot_loot(
                 inventory.slot().mag
             );
         }
-        let hostile: std::collections::HashSet<u64> = npcs.iter().filter(|q| q.5.faction.hostile_to_player()).map(|q| q.4.id).collect();
+        let hostile: std::collections::HashSet<u64> = npcs.iter().filter(|q| q.5.hostile()).map(|q| q.4.id).collect();
         // Not beside someone to keep safe (`KEEP_CLEAR`; people, not the
         // story's animals): away from them first (now and then: a companion
         // keeps coming).
@@ -4211,7 +4315,7 @@ fn autopilot_loot(
             // One across the island (WIL_010's tracking device, at Willis's
             // hut): beside it, so that it streams in.
             // (Not while a block still counts foes down: the fight first.)
-            let fighting = npcs.iter().any(|(_, h, _, _, actor, npc, _)| !h.dead && counted.contains(&actor.id) && npc.faction.hostile_to_player());
+            let fighting = npcs.iter().any(|(_, h, _, _, actor, npc, _)| !h.dead && counted.contains(&actor.id) && npc.hostile());
             let data = host.story.data();
             let far = awaited.iter().find(|id| !far_pickups.contains(*id)).and_then(|id| data.entities.get(id).map(|e| (*id, e.pos)));
             if let Some((id, pos)) = far.filter(|_| !fighting) {

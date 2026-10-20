@@ -250,9 +250,7 @@ fn play_music(
             let player = players.single().map(|t| t.translation).ok();
             let fighting = player.map_or(0, |p| {
                 npcs.iter()
-                    .filter(|(t, n, h)| {
-                        !h.dead && n.faction.hostile_to_player() && n.state == crate::npc::NpcState::Combat && t.translation().distance(p) < COMBAT_RANGE
-                    })
+                    .filter(|(t, n, h)| !h.dead && n.hostile() && n.state == crate::npc::NpcState::Combat && t.translation().distance(p) < COMBAT_RANGE)
                     .count()
             }) as f32;
             if fighting > 0.0 {

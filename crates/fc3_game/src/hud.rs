@@ -476,7 +476,7 @@ fn setup_hud(mut commands: Commands) {
 /// Shows whether nearby enemies are suspicious of, or have spotted, the player.
 fn update_detection(npcs: Query<&crate::npc::Npc>, mut q: Query<(&mut Text, &mut TextColor), With<DetectText>>) {
     let Ok((mut t, mut c)) = q.single_mut() else { return };
-    let hostile = || npcs.iter().filter(|n| n.faction.hostile_to_player());
+    let hostile = || npcs.iter().filter(|n| n.hostile());
     let spotted = hostile().any(|n| n.state == crate::npc::NpcState::Combat && n.sees_player);
     let hunting = hostile().any(|n| matches!(n.state, crate::npc::NpcState::Combat | crate::npc::NpcState::Search) && n.foe.is_none());
     // Busy with rebels: not about the player.

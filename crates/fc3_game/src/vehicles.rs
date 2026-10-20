@@ -1565,9 +1565,7 @@ fn autopilot_exit(
     let counted = host.story.counted_members();
     // (On a gun, those it could reach.)
     let reach = if on_gun { FIGHT_FROM_GUN } else { FIGHT_FROM_VEHICLE };
-    let fight = foes
-        .iter()
-        .any(|(t, a, npc, h)| !h.dead && counted.contains(&a.id) && npc.faction.hostile_to_player() && t.translation.distance(vt.translation) < reach);
+    let fight = foes.iter().any(|(t, a, npc, h)| !h.dead && counted.contains(&a.id) && npc.hostile() && t.translation.distance(vt.translation) < reach);
     if host.quiet() < if fight { 3.0 } else { 20.0 } || time.elapsed_secs() - *last < 5.0 {
         return;
     }

@@ -113,7 +113,7 @@ fn run_for_alarms(
         }
         let runner = guards
             .iter_mut()
-            .filter(|(_, t, n, h, _)| !h.dead && n.state == NpcState::Combat && n.faction.hostile_to_player() && t.translation.distance(at) < RUN_RANGE)
+            .filter(|(_, t, n, h, _)| !h.dead && n.state == NpcState::Combat && n.hostile() && t.translation.distance(at) < RUN_RANGE)
             .min_by(|a, b| a.1.translation.distance(at).total_cmp(&b.1.translation.distance(at)));
         if let Some((e, _, mut npc, _, _)) = runner {
             npc.alarm_target = Some(at);

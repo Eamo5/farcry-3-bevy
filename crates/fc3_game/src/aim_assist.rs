@@ -189,7 +189,7 @@ fn aim_assist(
     let reach = follow.distances[3].max(inv.and_then(|i| i.def().aim).map_or(0.0, |a| a.lock_fade.1));
     let bodies = npcs
         .iter()
-        .filter(|(_, _, n, h, _)| !h.dead && n.faction.hostile_to_player())
+        .filter(|(_, _, n, h, _)| !h.dead && n.hostile())
         .map(|(e, t, _, _, head)| Body {
             entity: e,
             head: head.map_or(t.translation + Vec3::Y * 0.75, |h| h.0),

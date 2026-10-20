@@ -813,7 +813,7 @@ fn update_minimap_icons(
         commands.spawn((tower_icon(px, 1.0, progress.towers.contains(&(i as u32))), MinimapDot, ChildOf(mini)));
     }
     for (gt, npc, h, tagged) in &npcs {
-        if h.dead || !npc.faction.hostile_to_player() {
+        if h.dead || !npc.hostile() {
             continue;
         }
         let aware = npc.awareness > 0.3 || matches!(npc.state, crate::npc::NpcState::Combat | crate::npc::NpcState::Search);

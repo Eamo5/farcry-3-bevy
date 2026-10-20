@@ -101,7 +101,7 @@ fn player_audio(
         };
     }
     // Spotted: the sting, once per encounter.
-    let detected = npcs.iter().any(|n| n.faction.hostile_to_player() && n.state == crate::npc::NpcState::Combat && n.sees_player);
+    let detected = npcs.iter().any(|n| n.hostile() && n.state == crate::npc::NpcState::Combat && n.sees_player);
     last.since_detected += dt;
     if detected && !last.detected && last.since_detected >= DETECTED_AGAIN {
         sfx.write(ui(snd::DETECTED, 0.7));

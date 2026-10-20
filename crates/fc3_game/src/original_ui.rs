@@ -2486,7 +2486,7 @@ fn drive_hud(
     mut placement: ResMut<crate::map::MinimapPlacement>,
     ui_scale: Res<UiScale>,
     (progress, mut armour_full): (Res<crate::progression::Progress>, Local<f32>),
-    (actions, mut thrown, time): (Res<crate::controls::ActionState>, Local<Option<crate::controls::Action>>, Res<Time>),
+    (actions, mut thrown, time): (Res<crate::controls::ActionState>, ResMut<crate::controls::ThrowChoice>, Res<Time>),
 ) {
     let Interface::Running(host) = &*state else { return };
     if !original.0 {
@@ -2531,9 +2531,9 @@ fn drive_hud(
     if let Some(inv) = inventory.filter(|i| !i.defs.is_empty() && !i.slots.is_empty()) {
         let (def, slot) = (inv.def(), inv.slot());
         if let Some((a, _)) = THROWABLE_FRAMES.iter().find(|(a, _)| actions.just_pressed(*a)) {
-            *thrown = Some(*a);
+            thrown.0 = Some(*a);
         }
-        let kind = thrown.unwrap_or(crate::controls::Action::Grenade);
+        let kind = thrown.0.unwrap_or(crate::controls::Action::Grenade);
         hud.throwables = match kind {
             crate::controls::Action::Molotov => inv.molotovs,
             crate::controls::Action::C4 => inv.c4,
@@ -3245,7 +3245,7 @@ fn drive_stealth(
     // The enemies noticing the player (not busy with rebels), most first.
     let mut noticing: Vec<(f32, Vec3, bool)> = npcs
         .iter()
-        .filter(|(_, n, h)| !h.dead && n.faction.hostile_to_player() && n.foe.is_none())
+        .filter(|(_, n, h)| !h.dead && n.hostile() && n.foe.is_none())
         .filter_map(|(t, n, _)| {
             let spotted = n.state == crate::npc::NpcState::Combat && n.sees_player;
             (spotted || n.awareness > 0.02).then(|| (if spotted { 2.0 } else { n.awareness }, t.translation(), spotted))
@@ -4663,7 +4663,7 @@ fn drive_radar(
     for (t, npc, h, tagged) in &npcs {
         let aware = npc.awareness > 0.3 || matches!(npc.state, crate::npc::NpcState::Combat | crate::npc::NpcState::Search);
         let l = local(t.translation());
-        if !h.dead && npc.faction.hostile_to_player() && (aware || tagged) && on_disc(l) {
+        if !h.dead && npc.hostile() && (aware || tagged) && on_disc(l) {
             objects.push((l.length(), marker(l, "enemy")));
         }
     }

@@ -497,6 +497,9 @@ pub struct Npc {
     /// A charger's slash under way: standing (0) or running (1).
     pub melee_slash: usize,
     pub faction: Faction,
+    /// Out of the fight: its army made neutral by a script
+    /// (`CAPI_NPC.SwitchArmy`): no one's foe, nor anyone its.
+    pub neutral: bool,
     pub role: Role,
     pub state: NpcState,
     pub post: Vec3,
@@ -753,6 +756,11 @@ struct Cover {
 }
 
 impl Npc {
+    /// The player's foe: of a hostile side, and not made neutral.
+    pub fn hostile(&self) -> bool {
+        !self.neutral && self.faction.hostile_to_player()
+    }
+
     /// Down behind cover (out of sight below the top of it).
     pub fn hiding(&self) -> bool {
         self.cover.is_some_and(|c| c.settled && !c.up)
@@ -1515,6 +1523,7 @@ pub(crate) fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker
     Npc {
         lap: LapState::default(),
         faction,
+        neutral: false,
         role,
         state: NpcState::Idle,
         post: feet,
@@ -1722,7 +1731,8 @@ fn perceive(
         .collect();
     let chest = pt.translation + Vec3::Y * 0.4;
     // Everyone alive, for picking fights between factions.
-    let roster: Vec<(Entity, Vec3, Faction)> = npcs.iter().filter(|(_, _, _, h)| !h.dead).map(|(e, t, n, _)| (e, t.translation, n.faction)).collect();
+    let roster: Vec<(Entity, Vec3, Faction)> =
+        npcs.iter().filter(|(_, _, n, h)| !h.dead && !n.neutral).map(|(e, t, n, _)| (e, t.translation, n.faction)).collect();
     // Live animals: predators are shot when they come close, any animal once it bites.
     // (Not the dogs they keep.)
     let animals: Vec<(Entity, Vec3, bool)> =
@@ -1731,7 +1741,7 @@ fn perceive(
         if h.dead {
             continue;
         }
-        let friendly = !npc.faction.hostile_to_player();
+        let friendly = !npc.hostile();
         let eye = t.translation + Vec3::Y * 0.75;
         let to = chest - eye;
         let dist = to.length();
@@ -1793,7 +1803,7 @@ fn perceive(
             let fought = npc.foe;
             let mut candidates: Vec<(f32, Entity, Vec3)> = roster
                 .iter()
-                .filter(|(o, _, f)| *o != e && npc.faction.hostile_to(*f))
+                .filter(|(o, _, f)| *o != e && !npc.neutral && npc.faction.hostile_to(*f))
                 .map(|(o, p, _)| (p.distance(t.translation), *o, *p))
                 .chain(
                     animals
@@ -2217,10 +2227,10 @@ fn act(
                     _ if npc.sees_player => {
                         Target { entity: pe, pos: pt.translation, vel: player.velocity, crouching: player.crouching, seen: true, is_player: true }
                     }
-                    Some((f, p, v)) if npc.foe_seen || !npc.faction.hostile_to_player() => {
+                    Some((f, p, v)) if npc.foe_seen || !npc.hostile() => {
                         Target { entity: f, pos: p, vel: v, crouching: false, seen: npc.foe_seen, is_player: false }
                     }
-                    _ if npc.faction.hostile_to_player() => {
+                    _ if npc.hostile() => {
                         Target { entity: pe, pos: npc.last_known.unwrap_or(pt.translation), vel: Vec3::ZERO, crouching: false, seen: false, is_player: true }
                     }
                     _ => Target { entity: e, pos: npc.last_known.unwrap_or(pos), vel: Vec3::ZERO, crouching: false, seen: false, is_player: false },
@@ -2353,7 +2363,7 @@ fn act(
             NpcState::Search => {
                 if let Some(lk) = npc.last_known {
                     // Flush the player out of cover with a grenade.
-                    if npc.state_time < 8.0 && npc.faction.hostile_to_player() {
+                    if npc.state_time < 8.0 && npc.hostile() {
                         throw(&mut npc, e, pos, lk, &spare, dt, &mut rng, &fx, &mut commands, &mut throw_clock);
                     }
                     goal = Some(lk);
@@ -3077,7 +3087,7 @@ fn react_to_death(
             *req = AnimRequest { kind: AnimKind::Death, rate: 1.0 };
         }
         commands.entity(d.entity).remove::<(Collider, RigidBody)>().insert(Corpse { age: 0.0, fall_axis: side, skinned, found: false });
-        if npc.faction.hostile_to_player() {
+        if npc.hostile() {
             commands.entity(d.entity).insert(crate::pickups::LootableBody { role: npc.role, rig: npc.rig, skin: false });
         }
         // A flamer's fuel tank goes up when he falls.
@@ -3374,7 +3384,9 @@ fn outpost_fire_test(
     let cleared = building.is_some() || (!pirates.is_empty() && pirates.iter().all(|id| host.story.is_dead(*id))
         && host.story.is_dead(2077647746472455879));
     let needs_ammo = !cleared && inv.slot().mag == 0 && inv.slot().reserve == 0;
-    let candidates: Vec<_> = npcs.iter().filter(|(_, _, n, h)| n.faction.hostile_to_player() && !h.dead)
+    let candidates: Vec<_> = npcs
+        .iter()
+        .filter(|(_, _, n, h)| n.hostile() && !h.dead)
         .map(|(e, t, _, _)| (e, t.translation, heads.get(e).map_or(t.translation + Vec3::Y * 0.6, |head| head.0)))
         .chain(animals.iter().filter(|(_, t, animal, h, story)| !h.dead && animal.dangerous()
             && (story.is_some() || t.translation.distance(at.translation) < 15.0))
@@ -3469,7 +3481,7 @@ fn clear_test(
     let Ok((pe, pt)) = players.single() else { return };
     let mut n = 0;
     for (e, npc, t, h) in &npcs {
-        if npc.faction.hostile_to_player() && !h.dead && t.translation.distance(pt.translation) < 250.0 {
+        if npc.hostile() && !h.dead && t.translation.distance(pt.translation) < 250.0 {
             damage.write(DamageEvent {
                 target: e,
                 amount: 10_000.0,

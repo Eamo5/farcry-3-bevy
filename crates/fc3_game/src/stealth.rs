@@ -423,7 +423,7 @@ fn binoculars(
     let fwd = cam.forward().as_vec3();
     let mut seen = Vec::new();
     for (e, gt, nh, npc) in &npcs {
-        if nh.dead || !npc.faction.hostile_to_player() {
+        if nh.dead || !npc.hostile() {
             continue;
         }
         let chest = gt.translation() + Vec3::Y * 0.3;
@@ -731,7 +731,7 @@ fn takedown(
         return;
     }
     let fwd = Vec3::new(-p.yaw.sin(), 0.0, -p.yaw.cos());
-    let takeable = |npc: &Npc, nh: &Health| nh.dead || !npc.faction.hostile_to_player() || (npc.role.armoured() && !perks.heavy_takedown);
+    let takeable = |npc: &Npc, nh: &Health| nh.dead || !npc.hostile() || (npc.role.armoured() && !perks.heavy_takedown);
 
     // Chain: a knife thrown at another enemy in view, once the takedown is done.
     if td.chain_window > 0.0 && perks.chain_takedown && td.timer < 0.3 && !p.swimming {
@@ -950,10 +950,7 @@ fn takedown(
         let near: Vec<Vec3> = npcs
             .iter()
             .filter(|(e, t, npc, nh)| {
-                *e != target
-                    && !nh.dead
-                    && npc.faction.hostile_to_player()
-                    && Vec2::new(t.translation.x - landing.x, t.translation.z - landing.z).length() < GRENADE_GROUP
+                *e != target && !nh.dead && npc.hostile() && Vec2::new(t.translation.x - landing.x, t.translation.z - landing.z).length() < GRENADE_GROUP
             })
             .map(|(_, t, _, _)| t.translation)
             .collect();
@@ -1160,7 +1157,7 @@ fn detection_markers(
     }
     let Ok((cam, cam_t)) = cameras.single() else { return };
     for (gt, npc, h, tagged) in &npcs {
-        if h.dead || !npc.faction.hostile_to_player() {
+        if h.dead || !npc.hostile() {
             continue;
         }
         let noticing = npc.awareness > 0.05 || npc.state != NpcState::Idle;

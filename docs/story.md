@@ -5012,8 +5012,20 @@ cache as they are, and the challenge manager's template (the rewards: $250,
   from its gun; a small stream crossing between guard rails (Dunia 105,
   2004) gets one too. `trial_run.ps1` (job tmp) starts a trial from a
   checkpoint with the player first placed near it.
-* **Not yet.** The loading screen, and the other natives the trials
-  call that do nothing yet (`SwitchArmy`, tagging, `SelectThrowGadget`).
+* **Sides and throwables.** `CAPI_NPC.SwitchArmy` (the `PawnSetArmy` box
+  calls it for each member of a group) puts a character in an army: red
+  (1) the player's foe, a rebel turning back to the pirates; grey (2) on
+  his side; neutral (3) out of the fight, no one's foe nor anyone its, what
+  it was after forgotten (`Npc::neutral`, which every check of a
+  character's hostility to the player now goes through:
+  `Npc::hostile`). A reinforcement point's army passes to the mercs it
+  calls in (G3_SC_05's sitting ducks are such points, made neutral until
+  the player comes near). Blue and green aren't the player's business and
+  are left as they are. `CAPI_Player.SelectThrowGadget` puts the throwable
+  it names in the HUD's hand (`ThrowChoice`: a trial's molotovs). Seen:
+  G3_SC_05's points put in army 3; not yet seen a merc they called in.
+* **Not yet.** The loading screen, and tagging (`ChangeTagActivation`,
+  `ValidateTag`).
   `DisplayCustomUIMsg` shows its popup (`docs/ui.md`), and the player's
   `RefillWeaponAmmo` tops up every weapon (none named) or the one named, to
   the count given or its most (the missions' `ManageInventory_v4` refills).
@@ -5080,8 +5092,11 @@ are played now (`races`):
   `Pirate_Assaulter`s by `ActiveLootingCrates_0` and `_1`) loot the crates
   as characters at rest take up their relax points (see "In the game").
   Not seen in a run: no checkpoint by D6.
-* **Not yet.** The racing voice of the player and the keepers' lines go
-  out, but not the saved best times and medals.
+* **Voices.** The racing voice of the player and the keepers' lines go
+  out.
+* **Best times and medals** aren't shown by the retail race movie
+  (`ACTI_Driving.feu`): its result frames say only won or lost, with no
+  best-time field, so none are kept.
 
 ### Knife throwing
 

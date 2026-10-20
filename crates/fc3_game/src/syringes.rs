@@ -395,7 +395,7 @@ fn hunter_marks(
     }
     if boosts.active(Syringe::EnemyVision) {
         spots.extend(
-            enemies.iter().filter(|(_, h, n)| !h.dead && n.faction.hostile_to_player()).map(|(gt, _, _)| (gt.translation() + Vec3::Y * 1.0, Color::srgba(0.95, 0.25, 0.2, 0.85))),
+            enemies.iter().filter(|(_, h, n)| !h.dead && n.hostile()).map(|(gt, _, _)| (gt.translation() + Vec3::Y * 1.0, Color::srgba(0.95, 0.25, 0.2, 0.85))),
         );
     }
     if boosts.active(Syringe::PlantVision) {

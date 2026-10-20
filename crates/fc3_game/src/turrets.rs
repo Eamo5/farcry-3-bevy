@@ -512,7 +512,7 @@ fn recruit_gunners(
             .filter(|(e, nt, n, h)| {
                 !h.dead
                     && !taken.contains(e)
-                    && n.faction.hostile_to_player()
+                    && n.hostile()
                     && matches!(n.state, crate::npc::NpcState::Combat | crate::npc::NpcState::Search)
                     && nt.translation.distance(spot) < RECRUIT
             })

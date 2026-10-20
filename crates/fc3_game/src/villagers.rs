@@ -950,7 +950,7 @@ fn thank_player(
         if h.dead || matches!(v.state, State::Flee | State::Dead) {
             continue;
         }
-        let threat = enemies.iter().any(|(c, ch, n)| n.faction.hostile_to_player() && !ch.dead && c.translation.distance(pos) < RESCUED);
+        let threat = enemies.iter().any(|(c, ch, n)| n.hostile() && !ch.dead && c.translation.distance(pos) < RESCUED);
         if threat || pos.distance(me) > THANK_REACH {
             if matches!(v.state, State::Thank(_)) {
                 v.state = State::Idle;
@@ -1132,9 +1132,7 @@ fn villager_ai(
             // gone to look; others only while near.)
             let own = |n: &crate::npc::Npc| group.is_some_and(|g| g.0 == n.marker_id);
             let near = |(c, ch, n): &(&Transform, &Health, &crate::npc::Npc)| {
-                n.faction.hostile_to_player()
-                    && !ch.dead
-                    && (own(n) && c.translation.distance(pos) < HOSTAGE_HOLD || c.translation.distance(pos) < HOSTAGE_GUARD)
+                n.hostile() && !ch.dead && (own(n) && c.translation.distance(pos) < HOSTAGE_HOLD || c.translation.distance(pos) < HOSTAGE_GUARD)
             };
             if captors.iter().any(|c| near(&c)) {
                 v.state = State::Cower;
@@ -1146,11 +1144,8 @@ fn villager_ai(
                 continue;
             }
             commands.entity(e).remove::<Hostage>();
-            let last = captors
-                .iter()
-                .filter(|(c, _, n)| n.faction.hostile_to_player() && c.translation.distance(pos) < HOSTAGE_GUARD * 2.0)
-                .map(|(c, _, _)| c.translation)
-                .next();
+            let last =
+                captors.iter().filter(|(c, _, n)| n.hostile() && c.translation.distance(pos) < HOSTAGE_GUARD * 2.0).map(|(c, _, _)| c.translation).next();
             // (One the encounter rewards stays, to thank the player.)
             if grateful {
                 v.state = State::Idle;
