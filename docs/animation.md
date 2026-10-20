@@ -912,7 +912,12 @@ impl FaceChoice { fn from_component(&fcb::Object); fn definition(head_tags) -> O
   `SV_Males` and `SV_Females` choose so. In a village run the head02 and
   head03 men took their own rigs (`RUST_LOG=farcry3::faces=debug`: `kit ...
   wearing [...]: rig ...`).
-* Not yet: the skydives' `*_facial` clips (a face the player doesn't see).
+* The skydive's `*_facial` clips (Grant's through the chicken QTE,
+  `ex_sdchicken_*_grant_facial`) belong to `JAS_020_B00E`, the skydive
+  gameplay (`CSkyDiving`, its `proto_skydiving` sequences), which
+  `JAS_020_MAIN` plays only when `GetDemoType()` is `Skydive`, the demo
+  build's; the retail game goes from the escape to `JAS_020_B05C`, as
+  ours does (a new game's first checkpoint is B05C's).
 
 ### Tools
 
