@@ -183,6 +183,11 @@ pub struct LoadedKit {
 #[derive(Component, Clone, Copy)]
 pub struct KitId(pub u64);
 
+/// The tags a character's kit parts gave it (its head's `head02`: which of
+/// its kit's face rigs it wears, see `faces`).
+#[derive(Component, Clone, Default)]
+pub struct KitTags(pub Vec<String>);
+
 /// A loaded [`LookDef`].
 pub struct Look {
     pub faction: Faction,
@@ -311,9 +316,11 @@ pub fn spawn_kit_character(
     role: Option<Role>,
     rng: &mut Rng,
     offset: Vec3,
-) -> Option<Entity> {
-    let parts = dress(kit, models, rng);
-    spawn_dressed_rig(commands, parent, &parts, weapon, assets.clips_for(role), offset, None)
+) -> Option<(Entity, Vec<String>)> {
+    let (parts, tags) = dress(kit, models, rng);
+    let rig = spawn_dressed_rig(commands, parent, &parts, weapon, assets.clips_for(role), offset, None)?;
+    commands.entity(rig).insert(KitTags(tags.clone()));
+    Some((rig, tags))
 }
 
 fn load_character_assets(mut commands: Commands, server: Res<AssetServer>, info: Res<crate::data::CacheInfo>) {
@@ -535,21 +542,24 @@ pub fn spawn_villager(
 ) -> Option<Entity> {
     let i = usize::from(female);
     let kit = &assets.kits[assets.villager_kits[i]?];
-    let parts = dress(kit, models, rng);
+    let (parts, tags) = dress(kit, models, rng);
     let rig = spawn_dressed_rig(commands, parent, &parts, None, assets.villager_clips[i].clone(), offset, None)?;
-    commands.entity(rig).insert(KitId(kit.id));
+    commands.entity(rig).insert((KitId(kit.id), KitTags(tags)));
     Some(rig)
 }
 
 /// Dresses a kit: a weighted part per slot, with matching material swaps,
-/// sorted so the part with the fullest bone list comes first.
-fn dress<'a>(kit: &LoadedKit, models: &'a Assets<Fc3Model>, rng: &mut Rng) -> Vec<Dressed<'a>> {
+/// sorted so the part with the fullest bone list comes first; and the tags
+/// the parts gave the character.
+fn dress<'a>(kit: &LoadedKit, models: &'a Assets<Fc3Model>, rng: &mut Rng) -> (Vec<Dressed<'a>>, Vec<String>) {
     let mut tags = kits::Tags::default();
+    let mut own = Vec::new();
     let mut parts: Vec<Dressed> = Vec::new();
     for slot in &kit.slots {
         let Some(i) = weighted(slot.iter().map(|p| p.weight), rng) else { continue };
         let part = &slot[i];
         let Some(model) = models.get(&part.model) else { continue };
+        take_part_tags(&mut tags, &mut own, part);
         let mut swaps = Vec::new();
         for ((default, choices), def) in part.swaps.iter().zip(&part.def.swaps) {
             let allowed = tags.allowed(def);
@@ -560,7 +570,20 @@ fn dress<'a>(kit: &LoadedKit, models: &'a Assets<Fc3Model>, rng: &mut Rng) -> Ve
         parts.push(Dressed { model, swaps });
     }
     parts.sort_by_key(|p| std::cmp::Reverse(p.model.bones.len()));
-    parts
+    (parts, own)
+}
+
+/// A worn part's own tags: the character has them (its later swaps follow
+/// them), and they are kept for its face.
+fn take_part_tags(tags: &mut kits::Tags, own: &mut Vec<String>, part: &KitPart) {
+    for t in &part.def.tags {
+        if !tags.0.contains(t) {
+            tags.0.push(t.clone());
+        }
+        if !own.contains(t) {
+            own.push(t.clone());
+        }
+    }
 }
 
 pub fn spawn_character(
@@ -575,6 +598,7 @@ pub fn spawn_character(
     let look = assets.looks.get(look)?;
     let kit = &assets.kits[*look.kits.get((rng.f32() * look.kits.len() as f32) as usize % look.kits.len().max(1))?];
     let mut tags = kits::Tags::default();
+    let mut own = Vec::new();
     let mut parts: Vec<Dressed> = Vec::new();
     // FC3_KIT_PART=<text> (debug): a slot with a part whose model names the
     // text wears that part.
@@ -585,6 +609,7 @@ pub fn spawn_character(
         let part = &slot[i];
         // Parts that failed to load are left off.
         let Some(model) = models.get(&part.model) else { continue };
+        take_part_tags(&mut tags, &mut own, part);
         let mut swaps = Vec::new();
         for ((default, choices), def) in part.swaps.iter().zip(&part.def.swaps) {
             let allowed = tags.allowed(def);
@@ -606,7 +631,7 @@ pub fn spawn_character(
     parts.sort_by_key(|p| std::cmp::Reverse(p.model.bones.len()));
     let weapon = models.get(&look.weapon);
     let rig = spawn_dressed_rig(commands, parent, &parts, weapon, assets.clips_for(Some(look.role)), offset, None)?;
-    commands.entity(rig).insert(KitId(kit.id));
+    commands.entity(rig).insert((KitId(kit.id), KitTags(own)));
     Some(rig)
 }
 

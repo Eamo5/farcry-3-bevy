@@ -1560,7 +1560,9 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
     // ---- which face each graphic kit's characters wear
-    if opts.only_sectors.is_none() && job.should_write(fc3_formats::facial::KIT_FACES_REL) {
+    let current =
+        std::fs::read_to_string(job.root().join(fc3_formats::facial::KIT_FACES_REL)).is_ok_and(|t| t.starts_with(fc3_formats::facial::KIT_FACES_HEADER));
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::facial::KIT_FACES_REL) || !current) {
         let result = (|| -> Result<()> {
             let bytes = std::fs::read(job.root().join("story/entitylibrary.fcb"))?;
             let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
@@ -2306,7 +2308,9 @@ fn convert_kits(job: &Job) -> Result<Vec<String>> {
         kit.id = fc3_formats::kits::id_from_file(file);
         kits.push(kit);
     }
-    if job.should_write(cache::KITS_REL) {
+    // (Rewritten while an older form, without the parts' own tags.)
+    let current = |rel: &str| std::fs::read_to_string(job.root().join(rel)).is_ok_and(|t| t.starts_with(fc3_formats::kits::TEXT_HEADER));
+    if job.should_write(cache::KITS_REL) || !current(cache::KITS_REL) {
         write_atomic(job.root(), cache::KITS_REL, fc3_formats::kits::to_text(&kits).as_bytes(), job.ctx)?;
     }
     // Every kit, for the story's characters.
@@ -2320,7 +2324,7 @@ fn convert_kits(job: &Job) -> Result<Vec<String>> {
             Err(e) => job.error(format!("kit {name}: {e:#}")),
         }
     }
-    if job.should_write(cache::ALL_KITS_REL) {
+    if job.should_write(cache::ALL_KITS_REL) || !current(cache::ALL_KITS_REL) {
         write_atomic(job.root(), cache::ALL_KITS_REL, fc3_formats::kits::to_text(&all).as_bytes(), job.ctx)?;
     }
     kits.extend(all);

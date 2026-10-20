@@ -677,10 +677,12 @@ fn spawn_actors(
         }
         // Fighters carry their faction's gun for the role.
         let weapon = fighter.and_then(|f| chars.looks_for(f.faction, f.role).first().and_then(|&l| models.get(&chars.looks[l].weapon)));
-        let rig = spawn_kit_character(&mut commands, root, &chars, kit, &models, weapon, fighter.map(|f| f.role), &mut rng, Vec3::new(0.0, -HALF_HEIGHT, 0.0));
-        // Its face rig, for scenes and spoken lines.
-        if let (Some(rig), Some(faces), Some(c)) = (rig, faces.as_mut(), e.component("CFacialPoseComponent")) {
-            if let Some(face) = faces.rig_for(c) {
+        let dressed =
+            spawn_kit_character(&mut commands, root, &chars, kit, &models, weapon, fighter.map(|f| f.role), &mut rng, Vec3::new(0.0, -HALF_HEIGHT, 0.0));
+        let rig = dressed.as_ref().map(|(r, _)| *r);
+        // Its face rig (for the head it wears), for scenes and spoken lines.
+        if let (Some((rig, tags)), Some(faces), Some(c)) = (dressed, faces.as_mut(), e.component("CFacialPoseComponent")) {
+            if let Some(face) = faces.rig_for(c, &tags) {
                 let phase = (e.id % 977) as f32 * 0.01;
                 commands.entity(rig).insert(crate::faces::Face::new(face, faces.idle(), phase));
             }

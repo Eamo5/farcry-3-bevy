@@ -46,7 +46,7 @@ pub struct FaceLibrary {
     /// Definition key -> its rig's path hash.
     definitions: HashMap<u32, u64>,
     /// Graphic kit id -> the definition key its characters wear.
-    kit_faces: HashMap<u64, u32>,
+    kit_faces: HashMap<u64, FaceChoice>,
     rigs: HashMap<u64, Option<Arc<FaceRig>>>,
     clips: HashMap<u64, Option<Arc<FaceClip>>>,
 }
@@ -87,9 +87,11 @@ impl FaceLibrary {
         rig
     }
 
-    /// The rig for a character's `CFacialPoseComponent`.
-    pub fn rig_for(&mut self, component: &fc3_formats::fcb::Object) -> Option<Arc<FaceRig>> {
-        self.rig(FaceChoice::from_component(component).definition(&[])?)
+    /// The rig for a character's `CFacialPoseComponent`, for the head it
+    /// wears (its kit parts' tags).
+    pub fn rig_for(&mut self, component: &fc3_formats::fcb::Object, tags: &[String]) -> Option<Arc<FaceRig>> {
+        let tags: Vec<&str> = tags.iter().map(String::as_str).collect();
+        self.rig(FaceChoice::from_component(component).definition(&tags)?)
     }
 
     /// The idle loop faces play.
@@ -138,14 +140,16 @@ impl Face {
     }
 }
 
-/// Gives generic characters the face their kit wears, blinking. Kits the
-/// game gives no face of their own wear the face of a kit of the same
-/// faction (the name before the first `_`) that has one.
+/// Gives generic characters the face their kit wears for the head they
+/// wear (`head02` and the like: villagers' three heads share a mesh, their
+/// rigs shape it), blinking. Kits the game gives no face of their own wear
+/// the face of a kit of the same faction (the name before the first `_`)
+/// that has one.
 fn attach_kit_faces(
     library: Option<ResMut<FaceLibrary>>,
     chars: Option<Res<crate::characters::CharacterAssets>>,
-    rigs: Query<(Entity, &crate::characters::KitId), (With<CharacterRig>, Without<Face>)>,
-    mut fallback: Local<Option<HashMap<u64, u32>>>,
+    rigs: Query<(Entity, &crate::characters::KitId, Option<&crate::characters::KitTags>), (With<CharacterRig>, Without<Face>)>,
+    mut fallback: Local<Option<HashMap<u64, FaceChoice>>>,
     mut commands: Commands,
 ) {
     let Some(mut library) = library else { return };
@@ -159,13 +163,15 @@ fn attach_kit_faces(
             .filter(|k| !library.kit_faces.contains_key(&k.id))
             .filter_map(|k| {
                 let same = kits.iter().find(|o| faction(&o.name) == faction(&k.name) && library.kit_faces.contains_key(&o.id))?;
-                Some((k.id, library.kit_faces[&same.id]))
+                Some((k.id, library.kit_faces[&same.id].clone()))
             })
             .collect()
     });
-    for (e, kit) in &rigs {
-        let key = library.kit_faces.get(&kit.0).or_else(|| fallback.get(&kit.0)).copied();
+    for (e, kit, tags) in &rigs {
+        let tags: Vec<&str> = tags.map(|t| t.0.iter().map(String::as_str).collect()).unwrap_or_default();
+        let key = library.kit_faces.get(&kit.0).or_else(|| fallback.get(&kit.0)).and_then(|c| c.definition(&tags));
         let rig = key.and_then(|k| library.rig(k));
+        debug!("faces: kit {:#x} wearing {tags:?}: rig {key:08x?}", kit.0);
         let phase = ((e.to_bits() & 0xffff_ffff) as f32 * 0.618).fract() * 4.0;
         match rig {
             Some(rig) => commands.entity(e).insert(Face::new(rig, library.idle(), phase)),

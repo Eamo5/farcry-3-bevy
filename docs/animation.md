@@ -900,8 +900,19 @@ impl FaceChoice { fn from_component(&fcb::Object); fn definition(head_tags) -> O
   body's pose (after `animate_characters`) as it barks: its alarm, a yelp
   when hurt, and every 2 to 4.5 s while it hunts or attacks within 70 m
   (its alarm call with each). `--animal-test hunt:dog` lets one loose.
-* Not yet: generic characters' rigs by kit head tag, and the skydives'
-  `*_facial` clips (a face the player doesn't see).
+* Generic characters wear the rig of the head they wear. A kit's head parts
+  carry their own tag (`<tag name="head02" type="3"/>` right after the part
+  opens: the tags a part gives; type 4, as on the villagers' arms, is one it
+  excludes and doesn't count), kept as the kit cache's `ptag` lines. The
+  kit-faces table keeps each kit's whole choice (`kit default
+  tagCRC:key...`), and a character's face takes the definition its parts'
+  tags name, else the default (`FaceChoice::definition`). The villagers'
+  three heads share one mesh, `NativeMan_Head02`; their rigs (head01's, the
+  default, head02's and head03's) shape it differently. `Villager_Men`,
+  `SV_Males` and `SV_Females` choose so. In a village run the head02 and
+  head03 men took their own rigs (`RUST_LOG=farcry3::faces=debug`: `kit ...
+  wearing [...]: rig ...`).
+* Not yet: the skydives' `*_facial` clips (a face the player doesn't see).
 
 ### Tools
 

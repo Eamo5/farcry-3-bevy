@@ -560,36 +560,56 @@ impl PakIndex {
     }
 }
 
-/// Graphic kit id -> the face definition its characters use, one `kit key`
-/// (hex) per line.
+/// Graphic kit id -> the face definitions its characters use: `kit default
+/// [head tag CRC:key...]` (hex; the default `-` when none) per line.
 pub const KIT_FACES_REL: &str = "facial/kit_faces.txt";
+/// The table's first line.
+pub const KIT_FACES_HEADER: &str = "# kit faces 2";
 
-/// Which face definition each graphic kit's characters use: the entity
-/// library's archetypes that carry both a `CGraphicKitComponent` and a
-/// `CFacialPoseComponent` (the first archetype of a kit decides).
-pub fn kit_faces(library: &Object) -> Vec<(u64, u32)> {
-    let mut out: Vec<(u64, u32)> = Vec::new();
+/// Which face definitions each graphic kit's characters use (by the tags of
+/// the head they wear): the entity library's archetypes that carry both a
+/// `CGraphicKitComponent` and a `CFacialPoseComponent` (the first archetype
+/// of a kit decides).
+pub fn kit_faces(library: &Object) -> Vec<(u64, FaceChoice)> {
+    let mut out: Vec<(u64, FaceChoice)> = Vec::new();
     library.walk(&mut |o, _| {
         let comps = o.child("Components").map(|c| c.as_ref()).unwrap_or(o);
         let Some(kit) = comps.child("CGraphicKitComponent").and_then(|c| c.u64("kitidGraphicKit")).filter(|&k| k != 0 && k != u64::MAX) else { return };
-        let Some(key) = comps.child("CFacialPoseComponent").and_then(|c| FaceChoice::from_component(c).default) else { return };
-        if !out.iter().any(|(k, _)| *k == kit) {
-            out.push((kit, key));
+        let Some(choice) = comps.child("CFacialPoseComponent").map(|c| FaceChoice::from_component(c)) else { return };
+        if (choice.default.is_some() || !choice.by_head.is_empty()) && !out.iter().any(|(k, _)| *k == kit) {
+            out.push((kit, choice));
         }
     });
-    out.sort();
+    out.sort_by_key(|(k, _)| *k);
     out
 }
 
-pub fn kit_faces_to_text(table: &[(u64, u32)]) -> String {
-    table.iter().map(|(k, f)| format!("{k:016x} {f:08x}\n")).collect()
+pub fn kit_faces_to_text(table: &[(u64, FaceChoice)]) -> String {
+    let mut s = format!("{KIT_FACES_HEADER}\n");
+    for (k, c) in table {
+        s += &format!("{k:016x} {}", c.default.map_or("-".to_string(), |d| format!("{d:08x}")));
+        for (tag, key) in &c.by_head {
+            s += &format!(" {tag:08x}:{key:08x}");
+        }
+        s.push('\n');
+    }
+    s
 }
 
-pub fn kit_faces_from_text(text: &str) -> std::collections::HashMap<u64, u32> {
+pub fn kit_faces_from_text(text: &str) -> std::collections::HashMap<u64, FaceChoice> {
     text.lines()
+        .filter(|l| !l.starts_with('#'))
         .filter_map(|l| {
-            let (k, f) = l.split_once(' ')?;
-            Some((u64::from_str_radix(k, 16).ok()?, u32::from_str_radix(f.trim(), 16).ok()?))
+            let mut it = l.split_whitespace();
+            let kit = u64::from_str_radix(it.next()?, 16).ok()?;
+            let default = it.next().and_then(|d| u32::from_str_radix(d, 16).ok());
+            let by_head = it
+                .filter_map(|p| {
+                    let (t, k) = p.split_once(':')?;
+                    Some((u32::from_str_radix(t, 16).ok()?, u32::from_str_radix(k, 16).ok()?))
+                })
+                .collect();
+            Some((kit, FaceChoice { default, by_head }))
         })
         .collect()
 }
@@ -833,11 +853,15 @@ mod tests {
 
     #[test]
     fn kit_faces_round_trip() {
-        let table = vec![(0xA773_2017_0000_0200, 0x1234_5678), (7, 0xFFFF_0000)];
+        let heads = FaceChoice { default: Some(0x1234_5678), by_head: vec![(crc32(b"head02"), 0xBA2A_1067)] };
+        let table = vec![(0xA773_2017_0000_0200, heads.clone()), (7, FaceChoice { default: Some(0xFFFF_0000), by_head: vec![] })];
         let back = kit_faces_from_text(&kit_faces_to_text(&table));
         assert_eq!(back.len(), 2);
-        assert_eq!(back[&0xA773_2017_0000_0200], 0x1234_5678);
-        assert_eq!(back[&7], 0xFFFF_0000);
+        assert_eq!(back[&0xA773_2017_0000_0200], heads);
+        assert_eq!(back[&7].default, Some(0xFFFF_0000));
+        // A villager wearing the second head takes its rig; any other, the default.
+        assert_eq!(back[&0xA773_2017_0000_0200].definition(&["head02"]), Some(0xBA2A_1067));
+        assert_eq!(back[&0xA773_2017_0000_0200].definition(&["head01"]), Some(0x1234_5678));
     }
 
     #[test]

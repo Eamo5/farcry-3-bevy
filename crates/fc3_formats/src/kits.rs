@@ -29,6 +29,8 @@ pub struct KitPart {
     pub model: String,
     pub weight: f32,
     pub swaps: Vec<MaterialSwap>,
+    /// The tags the part gives its character (a head's `head02`).
+    pub tags: Vec<String>,
 }
 
 /// Replaces one of the part's materials with a weighted pick.
@@ -141,13 +143,19 @@ fn part_model(reference: &str, mesh: &str) -> String {
 pub fn parse_kit(xml: &str) -> Result<Kit> {
     let mut kit = Kit::default();
     let mut in_swap = false;
+    // (Right after a part opens: its own tags come first.)
+    let mut part_opened = false;
     for t in tags(xml) {
+        let own_tag = part_opened && t.name == "tag" && !t.end;
+        if !t.end && t.name != "tag" {
+            part_opened = t.name == "part";
+        }
         match (t.name, t.end) {
             ("graphickit", false) => kit.name = t.attr("name").context("kit without a name")?.to_string(),
             ("slot", false) => kit.slots.push(KitSlot { name: t.attr("name").unwrap_or("").to_string(), parts: Vec::new() }),
             ("part", false) => {
                 let (Some(slot), Some(reference), Some(mesh)) = (kit.slots.last_mut(), t.attr("ref"), t.attr("mesh")) else { continue };
-                slot.parts.push(KitPart { model: part_model(reference, mesh), weight: t.weight(), swaps: Vec::new() });
+                slot.parts.push(KitPart { model: part_model(reference, mesh), weight: t.weight(), swaps: Vec::new(), tags: Vec::new() });
             }
             ("overrideslot", false) => {
                 let Some(part) = kit.slots.last_mut().and_then(|s| s.parts.last_mut()) else { continue };
@@ -164,6 +172,15 @@ pub fn parse_kit(xml: &str) -> Result<Kit> {
                 };
                 swap.choices.push(MaterialChoice { material: path, weight: t.weight(), tags: Vec::new() });
             }
+            // The tags a part gives (a head's `head02`: which face rig it
+            // takes); not those it excludes (type 4: the villagers' arms
+            // carry `head01` so).
+            ("tag", false) if own_tag && !in_swap => {
+                let (Some(part), Some(name)) = (kit.slots.last_mut().and_then(|s| s.parts.last_mut()), t.attr("name")) else { continue };
+                if t.attr("type").and_then(|v| v.parse::<u32>().ok()).map(TagRule::from_kit) != Some(TagRule::Excludes) {
+                    part.tags.push(name.to_string());
+                }
+            }
             ("tag", false) if in_swap => {
                 let Some(choice) = kit.slots.last_mut().and_then(|s| s.parts.last_mut()).and_then(|p| p.swaps.last_mut()).and_then(|s| s.choices.last_mut()) else { continue };
                 let (Some(name), Some(rule)) = (t.attr("name"), t.attr("type").and_then(|v| v.parse::<u32>().ok())) else { continue };
@@ -179,9 +196,13 @@ pub fn parse_kit(xml: &str) -> Result<Kit> {
     Ok(kit)
 }
 
-/// Text form for the cache: `kit`, `slot`, `part`, `swap` and `mat` lines.
+/// The cache's form's first line.
+pub const TEXT_HEADER: &str = "# kits 2";
+
+/// Text form for the cache: `kit`, `slot`, `part`, `ptag` (a part's own
+/// tag), `swap` and `mat` lines.
 pub fn to_text(kits: &[Kit]) -> String {
-    let mut out = String::new();
+    let mut out = format!("{TEXT_HEADER}\n");
     for k in kits {
         out += &format!("kit {}\n", k.name);
         if k.id != 0 {
@@ -191,6 +212,9 @@ pub fn to_text(kits: &[Kit]) -> String {
             out += &format!("slot {}\n", s.name);
             for p in &s.parts {
                 out += &format!("part {} {}\n", p.weight, p.model);
+                for t in &p.tags {
+                    out += &format!("ptag {t}\n");
+                }
                 for sw in &p.swaps {
                     out += &format!("swap {}\n", sw.default);
                     for c in &sw.choices {
@@ -224,7 +248,12 @@ pub fn from_text(text: &str) -> Vec<Kit> {
             "part" => {
                 let (w, model) = rest.split_once(' ').unwrap_or(("1", rest));
                 if let Some(s) = kits.last_mut().and_then(|k| k.slots.last_mut()) {
-                    s.parts.push(KitPart { model: model.to_string(), weight: w.parse().unwrap_or(1.0), swaps: Vec::new() });
+                    s.parts.push(KitPart { model: model.to_string(), weight: w.parse().unwrap_or(1.0), swaps: Vec::new(), tags: Vec::new() });
+                }
+            }
+            "ptag" => {
+                if let Some(p) = kits.last_mut().and_then(|k| k.slots.last_mut()).and_then(|s| s.parts.last_mut()) {
+                    p.tags.push(rest.to_string());
                 }
             }
             "swap" => {
@@ -292,6 +321,8 @@ mod tests {
 	<slot name="Head" position="0" bonename="Head">
 		<partdatabase name="" weight="0">
 			<part name="Head01" ref="graphics\chars\Head01.xml" mesh="Head01" weight="1" version="1">
+				<tag name="head02" type="3" />
+				<tag name="head01" type="4" />
 				<materialdatabase name="" weight="0" />
 				<defaultmaterials>
 					<overrideslot name="Face" id="a-m-1">
@@ -330,6 +361,8 @@ mod tests {
         assert_eq!(p.swaps[0].choices[1].material, "graphics\\_materials\\c-M-3.material.bin");
         assert_eq!(p.swaps[0].choices[1].weight, 2.0);
         assert_eq!(p.swaps[0].choices[0].tags, vec![("dark".to_string(), TagRule::Has), ("pale".to_string(), TagRule::Excludes)]);
+        // The part's own tag (which face rig the head takes), not the materials'.
+        assert_eq!(p.tags, vec!["head02".to_string()]);
         assert!(k.slots[1].parts.is_empty());
         let back = from_text(&to_text(&[k.clone()]));
         assert_eq!(back, vec![k]);
