@@ -6,7 +6,10 @@
 //! Each playing sound follows its bus and the buses above it
 //! (`sound::hear`). A state also turns on the low-pass units on buses (under
 //! water: 800 Hz), which the sounds below them run through as they play
-//! (`sound_source`); the other kinds of unit aren't applied.
+//! (`sound_source`). The reverb unit (the reverb return's) takes the preset
+//! the room the listener is in pushes (its `sndReverb`), else the sound
+//! regions' (outdoors), and each bus sends its sounds to it (parameter 4,
+//! dB); the sounds ring it themselves (`sound_source::Reverb`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -37,6 +40,46 @@ pub struct MixData {
     high: HashSet<u32>,
     /// Each state's changes to effect units, like `states`.
     effects: HashMap<u32, Vec<(u32, u32, f32, f32, f32)>>,
+    /// The reverb unit and its parameters' defaults; and the buses that
+    /// send to it (a state sets their parameter 4), by slot (see [`SENDS`]).
+    reverb: Option<(u32, Vec<(u32, f32)>)>,
+    send_slots: HashMap<u32, u8>,
+}
+
+/// The reverb's parameters as the latest preset sets them (`f32` bits), and
+/// whether one is on; for the playing sounds to read. By index: 0 on, 1 the
+/// early reflections' delay (ms), 2 the tail's level (dB), 3 density (%),
+/// 4 decay (s), 5 the treble's decay against the rest (%), 6 where the
+/// treble starts (Hz), 7 the tail's delay (ms), 8 the dry level (dB), 9
+/// diffusion (%), 12 the early reflections' level (dB). (Read from how they
+/// vary between presets: a cave's early reflections come 2 to 7 ms on at
+/// -2 dB, the jungle's 100 ms on at -20 dB, its treble from 4.8 kHz.)
+pub const REVERB_PARAMS: usize = 16;
+static REVERB: [AtomicU32; REVERB_PARAMS] = [const { AtomicU32::new(0) }; REVERB_PARAMS];
+static REVERB_ON: AtomicBool = AtomicBool::new(false);
+/// Each sending bus's send now (linear; 0: none), by slot.
+static SENDS: [AtomicU32; SLOTS] = [const { AtomicU32::new(0) }; SLOTS];
+/// The send slots on each sound's way to the mix, by file stem.
+static SEND_SLOTS: LazyLock<RwLock<HashMap<String, Arc<[u8]>>>> = LazyLock::new(Default::default);
+
+/// The reverb's parameters now, if a preset has it on (`FC3_REVERB=0`
+/// turns it off).
+pub fn reverb() -> Option<[f32; REVERB_PARAMS]> {
+    if !REVERB_ON.load(Ordering::Relaxed) {
+        return None;
+    }
+    Some(std::array::from_fn(|i| f32::from_bits(REVERB[i].load(Ordering::Relaxed))))
+}
+
+/// A sound's send to the reverb now (linear): its buses' strongest.
+pub fn send(slots: &[u8]) -> f32 {
+    slots.iter().map(|&s| f32::from_bits(SENDS[s as usize].load(Ordering::Relaxed))).fold(0.0, f32::max)
+}
+
+/// The send slots a sound file goes through (none until the manifest is
+/// read).
+pub fn sends_of(stem: &str) -> Arc<[u8]> {
+    SEND_SLOTS.read().ok().and_then(|m| m.get(stem).cloned()).unwrap_or_else(|| Arc::from([]))
 }
 
 /// The low-pass units' cutoffs now (Hz as `f32` bits; 0: open), by slot,
@@ -120,8 +163,21 @@ impl MixData {
                 if kind == "mixfx" {
                     self.effects.insert(id, sets);
                 } else {
+                    // (A bus a state sets parameter 4 of sends to the reverb.)
+                    for &(bus, param, ..) in &sets {
+                        let next = self.send_slots.len();
+                        if param == 4 && next < SLOTS {
+                            self.send_slots.entry(bus).or_insert(next as u8);
+                        }
+                    }
                     self.states.insert(id, sets);
                 }
+            }
+            "reverb" => {
+                // unit, then parameter:default...
+                let Some(unit) = it.next().and_then(hex) else { return };
+                let params = it.filter_map(|t| t.split_once(':')).filter_map(|(p, v)| Some((p.parse().ok()?, v.parse().ok()?))).collect();
+                self.reverb = Some((unit, params));
             }
             "mixevent" => {
                 let Some(id) = it.next().and_then(hex) else { return };
@@ -195,6 +251,34 @@ impl MixData {
             *m = out;
         }
     }
+
+    /// Hands the sound loader each file's send slots (by its bus).
+    pub fn publish_sends<'a>(&self, files: impl Iterator<Item = (&'a String, Option<u32>)>) {
+        let mut by_bus: HashMap<u32, Arc<[u8]>> = HashMap::new();
+        let mut out = HashMap::new();
+        for (stem, bus) in files {
+            let Some(bus) = bus else { continue };
+            let slots = by_bus
+                .entry(bus)
+                .or_insert_with(|| {
+                    let mut slots = Vec::new();
+                    let mut at = Some(bus);
+                    for _ in 0..16 {
+                        let Some(b) = at else { break };
+                        slots.extend(self.send_slots.get(&b));
+                        at = self.buses.get(&b).map(|x| x.0).filter(|p| *p != b);
+                    }
+                    slots.into()
+                })
+                .clone();
+            if !slots.is_empty() {
+                out.insert(stem.clone(), slots);
+            }
+        }
+        if let Ok(mut m) = SEND_SLOTS.write() {
+            *m = out;
+        }
+    }
 }
 
 /// Mixings asked for by name (started, or stopped), from the game and its
@@ -230,6 +314,10 @@ pub struct Rooms {
     inside: Option<usize>,
     /// The ambience regions' beds, by index.
     beds: HashMap<u32, u32>,
+    /// The reverb preset outdoors (the one most of the sound regions have),
+    /// and the one pushed now.
+    outdoors: u32,
+    reverb: Option<u32>,
 }
 
 impl Rooms {
@@ -246,7 +334,13 @@ const ROOM_CELL: f32 = 64.0;
 pub fn load_rooms(mut commands: Commands, info: Res<crate::data::CacheInfo>) {
     let text = std::fs::read_to_string(info.root.join(fc3_formats::cache::ROOMS_REL)).unwrap_or_default();
     let rooms: Vec<fc3_formats::rooms::Room> = text.lines().filter_map(fc3_formats::rooms::Room::from_line).collect();
-    let beds = text.lines().filter_map(fc3_formats::rooms::SoundRegion::from_line).map(|r| (r.index, r.bed)).collect();
+    let regions: Vec<fc3_formats::rooms::SoundRegion> = text.lines().filter_map(fc3_formats::rooms::SoundRegion::from_line).collect();
+    let beds = regions.iter().map(|r| (r.index, r.bed)).collect();
+    let mut counts: HashMap<u32, usize> = HashMap::new();
+    for r in regions.iter().filter(|r| r.reverb != 0 && r.reverb != u32::MAX) {
+        *counts.entry(r.reverb).or_default() += 1;
+    }
+    let outdoors = counts.into_iter().max_by_key(|(r, n)| (*n, *r)).map_or(0, |(r, _)| r);
     let mut cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
     for (i, r) in rooms.iter().enumerate() {
         let cell = |v: f32| (v / ROOM_CELL).floor() as i32;
@@ -257,7 +351,7 @@ pub fn load_rooms(mut commands: Commands, info: Res<crate::data::CacheInfo>) {
         }
     }
     info!("{} rooms", rooms.len());
-    commands.insert_resource(Rooms { rooms, cells, inside: None, beds });
+    commands.insert_resource(Rooms { rooms, cells, inside: None, beds, outdoors, reverb: None });
 }
 
 /// A room's mixing (`#` and its key), unless it has none.
@@ -279,6 +373,15 @@ pub fn room_mixings(rooms: Option<ResMut<Rooms>>, listener: Query<&GlobalTransfo
         .copied()
         .filter(|&i| rooms.rooms[i].contains(p))
         .min_by(|&a, &b| rooms.rooms[a].size().total_cmp(&rooms.rooms[b].size()));
+    // The reverb preset: the room's own while inside one that has it, else
+    // the outdoors' (its event pushes the mixer's reverb state; the latest
+    // pushed wins).
+    let reverb = now.map(|i| rooms.rooms[i].reverb).filter(|r| *r != 0 && *r != u32::MAX).unwrap_or(rooms.outdoors);
+    if reverb != 0 && rooms.reverb != Some(reverb) {
+        debug!("room: reverb preset {reverb:08x}");
+        mixings.1.push(reverb);
+        rooms.reverb = Some(reverb);
+    }
     if now == rooms.inside {
         return;
     }
@@ -422,6 +525,42 @@ impl Mixer {
             }
         }
         self.cutoffs.retain(|u, r| cut.contains_key(u) || (r.now - open_of(*u)).abs() >= 0.01);
+
+        // The reverb: its unit's parameters as the latest preset has them
+        // (over its defaults), on once one has set them; and each bus's
+        // send as the latest state sets it.
+        if let Some((unit, defaults)) = &mix.reverb {
+            let mut p = [0.0f32; REVERB_PARAMS];
+            for &(i, v) in defaults.iter().filter(|(i, _)| (*i as usize) < REVERB_PARAMS) {
+                p[i as usize] = v;
+            }
+            let mut set = false;
+            for state in &self.stack {
+                for &(u, param, value, ..) in mix.effects.get(state).into_iter().flatten() {
+                    if u == *unit && (param as usize) < REVERB_PARAMS {
+                        p[param as usize] = value;
+                        set = true;
+                    }
+                }
+            }
+            for (slot, v) in REVERB.iter().zip(p) {
+                slot.store(v.to_bits(), Ordering::Relaxed);
+            }
+            let off = std::env::var("FC3_REVERB").is_ok_and(|v| v == "0");
+            REVERB_ON.store(set && p[0] > 0.5 && !off, Ordering::Relaxed);
+        }
+        let mut sends: HashMap<u32, f32> = HashMap::new();
+        for state in &self.stack {
+            for &(bus, param, value, ..) in mix.states.get(state).into_iter().flatten() {
+                if param == 4 {
+                    sends.insert(bus, value);
+                }
+            }
+        }
+        for (bus, &slot) in &mix.send_slots {
+            let gain = sends.get(bus).map_or(0.0, |db| 10f32.powf(db / 20.0));
+            SENDS[slot as usize].store(gain.to_bits(), Ordering::Relaxed);
+        }
     }
 
     /// The mixer's change to the sounds of `bus` (dB, beside the levels
@@ -453,9 +592,10 @@ impl Mixer {
     /// menu: nothing a story or a room pushed carries over).
     pub fn reset(&mut self) {
         *self = Mixer::default();
-        for c in &CUTOFFS {
+        for c in CUTOFFS.iter().chain(&SENDS) {
             c.store(0, Ordering::Relaxed);
         }
+        REVERB_ON.store(false, Ordering::Relaxed);
     }
 
     /// Forgets this frame's stops (once every sound has heard them).
@@ -479,7 +619,7 @@ impl Mixer {
 pub fn reset_mixer(mut mixer: ResMut<Mixer>, rooms: Option<ResMut<Rooms>>) {
     mixer.reset();
     if let Some(mut rooms) = rooms {
-        rooms.inside = None;
+        (rooms.inside, rooms.reverb) = (None, None);
     }
 }
 

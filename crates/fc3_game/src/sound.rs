@@ -240,7 +240,9 @@ impl SoundBank {
                     let bus_id = rest.get(8).and_then(|b| u32::from_str_radix(b, 16).ok());
                     bank.files.insert(stem.to_string(), SoundFile { path: format!("audio/{stem}.{ext}"), looping, seconds, falloff, bus, bus_id });
                 }
-                Some(kind @ ("bus" | "fx" | "mixstate" | "mixfx" | "mixevent" | "mixing")) => bank.mix.read(kind, line.split_once(' ').map_or("", |x| x.1)),
+                Some(kind @ ("bus" | "fx" | "reverb" | "mixstate" | "mixfx" | "mixevent" | "mixing")) => {
+                    bank.mix.read(kind, line.split_once(' ').map_or("", |x| x.1))
+                }
                 Some("falloff") => {
                     let (Some(id), Some(points)) = (it.next(), it.next()) else { continue };
                     if let Some(c) = Curve::from_token(&format!("0:{DISTANCE:08x}:{points}")) {
@@ -563,6 +565,9 @@ fn hear(
     if tally {
         *shown = 0.0;
         debug!("mixer: {all} sounds, {held} paused, {lowered} lowered, low-passes {:?}", mixer.filters_on());
+        if let Some(p) = crate::mixer::reverb() {
+            debug!("mixer: reverb {:.1} s, tail {:+.0} dB after {:.0} ms, reflections {:+.0} dB after {:.0} ms", p[4], p[2], p[7], p[12], p[1]);
+        }
     }
 }
 
@@ -599,6 +604,7 @@ fn load_bank(mut commands: Commands, info: Res<CacheInfo>) {
     };
     info!("sound bank: {} files, {} events", bank.files.len(), bank.events.len());
     bank.mix.publish_filters(bank.files.iter().map(|(stem, f)| (stem, f.bus_id)));
+    bank.mix.publish_sends(bank.files.iter().map(|(stem, f)| (stem, f.bus_id)));
     commands.insert_resource(bank);
 }
 
@@ -784,8 +790,10 @@ fn update_loops(
                 info!("  {f} at {v:.3}, {d:.0} m");
             }
             let mode = if looping { PlaybackMode::Loop } else { PlaybackMode::Despawn };
+            // (A looped sound's reverb doesn't ring on past its end.)
+            let path = if looping { format!("{}#loop", cache_path(&f)) } else { cache_path(&f) };
             commands.spawn((
-                AudioPlayer::<Sfx>(server.load(cache_path(&f))),
+                AudioPlayer::<Sfx>(server.load(path)),
                 PlaybackSettings { speed, ..settings(mode, v, ev.at.is_some()) },
                 heard,
                 Transform::IDENTITY,

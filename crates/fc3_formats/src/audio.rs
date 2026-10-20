@@ -1367,6 +1367,38 @@ pub fn parse_effect_units(project: &[u8]) -> HashMap<u32, (u32, f32)> {
     out
 }
 
+/// The project's reverb units (type 10: the reverb return's, one in the
+/// game): `u32 id, 10, u32 count`, then `count` parameters each `2, u32
+/// index, -1, f32 default`. A reverb preset (a mixer state a room's or a
+/// sound region's `sndReverb` event pushes) sets them; see `fc3_game::mixer`
+/// for what each means.
+pub fn parse_reverb_units(project: &[u8]) -> HashMap<u32, Vec<(u32, f32)>> {
+    let mut out = HashMap::new();
+    let word = |o: usize| project.get(o..o + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+    let mut o = BAO_HEADER_SIZE;
+    while o + 12 <= project.len() {
+        if let (Some(id), Some(10), Some(count)) = (word(o), word(o + 4), word(o + 8)) {
+            if (0x1000..0x0100_0000).contains(&id) && (2..=32).contains(&count) {
+                let params: Option<Vec<(u32, f32)>> = (0..count as usize)
+                    .map(|k| {
+                        let at = o + 12 + 16 * k;
+                        match (word(at), word(at + 4), word(at + 8), word(at + 12)) {
+                            (Some(2), Some(p), Some(u32::MAX), Some(v)) if p < 64 => Some((p, f32::from_bits(v))),
+                            _ => None,
+                        }
+                    })
+                    .collect();
+                if let Some(mut params) = params {
+                    params.sort_by_key(|(p, _)| *p);
+                    out.entry(id).or_insert(params);
+                }
+            }
+        }
+        o += 4;
+    }
+    out
+}
+
 /// Each bus's parent and its two levels (dB, the parameters a mixer state
 /// calls 0 and 2; see [`parse_buses`]).
 pub fn parse_bus_params(project: &[u8]) -> HashMap<u32, (u32, f32, f32)> {
@@ -1527,6 +1559,8 @@ pub struct SoundGraph {
     /// Each bus's effect units, and each unit's type and default.
     pub bus_units: HashMap<u32, Vec<u32>>,
     pub effect_units: HashMap<u32, (u32, f32)>,
+    /// The reverb units, with their parameters' defaults.
+    pub reverb_units: HashMap<u32, Vec<(u32, f32)>>,
     pub mix_states: HashMap<u32, MixState>,
     pub mixings: Vec<Mixing>,
 }
@@ -1552,6 +1586,7 @@ impl SoundGraph {
             g.bus_params = parse_bus_params(&project);
             g.bus_units = bus_records(&project).into_iter().filter(|b| !b.units.is_empty()).map(|b| (b.id, b.units)).collect();
             g.effect_units = parse_effect_units(&project);
+            g.reverb_units = parse_reverb_units(&project);
         }
         if let Ok(m) = vfs.read(MIXINGS_PATH).map_err(anyhow::Error::from).and_then(|b| parse_mixings(&b)) {
             g.mixings = m;
@@ -2016,6 +2051,13 @@ impl SoundGraph {
                 s += &format!("fx {unit:08x} {bus:08x} {kind} {default}\n");
             }
         }
+        // The reverb units: `reverb <unit> <parameter>:<default>...`.
+        let mut reverbs: Vec<_> = self.reverb_units.iter().collect();
+        reverbs.sort_by_key(|r| *r.0);
+        for (unit, params) in reverbs {
+            let p: Vec<String> = params.iter().map(|(i, v)| format!("{i}:{v}")).collect();
+            s += &format!("reverb {unit:08x} {}\n", p.join(" "));
+        }
         let mut states: Vec<_> = self.mix_states.iter().filter(|m| !m.1.buses.is_empty()).collect();
         // (A state may set only effect units; `mixfx` below.)
         states.sort_by_key(|m| *m.0);
@@ -2223,6 +2265,13 @@ mod tests {
         assert_eq!(buses[&0x4000], (0x3000, -9.0));
         assert_eq!(bus_records(&p).iter().find(|b| b.id == 0x4000).map(|b| b.units.clone()), Some(vec![0x6000]));
         assert_eq!(parse_effect_units(&p)[&0x6000], (0, 20000.0));
+        // A reverb unit: its parameters' defaults, in order.
+        let mut r = b"<Binary>".to_vec();
+        r.resize(BAO_HEADER_SIZE, 0);
+        for w in [0x6707c, 10, 2, 2, 4, u32::MAX, 5.47f32.to_bits(), 2, 0, u32::MAX, 1.0f32.to_bits(), 0, 0] {
+            r.extend_from_slice(&w.to_le_bytes());
+        }
+        assert_eq!(parse_reverb_units(&r)[&0x6707c], vec![(0, 1.0), (4, 5.47)]);
         let mut g = SoundGraph { buses, ..Default::default() };
         g.header_bus.insert(7, 0x5001);
         assert_eq!(g.bus_gain(7), -14.0);

@@ -180,13 +180,15 @@ impl Room {
 /// name by index.
 pub const REGIONS_PATH: &str = r"generated\databases\generic\soundregions_default.obj";
 
-/// A sound region: its index (`disUniqueId`), name and looping bed (0:
-/// none).
+/// A sound region: its index (`disUniqueId`), name, looping bed and reverb
+/// preset (its first level's `sndReverb`: an event pushing the mixer's
+/// reverb state) (0: none).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SoundRegion {
     pub index: u32,
     pub name: String,
     pub bed: u32,
+    pub reverb: u32,
 }
 
 pub fn parse_regions(bytes: &[u8]) -> Vec<SoundRegion> {
@@ -197,15 +199,22 @@ pub fn parse_regions(bytes: &[u8]) -> Vec<SoundRegion> {
         .filter_map(|r| {
             let index = r.field("disUniqueId").and_then(|b| b.first().copied())? as u32;
             let bed = r.child("Ambiance").map_or(0, |a| event(a, "sndMultitrackSound"));
-            Some(SoundRegion { index, name: r.str("sName").unwrap_or_default(), bed })
+            let mut reverb = 0;
+            r.walk(&mut |o, _| {
+                if reverb == 0 && o.is("Level") {
+                    reverb = event(o, "sndReverb");
+                }
+            });
+            Some(SoundRegion { index, name: r.str("sName").unwrap_or_default(), bed, reverb })
         })
         .collect()
 }
 
 impl SoundRegion {
-    /// `region <index> <bed> <name>`.
+    /// `region <index> <bed> <reverb> <name>` (an older table's lines have no
+    /// reverb).
     pub fn to_line(&self) -> String {
-        format!("region {} {:08x} {}", self.index, self.bed, self.name)
+        format!("region {} {:08x} {:08x} {}", self.index, self.bed, self.reverb, self.name)
     }
 
     pub fn from_line(line: &str) -> Option<SoundRegion> {
@@ -213,7 +222,15 @@ impl SoundRegion {
         (it.next()? == "region").then_some(())?;
         let index = it.next()?.parse().ok()?;
         let bed = u32::from_str_radix(it.next()?, 16).ok()?;
-        Some(SoundRegion { index, bed, name: it.next().unwrap_or_default().to_string() })
+        let rest = it.next().unwrap_or_default();
+        let (reverb, name) = match rest.split_once(' ') {
+            Some((r, name)) if r.len() == 8 => match u32::from_str_radix(r, 16) {
+                Ok(r) => (r, name),
+                Err(_) => (0, rest),
+            },
+            _ => (0, rest),
+        };
+        Some(SoundRegion { index, bed, reverb, name: name.to_string() })
     }
 }
 
@@ -236,7 +253,9 @@ mod tests {
         assert!(!room.contains([99.0, 13.5, -51.0]));
         assert!(!room.contains([101.5, 11.0, -51.0]));
         assert_eq!(Room::from_line(&room.to_line()), Some(room));
-        let region = SoundRegion { index: 25, name: "MEM_INT_Cave".into(), bed: 0x618A2 };
+        let region = SoundRegion { index: 25, name: "MEM_INT_Cave".into(), bed: 0x618A2, reverb: 0x470ED };
         assert_eq!(SoundRegion::from_line(&region.to_line()), Some(region));
+        // (An older table's line, with no reverb.)
+        assert_eq!(SoundRegion::from_line("region 25 000618a2 MEM_INT_Cave").map(|r| (r.reverb, r.name)), Some((0, "MEM_INT_Cave".into())));
     }
 }

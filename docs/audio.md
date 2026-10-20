@@ -419,7 +419,8 @@ of going in and out.
 
 A room's region is the index (`disUniqueId`) of one of the 64 regions in
 `soundregions_default.obj`, written ahead of the rooms as `region <index>
-<bed> <name>`. The rooms use these, among others:
+<bed> <reverb> <name>` (the reverb its first `Level`'s `sndReverb`). The
+rooms use these, among others:
 
 * 25, `MEM_INT_Cave`;
 * 50, `MEM_INT_Bunker`;
@@ -428,9 +429,51 @@ A room's region is the index (`disUniqueId`) of one of the 64 regions in
 
 Inside such a room the ambience plays that region's bed at full, with no
 calls from outside, in place of the one picked from the ground (see
-Ambience). The rooms' reverbs aren't applied. `FC3_MIXING_TEST=<name>[,<s>]` starts one into
+Ambience). `FC3_MIXING_TEST=<name>[,<s>]` starts one into
 play, and `RUST_LOG=farcry3::sound=debug` tallies the sounds the mixer
-pauses and lowers.
+pauses and lowers, and the reverb preset on.
+
+### Reverb
+
+The mixer has one reverb unit (`0x6707c`, type 10, on the reverb return
+bus): `u32 id, 10, u32 count`, then each parameter as `2, index, -1, f32
+default` (`audio::parse_reverb_units`; the manifest's `reverb <unit>
+<parameter>:<default>...`). A reverb preset is a mixer state that sets
+those parameters, and the send of each of about 15 buses (bus parameter
+4, dB). Rooms and sound regions name their preset's event (`sndReverb`,
+kind 6: a push). 38 states set the unit, and presets replace each other:
+the latest pushed wins.
+
+What each parameter does is read from how they vary between presets:
+
+| parameter | meaning | outdoors (`0x470ED`) | cave (`0x470F7`) |
+| --- | --- | --- | --- |
+| 0 | on | 1 | 1 |
+| 1 | early reflections' delay (ms) | 100 | 2 |
+| 2 | tail level (dB) | -9 | -2 |
+| 4 | decay (s) | 5.47 | 5.47 |
+| 6 | where the treble starts (Hz) | 4,800 | 9,000 |
+| 7 | tail's delay (ms) | 40 | 5 |
+| 8 | dry level (dB) | -96 | -96 |
+| 9 | diffusion (%) | 90 | 100 |
+| 12 | early reflections' level (dB) | -20 | -2 |
+
+Parameters 3 and 5 (density and the treble's decay ratio, it seems) and
+10, 11, 13 and 14 aren't used. A small room's preset decays in 1.5 s.
+
+The game (`mixer::room_mixings`) pushes the preset of the room the
+listener is in, else the outdoors' (the one most regions have, `0x470ED`:
+our ambience picks its region from the ground, not the game's region map).
+The mixer publishes the latest preset's parameters and each bus's send.
+Each sound (`sound_source::Reverb`) rings its own reverb, after its
+filters and before its volume and panning, so a distant sound's reverb is
+as faint as it is. Its first channel goes in at its buses' strongest send,
+through four early reflections and a tail: four combs damped at the treble
+frequency, each losing 60 dB over the decay, into two all-passes. The
+result is added to every channel. Once a sound ends its tail rings on, up
+to 6 s or until quiet. A looped sound plays its `#loop` asset (the loader
+adds it), whose reverb stops at its end so the loop doesn't break. With no
+preset on, or no send, nothing runs. `FC3_REVERB=0` turns it off.
 
 The authored mix sits low: dialogue near -7 dB, the player's gun -12,
 music -12, other people's gunfire -14 to -17, ambience -14 to -20 (the
