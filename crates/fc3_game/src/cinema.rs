@@ -837,7 +837,10 @@ fn play_scenes(
                 })
             };
         }
-        if p.t >= p.seq.duration {
+        // (A sequence of no length ends on a frame time moved on, its sync
+        // points at nought reached first: ended on a still frame, they never
+        // were, and JAS_020 B15 waited on its window's for good.)
+        if p.t >= p.seq.duration && (p.seq.duration > 0.0 || b > a) {
             if p.seq.looping {
                 p.t -= p.seq.duration.max(0.01);
                 host.story.sequence_event(&p.scene.to_string(), &p.file, "FinishedLoop", None);

@@ -1603,6 +1603,20 @@ trigger 15 s after the lead went quiet, played the 62 s scene and completed
 JAS_100, starting DOC_020's brief. (The dog step itself has yet to be seen
 taking a dog: in both runs since, the dog died in the fight.)
 
+Replays from JAS_020 B15's checkpoint had stalled in B15 three runs in a
+row, for two reasons:
+
+* B15's second lure gives the rock back with its objective, a moment after
+  the autopilot has aimed. With no rock in hand the throw gave up at once.
+  It now waits up to 10 s for one (`ROCK_WAIT`).
+* A sequence of no length ended on the first frame it played, even when
+  time had not moved on that frame. Its sync points at nought were then
+  never reached, and B15 waited on them for good. Such a sequence now ends
+  only on a frame where time moves.
+
+From B15's checkpoint the next run completed B15, B20C and B30, then
+JAS_030's B10.
+
 The notes below are the earlier investigation.
 
 The opening autopilot now requests an aim toward the nearest enabled authored

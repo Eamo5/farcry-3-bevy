@@ -247,6 +247,9 @@ fn rock_path(from: Vec3, f: Vec3, distance: f32) -> Vec<Vec3> {
     path
 }
 
+/// How long (s) the autopilot's throw waits for the script to give a rock.
+const ROCK_WAIT: f32 = 10.0;
+
 fn aim_test_rock(
     mut target: ResMut<RockAimTest>,
     mut players: Query<(Entity, &mut Player)>,
@@ -254,12 +257,21 @@ fn aim_test_rock(
     mut actions: ResMut<ActionState>,
     spatial: SpatialQuery,
     scripted: Res<crate::story::ScriptedPlayer>,
+    (time, mut waited): (Res<Time>, Local<f32>),
 ) {
-    let Some(mut at) = target.0 else { return };
-    // (No rock to throw, this block's player not having one: given up.)
+    let Some(mut at) = target.0 else {
+        *waited = 0.0;
+        return;
+    };
+    // (No rock to throw: waited for a while, the script maybe about to give
+    // it back (JAS_020 B15's second lure hands it over with its objective,
+    // a moment after the autopilot has aimed), then given up.)
     if !scripted.has_gadget("gadgets:FC3/Rock") {
-        debug!("story rock test: no rock to throw at {at:?}");
-        target.0 = None;
+        *waited += time.delta_secs();
+        if *waited > ROCK_WAIT {
+            debug!("story rock test: no rock to throw at {at:?}");
+            target.0 = None;
+        }
         return;
     }
     let (Ok((entity, mut p)), Ok(cam)) = (players.single_mut(), cameras.single()) else { return };
