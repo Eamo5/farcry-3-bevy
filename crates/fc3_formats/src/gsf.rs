@@ -54,6 +54,12 @@ pub struct IntoxicationSettings {
     pub watch_hands: f32,
     /// The moves its generic events play (`WatchCough`, `WatchBubbleHands`).
     pub moves: std::collections::BTreeMap<String, String>,
+    /// While the player watches their hands: the effects on them (the
+    /// distortion, `m_handDistort`, and the light trail, `m_lightTrail`)
+    /// and the sounds as it starts and stops (`snd_WatchHand_Start`,
+    /// `..._Stop`; 0: none).
+    pub hand_effects: Vec<String>,
+    pub watch_sounds: (u32, u32),
 }
 
 const SWAY_FIELDS: [&str; 4] = ["SwayHSizeMultiplier", "SwayVSizeMultiplier", "SwayHSpeedMultiplier", "SwayVSpeedMultiplier"];
@@ -72,6 +78,9 @@ impl IntoxicationSettings {
                 .into_iter()
                 .filter_map(|(event, h)| o.str_h(h).filter(|m| !m.is_empty()).map(|m| (event.to_string(), m)))
                 .collect(),
+            // (The effects' names are their hashed fields' companions.)
+            hand_effects: [0xAC22_C80A, 0xA848_AEC5].into_iter().filter_map(|h| o.str_h(h).filter(|m| !m.is_empty())).collect(),
+            watch_sounds: (sound_id(&o, "snd_WatchHand_Start"), sound_id(&o, "snd_WatchHand_Stop")),
         })
     }
 
@@ -1072,7 +1081,15 @@ mod tests {
 
     #[test]
     fn a_scripts_intoxication_values_go_over_the_librarys() {
-        let s = IntoxicationSettings { speed: 2.5, sway: [0.5, 0.3, 0.2, 0.55], drunken_control: true, watch_hands: 10.0, moves: Default::default() };
+        let s = IntoxicationSettings {
+            speed: 2.5,
+            sway: [0.5, 0.3, 0.2, 0.55],
+            drunken_control: true,
+            watch_hands: 10.0,
+            moves: Default::default(),
+            hand_effects: Vec::new(),
+            watch_sounds: (0, 0),
+        };
         let own = s.clone().with(|k| match k {
             "MovementspeedFactor" => Some(1.9),
             "SwayHSizeMultiplier" => Some(0.1),

@@ -4,6 +4,9 @@
 //! wanders off its line (unless `DisableDrunkenControl`), easing in as it
 //! starts and out as it stops. The settings are the GSF library's
 //! (`gsf::IntoxicationSettings`), with the script's own values over them.
+//! While the player watches their hands (`WatchBubbleHands`), its effects
+//! play on both of them, the distortion and the light trail, for its time
+//! (`WatchHandsDuration`), with its sounds as it starts and stops.
 
 use std::collections::HashMap;
 
@@ -41,6 +44,11 @@ pub struct Intoxication {
     pub roll: f32,
     /// How far the walk wanders off where it is steered (radians).
     pub drift: f32,
+    /// The effects on the hands, the time they have left and the sound as
+    /// they stop.
+    hands: Vec<Entity>,
+    hands_left: f32,
+    hands_stop: u32,
 }
 
 impl Intoxication {
@@ -68,12 +76,15 @@ const WANDER_RATE: f32 = 0.04;
 /// Seconds to ease in and out.
 const EASE: f32 = 2.0;
 
+#[allow(clippy::too_many_arguments)]
 fn run(
     mut drunk: ResMut<Intoxication>,
     time: Res<Time>,
     info: Option<Res<crate::data::CacheInfo>>,
     mut tested: Local<bool>,
     mut anims: ResMut<crate::pawn_anims::PawnAnims>,
+    (fp, rigs, mut sfx): (Res<crate::fp::FpState>, Query<&crate::characters::CharacterRig>, MessageWriter<crate::sound::PlaySfx>),
+    (mut names, mut commands, mut test_event): (Local<HashMap<String, &'static str>>, Commands, Local<Option<String>>),
 ) {
     // FC3_DRUNK_TEST (debug): drunk from the start, at the library's values;
     // a value other than 1 is also sent as a generic event (`WatchCough`).
@@ -82,8 +93,14 @@ fn run(
             *tested = true;
             drunk.pending.push(Start { id: u64::MAX, params: HashMap::new() });
             if test != "1" {
-                drunk.events.push(test);
+                *test_event = Some(test);
             }
+        }
+    }
+    // (The test's event once the player's arms are in.)
+    if fp.rig().is_some() {
+        if let Some(event) = test_event.take() {
+            drunk.events.push(event);
         }
     }
     let cancelled = std::mem::take(&mut drunk.cancelled);
@@ -118,6 +135,39 @@ fn run(
         if let Some(name) = drunk.active.as_ref().and_then(|(_, s)| s.moves.get(&event)) {
             info!("intoxicated: {event} plays {name}");
             anims.requests.push(crate::pawn_anims::Request::Play { pawn: fc3_story::PLAYER, name: name.clone(), looping: false, quiet: true });
+        }
+        // Watching the hands: their effects on both, for its time.
+        if event == "WatchBubbleHands" {
+            let Some(s) = drunk.active.as_ref().map(|(_, s)| s.clone()) else { continue };
+            for e in std::mem::take(&mut drunk.hands) {
+                commands.entity(e).try_despawn();
+            }
+            let rig = fp.rig().and_then(|r| rigs.get(r).ok());
+            for hand in ["LeftHand", "RightHand"] {
+                let Some((_, joint)) = rig.and_then(|r| r.joint(fc3_formats::hash::name_hash(hand))) else { continue };
+                for effect in &s.hand_effects {
+                    let name = *names.entry(effect.clone()).or_insert_with(|| Box::leak(effect.clone().into_boxed_str()));
+                    drunk.hands.extend(crate::authored_fx::attach(&mut commands, name, joint));
+                }
+            }
+            info!("intoxicated: {} effects on the hands for {} s", drunk.hands.len(), s.watch_hands);
+            drunk.hands_left = s.watch_hands;
+            drunk.hands_stop = s.watch_sounds.1;
+            if s.watch_sounds.0 != 0 {
+                sfx.write(crate::sound::PlaySfx { event: s.watch_sounds.0, at: None, volume: 1.0 });
+            }
+        }
+    }
+    // (Their time out, or the trip over: they stop.)
+    if !drunk.hands.is_empty() {
+        drunk.hands_left -= time.delta_secs();
+        if drunk.hands_left <= 0.0 || drunk.active.is_none() {
+            for e in std::mem::take(&mut drunk.hands) {
+                commands.entity(e).try_despawn();
+            }
+            if drunk.hands_stop != 0 {
+                sfx.write(crate::sound::PlaySfx { event: drunk.hands_stop, at: None, volume: 1.0 });
+            }
         }
     }
     if drunk.active.as_ref().is_some_and(|(id, _)| cancelled.contains(id)) {

@@ -2073,6 +2073,18 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
             }
         }
     }
+    // The mushroom trip's on the player's hands (`m_handDistort`,
+    // `m_lightTrail`).
+    if let Ok(s) =
+        std::fs::read(job.root().join(fc3_formats::gsf::CACHE_REL)).map_err(anyhow::Error::from).and_then(|b| fc3_formats::gsf::IntoxicationSettings::parse(&b))
+    {
+        for n in &s.hand_effects {
+            if !names.contains(n) {
+                names.push(n.clone());
+                optional.push(n.clone());
+            }
+        }
+    }
     // The Ink Monster's fight's (its GSF entry's `m_particle...`).
     if let Ok(s) =
         std::fs::read(job.root().join(fc3_formats::gsf::CACHE_REL)).map_err(anyhow::Error::from).and_then(|b| fc3_formats::gsf::BossFightSettings::parse(&b))

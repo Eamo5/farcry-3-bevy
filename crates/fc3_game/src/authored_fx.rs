@@ -158,6 +158,12 @@ pub fn play_muzzle(commands: &mut Commands, name: &'static str, muzzle: Entity) 
     true
 }
 
+/// Plays an effect on an entity (a joint) as it stands, for as long as it's
+/// kept: despawning what it returns stops it. None when it isn't cached.
+pub fn attach(commands: &mut Commands, name: &'static str, parent: Entity) -> Option<Entity> {
+    available(name).then(|| commands.spawn((Transform::IDENTITY, AuthoredFx(name), ChildOf(parent))).id())
+}
+
 /// Plays an effect on a gun's muzzle for as long as it's kept (a
 /// flamethrower's nozzle): despawning what it returns stops it. None when
 /// it isn't cached.

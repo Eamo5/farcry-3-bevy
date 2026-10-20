@@ -3082,7 +3082,14 @@ two seconds. The scripts' generic events to it (`WatchCough`,
 `mushseq_cough` and `player_bubblehands`, first-person `ex_1st...` clips),
 quietly: the scripts hear no `Domino_PlayAnim` of them. `FC3_DRUNK_TEST`
 starts one at the library's values (debug; a value other than 1 is also
-sent as an event). Not yet: the hands' distortion and light-trail particles.
+sent as an event, once the player's arms are in). Watching the hands plays
+the library's hand effects on both of the first-person arms' hands for
+`WatchHandsDuration` (10 s): the distortion (`m_handDistort`:
+`hands_distortion_short`, a small heat haze) and the light trail
+(`m_lightTrail`: `lightrail`, faint white-to-blue wisps), with its sounds as
+it starts and stops (`snd_WatchHand_Start`, `..._Stop`). The converter caches
+both effects. In one night run of four, two frames (80 ms) as they started
+showed two black discs; the others showed none.
 
 ### The dark room's light: the shaft and the hands
 
