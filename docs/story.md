@@ -1579,6 +1579,30 @@ the panel. Its tower step only reached panels within 80 m. It now reaches
 the tower's finish. From B20's checkpoint the run took the panel and
 completed JAS_060, then JAS_080's B10, B20 and B30.
 
+JAS_080 B40's crafting tutorial then held the run in the journal (its
+rucksack wanted two boar hides; one had come as loot, which crafting now
+counts). Dennis got into the technical on his entry move (`riders`) and
+JAS_080 completed. JAS_100 then stalled twice at the outpost:
+
+* The autopilot's follow step goes after the last character the story gave
+  an action. In JAS_100 that was a farm's pig, sent to eat and sniff, so
+  the player was teleported to the pig and back to Dennis, who leads him,
+  and Dennis never got far. An animal's action no longer counts.
+* The block counts the outpost's guard dog with its pirates. In one run the
+  dog died in the fight, in another it lived, and the fighters' step only
+  goes after men. The hunt step now also takes a creature a block counts
+  down within fighting reach, when no hunt is on, with what is in hand.
+* Dennis then leads the player to the outpost's building, where the player
+  is to go in. The autopilot steps into no trigger while a companion leads,
+  so it waited by him for good. Led, it now steps into the triggers ahead
+  once the story has been quiet 15 s (`LED_STEP_AFTER`).
+
+From JAS_100_B10's checkpoint the run killed the outpost's six (the dog
+first this time), kept up with Dennis to the building, stepped into its
+trigger 15 s after the lead went quiet, played the 62 s scene and completed
+JAS_100, starting DOC_020's brief. (The dog step itself has yet to be seen
+taking a dog: in both runs since, the dog died in the fight.)
+
 The notes below are the earlier investigation.
 
 The opening autopilot now requests an aim toward the nearest enabled authored

@@ -1945,7 +1945,11 @@ fn run_story(
         };
         let next = focused.iter().chain(watched.iter()).find(|w| {
             !awaiting_rock
-                && !leading
+                // (Led, the leader's way is followed; but a while quiet, it
+                // has brought the player where the script wants him: JAS_100's
+                // Dennis, stopped by the outpost's building the player is to
+                // go into.)
+                && (!leading || host.quiet > LED_STEP_AFTER)
                 && near_companion(w.2)
                 && !past_door(w.2)
                 && w.3
@@ -2329,7 +2333,15 @@ fn run_story(
             }
             Command::StopDialog { .. } => ui.subtitle = None,
             Command::Action { pawn, action } => {
-                if action.is_some() {
+                // (Not an animal's: a farm's pig sent to eat and sniff is
+                // no one to follow. JAS_100's player was taken from Dennis,
+                // leading him to the outpost, to the pig, and back, for
+                // good.)
+                let animal = data
+                    .entities
+                    .get(&pawn)
+                    .is_some_and(|e| e.component("CAnimalNetworkComponent").is_some() || e.component("CFCXCountersComponentAnimal").is_some());
+                if action.is_some() && !animal {
                     host.last_ordered = Some(pawn);
                 }
                 orders.0.insert(pawn, action);
@@ -3145,6 +3157,9 @@ fn exit_point(shape: &fc3_story::triggers::Shape, from: [f32; 3], ground: impl F
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, p)| p)
 }
+/// How long (s) the story stays quiet, a companion leading, before the
+/// autopilot steps into the triggers ahead itself.
+const LED_STEP_AFTER: f32 = 15.0;
 /// How far an objective marker may be for the autopilot at the wheel to
 /// drive to it, nothing else to drive into: not one beside it (on a
 /// passenger), nor one across the island (a quest giver's).
@@ -4515,8 +4530,13 @@ fn autopilot_loot(
         return;
     }
     // A hunt (the animal quests): the quarry a block counts, with the weapon
-    // it asks for in hand (another fails the hunt).
-    if let Some(class) = host.story.hunt_weapon() {
+    // it asks for in hand (another fails the hunt). Or, no hunt on, a
+    // creature a block counts down, near, with what is in hand: JAS_100's
+    // outpost dog, which its pirates' count waits on (the fighters' step
+    // goes only after men).
+    let counted_beast =
+        story_actors.iter().any(|(t, a, creature)| creature && !a.dead && counted.contains(&a.id) && t.translation.distance(at.translation) < FIGHT_REACH);
+    if let Some(class) = host.story.hunt_weapon().or_else(|| counted_beast.then(|| "any".to_string())) {
         // (The story's creatures: a rare one isn't one of the wildlife's. The
         // one whose harm is weighed, the rare target, as well as those a
         // block counts down.)
