@@ -1112,7 +1112,7 @@ impl Story {
             .values()
             .filter_map(|l| {
                 let Listen::Message(m) = &l.on else { return None };
-                mission_of(&c, &l.callback.target).is_some_and(|(name, _)| missions.iter().any(|r| name.starts_with(r.as_str()))).then(|| m.clone())
+                of_missions(&c, &l.callback.target, &missions).then(|| m.clone())
             })
             .collect();
         out.sort();
@@ -1136,7 +1136,7 @@ impl Story {
     /// The triggers of these missions' graphs (by their names' stem) that
     /// scripts wait on, as `watched_triggers_in_graph` lists them.
     pub fn watched_triggers_of(&self, graph: Option<&str>, missions: &[String]) -> Vec<(u64, String, [f32; 3], bool)> {
-        self.watched_triggers_where(graph, |c, target| mission_of(c, target).is_some_and(|(name, _)| missions.iter().any(|m| name.starts_with(m.as_str()))))
+        self.watched_triggers_where(graph, |c, target| of_missions(c, target, missions))
     }
 
     /// The triggers scripts wait on that belong to no mission (a cave's
@@ -1681,7 +1681,7 @@ impl Story {
                 if event != "Leave" || !c.is_loaded(*id) || !c.trigger_on(*id) || in_graph(&l.callback.target, "exitzonewarning") {
                     return None;
                 }
-                mission_of(&c, &l.callback.target).filter(|(name, _)| missions.iter().any(|m| name.starts_with(m.as_str())))?;
+                of_missions(&c, &l.callback.target, &missions).then_some(())?;
                 Some((*id, triggers::shape_of(c.data.entities.get(id)?)?))
             })
             .collect();
@@ -1939,6 +1939,22 @@ fn in_sectors(e: &data::Entry, sectors: Option<&HashSet<u32>>) -> bool {
 /// it, left over.
 fn of_finished_mission(c: &Core, target: &Table) -> bool {
     mission_of(c, target).is_some_and(|(_, state)| matches!(state, missions::State::Completed | missions::State::Failed))
+}
+
+/// Whether a box's graph belongs to one of these missions (by their names'
+/// stem): its own mission, or for a block's graph the mission that
+/// registered the block (JAS_030's blocks are JAS_020_MAIN's).
+fn of_missions(c: &Core, target: &Table, missions: &[String]) -> bool {
+    let Some((name, _)) = mission_of(c, target) else { return false };
+    let named = |n: &str| missions.iter().any(|m| n.starts_with(m.as_str()));
+    named(&name)
+        || c.missions
+            .by_id
+            .values()
+            .find(|m| m.name == name)
+            .and_then(|m| m.block.as_ref()?.parent.as_ref())
+            .and_then(|parent| c.missions.by_id.get(parent))
+            .is_some_and(|parent| named(&parent.name))
 }
 
 /// The mission a box's graph belongs to, and its state: the first graph up

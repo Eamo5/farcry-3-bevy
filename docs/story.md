@@ -1558,8 +1558,17 @@ other guard not yet fighting. It gives up a throw when the player holds no
 rock.
 
 From the checkpoint, B15's lure works, the execution scene plays and
-JAS_020 completes. JAS_030 starts. The notes below are the earlier
-investigation.
+JAS_020 completes. JAS_030 starts.
+
+JAS_030_B10 then stalled. The focused mission is JAS_030, but B10's graph
+names only itself, and JAS_020_MAIN registers it as a block. The autopilot
+matched graphs to the focus by name, so it never saw B10's triggers.
+`of_missions` now also counts a block's graph as part of the mission that
+registered it. This covers the watched triggers, the messages and the
+leave zones. From B10's checkpoint the run saved B12 twice and then
+JAS_060_B10C.
+
+The notes below are the earlier investigation.
 
 The opening autopilot now requests an aim toward the nearest enabled authored
 trigger and presses the ordinary Throw Rock action.
