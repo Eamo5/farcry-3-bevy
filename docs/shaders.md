@@ -580,10 +580,18 @@ hang from their point by `PartSizeOffsetX` (across) and `PartSizeOffsetY`
 (along). One oriented in its effect's frame (`Flags` `Orientation` 1) that hardly
 moves (a flame, a standing wisp) stands along the frame's Z (Dunia's) instead.
 An evenly sized one oriented so lies in the frame's plane, turned by its angle:
-foam, rings of smoke on the ground, a water impact's ring. (`Orientation` is a
-mode, one bit of several: 8 is mostly the sparks and shards drawn along their
-heading, 4 smoke against a wall, the high bits clouds and god rays. Only 1 is
-read.) `FadeAngle` fades a flat one out as the line of sight nears its plane,
+foam, rings of smoke on the ground, a water impact's ring. (`Orientation` is
+one bit of several, one at a time, each its own mode. Over the library's 4,058
+emitters: 1 (146: flat on the ground), 8 (676: sparks, drips, trails, mostly
+sized unevenly, drawn along their heading anyway), 16 (260: the fires' flames:
+camp fires', the fire manager's ground, bush and foliage fires', burning
+people's, molotovs', and the heat haze over them), 4 (72: sand kicked up,
+drips, a wall of water), 65536 (30: clouds, lights), 131072 (102: blood
+sprays), 262144 (150: splashes, distortion rings).) One with 16 stands upright:
+turned only about the vertical to face the camera (its width levelled, its
+length or height straight up), so a fire's flames stay standing seen from
+above instead of tipping toward the camera. The rest beyond 1 and 16 aren't
+read. `FadeAngle` fades a flat one out as the line of sight nears its plane,
 and a stretched one as it nears its heading, over that many degrees, so
 neither shows edge-on as a sliver.
 An emitter in its own space (`Flags` `LocalEmitterSpace`) keeps its particles in

@@ -449,6 +449,10 @@ struct Compiled {
     /// ripples), turned by its angle; one sized unevenly that hardly moves
     /// (a flame, a standing wisp) stands along the frame's Z (Dunia's).
     oriented: bool,
+    /// Standing upright (`Orientation` 16: the fires' flames, burning
+    /// people's, heat haze over them): turned only about the vertical to
+    /// face the camera, so it stays standing when seen from above.
+    upright: bool,
     /// Fading out as it's seen edge-on (`FadeAngle`, degrees): one lying in
     /// the frame's plane as the view nears the plane, a stretched one as it
     /// nears its heading (sparks coming at the camera).
@@ -604,6 +608,7 @@ impl Compiled {
             pivot: Vec2::new(f("PartSizeOffsetX", 0.0), f("PartSizeOffsetY", 0.0)),
             local: s.child("Flags").is_some_and(|f| f.bool("LocalEmitterSpace") == Some(true)),
             oriented: s.child("Flags").is_some_and(|f| f.bool("Orientation") == Some(true)),
+            upright: s.child("Flags").and_then(|f| f.f32("Orientation")) == Some(16.0),
             fade_angle: f("FadeAngle", 0.0).clamp(0.0, 90.0),
             lit: on("SHLighting") && mode != 0,
             // (Faded near the camera by its alpha (`NearClippingAlpha`: a
@@ -1131,7 +1136,19 @@ fn draw(
             let mut centre = pos - origin;
             // (Edge-on: its plane's normal, or its heading, as the camera sees it.)
             let mut edge: Option<(Vec3, bool)> = None;
-            let (x, y) = if !em.uniform {
+            // (Upright: the camera's side, levelled.)
+            let level = Vec3::new(right.x, 0.0, right.z).normalize_or(view.cross(Vec3::Y).normalize_or(Vec3::X));
+            let (x, y) = if em.upright && !em.uniform {
+                // Its width across and its length up, hung from its point by
+                // its pivot.
+                edge = Some((Vec3::Y, false));
+                let (width, length) = (half.max(0.003), (p.size * em.part_length.at(t) * near).max(0.003));
+                centre += level * (width * em.pivot.x) + Vec3::Y * (length * em.pivot.y);
+                (level * width, Vec3::Y * length)
+            } else if em.upright {
+                let (s, c) = p.rot.sin_cos();
+                (level * (c * half) + Vec3::Y * (s * half), Vec3::Y * (c * half) - level * (s * half))
+            } else if !em.uniform {
                 // Sized unevenly (sparks, streaks of smoke): its width
                 // across and its length (`PartSizeZKF`) along its heading as
                 // seen, hung from its point by its pivot.
