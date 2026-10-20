@@ -210,7 +210,7 @@ about 150 grass materials in view at once, each a batch of its own.
 | file | content |
 |---|---|
 | `sector<id>.srl` | 1024 bytes: 32×32 `u8` sound region ids, 2 m cells (the ambience's regions: see `docs/audio.md`, Ambience) |
-| `zonesector<id>.zsr` | 4096 bytes: 64×64 `u8` zone ids, 1 m cells, `0xFF` = none (gameplay zones) |
+| `zonesector<id>.zsr` | 4096 bytes: 64×64 `u8` logic zone ids, 1 m cells, `0xFF` = none (the zones the ground burns by: see `docs/shaders.md`, the fire manager's region profiles) |
 | `sector<id>.desc.fcb` | sector descriptor: minimap path, lists of related sector and metasector ids |
 | `metasectors\worldsector_*.data.fcb` | spline collections and similar, no plant instances |
 | `sd<id>.sdat` tail | terrain only. Tentative layout: a 65×65 2-bit vertex LOD-level map (0x445C, 1057 bytes + pad); a 65×65 `u8` map (0x4880); 672 bytes of per-cell flag bytes (0x5904); an `0xFF`-padded list of up to 7 ids (0x5BA4); four `u16` LOD vertex counts (4225/1089/289/81 + stitching extras); a `u32` count at header +0x2C of 12-byte records for 8×8 patches (`u8[4]`, `u16 minH*64`, `u16 maxH*64`, `u32 patchIndex`); then 4 cumulative record offsets, sector bounds floats and a 9×9 `f32` grid of heights × 64. The file length is 23868 + 12 × count. |

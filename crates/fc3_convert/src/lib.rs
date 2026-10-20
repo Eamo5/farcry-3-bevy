@@ -1080,14 +1080,21 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
                 Err(e) => job.error(format!("sound regions: {e:#}")),
             }
         }
-        if opts.only_sectors.is_none() && (job.should_write(sr::MAP_REL) || !job.root().join(sr::MAP_REL).exists()) {
+        // (And the logic zones the fire manager burns the ground by, laid out
+        // the same.)
+        let maps: [(&str, usize, fn(&str, SectorCoord) -> String); 2] = [(sr::MAP_REL, sr::CELLS, sr::srl_path), (sr::ZONES_REL, sr::ZONE_CELLS, sr::zsr_path)];
+        for (rel, side, path) in maps {
+            let current = std::fs::read(job.root().join(rel)).is_ok_and(|b| sr::RegionMap::from_bytes(&b).is_ok());
+            if opts.only_sectors.is_some() || !(job.should_write(rel) || !current) {
+                continue;
+            }
             let w = ft::WORLD_SECTORS;
-            let sectors = (0..w * w).map(|id| SectorCoord::from_id(id as u32)).filter_map(|c| job.vfs.read(&sr::srl_path(&opts.world, c)).ok().map(|b| (c, b)));
-            let map = sr::RegionMap::from_sectors(sectors);
+            let sectors = (0..w * w).map(|id| SectorCoord::from_id(id as u32)).filter_map(|c| job.vfs.read(&path(&opts.world, c)).ok().map(|b| (c, b)));
+            let map = sr::RegionMap::from_sectors(side, sectors);
             if map.counts().0 == 0 {
-                job.error(format!("sound region map: no sector of {} has one", opts.world));
-            } else if let Err(e) = write_atomic(job.root(), sr::MAP_REL, &map.to_bytes(), job.ctx) {
-                job.error(format!("sound region map: {e:#}"));
+                job.error(format!("{rel}: no sector of {} has one", opts.world));
+            } else if let Err(e) = write_atomic(job.root(), rel, &map.to_bytes(), job.ctx) {
+                job.error(format!("{rel}: {e:#}"));
             }
         }
     }
@@ -2116,6 +2123,13 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
             match read(fs::FIRE_OBJECTS).and_then(|l| fs::parse_objects(&l)).and_then(|p| Ok((p, fs::parse_burnables(&read(fs::BURNABLES)?)?))) {
                 Ok((profiles, burnables)) => write_atomic(job.root(), fs::FIRE_OBJECTS_REL, fs::objects_to_text(&profiles, &burnables).as_bytes(), job.ctx)?,
                 Err(e) => job.error(format!("fire object profiles: {e:#}")),
+            }
+        }
+        // (And which ground burns: each logic zone's profile.)
+        if job.should_write(fs::FIRE_ZONES_REL) || !job.root().join(fs::FIRE_ZONES_REL).exists() {
+            match job.vfs.read(fs::BURNABLES).map_err(anyhow::Error::from).and_then(|obj| fs::parse_zones(&obj)) {
+                Ok(zones) => write_atomic(job.root(), fs::FIRE_ZONES_REL, fs::zones_to_text(&zones).as_bytes(), job.ctx)?,
+                Err(e) => job.error(format!("fire zones: {e:#}")),
             }
         }
         // (And how its burning ground burns.)

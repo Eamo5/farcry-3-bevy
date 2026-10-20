@@ -3,9 +3,12 @@
 //! downwind, burns them away, scorches the ground and burns anything standing
 //! in it. Rain damps it down. The flames and smoke are the game's fire
 //! manager's own effects (`fire_settings`), where they're cached, and a
-//! patch burns as long as the fire manager's region profile says (the
-//! savannah's, or a burnable region's own), its smoke lingering as long, and
-//! scares animals off from as far.
+//! patch burns as long as the fire manager's region profile says, its smoke
+//! lingering as long, and scares animals off from as far. The ground burns
+//! with the profile of the logic zone painted on it (the savannah's, the
+//! jungle's...); where its zone has none (roads, rivers, beaches) it doesn't
+//! burn, and a splash there only flares up. A burnable region burns with
+//! its own.
 //!
 //! A burnable region (`CBurnableRegion`: a field of crops a mission wants
 //! burnt) catches when fire reaches it and burns across its whole shape;
@@ -98,9 +101,13 @@ pub struct Fires {
     next_damage: f32,
     lights: Vec<Entity>,
     /// The fire manager's region profiles (as cached), and the one the open
-    /// world's grass burns with.
+    /// world's grass burns with where no zones are painted.
     profiles: Vec<fc3_formats::fire_settings::RegionProfile>,
     grass: Option<usize>,
+    /// The logic zones painted on the ground, and the profile the ground of
+    /// each burns with (one not listed doesn't burn).
+    zones: Option<fc3_formats::sound_regions::RegionMap>,
+    zone_profiles: HashMap<u8, usize>,
 }
 
 impl Fires {
@@ -110,6 +117,15 @@ impl Fires {
 
     fn profile(&self, b: &Burning) -> Option<&fc3_formats::fire_settings::RegionProfile> {
         b.profile.and_then(|i| self.profiles.get(i))
+    }
+
+    /// Whether a cell's ground burns, and with which profile: its painted
+    /// logic zone's (none: it doesn't), else, with no zones, the savannah's.
+    fn ground(&self, c: Cell) -> Option<Option<usize>> {
+        let Some(zones) = &self.zones else { return Some(self.grass) };
+        let p = cell_centre(c, 0.0);
+        let zone = zones.region_at(p.x, -p.z)?;
+        self.zone_profiles.get(&zone).map(|&i| Some(i))
     }
 
     /// When a patch's flames go out: its profile's fire half died down (the
@@ -151,7 +167,20 @@ fn load_fire_profiles(mut fires: ResMut<Fires>) {
     let Ok(text) = std::fs::read_to_string(fc3_formats::cache::default_cache_root().join(fs::FIRE_REGIONS_REL)) else { return };
     fires.profiles = fs::regions_from_text(&text);
     fires.grass = fires.profiles.iter().position(|p| p.name == fs::SAVANNAH);
-    info!("fire: {} region profiles, grass burns as {:?}", fires.profiles.len(), fires.grass.map(|i| &fires.profiles[i].name));
+    // The ground by its painted zones.
+    let root = fc3_formats::cache::default_cache_root();
+    let zones = std::fs::read_to_string(root.join(fs::FIRE_ZONES_REL)).map(|t| fs::zones_from_text(&t)).unwrap_or_default();
+    let by_zone: HashMap<u8, usize> = zones.into_iter().filter_map(|(z, k)| Some((z, fires.profiles.iter().position(|p| p.key == k)?))).collect();
+    let map = std::fs::read(root.join(fc3_formats::sound_regions::ZONES_REL)).ok().and_then(|b| fc3_formats::sound_regions::RegionMap::from_bytes(&b).ok());
+    fires.zones = map.filter(|_| !by_zone.is_empty());
+    fires.zone_profiles = by_zone;
+    info!(
+        "fire: {} region profiles, {} zones burn ({}), else grass burns as {:?}",
+        fires.profiles.len(),
+        fires.zone_profiles.len(),
+        if fires.zones.is_some() { "painted" } else { "no zone map" },
+        fires.grass.map(|i| &fires.profiles[i].name)
+    );
 }
 
 /// Plants per fire cell near a point (only what's spawned near the camera).
@@ -193,11 +222,13 @@ fn ignite(
                 if cell_centre(c, 0.0).with_y(ev.at.y).distance(ev.at) > ev.radius + CELL * 0.5 {
                     continue;
                 }
-                // The splash itself burns briefly even on bare ground.
+                // The splash itself burns briefly even on bare ground, or
+                // ground that doesn't burn.
                 let y = fuel.get(&c).map(|v| v[0].1).unwrap_or(ground);
-                let grass = fires.grass;
-                fires.light(c, y, grass, &mut rng);
-                if !fuel.contains_key(&c) {
+                let burns = fires.ground(c);
+                let profile = burns.unwrap_or(fires.grass);
+                fires.light(c, y, profile, &mut rng);
+                if !fuel.contains_key(&c) || burns.is_none() {
                     if let Some(b) = fires.burning.get_mut(&c) {
                         b.life = b.life.min(rng.range(3.0, 5.0));
                         b.bare = true;
@@ -208,8 +239,8 @@ fn ignite(
     }
 }
 
-/// Fire creeps into neighbouring cells that have plants, faster downwind;
-/// burnt-out cells lose their plants.
+/// Fire creeps into neighbouring cells that have plants on ground that
+/// burns, faster downwind; burnt-out cells lose their plants.
 #[allow(clippy::too_many_arguments)]
 fn spread(
     time: Res<Time>,
@@ -242,6 +273,7 @@ fn spread(
     let wind_dir = wind.normalize_or_zero();
     let mut new = Vec::new();
     let mut done = Vec::new();
+    let mut kept_off = 0;
     for (c, b) in &fires.burning {
         if b.age >= b.life {
             done.push(*c);
@@ -253,17 +285,21 @@ fn spread(
         for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)] {
             let n = (c.0 + dx, c.1 + dz);
             let Some(f) = fuel.get(&n) else { continue };
+            let Some(profile) = fires.ground(n) else {
+                kept_off += 1;
+                continue;
+            };
             let dir = Vec3::new(dx as f32, 0.0, dz as f32).normalize();
             let downwind = (1.0 + dir.dot(wind_dir) * (wind.length() / 6.0).min(1.5)).max(0.1);
             let p = 0.16 * downwind * (1.0 - 0.9 * rain);
             if rng.f32() < p {
-                new.push((n, f[0].1));
+                new.push((n, f[0].1, profile));
             }
         }
     }
-    for (c, y) in new {
-        let grass = fires.grass;
-        fires.light(c, y, grass, &mut rng);
+    debug!("fire: {} burning, {} burnt, {kept_off} plant cells by it on ground that doesn't burn", fires.burning.len(), fires.burnt.len());
+    for (c, y, profile) in new {
+        fires.light(c, y, profile, &mut rng);
     }
     for c in done {
         let Some(b) = fires.burning.remove(&c) else { continue };
@@ -841,6 +877,28 @@ mod tests {
         assert!(r.cells.contains(&cell_of(crate::data::to_bevy([101.0, 201.0, 0.0]))));
         assert!(!r.cells.contains(&cell_of(crate::data::to_bevy([99.0, 201.0, 0.0]))));
         assert_eq!(r.state, RegionState::Unlit);
+    }
+
+    /// The ground burns with its painted zone's profile; a zone with none,
+    /// or none painted (a road), doesn't burn; with no zones, the
+    /// savannah's.
+    #[test]
+    fn the_ground_burns_as_its_zone_says() {
+        use fc3_formats::sound_regions::{RegionMap, NONE, ZONE_CELLS};
+        // The sector at the origin: its west half zone 20, its east none.
+        let mut cells = vec![NONE; ZONE_CELLS * ZONE_CELLS];
+        for y in 0..ZONE_CELLS {
+            cells[y * ZONE_CELLS..y * ZONE_CELLS + 32].fill(20);
+        }
+        cells[ZONE_CELLS + 1] = 9;
+        let zones = RegionMap::from_sectors(ZONE_CELLS, [(fc3_formats::terrain::SectorCoord::new(80, 80), cells)]);
+        let mut fires = Fires { grass: Some(0), zones: Some(zones), zone_profiles: HashMap::from([(20, 1)]), ..Default::default() };
+        // (Bevy z is the negated Dunia y.)
+        assert_eq!(fires.ground((1, -3)), Some(Some(1)));
+        assert_eq!(fires.ground((20, -3)), None);
+        assert_eq!(fires.ground((0, -1)), None);
+        fires.zones = None;
+        assert_eq!(fires.ground((20, -3)), Some(Some(0)));
     }
 
     /// A patch burns as long as its profile's fire grows, burns and dies

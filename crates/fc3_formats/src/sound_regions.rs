@@ -9,6 +9,10 @@
 //! a reverb preset and calls (birds, insects, animals) in four bands: by day
 //! or by night, from further off or near. The template's time curve says how
 //! much each band calls at each hour.
+//!
+//! The sectors' logic zones (`zonesector<id>.zsr`: 64×64 cells of 1 m, laid
+//! out the same, [`NONE`] where none is painted) are kept the same way: the
+//! fire manager burns the ground with the profile of its zone.
 
 use anyhow::{bail, Context, Result};
 
@@ -17,11 +21,13 @@ use crate::terrain::{SectorCoord, SECTOR_SIZE, WORLD_SECTORS};
 
 pub const MAP_REL: &str = "world/sound_regions.bin";
 pub const TABLE_REL: &str = "world/sound_regions.txt";
-const MAP_MAGIC: &[u8; 8] = b"FC3SRM01";
+/// The logic zones' map.
+pub const ZONES_REL: &str = "world/logic_zones.bin";
+const MAP_MAGIC: &[u8; 8] = b"FC3SRM02";
 const TABLE_MAGIC: &str = "fc3-sound-regions 1";
-/// A sector's cells a side, and a cell's size (m).
+/// A sector's cells a side: in its sound region map, in its logic zone map.
 pub const CELLS: usize = 32;
-pub const CELL: f32 = SECTOR_SIZE / CELLS as f32;
+pub const ZONE_CELLS: usize = 64;
 /// No region painted (a sector with no map).
 pub const NONE: u8 = 0xFF;
 
@@ -33,35 +39,40 @@ pub fn srl_path(world: &str, c: SectorCoord) -> String {
     format!("worlds\\{world}\\levels\\{}\\generated\\worldsectors\\sector{}.srl", c.level(), c.id())
 }
 
-/// The world's painted regions: each sector one region over all of it, or
-/// its cells.
+/// A sector's logic zones in the world's files.
+pub fn zsr_path(world: &str, c: SectorCoord) -> String {
+    format!("worlds\\{world}\\levels\\{}\\generated\\worldsectors\\zonesector{}.zsr", c.level(), c.id())
+}
+
+/// The world's painted regions (or zones): each sector one over all of it,
+/// or its cells (`side` a side).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RegionMap {
+    side: usize,
     /// Per sector (`SectorCoord::id`): a region (`< 0x100`; [`NONE`]: no
     /// map), else `0x100 +` the index of its cells in `cells`.
     sectors: Vec<u16>,
     cells: Vec<u8>,
 }
 
-impl Default for RegionMap {
-    fn default() -> Self {
-        RegionMap { sectors: vec![NONE as u16; (WORLD_SECTORS * WORLD_SECTORS) as usize], cells: Vec::new() }
-    }
-}
-
 impl RegionMap {
-    /// The map from the sectors' `.srl` files.
-    pub fn from_sectors(sectors: impl IntoIterator<Item = (SectorCoord, Vec<u8>)>) -> RegionMap {
-        let mut map = RegionMap::default();
+    pub fn new(side: usize) -> RegionMap {
+        RegionMap { side, sectors: vec![NONE as u16; (WORLD_SECTORS * WORLD_SECTORS) as usize], cells: Vec::new() }
+    }
+
+    /// The map from the sectors' files (`.srl`, `.zsr`), each `side`² cells.
+    pub fn from_sectors(side: usize, sectors: impl IntoIterator<Item = (SectorCoord, Vec<u8>)>) -> RegionMap {
+        let mut map = RegionMap::new(side);
+        let area = side * side;
         for (c, cells) in sectors {
-            if !c.valid() || cells.len() != CELLS * CELLS {
+            if !c.valid() || cells.len() != area {
                 continue;
             }
             let entry = if cells.iter().all(|&v| v == cells[0]) {
                 cells[0] as u16
             } else {
                 map.cells.extend_from_slice(&cells);
-                0x100 + (map.cells.len() / (CELLS * CELLS) - 1) as u16
+                0x100 + (map.cells.len() / area - 1) as u16
             };
             map.sectors[c.id() as usize] = entry;
         }
@@ -79,22 +90,26 @@ impl RegionMap {
             entry as u8
         } else {
             let [ox, oy] = c.origin();
-            let cell = |v: f32| ((v / CELL) as usize).min(CELLS - 1);
+            let n = self.side;
+            let cell = |v: f32| ((v / (SECTOR_SIZE / n as f32)) as usize).min(n - 1);
             let (cx, cy) = (cell(x - ox), cell(y - oy));
-            *self.cells.get((entry as usize - 0x100) * CELLS * CELLS + cy * CELLS + cx)?
+            *self.cells.get((entry as usize - 0x100) * n * n + cy * n + cx)?
         };
         (v != NONE).then_some(v)
     }
 
     /// Sectors painted, and those with more than one region.
     pub fn counts(&self) -> (usize, usize) {
-        (self.sectors.iter().filter(|&&e| e != NONE as u16).count(), self.cells.len() / (CELLS * CELLS))
+        (self.sectors.iter().filter(|&&e| e != NONE as u16).count(), self.cells.len() / (self.side * self.side))
     }
 
+    /// `FC3SRM02`, then `u32` side, sector count and cell blocks, each
+    /// sector's `u16` entry and the blocks.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = MAP_MAGIC.to_vec();
+        out.extend_from_slice(&(self.side as u32).to_le_bytes());
         out.extend_from_slice(&(self.sectors.len() as u32).to_le_bytes());
-        out.extend_from_slice(&((self.cells.len() / (CELLS * CELLS)) as u32).to_le_bytes());
+        out.extend_from_slice(&((self.cells.len() / (self.side * self.side)) as u32).to_le_bytes());
         for e in &self.sectors {
             out.extend_from_slice(&e.to_le_bytes());
         }
@@ -103,19 +118,20 @@ impl RegionMap {
     }
 
     pub fn from_bytes(b: &[u8]) -> Result<RegionMap> {
-        if b.len() < 16 || &b[..8] != MAP_MAGIC {
-            bail!("not a sound region map");
+        if b.len() < 20 || &b[..8] != MAP_MAGIC {
+            bail!("not a region map");
         }
         let u32_at = |at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) as usize;
-        let (sectors, blocks) = (u32_at(8), u32_at(12));
-        if sectors != (WORLD_SECTORS * WORLD_SECTORS) as usize || b.len() != 16 + sectors * 2 + blocks * CELLS * CELLS {
-            bail!("sound region map of the wrong size");
+        let (side, sectors, blocks) = (u32_at(8), u32_at(12), u32_at(16));
+        let at = 20 + sectors * 2;
+        if side == 0 || side > 256 || sectors != (WORLD_SECTORS * WORLD_SECTORS) as usize || b.len() != at + blocks * side * side {
+            bail!("region map of the wrong size");
         }
-        let entries: Vec<u16> = b[16..16 + sectors * 2].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let entries: Vec<u16> = b[20..at].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
         if entries.iter().any(|&e| e >= 0x100 && (e - 0x100) as usize >= blocks) {
-            bail!("sound region map's sector past its cells");
+            bail!("region map's sector past its cells");
         }
-        Ok(RegionMap { sectors: entries, cells: b[16 + sectors * 2..].to_vec() })
+        Ok(RegionMap { side, sectors: entries, cells: b[at..].to_vec() })
     }
 }
 
@@ -334,14 +350,21 @@ mod tests {
         cells[5 * CELLS + 3] = 9;
         let c = SectorCoord::new(80, 80);
         let uniform = SectorCoord::new(81, 80);
-        let map = RegionMap::from_sectors([(c, cells), (uniform, vec![4u8; CELLS * CELLS])]);
+        let map = RegionMap::from_sectors(CELLS, [(c, cells), (uniform, vec![4u8; CELLS * CELLS])]);
         let map = RegionMap::from_bytes(&map.to_bytes()).unwrap();
         let [ox, oy] = c.origin();
-        assert_eq!(map.region_at(ox + 3.0 * CELL + 1.0, oy + 5.0 * CELL + 1.0), Some(9));
+        let cell = SECTOR_SIZE / CELLS as f32;
+        assert_eq!(map.region_at(ox + 3.0 * cell + 1.0, oy + 5.0 * cell + 1.0), Some(9));
         assert_eq!(map.region_at(ox + 1.0, oy + 1.0), Some(7));
         assert_eq!(map.region_at(ox + SECTOR_SIZE + 10.0, oy + 30.0), Some(4));
         assert_eq!(map.region_at(ox - 10.0, oy), None);
         assert_eq!(map.counts(), (2, 1));
+        // A zone map's 1 m cells, the unpainted ones none.
+        let mut zones = vec![NONE; ZONE_CELLS * ZONE_CELLS];
+        zones[2 * ZONE_CELLS + 63] = 20;
+        let map = RegionMap::from_bytes(&RegionMap::from_sectors(ZONE_CELLS, [(c, zones)]).to_bytes()).unwrap();
+        assert_eq!(map.region_at(ox + 63.5, oy + 2.5), Some(20));
+        assert_eq!(map.region_at(ox + 62.5, oy + 2.5), None);
     }
 
     #[test]

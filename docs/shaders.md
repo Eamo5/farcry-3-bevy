@@ -485,17 +485,31 @@ How long a patch burns is the fire manager's region profile's
 burning and dying-down times (`fStartingTime`, `fAliveTime`,
 `fExtinctionTime`), give or take 15 %. Its flames go out halfway through the
 dying down, and its smoke lingers the profile's smoke life
-(`fSmokeMinLifeTime` to `fSmokeMaxLifeTime`). The open world's grass burns
-as the savannah's (`Region/Savannah`). A burnable region burns as its
-ignitor names (`fireregRegionProfile_SP`: WIL_020's drug fields are
-`Region/Cannabis`). Animals within a fire's `Fire_FearStim` radius run from
+(`fSmokeMinLifeTime` to `fSmokeMaxLifeTime`). The open world's ground
+burns with the profile of the logic zone painted on it. Each sector paints
+its zones in `zonesector<id>.zsr`: 4,096 bytes, 64×64 cells of 1 m, row by
+row from the sector's south-west corner (with that order 6% of the cells
+along sector edges differ from their neighbours', against 35-63% with the
+rows flipped or turned), `0xFF` where none is painted. The converter keeps
+them as `world/logic_zones.bin` (laid out as the sound regions' map:
+`sound_regions::RegionMap`). `burnablesettings_default.obj`'s `Regions_SP`
+gives each zone its profile (`zoneLogicZone`, `fireregProfile_SP`), kept
+as `particles/fire-zones.txt`. Zones 0-2 burn as `Region/Jungle`, 3-5, 8,
+10, 11 and 16-21 as `Region/Savannah`, 89 and 94 as `Region/Cannabis`. The
+rest have none and don't burn: zone 90 (the shores), and the cells painted
+with no zone (roads, paths, rivers, villages). So fire spreads only into
+cells whose ground burns, with that ground's profile, and stops at a road.
+A splash on ground that doesn't burn still flares up for 3-5 s. One island
+is mostly savannah zones, the other jungle. Without the zone map the ground
+burns as the savannah's. `RUST_LOG=farcry3::fire=debug` tallies the
+burning and burnt cells and the plant cells kept from catching. A burnable
+region burns as its ignitor names (`fireregRegionProfile_SP`: WIL_020's
+drug fields are `Region/Cannabis`). Animals within a fire's `Fire_FearStim` radius run from
 it, unless their personality ignores fear (`bIgnorFearStim`). One alight
 bolts this way and that until it's out. Without the profiles, a patch burns
 7 to 11 s and its smoke lingers 12 to 20 s. Our flames and smoke stand in
-when nothing is cached. Not yet: picking the profile by the zone painted on
-the ground (`zoneLogicZone` in `burnablesettings_default.obj`, Jungle
-against Savannah), the profiles' damage (`fFireDmg`, `fDmgBuffer`: their
-units are unknown).
+when nothing is cached. Not yet: the profiles' damage (`fFireDmg`,
+`fDmgBuffer`: their units are unknown).
 
 Sticky fire (`sticky_fire`). The fire manager's sticky streams
 (`firestickystream.lib`, kept as `particles/fire-sticky.txt`) say what fire a

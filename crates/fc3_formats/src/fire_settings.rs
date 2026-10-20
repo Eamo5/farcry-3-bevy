@@ -43,6 +43,40 @@ pub const FIRE_REGIONS_REL: &str = "particles/fire-regions.txt";
 /// `burnablesettings_default.obj`).
 pub const SAVANNAH: &str = "Region/Savannah";
 
+/// Which region profile the ground of each logic zone burns with
+/// (`burnablesettings_default.obj`'s `Regions_SP`: `zoneLogicZone`,
+/// `fireregProfile_SP`), kept as [`FIRE_ZONES_REL`]; a zone without one
+/// doesn't burn.
+pub const FIRE_ZONES_REL: &str = "particles/fire-zones.txt";
+
+pub fn parse_zones(obj: &[u8]) -> Result<Vec<(u8, u64)>> {
+    let root = fcb_root(obj)?;
+    let list = root.child("Regions_SP").context("no Regions_SP")?;
+    Ok(list
+        .children
+        .iter()
+        .filter_map(|p| {
+            let zone = p.field("zoneLogicZone").and_then(|b| b.first().copied())?;
+            let key = p.u64("fireregProfile_SP").filter(|k| *k != u64::from(u32::MAX))?;
+            Some((zone, key))
+        })
+        .collect())
+}
+
+/// As cached ([`FIRE_ZONES_REL`]): `<zone> <profile key>` per line.
+pub fn zones_to_text(zones: &[(u8, u64)]) -> String {
+    zones.iter().map(|(z, k)| format!("{z} {k:x}\n")).collect()
+}
+
+pub fn zones_from_text(text: &str) -> Vec<(u8, u64)> {
+    text.lines()
+        .filter_map(|l| {
+            let (z, k) = l.split_once(' ')?;
+            Some((z.parse().ok()?, u64::from_str_radix(k.trim(), 16).ok()?))
+        })
+        .collect()
+}
+
 /// A region profile: how a burning patch of ground burns. A burnable
 /// region names its own (`CIgnitorComponent`'s `fireregRegionProfile_SP`,
 /// by key).
