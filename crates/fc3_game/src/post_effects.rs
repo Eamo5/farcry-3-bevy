@@ -17,7 +17,9 @@
 //! blurred through a mask, desaturated toward a colour, hue-shifted and
 //! burned, then up to two colour masks in the game's blend modes, and noise.
 //! Bloom clips open the scene's exposure and the grade's bloom; camera-shake
-//! clips add to the view's shake.
+//! clips add to the view's shake; motion-blur clips smear the view along the
+//! way it turned (a melee hit's); slow-motion clips slow the game (the
+//! drunk walk's).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -510,6 +512,8 @@ pub struct PostView {
     /// The calibration (`Settings::color_adjustment`): offset, scale,
     /// exponent, on.
     adjust: Vec4,
+    /// Motion blur: the smear's length across the screen (uv), on.
+    motion: Vec4,
 }
 
 impl PostView {
@@ -525,6 +529,7 @@ impl PostView {
             || self.distort[1].w > 0.0
             || self.adjust.w > 0.0
             || self.screen.w > 0.0
+            || self.motion.w > 0.0
     }
 }
 
@@ -617,6 +622,10 @@ struct Mix {
     distort: Option<(Rank, [Vec4; 2], String)>,
     bloom: Option<(Rank, (f32, f32))>,
     shake: Vec3,
+    /// Motion blur: its intensity and the blur's most (times the turn);
+    /// slow motion: the game's speed (the slowest asked for).
+    motion: Option<(Rank, (f32, f32))>,
+    slomo: Option<f32>,
 }
 
 fn better<T>(slot: &mut Option<(Rank, T)>, rank: Rank, value: T) {
@@ -701,7 +710,11 @@ impl Mix {
                             self.shake +=
                                 Vec3::new(v[4] * wave(settings[2], 1.3), v[3] * wave(settings[1], 0.0), v[2] * wave(settings[3], 2.1)) * amp.to_radians();
                         }
-                        PostClass::MotionBlur | PostClass::Slomo => {}
+                        PostClass::MotionBlur => better(&mut self.motion, rank, (v[0].max(0.0) * w, v[1].max(0.0))),
+                        PostClass::Slomo => {
+                            let speed = (1.0 + (v[0] - 1.0) * w).clamp(0.05, 1.0);
+                            self.slomo = Some(self.slomo.map_or(speed, |s| s.min(speed)));
+                        }
                     }
                 }
                 _ => {}
@@ -712,7 +725,8 @@ impl Mix {
 
 #[allow(clippy::too_many_arguments)]
 fn play(
-    time: Res<Time>,
+    (time, real, mut virt, wheel): (Res<Time>, Res<Time<Real>>, ResMut<Time<Virtual>>, Res<crate::weapon_wheel::WeaponWheel>),
+    (camera_at, mut turned, mut slowed): (Query<(&GlobalTransform, &Projection), With<PlayerCamera>>, Local<Option<Quat>>, Local<bool>),
     state: Res<State<crate::menu::GameState>>,
     server: Res<AssetServer>,
     white: Option<Res<White>>,
@@ -726,7 +740,8 @@ fn play(
 ) {
     let fixed = std::env::var("FC3_POSTFX_TEST_TIME").ok().and_then(|s| s.parse::<f32>().ok());
     let playing = *state.get() == crate::menu::GameState::Playing;
-    let dt = if playing || fixed.is_some() { time.delta_secs() } else { 0.0 };
+    // (The effects run on the wall clock: slow motion is one of theirs.)
+    let dt = if playing || fixed.is_some() { real.delta_secs().min(0.1) } else { 0.0 };
     fx.tick(dt);
     if let Some(t) = fixed {
         for p in &mut fx.playing {
@@ -743,6 +758,25 @@ fn play(
     let (bloom, exposure) = mix.bloom.map_or((1.0, 1.0), |(_, (b, e))| (b, e));
     *light = PostLight { exposure, bloom };
     shake.0 = mix.shake;
+    // Slow motion: the game at its speed while asked (the weapon wheel's
+    // own slowing aside), and back once it isn't.
+    match mix.slomo.filter(|_| playing) {
+        Some(speed) if !wheel.open => {
+            if !*slowed {
+                debug!("post-effects: slow motion");
+            }
+            virt.set_relative_speed(speed);
+            *slowed = true;
+        }
+        None if *slowed => {
+            if !wheel.open {
+                virt.set_relative_speed(1.0);
+            }
+            debug!("post-effects: slow motion over");
+            *slowed = false;
+        }
+        _ => {}
+    }
 
     let Some(white) = white else { return };
     let mut texture = |path: &str| -> Handle<Image> {
@@ -807,6 +841,22 @@ fn play(
     let [offset, scale, exponent] = settings.color_adjustment();
     let neutral = offset.abs() < 1e-4 && (scale - 1.0).abs() < 1e-4 && (exponent - 1.0).abs() < 1e-4;
     view.adjust = Vec4::new(offset, scale, exponent, if neutral { 0.0 } else { 1.0 });
+    // Motion blur: how far the view turned this frame, across the screen,
+    // smeared at the clip's intensity (no further than its most).
+    let now = camera_at.single().ok();
+    if let (Some((_, (intensity, most))), Some((gt, Projection::Perspective(p))), Some(before)) = (mix.motion, now, *turned) {
+        let delta = gt.rotation().inverse() * before;
+        let (yaw, pitch, _) = delta.to_euler(EulerRot::YXZ);
+        let vfov = p.fov.max(0.1);
+        let hfov = 2.0 * ((vfov * 0.5).tan() * p.aspect_ratio).atan();
+        let smear = Vec2::new(yaw / hfov, -pitch / vfov) * intensity;
+        let smear = smear.clamp_length_max(0.06 * most.max(0.1));
+        if smear.length() > 1e-4 {
+            view.motion = Vec4::new(smear.x, smear.y, intensity, 1.0);
+            trace!("post-effects: motion blur {smear:?}");
+        }
+    }
+    *turned = now.map(|(gt, _)| gt.rotation());
     let on = view.active();
     for camera in &cameras {
         if on {

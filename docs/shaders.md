@@ -915,8 +915,14 @@ saturation offset (-1 grey) and `HUE_Rotation` a fraction of a turn; noise
 modulates by its texture, tiled; distortion moves the source by its texture's
 offsets (pixels, `DistortionFactor`). Bloom clips (`fIntensity`, `fExposure`)
 multiply the grade's bloom and the scene's exposure. The fades to white go to
-1,500 times. Camera-shake clips add to the view's shake. Motion blur and slow
-motion aren't played. Clips name four textures the game doesn't ship
+1,500 times. Camera-shake clips add to the view's shake. A motion-blur clip
+(a melee hit's, the river rapids' QTE hit's) smears the view along the way it
+turned that frame: eight taps across the screen over the turn times the clip's
+intensity (`fIntensity`, 0.65), no longer than 6% of the screen times
+`fMaxBlurModifier`. A slow-motion clip (the drunk walk's, `DrunkFX_NoCamShake`:
+down to half speed over half a second, for five) sets the game's speed
+(`Time<Virtual>`), unless the weapon wheel is slowing it; the effects
+themselves run on the wall clock. Clips name four textures the game doesn't ship
 (`critical_health`, `bossinksplash`, `animalslash_center`, `animalslash01`);
 those stay plain.
 

@@ -16,6 +16,7 @@ struct PostView {
     distort: array<vec4<f32>, 2>,
     screen: vec4<f32>,
     adjust: vec4<f32>,
+    motion: vec4<f32>,
 }
 
 @group(0) @binding(0) var screen: texture_2d<f32>;
@@ -144,6 +145,15 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     }
 
     var c = source(uv);
+
+    // Motion blur: the view smeared along the way it turned this frame.
+    if fx.motion.w > 0.0 {
+        var smeared = vec3<f32>(0.0);
+        for (var k = 0; k < 8; k++) {
+            smeared += source(uv + fx.motion.xy * (f32(k) / 7.0 - 0.5));
+        }
+        c = smeared / 8.0;
+    }
 
     // RGB separation: each channel from its own place, through the mask,
     // the original shown through by the opacity.
