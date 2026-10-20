@@ -1617,6 +1617,26 @@ row, for two reasons:
 From B15's checkpoint the next run completed B15, B20C and B30, then
 JAS_030's B10.
 
+DOC_020 B10E then stalled in the cave, waiting for the mushroom's trip to
+end. There were three causes:
+
+* The trip's cough and its watching of the hands are the engine's moves.
+  The script waits for each by message (`Watch_Cough_Complete`,
+  `Watch_Bubble_Hands_Complete`), and neither message was sent. A move now
+  says when it has played out, or when it is cut short (the hands cut the
+  cough 3 s in). The hands say when their watching is over.
+* JAS_100's Dennis still counted as leading after he had gone (the script
+  never ended his lead), and held the autopilot back. A leader now counts
+  only while he is in the world.
+* B10E arms the mushroom's reaction, then the cave's way on. The way on
+  stops the trip in case it still runs, but only once. The autopilot took
+  the triggers by id, so it stepped into the way on first, and the trip
+  begun after it was never stopped. A running mission's triggers are now
+  taken in the order the scripts armed them.
+
+From B10E's checkpoint the run played the trip, ended it and completed
+B10E. B20E armed its vine.
+
 The notes below are the earlier investigation.
 
 The opening autopilot now requests an aim toward the nearest enabled authored

@@ -32,6 +32,9 @@ pub enum Request {
         name: String,
         looping: bool,
         quiet: bool,
+        /// A message broadcast when it has played out (a gameplay's own
+        /// move the scripts wait on: the intoxication's cough).
+        done: Option<&'static str>,
     },
     Stop {
         pawn: u64,
@@ -58,6 +61,7 @@ struct Playing {
     handle: Handle<Fc3Clip>,
     looping: bool,
     quiet: bool,
+    done: Option<&'static str>,
     waited: f32,
     scene: Option<String>,
     finishing: bool,
@@ -107,7 +111,7 @@ fn run_pawn_anims(
     let anims = &mut *anims;
     for r in std::mem::take(&mut anims.requests) {
         match r {
-            Request::Play { pawn, name, looping, quiet } => {
+            Request::Play { pawn, name, looping, quiet, done } => {
                 let clip = (pawn == PLAYER).then(|| table.0.get(&name.to_ascii_lowercase())).flatten().and_then(player_clip);
                 let Some(clip) = clip else {
                     // (A character's moves, and moves with no first-person
@@ -117,9 +121,14 @@ fn run_pawn_anims(
                         tell(&mut host, pawn, "Started");
                         tell(&mut host, pawn, "Finished");
                     }
+                    if let Some(m) = done {
+                        host.story.message(m);
+                    }
                     continue;
                 };
-                // A new move cuts short the one playing.
+                // A new move cuts short the one playing (over, for one whose
+                // end is told: the intoxication's cough, cut by its watching
+                // the hands a moment later).
                 if let Some(old) = anims.active.take() {
                     if let Some(s) = old.scene {
                         cinema.stop_built(&s);
@@ -127,10 +136,13 @@ fn run_pawn_anims(
                     if !old.quiet {
                         tell(&mut host, PLAYER, "Interrupted");
                     }
+                    if let Some(m) = old.done {
+                        host.story.message(m);
+                    }
                 }
                 info!("pawn anim: {name}: {clip}");
                 let handle = server.load(cache_path(&fc3_formats::cache::anim_rel(clip)));
-                anims.active = Some(Playing { clip: clip.to_string(), handle, looping, quiet, waited: 0.0, scene: None, finishing: false });
+                anims.active = Some(Playing { clip: clip.to_string(), handle, looping, quiet, done, waited: 0.0, scene: None, finishing: false });
             }
             Request::Stop { pawn } => {
                 if pawn != PLAYER {
@@ -162,9 +174,13 @@ fn run_pawn_anims(
             }
             let length = clips.get(&p.handle).map_or(0.0, |c| c.0.duration);
             let Some((t, player)) = players.single().ok().filter(|_| length > 0.0) else {
+                let done = p.done;
                 anims.active = None;
                 tell(&mut host, PLAYER, "Started");
                 tell(&mut host, PLAYER, "Finished");
+                if let Some(m) = done {
+                    host.story.message(m);
+                }
                 return;
             };
             // From his feet, facing his way.
@@ -193,8 +209,11 @@ fn run_pawn_anims(
                 }
             }
             None => {
-                let finishing = p.finishing;
+                let (finishing, done) = (p.finishing, p.done);
                 anims.active = None;
+                if let Some(m) = done {
+                    host.story.message(m);
+                }
                 if !finishing {
                     tell(&mut host, PLAYER, "FinishingSoon");
                 }

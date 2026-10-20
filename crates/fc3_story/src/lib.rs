@@ -1092,7 +1092,7 @@ impl Story {
     /// effects or optional missions. Nested library boxes retain their graph
     /// ancestry, so their triggers remain eligible for the owning mission.
     pub fn watched_triggers_in_graph(&self, graph: Option<&str>) -> Vec<(u64, String, [f32; 3], bool)> {
-        self.watched_triggers_where(graph, |_, _| true)
+        self.watched_triggers_where(graph, |_, _| true, false)
     }
 
     /// The missions running that hold the player, by their names' stem
@@ -1134,9 +1134,14 @@ impl Story {
     }
 
     /// The triggers of these missions' graphs (by their names' stem) that
-    /// scripts wait on, as `watched_triggers_in_graph` lists them.
+    /// scripts wait on, as `watched_triggers_in_graph` lists them but in
+    /// the order the scripts armed them: the way their designers laid
+    /// them. (DOC_020 B10E arms the mushroom's reaction, then the cave's
+    /// way on, which stops the reaction's trip in case it still runs; the
+    /// way on stepped into first, the trip, begun after, was never
+    /// stopped and the block never completed.)
     pub fn watched_triggers_of(&self, graph: Option<&str>, missions: &[String]) -> Vec<(u64, String, [f32; 3], bool)> {
-        self.watched_triggers_where(graph, |c, target| of_missions(c, target, missions))
+        self.watched_triggers_where(graph, |c, target| of_missions(c, target, missions), true)
     }
 
     /// The triggers scripts wait on that belong to no mission (a cave's
@@ -1144,14 +1149,15 @@ impl Story {
     /// not another mission's start (a quest giver's brief runs too) while
     /// one of the story's own holds the player.
     pub fn watched_triggers_unowned(&self, graph: Option<&str>) -> Vec<(u64, String, [f32; 3], bool)> {
-        self.watched_triggers_where(graph, |c, target| mission_of(c, target).is_none())
+        self.watched_triggers_where(graph, |c, target| mission_of(c, target).is_none(), false)
     }
 
-    fn watched_triggers_where(&self, graph: Option<&str>, keep: impl Fn(&Core, &Table) -> bool) -> Vec<(u64, String, [f32; 3], bool)> {
+    /// (`armed`: in the order they were first listened to, else by id.)
+    fn watched_triggers_where(&self, graph: Option<&str>, keep: impl Fn(&Core, &Table) -> bool, armed: bool) -> Vec<(u64, String, [f32; 3], bool)> {
         let c = self.core.borrow();
         let graph = graph.map(str::to_ascii_lowercase);
         let mut out = Vec::new();
-        for l in c.listeners.values() {
+        for (&key, l) in &c.listeners {
             let Listen::Entity(t, e) = &l.on else { continue };
             if !matches!(e.as_str(), "Enter" | "Use" | "EnterFOV") || !c.is_loaded(*t) {
                 continue;
@@ -1168,7 +1174,7 @@ impl Story {
                     continue;
                 }
                 if let Some(at) = c.position(*t) {
-                    out.push((*t, e.clone(), at, c.trigger_on(*t)));
+                    out.push((key, (*t, e.clone(), at, c.trigger_on(*t))));
                 }
                 continue;
             }
@@ -1198,11 +1204,14 @@ impl Story {
                 None => c.view.spawned.get(t).map_or(entry.pos, |l| l.pos),
                 _ => entry.pos,
             };
-            out.push((*t, e.clone(), point, c.trigger_on(*t)));
+            out.push((key, (*t, e.clone(), point, c.trigger_on(*t))));
         }
-        out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-        out.dedup();
-        out
+        out.sort_by(|a, b| a.1 .0.cmp(&b.1 .0).then(a.1 .1.cmp(&b.1 .1)).then(a.0.cmp(&b.0)));
+        out.dedup_by(|a, b| a.1 .0 == b.1 .0 && a.1 .1 == b.1 .1);
+        if armed {
+            out.sort_by_key(|w| w.0);
+        }
+        out.into_iter().map(|w| w.1).collect()
     }
 
     /// The places scripts wait for the player to come near

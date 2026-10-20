@@ -1897,7 +1897,10 @@ fn run_story(
         // where it is: HOY_010's Sam, waiting by the last bomb, kept the
         // player from JAS_200's start across the island.)
         let companions = host.story.companions();
-        let leading = companions.iter().any(|c| matches!(c.1, fc3_story::Companion::Lead { .. }));
+        // (A leader in the world: one whose mission is over and who is gone,
+        // its lead never ended, leads no one. JAS_100's Dennis held the
+        // autopilot back through DOC_020.)
+        let leading = companions.iter().any(|c| matches!(c.1, fc3_story::Companion::Lead { .. }) && actors.iter().any(|(a, _, _)| a.id == c.0 && !a.dead));
         let kept: Vec<Vec3> = actors
             .iter()
             .filter(|(a, _, _)| !a.dead && companions.iter().any(|c| c.0 == a.id && matches!(c.1, fc3_story::Companion::Follow)))
@@ -1962,9 +1965,10 @@ fn run_story(
         // each back.)
         if (host.quiet > 20.0 && host.quiet - dt <= 20.0) || minute {
             info!(
-                "story autopilot: trigger step: {} focused, {} watched, rock {awaiting_rock}, led {leading}, kept near {} companions",
+                "story autopilot: trigger step: {} focused (of {focus:?}), {} watched, rock {awaiting_rock}, led {leading} ({:?}), kept near {} companions",
                 focused.len(),
                 watched.len(),
+                companions.iter().filter(|c| matches!(c.1, fc3_story::Companion::Lead { .. })).map(|c| c.0).collect::<Vec<_>>(),
                 kept.len()
             );
             for w in focused.iter().chain(watched.iter()) {
@@ -2860,7 +2864,7 @@ fn run_story(
                     // A move played on a character by name, and stopped.
                     "CAPI_AI.StartPlayAnim" => {
                         if let Ok(pawn) = a(0).parse::<u64>() {
-                            pawn_anims.requests.push(crate::pawn_anims::Request::Play { pawn, name: a(1), looping: a(2) == "true", quiet: false });
+                            pawn_anims.requests.push(crate::pawn_anims::Request::Play { pawn, name: a(1), looping: a(2) == "true", quiet: false, done: None });
                         }
                     }
                     "CAPI_AI.StopPlayAnim" => {

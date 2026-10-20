@@ -85,7 +85,9 @@ fn run(
     mut anims: ResMut<crate::pawn_anims::PawnAnims>,
     (fp, rigs, mut sfx): (Res<crate::fp::FpState>, Query<&crate::characters::CharacterRig>, MessageWriter<crate::sound::PlaySfx>),
     (mut names, mut commands, mut test_event): (Local<HashMap<String, &'static str>>, Commands, Local<Option<String>>),
+    host: Option<NonSendMut<crate::story::StoryHost>>,
 ) {
+    let mut host = host;
     // FC3_DRUNK_TEST (debug): drunk from the start, at the library's values;
     // a value other than 1 is also sent as a generic event (`WatchCough`).
     if !*tested {
@@ -134,7 +136,10 @@ fn run(
     for event in std::mem::take(&mut drunk.events) {
         if let Some(name) = drunk.active.as_ref().and_then(|(_, s)| s.moves.get(&event)) {
             info!("intoxicated: {event} plays {name}");
-            anims.requests.push(crate::pawn_anims::Request::Play { pawn: fc3_story::PLAYER, name: name.clone(), looping: false, quiet: true });
+            // (The cough played out, the gameplay says so, as the engine
+            // did: DOC_020's cave waits on it.)
+            let done = (event == "WatchCough").then_some("Watch_Cough_Complete");
+            anims.requests.push(crate::pawn_anims::Request::Play { pawn: fc3_story::PLAYER, name: name.clone(), looping: false, quiet: true, done });
         }
         // Watching the hands: their effects on both, for its time.
         if event == "WatchBubbleHands" {
@@ -167,6 +172,10 @@ fn run(
             }
             if drunk.hands_stop != 0 {
                 sfx.write(crate::sound::PlaySfx { event: drunk.hands_stop, at: None, volume: 1.0 });
+            }
+            // (As the engine said, the watching over.)
+            if let Some(h) = host.as_mut() {
+                h.story.message("Watch_Bubble_Hands_Complete");
             }
         }
     }
