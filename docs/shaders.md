@@ -568,7 +568,10 @@ give or take its variant. It is born in the emitter's volume: in a sphere of
 out from the volume instead. Over its life it follows the `Part...KF` curves:
 speed, size, `SizeZ` (a streak's length), alpha, spin and gravity. Its colour
 follows the `PartColorKF` points times `InitColorKF`, or its evenly spaced
-`Key`s when it has no points. With `RandomColor`, one colour is picked at
+`Key`s when it has no points. The colours are sRGB, as the editor shows them:
+blended so, then made linear, as the sheets are. Read as linear, a ground
+fire's flames (orange, 0.85, 0.40, 0.26, fading to black) had shown as a pale
+salmon wash, and greys came out too light. With `RandomColor`, one colour is picked at
 birth. The sheet is `FrameCount` by `FrameCountY` (0 is one image),
 shown at `FramePerSecond`. `BlendType` 1 adds; `RedAsAlpha` takes brightness as
 coverage; else the alpha blends. A particle's size is its half-extent (its

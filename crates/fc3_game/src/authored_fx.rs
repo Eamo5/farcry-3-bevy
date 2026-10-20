@@ -648,6 +648,12 @@ impl Volume {
     }
 }
 
+/// An sRGB colour, linear.
+fn linear(c: Vec3) -> Vec3 {
+    let l = LinearRgba::from(Color::srgb(c.x, c.y, c.z));
+    Vec3::new(l.red, l.green, l.blue)
+}
+
 fn dunia_colour(v: &str) -> Option<Vec3> {
     let p: Vec<f32> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
     (p.len() == 3).then(|| Vec3::new(p[0], p[1], p[2]))
@@ -1126,7 +1132,10 @@ fn draw(
             if alpha <= 0.002 {
                 continue;
             }
-            let colour = p.colour.unwrap_or_else(|| gradient(&em.colours, t));
+            // (Authored as the editor shows them, sRGB: blended so, then
+            // made linear, as the sheets are. Taken as linear, a flame's
+            // orange had shown as a pale salmon.)
+            let colour = linear(p.colour.unwrap_or_else(|| gradient(&em.colours, t)));
             let light = if em.lit { ambient } else { 1.0 };
             // (What glows: light added, and brightness as coverage.)
             let colour = colour * light * if batch.0.mode != 1 { em.brightness } else { 1.0 };
