@@ -5036,8 +5036,8 @@ cache as they are, and the challenge manager's template (the rewards: $250,
   only while it waits). One tagged outright (five of WIL_050's guards) is
   marked as if the player had, once it is in the world. Seen: C4_SC_09
   turning its two mercs' tagging on as the trial starts.
-* **Not yet.** The loading screen.
-  `DisplayCustomUIMsg` shows its popup (`docs/ui.md`), and the player's
+* **The loading screen** as a run begins is the trial's own (its challenge
+  page in loading mode: `docs/ui.md`). `DisplayCustomUIMsg` shows its popup (`docs/ui.md`), and the player's
   `RefillWeaponAmmo` tops up every weapon (none named) or the one named, to
   the count given or its most (the missions' `ManageInventory_v4` refills).
   `FC3_TELEPORT=<s>,<x>,<y>,<z>` (tests) puts the player at a Dunia place
