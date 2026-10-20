@@ -307,6 +307,13 @@ impl LootCatalog {
                 *count = count.saturating_add(progress.plants[plant.index()]);
             }
         }
+        // (The same item found as loot: a hide taken off a boar's body when
+        // it was searched is as good as one skinned. JAS_080's rucksack wants
+        // two, and one of its boars gave its hide so.)
+        for (&id, &n) in &progress.loot {
+            let count = quantities.entry(id).or_default();
+            *count = count.saturating_add(n);
+        }
         quantities
     }
 
@@ -351,6 +358,14 @@ impl LootCatalog {
             *have -= used;
             *need -= used;
         }
+        for (id, need) in remaining.iter_mut().filter(|(_, n)| **n > 0) {
+            if let Some(have) = progress.loot.get_mut(id) {
+                let used = (*have).min(*need);
+                *have -= used;
+                *need -= used;
+            }
+        }
+        progress.loot.retain(|_, n| *n > 0);
         true
     }
 }
@@ -523,6 +538,22 @@ mod tests {
         let before = p.clone();
         assert!(catalog.craft(&mut p, &mut stats, 3, &loot, RUCKSACK).is_none());
         assert_eq!(before, p);
+    }
+
+    #[test]
+    fn a_hide_found_on_a_body_counts_with_one_skinned() {
+        let (catalog, loot) = catalog();
+        let mut p = Progress { story: true, ..Default::default() };
+        let mut stats = stats();
+        let hide = loot.item(LootKind::Skin(Animal::Boar)).unwrap().id;
+        p.skins.insert(Animal::Boar, 1);
+        p.loot.insert(hide, 1);
+        p.loot.insert(99, 3);
+        assert_eq!(catalog.craft(&mut p, &mut stats, 3, &loot, RUCKSACK), Some(ItemCrafted { kind: 2, label: "Loot pouch small".into() }));
+        // (The skin first, then the loot; other loot untouched.)
+        assert_eq!(p.skins.get(&Animal::Boar), Some(&0));
+        assert_eq!(p.loot.get(&hide), None);
+        assert_eq!(p.loot.get(&99), Some(&3));
     }
 
     #[test]

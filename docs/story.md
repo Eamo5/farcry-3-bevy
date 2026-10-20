@@ -422,6 +422,10 @@ is the story's own:
   the installed recipe's ingredients, completed-mission unlock and event identity.
   Medicine consumes one green leaf from any matching species; the rucksack
   consumes two boar hides and applies the authored +16 loot-capacity modifier.
+  An ingredient carried as loot (the same item found on a body or in a crate)
+  counts with those skinned or gathered, and is used after them. A boar of
+  JAS_080's gave its hide when its body was searched, so a run held one hide
+  skinned and one as loot, and the tutorial's rucksack could not be made.
   Capacity and unlock checks happen before any ingredient changes. Crafted gear
   persists in saves; crafting events survive journal frames and are delivered once
   as `DominoEvent_CraftRecipe(kind, sName)`. The script-owned crafting tutorial

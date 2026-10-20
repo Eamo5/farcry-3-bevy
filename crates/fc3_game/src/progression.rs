@@ -1765,6 +1765,7 @@ fn journal_automation(
         };
         if matches { *interaction = Interaction::Pressed; *pressed = Some(e); break; }
     }
+    debug!("journal automation: {:?} pressed {}, page {:?}", menu.tutorial, pressed.is_some(), menu.page);
 }
 
 fn refresh_journal(
