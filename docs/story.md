@@ -1568,6 +1568,13 @@ registered it. This covers the watched triggers, the messages and the
 leave zones. From B10's checkpoint the run saved B12 twice and then
 JAS_060_B10C.
 
+JAS_060_B20 then stalled at the radio tower. The autopilot had put the
+player on the trigger at the top, but he came down 98 m off and 80 m below
+the panel. Its tower step only reached panels within 80 m. It now reaches
+200 m, still only while a mission (not just the towers' manager) waits for
+the tower's finish. From B20's checkpoint the run took the panel and
+completed JAS_060, then JAS_080's B10, B20 and B30.
+
 The notes below are the earlier investigation.
 
 The opening autopilot now requests an aim toward the nearest enabled authored

@@ -2169,7 +2169,9 @@ fn run_story(
             .enumerate()
             .filter(|(i, _)| !progress.towers.contains(&(*i as u32)))
             .map(|(_, at)| Vec3::from(*at))
-            .filter(|at| host.quiet > 12.0 && at.distance(t.translation) < 80.0)
+            // (Within a tower's height and more: JAS_060's player, put on
+            // its top, came down 98 m off and 80 m below the panel.)
+            .filter(|at| host.quiet > 12.0 && at.distance(t.translation) < 200.0)
             // (Once a mission listens for the tower, not just the towers'
             // own manager.)
             .filter(|_| host.story.waiting_on().iter().any(|w| w.contains("CRadioTowerFinishedEvent") && !w.contains("RadioTowersManager")))
