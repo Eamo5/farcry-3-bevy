@@ -870,7 +870,8 @@ fn crew_gunners(
         if t.user.is_some() {
             continue;
         }
-        let Some((e, mut ride, _)) = crew.iter_mut().find(|(_, r, h)| r.vehicle == ve && r.visible && !h.dead) else { continue };
+        // (Not one seated in a place of its own: the man in the back.)
+        let Some((e, mut ride, _)) = crew.iter_mut().find(|(_, r, h)| r.vehicle == ve && r.visible && r.place.is_none() && !h.dead) else { continue };
         // To the gun.
         ride.seat = local + t.back;
         t.user = Some(e);

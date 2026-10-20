@@ -842,6 +842,9 @@ pub struct Riding {
     pub seat: Vec3,
     /// Shown (a gunner standing in the back) or hidden (the driver).
     pub visible: bool,
+    /// Its place among the vehicle's (`riders::places`): it sits there on
+    /// the place's own move, shown, and gets out by its move.
+    pub place: Option<u8>,
 }
 
 /// Body parts of the placeholder figure, animated procedurally.

@@ -508,6 +508,51 @@ gunner entry points.
 Third-person gunner clips are `weapons\mounted\dshk\3rdge_fulbst_*_modshk`: aim
 vertical at -45/0/+45, enter forward/turn, exit, and a grenade stun.
 
+### Riders
+
+The move database has a seated loop for each place in a vehicle
+(`com_inside_vehicle`) and the moves into and out of it
+(`com_enter_vehicle`, `com_exit_vehicle`). The places' clips are made in
+the vehicle's frame: the root starts at the seat, turned the way the rider
+faces. The technical's bed riders are about 1.5 m up, at x ±0.8 and
+z 0.7 or 1.8, facing out; its driver at (-0.47, 0.86, -0.23). The
+entry and exit moves start at the root's origin and move from the seat: a
+4x4 driver's exit ends 1.08 m to the left and 0.96 m lower, turned 90
+degrees.
+
+`riders` seats the patrols' and convoys' crews this way. Each place
+(`riders::places`, by vehicle) has a seated loop and its move out:
+* The technical: the wheel, the seat beside it, and the four in the
+  bed (`reinfposition{l,r}{1,2}_4x4tech`).
+* The zodiac: the driver and the right benches. Boat crews stay aboard.
+
+At the wheel the rider takes the first-person driving clip, which is the
+whole body with hands on the wheel. No third-person driving loop is among
+the moves.
+
+A rider stands where the vehicle's transform times the clip's root puts
+it, on the clip in step with the others (`ClipOverride` on the rig). The
+driver, who used to be hidden, is now seen. The man by a gun has no place
+and still mans it. When the vehicle stops, each rider plays its move out
+from the seat. The move's root is applied to the seat in the vehicle's
+frame, and the rider's collider stays off until it ends. It then stands
+on the ground, moved 0.5 m clear of the vehicle's sides if the move left
+it closer (a body inside the vehicle made the two push each other apart).
+It joins the fight from there.
+
+The technical's own cab has no moves out, so its riders take the 4x4's,
+whose cab is about 0.1 m higher. `FC3_RIDERS_TEST=<s>` parks a technical
+with four aboard 10 m in front of the player and has them get out that
+long after; with `--screenshot` it captures them seated and 0.7, 1.5 and
+3.5 s into the exit.
+
+Seen: the driver with hands on the wheel, the bed's riders sitting with
+their rifles, and all four out beside the vehicle. A pirate crew fired
+through the technical at the player and wrecked it, so the test crew are
+rebels. Not yet: the story's characters in a vehicle's seats (put at the
+seat's bone, on their own clips) don't take these loops, and nobody plays
+the moves into a vehicle.
+
 ### Guard spots
 
 The world's `SimpleAnimation.<what>[_<faction>_v]_<n>` entities (about 2,400) are places for

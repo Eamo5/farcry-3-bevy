@@ -25,6 +25,7 @@ pub struct PatrolsPlugin;
 
 impl Plugin for PatrolsPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(crate::riders::RidersPlugin);
         app.init_resource::<Routes>()
             .add_message::<Convoy>()
             .add_systems(
@@ -37,6 +38,7 @@ impl Plugin for PatrolsPlugin {
                     (spot, drive_patrols, dismount).chain(),
                     end_patrols,
                     patrol_log,
+                    riders_test,
                 )
                     .run_if(in_state(crate::menu::GameState::Playing)),
             )
@@ -199,14 +201,16 @@ fn send_convoys(
             (Vec3::new((min.x + max.x) * 0.5, min.y + size.y * 0.42, max.z - size.z * 0.22), true),
             (Vec3::new((min.x + max.x) * 0.5, min.y + size.y * 0.42, max.z - size.z * 0.4), true),
         ];
-        for (seat, visible) in seats.into_iter().take(CONVOY_CREW) {
+        // (The wheel, the seat beside it, the gun, the bed: `riders::places`.)
+        let places = [Some(0), Some(1), None, Some(2)];
+        for ((seat, visible), place) in seats.into_iter().zip(places).take(CONVOY_CREW) {
             spawns.write(SpawnEnemy {
                 at,
                 hunting: Some(pt.translation),
                 garrison: Some(c.garrison),
                 faction,
                 role: None,
-                ride: Some(Riding { vehicle, seat, visible }),
+                ride: Some(Riding { vehicle, seat, visible, place }),
             });
         }
         info!("convoy to outpost {} from {at:.0?}", c.garrison);
@@ -334,8 +338,16 @@ fn spawn_patrols(
                 Vec3::new((min.x + max.x) * 0.5, min.y + size.y * 0.42, max.z - size.z * 0.22),
             )
         };
-        for (seat, visible, role) in [(driver, false, Role::Assault), (gunner, armed || !afloat, Role::Assault)] {
-            spawns.write(SpawnEnemy { at, hunting: None, garrison: None, faction, role: Some(role), ride: Some(Riding { vehicle, seat, visible }) });
+        // (The driver in his place; the gunner to the gun.)
+        for (seat, visible, place) in [(driver, false, Some(0)), (gunner, armed || !afloat, None)] {
+            spawns.write(SpawnEnemy {
+                at,
+                hunting: None,
+                garrison: None,
+                faction,
+                role: Some(Role::Assault),
+                ride: Some(Riding { vehicle, seat, visible, place }),
+            });
         }
         routes.active[ri] = Some(vehicle);
         info!("patrol on route {ri} ({faction:?}, {}) from {at:.0?}", if afloat { "boat" } else { "technical" });
@@ -510,14 +522,14 @@ fn spawn_boat_patrols(
             let size = max - min;
             let driver = Vec3::new((min.x + max.x) * 0.5, min.y + 0.5, max.z - size.z * 0.2);
             let gunner = Vec3::new((min.x + max.x) * 0.5, min.y + 0.5, min.z + size.z * 0.3);
-            for (seat, visible) in [(driver, false), (gunner, armed)] {
+            for (seat, visible, place) in [(driver, false, Some(0)), (gunner, armed, None)] {
                 spawns.write(SpawnEnemy {
                     at,
                     hunting: None,
                     garrison: None,
                     faction,
                     role: Some(Role::Assault),
-                    ride: Some(Riding { vehicle, seat, visible }),
+                    ride: Some(Riding { vehicle, seat, visible, place }),
                 });
             }
             routes.active[ri] = Some(vehicle);
@@ -668,12 +680,15 @@ fn drive_patrols(time: Res<Time>, routes: Res<Routes>, mut vehicles: Query<(&Tra
     }
 }
 
-/// Once stopped, the crew climbs out and fights.
+/// Once stopped, the crew climbs out and fights: those in a place of their
+/// own by its move out (`riders`), the rest put down beside the vehicle.
+#[allow(clippy::too_many_arguments)]
 fn dismount(
     mut commands: Commands,
     heights: Res<crate::terrain::Heightfield>,
     vehicles: Query<(Entity, &Transform, &LinearVelocity, &Vehicle, &PatrolDriver)>,
     mut crew: Query<(Entity, &Riding, &mut Transform, &mut Npc, &mut Visibility, Has<crate::turrets::Gunner>), Without<PatrolDriver>>,
+    (rider_clips, clips): (Option<Res<crate::riders::RiderClips>>, Res<Assets<crate::cache_assets::Fc3Clip>>),
 ) {
     for (ve, vt, vel, v, d) in &vehicles {
         // Boat crews fight from the boat.
@@ -690,6 +705,13 @@ fn dismount(
                 npc.state = NpcState::Combat;
                 continue;
             }
+            if crate::riders::begin_exit(&mut commands, e, (ve, v), ride, rider_clips.as_deref(), &clips) {
+                continue;
+            }
+            // (Put out as it sat: its own moves again.)
+            if let Some(rig) = npc.rig {
+                commands.entity(rig).remove::<crate::characters::ClipOverride>();
+            }
             // Out on the side of the seat, onto the ground.
             let side = if ride.seat.x < (min.x + max.x) * 0.5 { min.x - 1.0 } else { max.x + 1.0 };
             let mut at = vt.transform_point(Vec3::new(side, 0.0, ride.seat.z));
@@ -702,6 +724,77 @@ fn dismount(
             commands.entity(e).remove::<(Riding, ColliderDisabled)>();
         }
         commands.entity(ve).remove::<PatrolDriver>();
+    }
+}
+
+/// `FC3_RIDERS_TEST=<s>`: a technical parked side on 10 m ahead of the
+/// player with four in its places (the cab's two, two in the bed), told to
+/// stop and get out that long after it is made; with `--screenshot`, it is
+/// captured seated, then 0.7, 1.5 and 3.5 s into getting out.
+#[allow(clippy::too_many_arguments)]
+fn riders_test(
+    time: Res<Time>,
+    args: Res<crate::Args>,
+    mut state: Local<(Option<(Entity, f32)>, u32, bool)>,
+    assets: Option<Res<VehicleAssets>>,
+    models: Res<Assets<Fc3Model>>,
+    heights: Res<crate::terrain::Heightfield>,
+    players: Query<(&Transform, &Player)>,
+    mut spawns: MessageWriter<SpawnEnemy>,
+    mut commands: Commands,
+) {
+    let Some(after) = std::env::var("FC3_RIDERS_TEST").ok().and_then(|s| s.parse::<f32>().ok()) else { return };
+    let now = time.elapsed_secs();
+    let (made, shots, told) = &mut *state;
+    let Some((vehicle, at)) = *made else {
+        let (Some(assets), Ok((pt, p))) = (assets, players.single()) else { return };
+        let (Some(def), true) = (crate::vehicles::def_named("Technical"), !p.spawning && now > 8.0) else { return };
+        let Some(model) = models.get(&assets.models[def]) else { return };
+        let ahead = Vec3::new(-p.yaw.sin(), 0.0, -p.yaw.cos());
+        let mut pos = pt.translation + ahead * 10.0;
+        pos.y = heights.height_at(pos).unwrap_or(pos.y) + 1.0;
+        let rotation = Quat::from_rotation_arc(Vec3::NEG_Z, Vec3::new(ahead.z, 0.0, -ahead.x));
+        let vehicle = crate::vehicles::build_vehicle(&mut commands, def, model, pos, rotation, 0x5300_0000_0000_0000);
+        for place in 0..4u8 {
+            spawns.write(SpawnEnemy {
+                at: pos,
+                hunting: None,
+                garrison: None,
+                // (Rebels: out without a fight, to be seen.)
+                faction: Faction::Rebel,
+                role: Some(Role::Assault),
+                ride: Some(Riding { vehicle, seat: Vec3::ZERO, visible: true, place: Some(place) }),
+            });
+        }
+        info!("riders test: a technical with four aboard at {pos:.1?}");
+        *made = Some((vehicle, now));
+        return;
+    };
+    let t = now - at;
+    let stem = args.screenshot.as_ref().map(|p| p.strip_suffix(".png").unwrap_or(p).to_string());
+    let marks = [after - 0.5, after + 0.7, after + 1.5, after + 3.5];
+    if let (Some(stem), Some(&mark)) = (stem, marks.get(*shots as usize)) {
+        if t >= mark {
+            crate::camera::capture(&mut commands, format!("{stem}_riders{shots}.png"));
+            *shots += 1;
+        }
+    }
+    if t >= after && !*told {
+        *told = true;
+        info!("riders test: told to get out");
+        commands.entity(vehicle).insert(PatrolDriver {
+            route: usize::MAX,
+            next: 0,
+            step: 1,
+            alert: 1.0,
+            stopping: true,
+            reverse: 0.0,
+            stuck: 0.0,
+            look: 0.5,
+            goal: None,
+            jams: 0,
+            friendly: true,
+        });
     }
 }
 

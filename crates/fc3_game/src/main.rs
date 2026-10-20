@@ -53,6 +53,7 @@ mod pawn_anims;
 mod physics;
 mod pickups;
 mod player;
+mod riders;
 mod player_audio;
 mod profile;
 mod progression;
