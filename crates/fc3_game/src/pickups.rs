@@ -263,6 +263,9 @@ pub struct WorldState {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PickupKind {
     Ammo,
+    /// A bundle of arrows (`Arrow_Bundle_Pickup`: its `CPickupMultipleAmmo`
+    /// gives this many).
+    Arrows(u32),
     Explosives,
     Health,
     Grenade,
@@ -292,6 +295,7 @@ impl PickupKind {
     fn label(self) -> String {
         match self {
             PickupKind::Ammo => "ammo".into(),
+            PickupKind::Arrows(_) => "arrows".into(),
             PickupKind::Explosives => "explosives".into(),
             PickupKind::Health => "medkit".into(),
             PickupKind::Grenade => "grenade".into(),
@@ -321,6 +325,18 @@ fn game_weapon(pickup: &str) -> &str {
     name.rsplit_once('_').filter(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).map_or(name, |(base, _)| base)
 }
 
+/// The arrows a bundle gives (its archetype's `iAmmoQuantity`; a single
+/// `ArrowPickup`'s is 1), when its own entry isn't at hand.
+pub const ARROW_BUNDLE: u32 = 10;
+
+/// The ammo a pickup's `CPickupMultipleAmmo` gives in all (its entries'
+/// `iAmmoQuantity`).
+pub fn ammo_quantity(component: &fc3_formats::fcb::Object) -> Option<u32> {
+    let list = component.child("Ammunitions")?;
+    let n: u32 = list.children.iter().filter_map(|e| e.u32("iAmmoQuantity")).sum();
+    (n > 0).then_some(n)
+}
+
 /// Classifies a world entity by name (pickup categories and explosive props).
 pub fn classify(name: &str) -> Option<Classified> {
     let n = name.to_ascii_lowercase();
@@ -331,7 +347,7 @@ pub fn classify(name: &str) -> Option<Classified> {
         if n.contains("explosive") {
             PickupKind::Explosives
         } else if n.contains("arrow") {
-            return None;
+            PickupKind::Arrows(if n.contains("bundle") { ARROW_BUNDLE } else { 1 })
         } else {
             PickupKind::Ammo
         }
@@ -572,6 +588,10 @@ fn interact(
     };
     let said = text.as_deref().and_then(|t| t.prompt(game, &actions, &settings));
     hud.prompt = Some(said.unwrap_or_else(|| format!("{}  pick up {}", actions.label(crate::controls::Action::Interact, &settings), p.kind.label())));
+    // FC3_PICKUP_TEST (tests): the one in reach taken.
+    if std::env::var("FC3_PICKUP_TEST").is_ok() {
+        actions.press(crate::controls::Action::Interact);
+    }
     if !actions.used() {
         return;
     }
@@ -606,6 +626,7 @@ fn interact(
         looted.write(crate::progression::ItemLooted(crate::progression::LootKind::Plant(plant)));
     }
     actions.consume(crate::controls::Action::Interact);
+    info!("picked up {:?} ({}): {msg}", p.kind, p.id);
     hud.notify(msg);
     // Collectibles are worth experience as well as cash.
     // (Their XP is the game's, by kind.)
@@ -659,6 +680,7 @@ fn apply_reward(
         // (The scripts hear it was picked up; they give what they give.)
         PickupKind::Mission => String::new(),
         PickupKind::Ammo => format!("+{} rounds", give_ammo(inv, 1.0)),
+        PickupKind::Arrows(n) => format!("+{} arrows", inv.add_ammo(WeaponClass::Bow, n)),
         PickupKind::Explosives => {
             inv.grenades = (inv.grenades + 1).min(grenade_cap);
             inv.molotovs = (inv.molotovs + 1).min(crate::weapons::MOLOTOV_CAP);
@@ -767,6 +789,18 @@ mod tests {
     use crate::controls::{Action, ActionState};
     use crate::progression::{ItemLooted, LootKind, Progress};
     use crate::syringes::Plant;
+
+    /// Arrow pickups give the bow arrows: a bundle ten, a single arrow one.
+    #[test]
+    fn arrow_pickups_give_the_bow_arrows() {
+        let arrows = |name: &str| match classify(name) {
+            Some(Classified::Pickup(PickupKind::Arrows(n))) => Some(n),
+            _ => None,
+        };
+        assert_eq!(arrows("Pickups/Ammo/Arrow_Bundle_Pickup_1"), Some(10));
+        assert_eq!(arrows("Pickups/Ammo/ArrowPickup_1"), Some(1));
+        assert_eq!(arrows("Pickups/Ammo/AmmoBox_01"), None);
+    }
 
     #[test]
     fn weapon_pickups_name_the_games_weapons() {

@@ -4711,8 +4711,17 @@ then kill the rare animal with that weapon (B20) and skin it to craft
 * **Seen.** SQA_D5 from the poster to its end: the bow taken, the rare
   komodo shot with it (the kill counts), skinned; B20 and the hunt
   complete.
-* **Not yet.** The arrows the script spawns from an archetype
-  (`Arrow_Bundle_Pickup`) aren't there (the hunt needs none of them).
+* **Spare arrows.** For a bow hunt the script spawns arrow bundles from
+  their archetype (`SetArchetype` then `Spawner_v2`:
+  `FC3_Interactive:Pickups/Ammo/Arrow_Bundle_Pickup`) at its three pickup
+  spots. A spawned archetype carrying a pickup component is now a pickup
+  under the story's id (`story_props::spawned_pickup`), so the script hears
+  it taken; a bundle gives its `CPickupMultipleAmmo` count of arrows (10).
+  The world's 18 placed arrow pickups (bundles of 10, single arrows of 1)
+  had been left out by name and are picked up too. Not seen in a hunt (no
+  checkpoint by one); a placed bundle was taken in a run
+  (`FC3_PICKUP_TEST` takes the pickup in reach; `farcry3::pickups` logs
+  what each gave).
 
 ### Wanted Dead (SQW)
 
