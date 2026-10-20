@@ -760,8 +760,9 @@ fn riders_test(
                 at: pos,
                 hunting: None,
                 garrison: None,
-                // (Rebels: out without a fight, to be seen.)
-                faction: Faction::Rebel,
+                // (Rebels: out without a fight, to be seen; pirates with
+                // `FC3_RIDERS_HOSTILE`, to see them fight.)
+                faction: if std::env::var_os("FC3_RIDERS_HOSTILE").is_some() { Faction::Pirate } else { Faction::Rebel },
                 role: Some(Role::Assault),
                 ride: Some(Riding { vehicle, seat: Vec3::ZERO, visible: true, place: Some(place) }),
             });

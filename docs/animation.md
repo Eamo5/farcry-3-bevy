@@ -548,8 +548,12 @@ long after; with `--screenshot` it captures them seated and 0.7, 1.5 and
 
 Seen: the driver with hands on the wheel, the bed's riders sitting with
 their rifles, and all four out beside the vehicle. A pirate crew fired
-through the technical at the player and wrecked it, so the test crew are
-rebels.
+through the technical at the player and wrecked it in seconds. A character
+now holds fire while a vehicle (or one of its parts) is the first thing on
+its line to its target (`npc::shoot`), and moves on to find a clear one.
+The test crew are rebels; `FC3_RIDERS_HOSTILE` makes them pirates. With
+pirates, the technical still stood after 45 s, though their grenades did
+damage it.
 
 The story's characters in a vehicle's seats sit the same way
 (`seat_story_riders`). One takes the seat's first-person seated clip where

@@ -2084,12 +2084,14 @@ fn act(
     mut commands: Commands,
     mut noises: MessageWriter<Noise>,
     mut damage: MessageWriter<DamageEvent>,
-    (mut loops, mut sfx, aim_table, settings, strikes): (
+    (mut loops, mut sfx, aim_table, settings, strikes, vehicles, parents): (
         MessageWriter<crate::sound::LoopSfx>,
         MessageWriter<crate::sound::PlaySfx>,
         Res<AimTable>,
         Res<crate::settings::Settings>,
         Res<crate::combat::DamageTable>,
+        Query<(), With<crate::vehicles::Vehicle>>,
+        Query<&ChildOf>,
     ),
     (mut alarms, mut throw_clock, nav, probe, collider_names, bystanders): (
         MessageWriter<crate::outposts::AlarmRaised>,
@@ -2125,6 +2127,8 @@ fn act(
     let Ok((pe, pt, player)) = players.single() else { return };
     *throw_clock -= dt;
     let spare: Vec<Vec3> = bystanders.iter().filter(|(_, a)| !a.dead).map(|(t, _)| t.translation()).collect();
+    // (A vehicle, or one of its parts: held fire through.)
+    let is_vehicle = |e: Entity| vehicles.contains(e) || parents.get(e).is_ok_and(|c| vehicles.contains(c.parent()));
     let mut others: std::collections::HashMap<Entity, (Vec3, Vec3)> = npcs.iter().map(|(e, t, n, _, _, _)| (e, (t.translation, n.velocity))).collect();
     others.extend(beasts.iter().map(|(e, t)| (e, (t.translation, Vec3::ZERO))));
     for (e, mut t, mut npc, h, children, garrison) in &mut npcs {
@@ -2305,6 +2309,7 @@ fn act(
                                 &mut sfx,
                                 lap.as_ref(),
                                 &spare,
+                                &is_vehicle,
                             );
                         }
                     }
@@ -2360,6 +2365,7 @@ fn act(
                         &mut sfx,
                         lap.as_ref(),
                         &spare,
+                        &is_vehicle,
                     );
                 }
             }
@@ -2676,11 +2682,25 @@ fn shoot(
     sfx: &mut MessageWriter<crate::sound::PlaySfx>,
     lap: Option<&Lap>,
     spare: &[Vec3],
+    is_vehicle: &dyn Fn(Entity) -> bool,
 ) {
     use crate::sound::ev;
     // (A charger has nothing to shoot.)
     if npc.role == Role::Charger {
         return;
+    }
+    // Not through a vehicle in the way: the rounds would be its (a crew got
+    // out behind its own technical and shot it to pieces at the player).
+    {
+        let muzzle = pos + Vec3::Y * 0.35 + Vec3::new(-npc.yaw.sin(), 0.0, -npc.yaw.cos()) * 0.7;
+        let chest = tgt.pos + Vec3::Y * 0.3;
+        let along = chest - muzzle;
+        if let Ok(d) = Dir3::new(along) {
+            let blocked = spatial.cast_ray(muzzle, d, along.length(), true, &SpatialQueryFilter::from_excluded_entities([me]));
+            if blocked.is_some_and(|h| h.entity != tgt.entity && h.distance < along.length() - 0.5 && is_vehicle(h.entity)) {
+                return;
+            }
+        }
     }
     let stats = npc.role.stats(npc.faction);
     let forward = Vec3::new(-npc.yaw.sin(), 0.0, -npc.yaw.cos());
