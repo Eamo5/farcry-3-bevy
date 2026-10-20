@@ -5024,8 +5024,19 @@ cache as they are, and the challenge manager's template (the rewards: $250,
   are left as they are. `CAPI_Player.SelectThrowGadget` puts the throwable
   it names in the HUD's hand (`ThrowChoice`: a trial's molotovs). Seen:
   G3_SC_05's points put in army 3; not yet seen a merc they called in.
-* **Not yet.** The loading screen, and tagging (`ChangeTagActivation`,
-  `ValidateTag`).
+* **Tags scripts give and take.** The `TaggingModifier` box turns a
+  character's tagging off or on (`CAPI_Entity.ChangeTagActivation`) or
+  tags it outright (`CAPI_Entity.ValidateTag`). Tagging is on by default
+  (the characters' `CTaggableComponent` has `bEnable` set); one a script
+  turns it off for (HUR_020's VIP, two of WIL_040's pirates, two of
+  JAS_200's reinforcements, Oliver once he is in the helicopter) loses its
+  tag and gets `stealth::NoTag`, so the camera passes it by and doesn't
+  tell the scripts it was tagged (taking it in, `Entity_Discovered`, is
+  still reported: WIL_010's photo listener turns its target's tagging on
+  only while it waits). One tagged outright (five of WIL_050's guards) is
+  marked as if the player had, once it is in the world. Seen: C4_SC_09
+  turning its two mercs' tagging on as the trial starts.
+* **Not yet.** The loading screen.
   `DisplayCustomUIMsg` shows its popup (`docs/ui.md`), and the player's
   `RefillWeaponAmmo` tops up every weapon (none named) or the one named, to
   the count given or its most (the missions' `ManageInventory_v4` refills).

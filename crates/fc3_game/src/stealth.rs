@@ -46,6 +46,11 @@ impl Plugin for StealthPlugin {
 #[derive(Component)]
 pub struct Tagged;
 
+/// A character a script keeps from being tagged (`TaggingModifier`'s
+/// Disable: a target to be met, a friend among foes).
+#[derive(Component)]
+pub struct NoTag;
+
 /// Binocular zoom (0..1 blend, read by the camera FOV and view model).
 #[derive(Resource)]
 pub struct Binoculars {
@@ -344,13 +349,13 @@ fn binoculars(
     mut bino: ResMut<Binoculars>,
     players: Query<(Entity, &Player, &Health)>,
     camera: Query<&GlobalTransform, With<PlayerCamera>>,
-    npcs: Query<(Entity, &GlobalTransform, &Health, &Npc), Without<Tagged>>,
+    npcs: Query<(Entity, &GlobalTransform, &Health, &Npc), (Without<Tagged>, Without<NoTag>)>,
     mut commands: Commands,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     perks: Res<crate::progression::Perks>,
     (mut scripted, hud): (ResMut<crate::story::ScriptedPlayer>, Res<crate::map::HudParams>),
     (actors, mut saw, mut reported, mut story_dwell, placed, mut targets): (
-        Query<(Entity, &GlobalTransform, &crate::story_actors::StoryActor)>,
+        Query<(Entity, &GlobalTransform, &crate::story_actors::StoryActor, Has<NoTag>)>,
         MessageWriter<CameraSaw>,
         Local<std::collections::HashSet<u64>>,
         Local<HashMap<u64, f32>>,
@@ -400,7 +405,7 @@ fn binoculars(
         let Ok(cam) = camera.single() else { return };
         let near = actors
             .iter()
-            .map(|(_, gt, a)| (a.id, a.dead, gt.translation() - cam.translation()))
+            .map(|(_, gt, a, _)| (a.id, a.dead, gt.translation() - cam.translation()))
             .min_by(|a, b| a.2.length().total_cmp(&b.2.length()))
             .map(|(id, dead, to)| (id, dead, to.length(), to.normalize_or_zero().dot(cam.forward().as_vec3()).clamp(-1.0, 1.0).acos().to_degrees()));
         info!("camera up; nearest story character (id, dead, m, degrees off): {near:?}");
@@ -439,10 +444,11 @@ fn binoculars(
             seen.push(e);
         }
     }
-    // The story's characters, the dead too (a body to photograph).
+    // The story's characters, the dead too (a body to photograph): taken in
+    // whatever scripts allow, tagged (alive) if they let them be.
     let filter = SpatialQueryFilter::from_excluded_entities([pe]);
     let mut story_seen = Vec::new();
-    for (e, gt, actor) in &actors {
+    for (e, gt, actor, kept) in &actors {
         if reported.contains(&actor.id) {
             continue;
         }
@@ -454,7 +460,7 @@ fn binoculars(
         }
         let Ok(dir) = Dir3::new(to) else { continue };
         if spatial.cast_ray(eye, dir, dist, true, &filter).is_none_or(|hit| hit.entity == e || hit.distance > dist - 0.8) {
-            story_seen.push((actor.id, !actor.dead));
+            story_seen.push((actor.id, !actor.dead && !kept));
         }
     }
     // Things the scripts wait to see (not characters): their middle.

@@ -62,7 +62,7 @@ impl Plugin for StoryPlugin {
                 matches!(state.get(), GameState::Playing | GameState::Paused | GameState::Map | GameState::Journal | GameState::Shop)
             }))
             .add_systems(Update, show_story_ui)
-            .add_systems(Update, apply_sides.after(StorySet));
+            .add_systems(Update, (apply_sides, apply_tags).after(StorySet));
         if std::env::var_os("FC3_STORY_RETRY_TEST").is_some() {
             app.add_systems(Update, retry_inventory_test.after(StorySet).run_if(in_state(GameState::Playing)));
         }
@@ -112,6 +112,31 @@ fn apply_sides(
                 npc.awareness = 0.0;
                 npc.state = crate::npc::NpcState::Idle;
             }
+        }
+    }
+}
+
+/// The tags scripts give and take (`TaggingModifier`): a character kept from
+/// being tagged loses its tag and the camera passes it by; one tagged
+/// outright (WIL_050's guards round Oliver) is marked as if the player had.
+fn apply_tags(
+    host: Option<NonSendMut<StoryHost>>,
+    actors: Query<(Entity, &crate::story_actors::StoryActor, Has<crate::stealth::Tagged>, Has<crate::stealth::NoTag>)>,
+    mut commands: Commands,
+) {
+    let Some(mut host) = host else { return };
+    if host.taggable.is_empty() && host.tag_now.is_empty() {
+        return;
+    }
+    for (e, actor, tagged, kept) in &actors {
+        let allowed = host.taggable.get(&actor.id).copied().unwrap_or(true);
+        if !allowed && !kept {
+            commands.entity(e).insert(crate::stealth::NoTag).remove::<crate::stealth::Tagged>();
+        } else if allowed && kept {
+            commands.entity(e).remove::<crate::stealth::NoTag>();
+        }
+        if allowed && host.tag_now.remove(&actor.id) && !tagged {
+            commands.entity(e).insert(crate::stealth::Tagged);
         }
     }
 }
@@ -647,6 +672,11 @@ pub struct StoryHost {
     pub throw_choice: Option<crate::controls::Action>,
     /// The reinforcement point each called-in merc came from.
     pub called_from: std::collections::HashMap<u64, u64>,
+    /// Whether scripts let each character be tagged
+    /// (`CAPI_Entity.ChangeTagActivation`), and those they tag outright
+    /// (`CAPI_Entity.ValidateTag`) until they are in the world.
+    pub taggable: std::collections::HashMap<u64, bool>,
+    pub tag_now: std::collections::HashSet<u64>,
     /// The game is over: the end credits are due (`PopUpEndOfGame`; the
     /// story waits for `CreditsFinished`).
     pub end_of_game: bool,
@@ -795,6 +825,8 @@ impl StoryHost {
             armies: Default::default(),
             throw_choice: None,
             called_from: Default::default(),
+            taggable: Default::default(),
+            tag_now: Default::default(),
             end_of_game: false,
             damages: Vec::new(),
             spawned_props: Vec::new(),
@@ -2832,6 +2864,24 @@ fn run_story(
                         if let (Ok(id), Ok(army)) = (a(0).parse::<u64>(), a(1).parse::<u8>()) {
                             debug!("story: {id} to army {army}");
                             host.armies.insert(id, army);
+                        }
+                    }
+                    // Tagging allowed on a character (1) or not (0, its tag
+                    // taken off), or its tag put on at once.
+                    "CAPI_Entity.ChangeTagActivation" => {
+                        if let Ok(id) = a(0).parse::<u64>() {
+                            let on = !matches!(a(1).as_str(), "0" | "false");
+                            debug!("story: {id} taggable {on}");
+                            host.taggable.insert(id, on);
+                            if !on {
+                                host.tag_now.remove(&id);
+                            }
+                        }
+                    }
+                    "CAPI_Entity.ValidateTag" => {
+                        if let Ok(id) = a(0).parse::<u64>() {
+                            debug!("story: {id} tagged");
+                            host.tag_now.insert(id);
                         }
                     }
                     // The throwable the player holds ready: a trial's.
