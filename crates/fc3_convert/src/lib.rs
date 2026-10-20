@@ -620,7 +620,9 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             }
         }
     }
-    if opts.only_sectors.is_none() && job.should_write(cache::ENVIRONMENT_REL) {
+    // (Rewritten while it lacks the weather's rhythm.)
+    let env_current = std::fs::read_to_string(job.root().join(cache::ENVIRONMENT_REL)).is_ok_and(|t| t.contains("\nweather "));
+    if opts.only_sectors.is_none() && (job.should_write(cache::ENVIRONMENT_REL) || !env_current) {
         let env = job.vfs.read(fc3_formats::environment::MANAGERS_PATH).and_then(|b| fc3_formats::environment::Environment::parse(&b)).map(|mut e| {
             // The bloom's response, from the world's render settings.
             if let Ok(b) = job.vfs.read(fc3_formats::environment::WORLD_SETTINGS_PATH) {

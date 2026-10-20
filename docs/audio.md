@@ -807,6 +807,10 @@ calls play. The rain (`clouds::rain`) is the region's, its parameter
 loop sent with no parameter (as before) wasn't heard. `FC3_REGION_DEBUG`
 logs the region, whether it was painted, and the bands' intensities.
 
+The regions' template (`Thunder`'s `sndThunder`, `001A4A01`: six claps of 4 to
+7 s, kept as the table's `thunder` line) is the storms' thunder: one clap
+after each lightning flash, 0.5 to 4 s later, quieter indoors.
+
 With no map in the cache, `sound::Region` picks one from the ground:
 
 | condition | region |

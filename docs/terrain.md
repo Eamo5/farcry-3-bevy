@@ -205,6 +205,24 @@ to `world/environment.txt`:
   cover), the fog takes them, and the sky fades into the fog toward the
   horizon. The storm sky had drawn black before: the panorama's shading went
   through the clear-weather cloud lighting dimmed for the storm.
+- The weather's rhythm (`CEnvironmentWeather`, the single-player
+  `Default:StormIntensity.Default`, kept as the environment's `weather`
+  line): a storm comes after a clear spell of 2,000 to 4,840 s and lasts
+  120 to 240 s. `clouds::update_weather` keeps its fair-weather skies
+  (light to heavy cloud, a new one every 4 to 9 minutes: what picks the
+  game's cloud panorama isn't recovered). When a storm is due the clouds
+  gather into heavy cloud at their usual pace, then the storm comes on over
+  its transition (10 s), and its time runs from there. Before, a storm came
+  one sky change in twelve, every few minutes.
+- Lightning (`fLightningIntensity` 24, `fLightningSpeed` 12, every
+  `fLightningMinimumTime` to `fLightningMaximumTime`, 4 to 16 s, while the
+  storm is more than half on): a flash multiplies the sky's light (the
+  ambient light and the light probes, less indoors), the clouds and the
+  storm sky by up to 25, fading at its speed (e^(-12 t)). At night a burst of
+  frames goes from a mean brightness of 36 to 135 at the flash, the storm
+  clouds showing, and back within about 0.4 s. Thunder follows each flash
+  (see `docs/audio.md`). `FC3_LIGHTNING_GAP=<s>` (tests) flashes that
+  often.
 
 ## Render world settings
 

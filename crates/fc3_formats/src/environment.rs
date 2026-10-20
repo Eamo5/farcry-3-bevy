@@ -23,6 +23,22 @@ pub const MANAGERS_PATH: &str = r"worlds\fc3_main\generated\fc3_main.managers.fc
 pub const OUTDOOR: &str = "Preview_Lighting:Preview_";
 /// Prefix of the presets the weather blends to in a storm.
 pub const STORM: &str = "Default:Storm.";
+/// The single-player world's weather (`CEnvironmentWeather`).
+pub const WEATHER: &str = "Default:StormIntensity.Default";
+
+/// The weather's rhythm (`CEnvironmentWeather`): how long clear spells and
+/// storms last (s: least, most), how long a storm takes to come on (s), and
+/// its lightning: how bright a flash is (a multiplier on the light), how
+/// fast it fades (per s) and the wait between flashes (s: least, most).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct WeatherTimes {
+    pub clear: (f32, f32),
+    pub storm: (f32, f32),
+    pub transition: f32,
+    pub lightning: f32,
+    pub lightning_speed: f32,
+    pub lightning_gap: (f32, f32),
+}
 /// Field holding a database template's name.
 const TEMPLATE_NAME: u32 = 0xD97A_7AA9;
 
@@ -195,6 +211,8 @@ pub struct Environment {
     /// centre, fading out by the second (degrees). Their intensity, tint and
     /// cloud masking are constant over the day.
     pub shafts_fade: (f32, f32),
+    /// The weather's rhythm and lightning ([`WEATHER`]).
+    pub weather: Option<WeatherTimes>,
 }
 
 fn knots(o: &Object, name: &str) -> Vec<Arc<Object>> {
@@ -246,7 +264,7 @@ impl Environment {
         let inner = name_hash("Template");
         root.walk(&mut |o, _| {
             if let Some(name) = o.str_h(TEMPLATE_NAME) {
-                if name.starts_with(OUTDOOR) || name.starts_with(STORM) {
+                if name.starts_with(OUTDOOR) || name.starts_with(STORM) || name == WEATHER {
                     if let Some(body) = o.children.iter().find(|c| c.name_hash == inner) {
                         templates.insert(name, body.clone());
                     }
@@ -265,7 +283,20 @@ impl Environment {
         let storm = |kind: &str| templates.get(&format!("{STORM}{kind}"));
         let (storm_sky, storm_cloud, storm_fog) = (storm("Sky"), storm("Cloud"), storm("Fog"));
         let angle = |name: &str, default: f32| rays.and_then(|r| r.f32(name)).unwrap_or(default);
+        let weather = templates.get(WEATHER).map(|w| {
+            // (A zero is stored as a single byte.)
+            let f = |n: &str| w.f32(n).unwrap_or(0.0);
+            WeatherTimes {
+                clear: (f("fClearMinimumTime"), f("fClearMaximumTime")),
+                storm: (f("fStormMinimumTime"), f("fStormMaximumTime")),
+                transition: f("fStormTransitionTime"),
+                lightning: f("fLightningIntensity"),
+                lightning_speed: f("fLightningSpeed"),
+                lightning_gap: (f("fLightningMinimumTime"), f("fLightningMaximumTime")),
+            }
+        });
         Ok(Environment {
+            weather,
             sun_color: gradient(lighting, "gradSunLightColor"),
             moon_color: gradient(lighting, "gradMoonLightColor"),
             light_hdr: curve(lighting, "curveLightHDRMul"),
@@ -339,6 +370,12 @@ impl Environment {
             out += &format!("dof {} {} {} {} {} {}\n", d[0], d[1], d[2], d[3], d[4], d[5]);
         }
         out += &format!("storm_sky_fog {} {}\n", self.storm_sky_fog.0, self.storm_sky_fog.1);
+        if let Some(w) = self.weather {
+            out += &format!(
+                "weather {} {} {} {} {} {} {} {} {}\n",
+                w.clear.0, w.clear.1, w.storm.0, w.storm.1, w.transition, w.lightning, w.lightning_speed, w.lightning_gap.0, w.lightning_gap.1
+            );
+        }
         out
     }
 
@@ -360,6 +397,10 @@ impl Environment {
                 ("veg_sss", [a, b, c, d, f, g, k]) => e.veg_sss = Some([*a, *b, *c, *d, *f, *g, *k]),
                 ("bloom_intensity", [x]) => e.bloom_intensity = *x,
                 ("storm_sky_fog", [a, b]) => e.storm_sky_fog = (*a, *b),
+                ("weather", [a, b, c, d, f, g, h, i, j]) => {
+                    e.weather =
+                        Some(WeatherTimes { clear: (*a, *b), storm: (*c, *d), transition: *f, lightning: *g, lightning_speed: *h, lightning_gap: (*i, *j) })
+                }
                 ("light_hdr", [t, x]) => e.light_hdr.0.push((*t, *x)),
                 ("fog_density", [t, x]) => e.fog_density.0.push((*t, *x)),
                 ("middle_grey", [t, x]) => e.middle_grey.0.push((*t, *x)),
@@ -406,6 +447,14 @@ mod tests {
             storm_fog_sky: 0.5,
             storm_sky_fog: (1.0, 12.0),
             dof: Some([0.001, 0.0, 1500.0, 0.25, 0.01, 0.0]),
+            weather: Some(WeatherTimes {
+                clear: (2000.0, 4840.0),
+                storm: (120.0, 240.0),
+                transition: 10.0,
+                lightning: 24.0,
+                lightning_speed: 12.0,
+                lightning_gap: (4.0, 16.0),
+            }),
             bloom_response: Curve(vec![(0.0, 0.0), (1.0, 0.03), (3.6, 0.43)]),
             veg_sss: Some([0.9, 1.0, 0.0, 4.0, 3.0, 1.5, 0.8]),
             bloom_intensity: 1.0,

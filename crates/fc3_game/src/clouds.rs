@@ -53,15 +53,55 @@ pub struct Weather {
     spin: f32,
     /// Direction the wind blows toward (radians about +Y).
     wind_angle: f32,
+    /// The clear spell left before the next storm (s).
+    storm_in: f32,
+    /// Lightning: the last flash (1 as it strikes, fading), how bright a
+    /// flash is, the wait to the next, and the flashes so far.
+    flash: f32,
+    flash_light: f32,
+    next_flash: f32,
+    pub flashes: u32,
 }
+
+/// Without the game's weather (an old cache): its single-player rhythm.
+const WEATHER_TIMES: fc3_formats::environment::WeatherTimes = fc3_formats::environment::WeatherTimes {
+    clear: (2000.0, 4840.0),
+    storm: (120.0, 240.0),
+    transition: 10.0,
+    lightning: 24.0,
+    lightning_speed: 12.0,
+    lightning_gap: (4.0, 16.0),
+};
 
 impl Weather {
     /// `FC3_WEATHER=<0..4>` pins the sky (0 clear .. 4 storm), for testing.
     fn from_env() -> Self {
         match std::env::var("FC3_WEATHER").ok().and_then(|v| v.parse::<f32>().ok()) {
-            Some(s) => Weather { state: s.clamp(0.0, STORM), target: s.clamp(0.0, STORM), change_in: f32::INFINITY, spin: 0.0, wind_angle: 0.9 },
-            None => Weather { state: 1.0, target: 1.0, change_in: 300.0, spin: 0.0, wind_angle: 0.9 },
+            Some(s) => Weather { state: s.clamp(0.0, STORM), target: s.clamp(0.0, STORM), change_in: f32::INFINITY, ..Weather::calm() },
+            None => Weather::calm(),
         }
+    }
+
+    /// Light cloud, the first storm a clear spell away.
+    fn calm() -> Self {
+        Weather {
+            state: 1.0,
+            target: 1.0,
+            change_in: 300.0,
+            spin: 0.0,
+            wind_angle: 0.9,
+            storm_in: WEATHER_TIMES.clear.0,
+            flash: 0.0,
+            flash_light: 0.0,
+            next_flash: 0.0,
+            flashes: 0,
+        }
+    }
+
+    /// The lightning's light now: what it multiplies the sky's light by,
+    /// less one.
+    pub fn lightning(&self) -> f32 {
+        self.flash * self.flash_light
     }
 
     /// How stormy it is (0..1): darkness, rain and fog.
@@ -303,23 +343,65 @@ fn follow_camera(cameras: Query<&GlobalTransform, With<PlayerCamera>>, mut dome:
     t.translation = c.translation();
 }
 
-/// Picks a new sky every few minutes: mostly fair, sometimes heavy cloud,
-/// occasionally a storm. Changes take a minute or two to roll in.
-fn update_weather(time: Res<Time>, mut weather: ResMut<Weather>, mut rng: ResMut<Rng>) {
+/// A fair-weather sky every few minutes: mostly light cloud, sometimes
+/// heavy. A storm comes after a clear spell as long as the game's weather
+/// says (`CEnvironmentWeather`: 2,000 to 4,840 s), gathers into heavy
+/// cloud, comes on over its transition (10 s) and lasts as long as it says
+/// (120 to 240 s), its lightning striking every few seconds (4 to 16).
+fn update_weather(time: Res<Time>, mut weather: ResMut<Weather>, mut rng: ResMut<Rng>, env: Res<crate::sky::GameEnvironment>) {
     let dt = time.delta_secs();
-    weather.change_in -= dt;
-    if weather.change_in <= 0.0 {
-        weather.target = match rng.f32() {
-            r if r < 0.25 => 0.0,
-            r if r < 0.6 => 1.0,
-            r if r < 0.8 => 2.0,
-            r if r < 0.92 => 3.0,
-            _ => STORM,
-        };
-        weather.change_in = if weather.target == STORM { rng.range(120.0, 240.0) } else { rng.range(240.0, 540.0) };
+    let mut times = env.0.as_ref().and_then(|e| e.weather).unwrap_or(WEATHER_TIMES);
+    // `FC3_LIGHTNING_GAP=<s>` (tests): a flash that often.
+    if let Some(gap) = std::env::var("FC3_LIGHTNING_GAP").ok().and_then(|v| v.parse::<f32>().ok()) {
+        times.lightning_gap = (gap, gap);
     }
-    let step = dt / 90.0;
+    let fair = |rng: &mut Rng| match rng.f32() {
+        r if r < 0.27 => 0.0,
+        r if r < 0.65 => 1.0,
+        r if r < 0.87 => 2.0,
+        _ => 3.0,
+    };
+    let range = |rng: &mut Rng, (a, b): (f32, f32)| rng.range(a, b.max(a));
+    // (`FC3_WEATHER` pins it.)
+    if weather.change_in.is_finite() {
+        if weather.target == STORM {
+            // The storm's time runs once it has gathered.
+            if weather.state >= 3.0 {
+                weather.change_in -= dt;
+            }
+            if weather.change_in <= 0.0 {
+                weather.target = fair(&mut rng);
+                weather.change_in = rng.range(240.0, 540.0);
+                weather.storm_in = range(&mut rng, times.clear);
+            }
+        } else {
+            weather.change_in -= dt;
+            weather.storm_in -= dt;
+            if weather.storm_in <= 0.0 {
+                weather.target = STORM;
+                weather.change_in = range(&mut rng, times.storm);
+            } else if weather.change_in <= 0.0 {
+                weather.target = fair(&mut rng);
+                weather.change_in = rng.range(240.0, 540.0);
+            }
+        }
+    }
+    // Clouds come and go over a minute or two; a storm comes on and clears
+    // over its transition.
+    let stormy = weather.state >= 3.0 && (weather.target == STORM || weather.state > 3.0);
+    let step = dt / if stormy { times.transition.max(1.0) } else { 90.0 };
     weather.state += (weather.target - weather.state).clamp(-step, step);
+    // Lightning while the storm is on: each flash fading at its speed.
+    weather.flash *= (-times.lightning_speed.max(0.1) * dt).exp();
+    weather.flash_light = times.lightning;
+    if weather.storm() > 0.5 && times.lightning > 0.0 {
+        weather.next_flash -= dt;
+        if weather.next_flash <= 0.0 {
+            weather.flash = 1.0;
+            weather.flashes = weather.flashes.wrapping_add(1);
+            weather.next_flash = range(&mut rng, times.lightning_gap);
+        }
+    }
     // About one turn every two hours.
     weather.spin = (weather.spin + dt / 7200.0).fract();
     // The wind veers slowly.
@@ -353,7 +435,7 @@ fn update_clouds(
     // dusk to moonlit grey; expressed as luminance under the current exposure.
     let display = 0.08 + 0.44 * smoothstep(-0.15, 0.12, elevation);
     let ev100 = scene.ev100 - weather.exposure_shift();
-    let luminance = display / crate::sky::exposure_scale(ev100) * (1.0 - 0.6 * weather.storm());
+    let luminance = display / crate::sky::exposure_scale(ev100) * (1.0 - 0.6 * weather.storm()) * (1.0 + weather.lightning());
     let colour = if elevation > -0.12 {
         // Low sun reddens the light.
         Vec3::new(1.0, 0.55, 0.32).lerp(Vec3::new(1.0, 0.97, 0.92), smoothstep(-0.02, 0.3, elevation))
@@ -386,7 +468,9 @@ fn update_clouds(
             .as_ref()
             .and_then(|e| {
                 let shift = weather.exposure_shift() + 0.8 * indoors.0;
-                Some(storm_cloud(e, t, &scene, shift)?.extend((storm_sky(e, t, &scene, shift)? * e.storm_fog_sky).max(1e-4)))
+                // (Lit up by a lightning flash.)
+                let flash = 1.0 + weather.lightning();
+                Some((storm_cloud(e, t, &scene, shift)? * flash).extend((storm_sky(e, t, &scene, shift)? * e.storm_fog_sky * flash).max(1e-4)))
             })
             .unwrap_or(Vec4::ZERO),
         storm_fog: env.0.as_ref().map_or(Vec4::ZERO, |e| Vec4::new(e.storm_sky_fog.0, e.storm_sky_fog.1, 0.0, 0.0)),
@@ -412,9 +496,11 @@ fn weather_light(
         light.illuminance *= (1.0 - 0.3 * overcast) * (1.0 - 0.75 * storm);
     }
     let inside = indoors.0;
+    // A lightning flash lights everything from the sky (less indoors).
+    let flash = 1.0 + weather.lightning() * (1.0 - 0.8 * inside);
     // `advance_time` set this frame's ambient level; warm it toward bounce light.
     ambient.color = Color::srgb(0.75, 0.85, 1.0).mix(&Color::srgb(1.0, 0.86, 0.7), inside);
-    ambient.brightness *= 1.0 + 0.6 * inside;
+    ambient.brightness *= (1.0 + 0.6 * inside) * flash;
     // `FC3_SKY_FILL` overrides it (tuning).
     // With the game's grade the probe is already as bright as the game's.
     let fill: f32 = std::env::var("FC3_SKY_FILL").ok().and_then(|v| v.parse().ok()).unwrap_or(if scene.game.is_some() { 1.0 } else { SKY_FILL });
@@ -423,7 +509,7 @@ fn weather_light(
         // atmosphere only copies when it first makes it): a tropical day's
         // bright fill by day, dimmer in storms and indoors.
         let day = smoothstep(-0.05, 0.3, tod.sun_dir().y);
-        let intensity = (1.0 + (fill - 1.0) * day) * (1.0 - 0.45 * storm) * (1.0 - 0.65 * inside);
+        let intensity = (1.0 + (fill - 1.0) * day) * (1.0 - 0.45 * storm) * (1.0 - 0.65 * inside) * flash;
         if let Some(mut env) = env {
             if (env.intensity - intensity).abs() > 0.005 {
                 env.intensity = intensity;

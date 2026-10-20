@@ -1020,7 +1020,7 @@ fn ambience(
     mut loops: MessageWriter<LoopSfx>,
     mut sfx: MessageWriter<PlaySfx>,
     (mut next_bird, mut outdoors, mut beds, mut winds): (Local<f32>, Local<Option<f32>>, Local<Fades>, Local<Fades>),
-    (mut due, mut recent): (Local<[f32; 4]>, Local<[Vec<f32>; 4]>),
+    (mut due, mut recent, mut thunder): (Local<[f32; 4]>, Local<[Vec<f32>; 4]>, Local<(u32, Vec<f32>)>),
     mut rng: ResMut<Rng>,
     (probe, tod, driving, rooms): (crate::surfaces::SurfaceProbe, Res<crate::sky::TimeOfDay>, Res<crate::vehicles::Driving>, Option<Res<crate::mixer::Rooms>>),
     (mut regions, weather): (ResMut<SoundRegions>, Option<Res<crate::clouds::Weather>>),
@@ -1071,6 +1071,23 @@ fn ambience(
     for (event, level) in winds.step(wind, 1.0, dt) {
         let params = [(WIND_SPEED, kmh), (0, 0.0), (0, 0.0), (0, 0.0)];
         loops.write(LoopSfx { key: 0x5749_0000_0000_0000 | event as u64, event, at: None, volume: out * level * 0.35, params, ..default() });
+    }
+    // Thunder after each lightning flash, as far off as it takes to come
+    // (the regions' template's).
+    let flashes = weather.as_deref().map_or(0, |w| w.flashes);
+    if flashes != thunder.0 {
+        thunder.0 = flashes;
+        let delay = rng.range(0.5, 4.0);
+        thunder.1.push(delay);
+    }
+    let mut struck = 0;
+    thunder.1.retain_mut(|t| {
+        *t -= dt;
+        struck += (*t <= 0.0) as u32;
+        *t > 0.0
+    });
+    if struck > 0 && regions.table.thunder != 0 {
+        sfx.write(PlaySfx { event: regions.table.thunder, at: None, volume: 0.4 + 0.6 * out });
     }
     if regions.table.regions.is_empty() {
         // (An older cache: the ground's pick, the surf and its calls.)
