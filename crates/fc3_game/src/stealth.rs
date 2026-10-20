@@ -186,25 +186,65 @@ fn load_rock(mut commands: Commands, server: Res<AssetServer>) {
 pub(crate) struct RockAimTest(pub Option<Vec3>);
 
 fn rock_aim(from: Vec3, target: Vec3) -> Option<Vec3> {
+    rock_aims(from, target).into_iter().next()
+}
+
+/// The directions a rock thrown from `from` lands on `target` by, the low
+/// arc first (it keeps under roofs), then the high one (over what's in the
+/// low one's way: JAS_020's well, before the guard's window).
+fn rock_aims(from: Vec3, target: Vec3) -> Vec<Vec3> {
     let horizontal = (target - from).with_y(0.0);
     let distance = horizontal.length();
-    if distance < 0.6 { return None; }
+    if distance < 0.6 {
+        return Vec::new();
+    }
     let heading = horizontal / distance;
-    let mut best = None;
-    let mut error = f32::MAX;
-    // Include the actual hand offset and upward launch bias. Prefer the low
-    // arc, which avoids roofs; physical collisions still decide the impact.
-    for i in 0..=1300 {
-        let angle = -1.2 + i as f32 * 0.002;
+    // Include the actual hand offset and upward launch bias. Each arc is the
+    // angle where the rock's height there crosses the target's.
+    let height = |angle: f32| {
         let f = heading * angle.cos() + Vec3::Y * angle.sin();
         let velocity = (f + Vec3::Y * 0.12).normalize() * 17.0;
         let flight = (distance - angle.cos() * 0.5) / velocity.with_y(0.0).length();
-        let y = from.y + f.y * 0.5 - 0.1 + velocity.y * flight - 4.905 * flight * flight;
-        let miss = (y - target.y).abs();
-        if miss < error { error = miss; best = Some(f); }
-        if miss < 0.025 { return Some(f); }
+        (f, from.y + f.y * 0.5 - 0.1 + velocity.y * flight - 4.905 * flight * flight - target.y)
+    };
+    let mut arcs = Vec::new();
+    let (mut best, mut error) = (None, f32::MAX);
+    let mut last: Option<(Vec3, f32)> = None;
+    // (Up to 89 degrees: a near throw's high arc is almost straight up.)
+    for i in 0..=1375 {
+        let (f, miss) = height(-1.2 + i as f32 * 0.002);
+        if miss.abs() < error {
+            (best, error) = (Some(f), miss.abs());
+        }
+        if let Some((pf, pm)) = last {
+            if pm.signum() != miss.signum() {
+                arcs.push(if pm.abs() < miss.abs() { pf } else { f });
+            }
+        }
+        last = Some((f, miss));
     }
-    best.filter(|_| error < 0.15)
+    if arcs.is_empty() {
+        arcs.extend(best.filter(|_| error < 0.15));
+    }
+    arcs
+}
+
+/// Where a rock thrown along `f` from `from` flies on its way to a point
+/// that far off (as `rock_aims` reckons its flight), in steps.
+fn rock_path(from: Vec3, f: Vec3, distance: f32) -> Vec<Vec3> {
+    let mut at = from + f * 0.5 - Vec3::Y * 0.1;
+    let mut velocity = (f + Vec3::Y * 0.12).normalize() * 17.0;
+    let heading = f.with_y(0.0).normalize_or_zero();
+    let mut path = vec![at];
+    for _ in 0..400 {
+        velocity.y -= 9.81 * 0.02;
+        at += velocity * 0.02;
+        path.push(at);
+        if (at - from).dot(heading) >= distance {
+            break;
+        }
+    }
+    path
 }
 
 fn aim_test_rock(
@@ -213,8 +253,15 @@ fn aim_test_rock(
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
     mut actions: ResMut<ActionState>,
     spatial: SpatialQuery,
+    scripted: Res<crate::story::ScriptedPlayer>,
 ) {
     let Some(mut at) = target.0 else { return };
+    // (No rock to throw, this block's player not having one: given up.)
+    if !scripted.has_gadget("gadgets:FC3/Rock") {
+        debug!("story rock test: no rock to throw at {at:?}");
+        target.0 = None;
+        return;
+    }
     let (Ok((entity, mut p)), Ok(cam)) = (players.single_mut(), cameras.single()) else { return };
     if p.spawning || p.velocity.length() > 0.2 { return; }
     // Trigger centres are often above a sloped floor. Aim at the actual
@@ -224,7 +271,19 @@ fn aim_test_rock(
     if let Some(hit) = spatial.cast_ray(origin, Dir3::NEG_Y, 8.0, true, &SpatialQueryFilter::from_excluded_entities([entity])) {
         at.y = origin.y - hit.distance + 0.02;
     }
-    let Some(f) = rock_aim(cam.translation(), at) else {
+    // (The first arc nothing stands in the way of short of the target.)
+    let eye = cam.translation();
+    let distance = (at - eye).with_y(0.0).length();
+    let filter = SpatialQueryFilter::from_excluded_entities([entity]);
+    let clear = |f: &Vec3| {
+        rock_path(eye, *f, distance).windows(2).all(|w| {
+            let (a, b) = (w[0], w[1]);
+            let Ok(dir) = Dir3::new(b - a) else { return true };
+            spatial.cast_ray(a, dir, a.distance(b), true, &filter).is_none_or(|hit| (a + *dir * hit.distance).distance(at) < 1.0)
+        })
+    };
+    let arcs = rock_aims(eye, at);
+    let Some(f) = arcs.iter().find(|f| clear(f)).or(arcs.first()).copied() else {
         warn!("story rock test: target {at:?} is out of throwing range from {:?}", cam.translation());
         target.0 = None;
         return;
@@ -251,6 +310,19 @@ fn throw_rock(
 ) {
     *cooldown -= time.delta_secs();
     let Ok((p, h)) = players.single() else { return };
+    if actions.just_pressed(Action::ThrowRock) {
+        debug!(
+            "rock asked for: ignored {}, gadget {}, cooldown {:.1}, swimming {}, driving {}, noclip {}, mounted {}, hands busy {}",
+            scripted.ignored.contains("throw_rock"),
+            scripted.has_gadget("gadgets:FC3/Rock"),
+            *cooldown,
+            p.swimming,
+            p.driving,
+            p.noclip,
+            p.mounted.is_some(),
+            busy.busy()
+        );
+    }
     if !actions.just_pressed(Action::ThrowRock)
         || scripted.ignored.contains("throw_rock")
         || !scripted.has_gadget("gadgets:FC3/Rock")
@@ -548,6 +620,24 @@ mod tests {
             assert!(nearest < 0.08, "missed {target:?} by {nearest}");
         }
         assert!(rock_aim(from, Vec3::new(100.0, 0.0, 0.0)).is_none());
+    }
+
+    #[test]
+    fn a_rock_has_a_low_arc_and_a_high_one_and_both_reach_the_target() {
+        let from = Vec3::new(0.0, 2.0, 0.0);
+        let target = Vec3::new(0.0, 0.0, -7.0);
+        let arcs = rock_aims(from, target);
+        assert_eq!(arcs.len(), 2, "{arcs:?}");
+        assert!(arcs[0].y < arcs[1].y);
+        let mut tops = Vec::new();
+        for f in arcs {
+            let path = rock_path(from, f, 7.0);
+            let end = *path.last().unwrap();
+            assert!(end.distance(target) < 0.5, "{f:?} ends at {end:?}");
+            tops.push(path.iter().map(|p| p.y).fold(f32::MIN, f32::max));
+        }
+        // (The high one climbs well over what stands in the low one's way.)
+        assert!(tops[1] > tops[0] + 2.0, "{tops:?}");
     }
 
     fn player() -> Player {

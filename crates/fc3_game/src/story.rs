@@ -608,6 +608,8 @@ pub struct StoryHost {
     /// Tests (`FC3_STORY_AUTOPILOT`): seconds since anything happened, and
     /// the triggers already walked into.
     quiet: f32,
+    /// When the autopilot last threw a rock to lure a guard off (tests).
+    distracted_at: f32,
     /// What last kept the story from going quiet (tests: the stall dump).
     stirred_by: String,
     /// When the autopilot last went near a place a script waits for the
@@ -797,6 +799,7 @@ impl StoryHost {
             scene_in_block: false,
             scene_in_last: false,
             quiet: 0.0,
+            distracted_at: f32::MIN,
             stirred_by: String::new(),
             near_at: HashMap::new(),
             replays: Default::default(),
@@ -2088,6 +2091,7 @@ fn run_story(
                 .map(to_bevy).unwrap_or(at + (t.translation - at).with_y(0.0).normalize_or_zero() * 3.0);
             info!("story autopilot: aim a rock to distract {} at {target:?}", data.name_of(id).unwrap_or("?"));
             host.used.insert((id, "distract".into()));
+            host.distracted_at = time.elapsed_secs();
             if let Some(test) = rock_test.as_mut() { test.0 = Some(target); }
             host.quiet = 0.0;
         } else if let Some((id, radius, point)) = host
@@ -3645,6 +3649,9 @@ const TARGET_STICK: f32 = 4.0;
 /// and how long the story is quiet (s) before one a block counts down is
 /// gone after wherever he is (HUR_040 B40's last boat crew, off the beach).
 const FIGHT_REACH: f32 = 150.0;
+/// How long (s) after the autopilot throws a rock to lure a guard it leaves
+/// those not yet fighting alone (they've gone to look, as was wanted).
+const LURE_GRACE: f32 = 20.0;
 const FAR_FOE_AFTER: f32 = 30.0;
 
 /// How far (m) from a battlefield's middle its strategic point may be.
@@ -4042,6 +4049,11 @@ fn autopilot_loot(
                     && (!actor.seated || counted.contains(&actor.id))
                     && !skipped.contains_key(&actor.id)
                     && npc.hostile()
+                    // (Not one it threw a rock to lure off, gone to look:
+                    // JAS_020's guard by the window; nor, a while after a
+                    // throw, any other the rock drew. Only those who fight.)
+                    && (npc.state == crate::npc::NpcState::Combat
+                        || (!host.used.contains(&(actor.id, "distract".to_string())) && now - host.distracted_at > LURE_GRACE))
                     && (to_kill.contains(&actor.id) || wanted.contains(&actor.id) || npc.state != crate::npc::NpcState::Idle || sniping)
                     && (near(t) < FIGHT_REACH || wanted.contains(&actor.id) || (to_kill.contains(&actor.id) && host.quiet > FAR_FOE_AFTER))
             })

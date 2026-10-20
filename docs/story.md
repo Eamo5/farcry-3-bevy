@@ -1545,6 +1545,22 @@ labels and reordered/removed previous weapons are covered by regressions.
 
 ### Physical opening-rock investigation (in progress)
 
+Latest (from a new game's B15 checkpoint): the autopilot's rock landed
+3.2 m short. A well between the player and the window stood in the low
+arc's way. The aim now finds both arcs (`rock_aims`, up to 89 degrees) and
+traces each (`rock_path`). It takes the first that nothing blocks short of
+the target, here the high one, which lands on the target.
+
+The autopilot then shot the guard the rock had drawn, as he wasn't idle
+any more. That failed B15 and restarted it. It now leaves a guard it lured
+alone unless he fights, and, for 20 s after a throw (`LURE_GRACE`), any
+other guard not yet fighting. It gives up a throw when the player holds no
+rock.
+
+From the checkpoint, B15's lure works, the execution scene plays and
+JAS_020 completes. JAS_030 starts. The notes below are the earlier
+investigation.
+
 The opening autopilot now requests an aim toward the nearest enabled authored
 trigger and presses the ordinary Throw Rock action.
 Launch offsets, projectile gravity/collisions and impact noise remain in the
