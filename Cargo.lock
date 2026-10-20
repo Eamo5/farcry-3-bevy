@@ -5891,7 +5891,6 @@ dependencies = [
 [[package]]
 name = "ruffle_core"
 version = "0.7.1"
-source = "git+https://github.com/ruffle-rs/ruffle?rev=2372a4e148a67d68efd796f4477b3cddd4f880cd#2372a4e148a67d68efd796f4477b3cddd4f880cd"
 dependencies = [
  "async-channel",
  "bitflags 2.13.2",

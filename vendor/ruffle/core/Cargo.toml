@@ -1,0 +1,95 @@
+[package]
+name = "ruffle_core"
+authors = ["Ruffle LLC <ruffle@ruffle.rs>"]
+edition = "2024"
+homepage = "https://ruffle.rs"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ruffle-rs/ruffle"
+version = "0.7.1"
+
+[dependencies]
+linkme = { version = "0.3", optional = true }
+byteorder = "1.5"
+bitstream-io = "4.10.0"
+flate2 = "1.1.9"
+fnv = "1.0.7"
+gc-arena = { version = "0.7.0", features = ["enum-map", "hashbrown", "indexmap", "slotmap", "smallvec"] }
+slotmap = "1.1.1"
+indexmap = "2.13.0"
+tracing = "0.1.43"
+ruffle_common = { git = "https://github.com/ruffle-rs/ruffle", rev = "2372a4e148a67d68efd796f4477b3cddd4f880cd" }
+ruffle_macros = { git = "https://github.com/ruffle-rs/ruffle", rev = "2372a4e148a67d68efd796f4477b3cddd4f880cd" }
+naga-agal = { path = "../../naga-agal" }
+ruffle_render = { git = "https://github.com/ruffle-rs/ruffle", rev = "2372a4e148a67d68efd796f4477b3cddd4f880cd", features = ["tessellator"] }
+ruffle_video = { git = "https://github.com/ruffle-rs/ruffle", rev = "2372a4e148a67d68efd796f4477b3cddd4f880cd" }
+ruffle_wstr = { git = "https://github.com/ruffle-rs/ruffle", rev = "2372a4e148a67d68efd796f4477b3cddd4f880cd" }
+swf = { git = "https://github.com/ruffle-rs/ruffle", rev = "2372a4e148a67d68efd796f4477b3cddd4f880cd" }
+bitflags = "2.12.1"
+smallvec = { version = "1.15.1", features = ["const_new", "union"] }
+num-traits = "0.2.19"
+num-derive = "0.4.2"
+quick-xml = "0.37.5"
+url = "2.5.8"
+percent-encoding = "2.3.2"
+thiserror = "2.0.18"
+chrono = { version = "0.4.44", default-features = false, features = ["clock"] }
+web-time = "1.1.0"
+encoding_rs = "0.8.35"
+rand = { version = "0.10.1", default-features = false, features = ["std", "sys_rng"] }
+serde = "1.0.228"
+serde_json = { version = "1.0.150", features = ["preserve_order"] }
+nellymoser-rs = { git = "https://github.com/ruffle-rs/nellymoser", rev = "073eb48d907201f46dea0c8feb4e8d9a1d92208c", optional = true }
+regress = { git = "https://github.com/ruffle-rs/regras3", rev = "6d48179d6bd448f2cc66b76352c9f048dde968d1" }
+flash-lso = { git = "https://github.com/ruffle-rs/rust-flash-lso", rev = "61b717248aae853a4f5d8a103eba704268d286c8" }
+lzma-rs = { version = "0.3.0", optional = true }
+dasp = { version = "0.11.0", features = ["interpolate", "interpolate-linear", "signal"], optional = true }
+symphonia = { version = "0.5.5", default-features = false, optional = true }
+enumset = "1.1.13"
+bytemuck = { version = "1.25.0", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive"], optional = true }
+realfft = "3.5.0"
+hashbrown = "0.17.1"
+scopeguard = "1.2.0"
+fluent-templates = "0.13.3"
+egui = { version = "0.36.1", optional = true }
+egui_extras = { version = "0.36.1", default-features = false, optional = true }
+png = { version = "0.18.1", optional = true }
+flv-rs = { git = "https://github.com/ruffle-rs/ruffle", rev = "2372a4e148a67d68efd796f4477b3cddd4f880cd" }
+async-channel = "2.5.0"
+jpegxr = { git = "https://github.com/ruffle-rs/jpegxr", rev = "86cc1749d493288f53d7290ac3eb7082c475b5d9", optional = true }
+image = { version = "0.25.10", default-features = false, features = ["tiff"] }
+enum-map = "2.7.3"
+ttf-parser = "0.25"
+num-bigint = "0.4"
+unicode-segmentation = "1.13.3"
+id3 = "1.17.0"
+either = "1.16.0"
+chardetng = "0.1.17"
+tracy-client = { version = "0.18.4", optional = true, default-features = false }
+itertools = "0.14.0"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies.futures]
+version = "0.3.32"
+
+[target.'cfg(target_family = "wasm")'.dependencies.wasm-bindgen-futures]
+version = "0.4.70"
+
+[features]
+default = []
+lzma = ["lzma-rs", "swf/lzma"]
+avm_debug = []
+tracy_avm = ["dep:tracy-client"]
+timeline_debug = []
+mp3 = ["symphonia", "symphonia/mp3"]
+aac = ["symphonia", "symphonia/aac"]
+nellymoser = ["nellymoser-rs"]
+audio = ["dasp"]
+known_stubs = ["linkme", "serde"]
+default_compatibility_rules = []
+egui = ["dep:egui", "dep:egui_extras", "png"]
+jpegxr = ["dep:jpegxr", "ruffle_render/jpegxr", "lzma"]
+default_font = []
+serde = ["serde/derive"]
+
+[build-dependencies]
+build_playerglobal = { path = "../../build_playerglobal" }

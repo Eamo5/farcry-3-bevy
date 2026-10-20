@@ -24,11 +24,12 @@ flate2 = "1"
 bevy_mesh = { path = "vendor/bevy_mesh" }
 
 # Ruffle's AGAL shader compiler at naga 29, to match the vendored renderer,
-# and its playerglobal builder reading a pre-built ABC instead of running
-# Java (see vendor/README.md).
+# its playerglobal builder reading a pre-built ABC instead of running Java,
+# and its core laying out images inline in text (see vendor/README.md).
 [patch."https://github.com/ruffle-rs/ruffle"]
 naga-agal = { path = "vendor/naga-agal" }
 build_playerglobal = { path = "vendor/build_playerglobal" }
+ruffle_core = { path = "vendor/ruffle/core" }
 
 [profile.dev]
 opt-level = 1

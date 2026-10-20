@@ -128,10 +128,30 @@ under the character id the movie gave the external font.
 
 ## Runtime (Ruffle)
 
-`crates/fc3_ui` plays a movie with `ruffle_core` (pinned to Ruffle
-`2372a4e1`) and draws it with the vendored `ruffle_render_wgpu`, taken back
-to the wgpu 29 that Bevy uses (see `vendor/README.md`); `fc3ui shot
-<movie.swf> <out.png> [frames] [w h]` renders a movie off screen.
+`crates/fc3_ui` plays a movie with `ruffle_core` (Ruffle `2372a4e1`,
+vendored in `vendor/ruffle/core`) and draws it with the vendored
+`ruffle_render_wgpu`, taken back to the wgpu 29 that Bevy uses (see
+`vendor/README.md`); `fc3ui shot <movie.swf> <out.png> [frames] [w h]`
+renders a movie off screen. `fc3ui hud` loads a movie over the engine shim;
+`FC3UI_PRELOAD` loads others first (`MainHud.feu@1`, as the game does),
+`FC3UI_LEVEL` puts it at its own level and `FC3UI_CALL` calls its functions
+(`_level3.setTutorial|Title|Text|false;_level3.showTutorial`).
+
+**Icons in text.** The game's strings put icons in their text as
+`<img src="MC_TX_...">`: the bullets of the tutorials' lists, the map's icons
+in the handbook and the tutorials (an outpost, fast travel, a safe house),
+the found letter's or relic's in the loot messages. Scaleform draws such an
+image inline: in the line like a word, the movie's symbol exported under
+that name at its own size. Ruffle reads the tag but lays out nothing for it
+(Flash floats an image at the margin instead, from a URL), so its core is
+patched to (`fc3 patch` in `html/layout.rs`, `html/layout/context.rs`,
+`display_object/edit_text.rs`, `graphic.rs` and `movie_clip.rs`): the image
+takes its symbol's width (and its `hspace` either side) in the line, wraps
+like a word, is centred on the line's height, which grows to hold it, and
+is drawn as the shapes the symbol's first frame places (the icons are each a
+sprite holding one bitmap-filled shape). A line begun by an image takes the
+next line's size from the text going on, not the image's placeholder (a
+2 px space).
 
 `ruffle_core`'s build compiles Ruffle's ActionScript 3 globals with a Java
 tool, even though these movies are ActionScript 2 (the player sets AVM2 up
@@ -395,7 +415,7 @@ only what changed (and everything again until the movies have loaded):
   (`MissionCard::Event`), all the game's strings: the outpost's by how it
   fell (154986 undetected, 154987 no alarms, 111340 else, each with its XP
   line) over "%d of 34" (156253), the tower's 156250 over "%d of 18"
-  (156252). Their counts' icons (`<img>` in the text) aren't drawn.
+  (156252), each with its icon in the text (see **Icons in text**).
 * **Saving**: the HUD and the pause menu each load `SaveGame\SaveGame.feu`,
   a spinner; `ShowSaving 1 <text>` brings it in as a save is written
   (`save::GameSaved`: the game's "Checkpoint reached", 159959, at a story

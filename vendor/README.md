@@ -30,6 +30,18 @@ texture presents itself, and Pixel Bender inputs wrap a texture in
 `RawTexture` for the textures of Ruffle's wgpu, not this one. naga is built
 with `wgsl-out`, as Ruffle's workspace does.
 
+`ruffle/core` is `ruffle_core` itself (same revision and licence), patched
+in for the git one so that images inline in text (`<img src="...">` naming
+an exported symbol, as the game's strings use for their icons) are laid out
+and drawn as Scaleform does: in the line, the symbol at its own size. The
+changes are marked `fc3 patch` (`src/html/layout.rs`,
+`src/html/layout/context.rs`, `src/display_object/edit_text.rs`,
+`src/display_object/graphic.rs`, `src/display_object/movie_clip.rs`; see
+`docs/ui.md`). It sits at `ruffle/core` so that its build script finds its
+ActionScript sources where `build_playerglobal` looks, `../core/src` from
+the crate. Its manifest names versions and Ruffle's other crates at the
+revision instead of the workspace's; the lock file resolves the same.
+
 `build_playerglobal` is Ruffle's build helper for `ruffle_core` (same
 revision and licence), patched in the same way. Upstream, it compiles
 Ruffle's ActionScript 3 globals (`core/src/avm2/globals/*.as`) with

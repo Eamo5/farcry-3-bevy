@@ -48,7 +48,17 @@ fn main() -> Result<()> {
             host.answer("GetLanguage", "english");
             host.answer("Platform", "PC");
             step(&mut host);
-            host.load(movie, 1);
+            // FC3UI_PRELOAD="UI\...\MainHud.feu@2;...": movies loaded first,
+            // at their levels (the HUD's, whose fonts the others use).
+            for entry in std::env::var("FC3UI_PRELOAD").unwrap_or_default().split(';').filter(|e| !e.is_empty()) {
+                let (path, level) = entry.rsplit_once('@').map_or((entry, 2), |(p, l)| (p, l.parse().unwrap_or(2)));
+                host.load(path, level);
+                for _ in 0..5 {
+                    step(&mut host);
+                }
+            }
+            // (FC3UI_LEVEL: the movie's level, 1 unless said.)
+            host.load(movie, std::env::var("FC3UI_LEVEL").ok().and_then(|l| l.parse().ok()).unwrap_or(1));
             for _ in 0..frames.max(1) {
                 step(&mut host);
             }
@@ -120,6 +130,24 @@ fn main() -> Result<()> {
                 // (FC3UI_AFTER: frames to run on after, for what plays.)
                 let after: u32 = std::env::var("FC3UI_AFTER").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
                 for _ in 0..after {
+                    step(&mut host);
+                }
+            }
+            // FC3UI_CALL="_level1.setTutorial|Title|Text|false;_level1.showTutorial":
+            // the movie's functions to call (arguments by "|", "true" and
+            // "false" as booleans, the rest as text).
+            for call in std::env::var("FC3UI_CALL").unwrap_or_default().split(';').filter(|c| !c.is_empty()) {
+                let mut parts = call.split('|');
+                let Some(path) = parts.next() else { continue };
+                let args = parts
+                    .map(|a| match a {
+                        "true" => fc3_ui::ExternalValue::Bool(true),
+                        "false" => fc3_ui::ExternalValue::Bool(false),
+                        _ => fc3_ui::text_value(a),
+                    })
+                    .collect();
+                println!("{path} -> {:?}", host.call_function(path, args));
+                for _ in 0..frames.max(1) {
                     step(&mut host);
                 }
             }
