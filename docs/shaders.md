@@ -414,7 +414,25 @@ steam when water puts one out (`psFireWaterSmokeParticles`: `water_smoke`). It
 also names the start and stop sounds (`001B0477`, `001B0479`). The torch burns
 on a person's chest (the `Spine2` bone; an animal's at its body's middle) and
 stays upright as they move and fall. The component holds no numbers, so the
-6 s burn and its 30 harm a second are ours.
+6 s burn and its 30 harm a second are ours. What sets one alight is the
+game's: a character's counters (`CFCXCountersComponentAI.Burn`) give the
+fire it takes before it catches (`fAccumulatedDamageBeforeBurning`) within
+a time (`fBurnDamageAccumulateTime`): a merc 25 in 8 s, a villager or
+companion 50 (the villagers' base prototype's, for those of no archetype),
+counted as their burn multipliers take it. An animal catches at once.
+
+The player catches fire as the counters service says
+(`StatsAndCounters.Health`, whose notes in FC3.dll give the meaning):
+45 of fire's harm within 8 s (`fBurnOnFireDamageThreshold`,
+`fBurnOnFireTimeLimit`). Alight, he takes 5 a second more
+(`fBurnOnFireDamageRate`), until he has been out of the flames for 2 s
+(`fBurnDamageExpiryDelay`, whose note is a copy of the rate's, so this
+reading is ours) or goes into water. Fire's harm to him is scaled by the
+level's `StimBurnMultiplierPerLevel` (casual 1.2 to infamous 0.3), and the
+fireproof syringe keeps him from catching. Seen (`FC3_GROUND_FIRE_TEST=<s>`
+sets the ground alight under the player and everyone within 40 m): 15 a
+second in the flames, alight at 3.4 s, 20 a second then, out 2 s after the
+flames died, 60 lost in all. The two test guards caught at 2 s.
 
 A person alight panics. They drop the fight and run blind, 5 to 10 m this way
 and that, on the game's burning move (`pawn_generic_burn`: the
@@ -514,8 +532,12 @@ drug fields are `Region/Cannabis`). Animals within a fire's `Fire_FearStim` radi
 it, unless their personality ignores fear (`bIgnorFearStim`). One alight
 bolts this way and that until it's out. Without the profiles, a patch burns
 7 to 11 s and its smoke lingers 12 to 20 s. Our flames and smoke stand in
-when nothing is cached. Not yet: the profiles' damage (`fFireDmg`,
-`fDmgBuffer`: their units are unknown).
+when nothing is cached. A burning patch hurts whoever stands in it its
+profile's `fFireDmg` a second (15 for every region; 28 without the
+profiles). A splash where the ground doesn't burn hurts as its sticky
+stream says (a flamer's and a Disciple's molotov's 1, the rest 15). Not
+read: `fDmgBuffer` (0.5 to 10 on regions, 0 to 100 on objects). FC3.dll
+registers it with no note, and nothing found reads it beside the damage.
 
 Sticky fire (`sticky_fire`). The fire manager's sticky streams
 (`firestickystream.lib`, kept as `particles/fire-sticky.txt`) say what fire a

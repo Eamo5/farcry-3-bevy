@@ -62,10 +62,18 @@ pub struct Ignite {
     pub at: Vec3,
     pub radius: f32,
     pub instigator: Option<Entity>,
+    /// What the splash's own fire does each second where the ground doesn't
+    /// burn (a sticky stream's `fFireDmg`); else the ground's profile's.
+    pub damage: Option<f32>,
 }
 
 /// Fire grid cell size (m).
 const CELL: f32 = 2.0;
+/// What a patch does each second to whoever stands in it when no profile
+/// says (theirs: `fFireDmg`).
+const FIRE_DPS: f32 = 28.0;
+/// How often (s) a patch hurts.
+const DAMAGE_EVERY: f32 = 0.25;
 /// Burning cells at once, and cells one fire may burn in total.
 const MAX_BURNING: usize = 260;
 const MAX_BURNT: usize = 1600;
@@ -89,6 +97,8 @@ struct Burning {
     bare: bool,
     /// Its region profile (an index into [`Fires::profiles`]).
     profile: Option<usize>,
+    /// What it does each second to whoever stands in it.
+    damage: f32,
 }
 
 #[derive(Resource, Default)]
@@ -157,7 +167,8 @@ impl Fires {
                 Some(p) => (p.starting + p.alive + p.extinction) * rng.range(0.85, 1.15),
                 None => rng.range(7.0, 11.0),
             };
-            self.burning.entry(c).or_insert(Burning { age: 0.0, life, y, bare: false, profile });
+            let damage = profile.and_then(|i| self.profiles.get(i)).map(|p| p.damage).filter(|d| *d > 0.0).unwrap_or(FIRE_DPS);
+            self.burning.entry(c).or_insert(Burning { age: 0.0, life, y, bare: false, profile, damage });
         }
     }
 }
@@ -232,6 +243,9 @@ fn ignite(
                     if let Some(b) = fires.burning.get_mut(&c) {
                         b.life = b.life.min(rng.range(3.0, 5.0));
                         b.bare = true;
+                        if let Some(d) = ev.damage {
+                            b.damage = d;
+                        }
                     }
                 }
             }
@@ -756,7 +770,8 @@ fn burn_effects(
     }
 }
 
-/// Anything standing in a burning cell takes fire damage.
+/// Anything standing in a burning cell takes fire damage: its profile's a
+/// second.
 fn burn_damage(time: Res<Time>, mut fires: ResMut<Fires>, targets: Query<(Entity, &GlobalTransform, &Health)>, mut damage: MessageWriter<DamageEvent>) {
     if fires.burning.is_empty() {
         return;
@@ -765,7 +780,7 @@ fn burn_damage(time: Res<Time>, mut fires: ResMut<Fires>, targets: Query<(Entity
     if fires.next_damage > 0.0 {
         return;
     }
-    fires.next_damage = 0.25;
+    fires.next_damage = DAMAGE_EVERY;
     for (e, gt, h) in &targets {
         let p = gt.translation();
         if h.dead {
@@ -775,7 +790,7 @@ fn burn_damage(time: Res<Time>, mut fires: ResMut<Fires>, targets: Query<(Entity
             if (p.y - b.y).abs() < 2.5 && b.age > 0.3 && b.age < b.life * 0.9 {
                 damage.write(DamageEvent {
                     target: e,
-                    amount: 7.0,
+                    amount: b.damage * DAMAGE_EVERY,
                     kind: DamageKind::Fire,
                     source: Some(p),
                     instigator: fires.instigator,

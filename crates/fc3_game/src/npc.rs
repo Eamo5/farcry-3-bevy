@@ -2840,7 +2840,7 @@ fn shoot(
                     });
                 }
                 if rng.f32() < 0.12 {
-                    shot_fx.ignite.write(crate::fire::Ignite { at: muzzle + dir * h.distance, radius: 1.5, instigator: Some(me) });
+                    shot_fx.ignite.write(crate::fire::Ignite { at: muzzle + dir * h.distance, radius: 1.5, instigator: Some(me), damage: None });
                 }
                 // (And it sticks, burning on where it lands.)
                 let profile = fc3_formats::fire_settings::FLAMETHROWER_NPC;

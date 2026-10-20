@@ -118,7 +118,7 @@ fn burn(
         f.next -= dt;
         if f.next <= 0.0 && f.age < p.starting + p.alive {
             f.next = STIM_EVERY;
-            ignite.write(Ignite { at: f.at, radius: p.burn.max(0.5), instigator: f.instigator });
+            ignite.write(Ignite { at: f.at, radius: p.burn.max(0.5), instigator: f.instigator, damage: (p.damage > 0.0).then_some(p.damage) });
         }
         let on = f.age < f.life;
         if !on {

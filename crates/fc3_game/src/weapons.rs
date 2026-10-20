@@ -1888,7 +1888,7 @@ fn fire(
                 markers.write(HitMarker { kill: false, headshot: false });
             }
             if rng.f32() < 0.2 {
-                shot_fx.ignite.write(crate::fire::Ignite { at: end, radius: 1.5, instigator: Some(player_e) });
+                shot_fx.ignite.write(crate::fire::Ignite { at: end, radius: 1.5, instigator: Some(player_e), damage: None });
             }
             // (And it sticks, burning on where it lands.)
             let profile = fc3_formats::fire_settings::FLAMETHROWER;
@@ -2300,7 +2300,7 @@ fn update_projectiles(
                         markers.write(HitMarker { kill: false, headshot: false });
                     }
                     if p.incendiary {
-                        ignite.write(crate::fire::Ignite { at: point, radius: p.radius, instigator: Some(p.owner) });
+                        ignite.write(crate::fire::Ignite { at: point, radius: p.radius, instigator: Some(p.owner), damage: None });
                         crate::particles::fx::fire_burst(&mut particles, &mut rng, point);
                         sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::IMPACT, at: Some(point), volume: 0.6 });
                     } else {
@@ -2337,7 +2337,7 @@ fn update_projectiles(
                     continue;
                 }
                 if p.incendiary {
-                    ignite.write(crate::fire::Ignite { at: point, radius: p.radius, instigator: Some(p.owner) });
+                    ignite.write(crate::fire::Ignite { at: point, radius: p.radius, instigator: Some(p.owner), damage: None });
                     // The fire it leaves burning where it broke.
                     let profile = fc3_formats::fire_settings::MOLOTOV;
                     sticky.write(crate::sticky_fire::StickyFire { at: point, normal: hit.normal, profile, instigator: Some(p.owner) });
@@ -2430,7 +2430,7 @@ fn explode(
                 crate::particles::fx::explosion(&mut particles, &mut rng, ex.at, ex.radius);
             }
             // Blasts set the grass around them alight.
-            ignite.write(crate::fire::Ignite { at: ex.at, radius: ex.radius * 0.4, instigator: ex.instigator });
+            ignite.write(crate::fire::Ignite { at: ex.at, radius: ex.radius * 0.4, instigator: ex.instigator, damage: None });
             if let Some(h) = spatial.cast_ray(ex.at + Vec3::Y * 0.5, Dir3::NEG_Y, 2.5, true, &SpatialQueryFilter::default()) {
                 decals.add(crate::particles::DecalSheet::Sand, ex.at + Vec3::Y * (0.5 - h.distance), h.normal, ex.radius * 0.45, rng.f32());
             }

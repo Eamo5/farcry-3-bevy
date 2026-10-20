@@ -258,7 +258,7 @@ fn burn(
         // The ground under it, once its fire has grown.
         if !b.spread && b.age >= profile.starting {
             b.spread = true;
-            ignite.write(Ignite { at, radius: reach(model, t), instigator: None });
+            ignite.write(Ignite { at, radius: reach(model, t), instigator: None, damage: None });
         }
         // Its fires out halfway through dying down; then smoke a while.
         if b.age >= b.life - profile.extinction * 0.5 {

@@ -21,7 +21,10 @@ pub struct BurningPlugin;
 
 impl Plugin for BurningPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, load_clips).add_systems(Update, (burn_test, catch_fire, burn).chain().run_if(in_state(crate::menu::GameState::Playing)));
+        app.init_resource::<PlayerAlight>().add_systems(Startup, load_clips).add_systems(
+            Update,
+            (burn_test, ground_fire_test, catch_fire, player_catch_fire, burn, player_burn).chain().run_if(in_state(crate::menu::GameState::Playing)),
+        );
     }
 }
 
@@ -36,6 +39,8 @@ const STOP_SOUND: u32 = 0x001B_0479;
 /// How long one burns (s) and what the fire does to them each second.
 const BURN_SECS: f32 = 6.0;
 const BURN_DAMAGE: f32 = 30.0;
+/// How often (s) the fire on the player hurts him.
+const PLAYER_TICK: f32 = 0.25;
 /// The bone the torch burns on (the chest), and where it is on a person
 /// without their skeleton in (m up from their capsule's centre). An
 /// animal's burns at its body's middle.
@@ -114,22 +119,46 @@ pub struct Aflame {
 }
 
 /// Fire's harm sets those it touches alight (people and animals; the player
-/// takes it as his own harm).
+/// takes it as his own harm). A character catches fire once fire has done it
+/// its counters' share within their time (`Burn`: a merc 25 in 8 s, a
+/// villager 50); an animal at once.
 #[allow(clippy::too_many_arguments)]
 fn catch_fire(
+    time: Res<Time>,
+    table: Res<crate::combat::DamageTable>,
+    mut taken: Local<std::collections::HashMap<Entity, Vec<(f32, f32)>>>,
     mut hits: MessageReader<DamageEvent>,
-    targets: Query<(&Health, &GlobalTransform, Has<Aflame>, Option<&crate::npc::Npc>), Or<(With<crate::npc::Npc>, With<crate::wildlife::WildAnimal>)>>,
+    targets: Query<
+        (&Health, &GlobalTransform, Has<Aflame>, Option<&crate::npc::Npc>, Option<&crate::combat::Counters>),
+        Or<(With<crate::npc::Npc>, With<crate::wildlife::WildAnimal>)>,
+    >,
     burn_clips: Option<Res<BurnClips>>,
     mut rigs: Query<&mut CharacterRig>,
     mut rng: ResMut<crate::weapons::Rng>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     mut commands: Commands,
 ) {
+    let now = time.elapsed_secs();
+    taken.retain(|_, l| l.last().is_some_and(|(t, _)| now - t < 30.0));
+    // (`FC3_BURN_TEST`: any touch of fire sets alight.)
+    let test = std::env::var_os("FC3_BURN_TEST").is_some();
     let mut lit = Vec::new();
     for hit in hits.read().filter(|h| h.kind == DamageKind::Fire) {
-        let Ok((health, at, burning, npc)) = targets.get(hit.target) else { continue };
+        let Ok((health, at, burning, npc, counters)) = targets.get(hit.target) else { continue };
         if burning || health.dead || lit.contains(&hit.target) {
             continue;
+        }
+        // Fire's harm to it (as its counters take it) adds up over their time.
+        let catch = npc.and(counters.and_then(|c| c.v.burn).or_else(|| table.0.as_ref().and_then(|d| d.others_burn))).filter(|_| !test);
+        if let Some(c) = catch {
+            let share = counters.map_or(1.0, |c| c.v.body * c.v.harm(fc3_formats::counters::Harm::Burn));
+            let list = taken.entry(hit.target).or_default();
+            list.retain(|(t, _)| now - t < c.window);
+            list.push((now, hit.amount * share));
+            if list.iter().map(|(_, a)| a).sum::<f32>() < c.threshold {
+                continue;
+            }
+            taken.remove(&hit.target);
         }
         lit.push(hit.target);
         debug!("{} catches fire", hit.target);
@@ -228,6 +257,130 @@ fn burn(
         sfx.write(crate::sound::PlaySfx { event: STOP_SOUND, at: Some(p), volume: 1.0 });
         debug!("{e}'s fire goes out{}", if drowned { " in water" } else { "" });
         commands.entity(e).remove::<Aflame>();
+    }
+}
+
+/// The player alight (`StatsAndCounters.Health`'s burn): when fire last
+/// touched him and who set it, the wait to the next hurt, and the fire done
+/// him lately.
+#[derive(Resource, Default)]
+pub struct PlayerAlight {
+    pub on: bool,
+    last: f32,
+    tick: f32,
+    instigator: Option<Entity>,
+    taken: Vec<(f32, f32)>,
+}
+
+/// The player catches fire once fire has done him the counters' share
+/// within their time (45 in 8 s), unless the fireproof syringe keeps it off.
+fn player_catch_fire(
+    time: Res<Time>,
+    table: Res<crate::combat::DamageTable>,
+    (settings, boosts): (Res<crate::settings::Settings>, Res<crate::syringes::Boosts>),
+    mut hits: MessageReader<DamageEvent>,
+    players: Query<(Entity, &GlobalTransform), With<crate::player::Player>>,
+    mut alight: ResMut<PlayerAlight>,
+    mut sfx: MessageWriter<crate::sound::PlaySfx>,
+) {
+    let (Some(burn), Ok((pe, at))) = (table.0.as_ref().map(|d| (d.player.burn, d.player.burn_taken)), players.single()) else {
+        hits.clear();
+        return;
+    };
+    let (Some(b), taken) = burn else {
+        hits.clear();
+        return;
+    };
+    let now = time.elapsed_secs();
+    let share = taken[settings.difficulty.index()];
+    // (Its own hurt, from no place, isn't fire touching him.)
+    for hit in hits.read().filter(|h| h.kind == DamageKind::Fire && h.target == pe && h.source.is_some() && h.amount > 0.0) {
+        if boosts.active(crate::syringes::Syringe::Fireproof) {
+            continue;
+        }
+        alight.last = now;
+        alight.instigator = hit.instigator.or(alight.instigator);
+        if alight.on {
+            continue;
+        }
+        alight.taken.retain(|(t, _)| now - t < b.window);
+        alight.taken.push((now, hit.amount * share));
+        if alight.taken.iter().map(|(_, a)| a).sum::<f32>() >= b.threshold {
+            debug!("the player catches fire");
+            alight.on = true;
+            alight.tick = PLAYER_TICK;
+            alight.taken.clear();
+            sfx.write(crate::sound::PlaySfx { event: START_SOUND, at: Some(at.translation()), volume: 1.0 });
+        }
+    }
+}
+
+/// The fire on the player hurts him its rate a second until he has been out
+/// of the flames for his burn's expiry (2 s), or water or death puts it out.
+fn player_burn(
+    time: Res<Time>,
+    table: Res<crate::combat::DamageTable>,
+    heights: Res<crate::terrain::Heightfield>,
+    players: Query<(Entity, &crate::player::Player, &Health, &GlobalTransform)>,
+    mut alight: ResMut<PlayerAlight>,
+    mut damage: MessageWriter<DamageEvent>,
+    mut sfx: MessageWriter<crate::sound::PlaySfx>,
+) {
+    if !alight.on {
+        return;
+    }
+    let (Some(b), Ok((pe, p, h, at))) = (table.0.as_ref().and_then(|d| d.player.burn), players.single()) else { return };
+    let now = time.elapsed_secs();
+    let pos = at.translation();
+    let drowned = p.swimming || crate::water::surface_at(pos, &heights) > pos.y + CHEST;
+    if h.dead || drowned || now - alight.last > b.expiry.max(PLAYER_TICK) {
+        debug!("the player's fire goes out{}", if drowned { " in water" } else { "" });
+        alight.on = false;
+        alight.instigator = None;
+        sfx.write(crate::sound::PlaySfx { event: STOP_SOUND, at: Some(pos), volume: 1.0 });
+        return;
+    }
+    alight.tick -= time.delta_secs();
+    if alight.tick <= 0.0 {
+        alight.tick += PLAYER_TICK;
+        damage.write(DamageEvent {
+            target: pe,
+            amount: b.rate * PLAYER_TICK,
+            kind: DamageKind::Fire,
+            source: None,
+            instigator: alight.instigator,
+            headshot: false,
+            hit: Hit::Whole,
+        });
+    }
+}
+
+/// Test: `FC3_GROUND_FIRE_TEST=<seconds>` sets the ground alight under the
+/// player and every character within 40 m that long after the start (real
+/// time), three times 2 s apart, and logs the player's health each second
+/// for 20 s.
+fn ground_fire_test(
+    time: Res<Time<Real>>,
+    mut state: Local<(u32, f32)>,
+    players: Query<(&GlobalTransform, &Health), With<crate::player::Player>>,
+    npcs: Query<&GlobalTransform, With<crate::npc::Npc>>,
+    alight: Res<PlayerAlight>,
+    mut ignite: MessageWriter<crate::fire::Ignite>,
+) {
+    let Some(at) = std::env::var("FC3_GROUND_FIRE_TEST").ok().and_then(|s| s.parse::<f32>().ok()) else { return };
+    let Ok((player, h)) = players.single() else { return };
+    let now = time.elapsed_secs();
+    let (lit, logged) = &mut *state;
+    if *lit < 3 && now >= at + *lit as f32 * 2.0 {
+        *lit += 1;
+        let me = player.translation();
+        for p in std::iter::once(me).chain(npcs.iter().map(|t| t.translation()).filter(|p| p.distance(me) < 40.0)) {
+            ignite.write(crate::fire::Ignite { at: p, radius: 3.0, instigator: None, damage: None });
+        }
+    }
+    if now >= at && now < at + 20.0 && now - *logged >= 1.0 {
+        *logged = now;
+        info!("ground-fire test: {:.0} s, player health {:.1} of {:.0}, alight {}", now - at, h.current, h.max, alight.on);
     }
 }
 

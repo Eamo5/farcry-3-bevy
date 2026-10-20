@@ -1230,6 +1230,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
                 table: fc3_formats::counters::health_table(&templates).context("no counters health table")?,
                 player: fc3_formats::counters::player_health(&templates).unwrap_or_default(),
                 archetypes: fc3_formats::counters::archetypes(&library, &templates),
+                others_burn: fc3_formats::counters::others_burn(&library),
             };
             if damage.archetypes.is_empty() {
                 bail!("no character counters");
@@ -2127,7 +2128,9 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
             Err(e) => job.error(format!("fire settings: {e:#}")),
         }
         // (And the fire weapons leave where they land.)
-        if job.should_write(fs::FIRE_STICKY_REL) {
+        // (Written again when an older cache lacks their harm.)
+        let sticky_current = std::fs::read_to_string(job.root().join(fs::FIRE_STICKY_REL)).is_ok_and(|t| fs::sticky_current(&t));
+        if job.should_write(fs::FIRE_STICKY_REL) || !sticky_current {
             match job.vfs.read(fs::FIRE_STICKY).map_err(anyhow::Error::from).and_then(|lib| fs::parse_sticky(&lib)) {
                 Ok(profiles) => write_atomic(job.root(), fs::FIRE_STICKY_REL, fs::sticky_to_text(&profiles).as_bytes(), job.ctx)?,
                 Err(e) => job.error(format!("fire sticky streams: {e:#}")),
@@ -2149,7 +2152,8 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
             }
         }
         // (And how its burning ground burns.)
-        if job.should_write(fs::FIRE_REGIONS_REL) {
+        let regions_current = std::fs::read_to_string(job.root().join(fs::FIRE_REGIONS_REL)).is_ok_and(|t| fs::regions_current(&t));
+        if job.should_write(fs::FIRE_REGIONS_REL) || !regions_current {
             match job.vfs.read(fs::FIRE_REGIONS).map_err(anyhow::Error::from).and_then(|lib| fs::parse_regions(&lib)) {
                 Ok(profiles) => write_atomic(job.root(), fs::FIRE_REGIONS_REL, fs::regions_to_text(&profiles).as_bytes(), job.ctx)?,
                 Err(e) => job.error(format!("fire region profiles: {e:#}")),

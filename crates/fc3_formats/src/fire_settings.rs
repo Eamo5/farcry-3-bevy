@@ -94,6 +94,9 @@ pub struct RegionProfile {
     pub smoke: (f32, f32),
     /// Animals this near (m) are scared off (`Fire_FearStim`).
     pub fear: f32,
+    /// What its fire does each second to whoever stands in it
+    /// (`fFireDmg`).
+    pub damage: f32,
 }
 
 pub fn parse_regions(lib: &[u8]) -> Result<Vec<RegionProfile>> {
@@ -115,6 +118,7 @@ pub fn parse_regions(lib: &[u8]) -> Result<Vec<RegionProfile>> {
                 dying: f(Some(p), "fDyingTime"),
                 smoke: (f(smoke, "fSmokeMinLifeTime"), f(smoke, "fSmokeMaxLifeTime")),
                 fear: f(p.child("Fire_FearStim"), "fRadius"),
+                damage: f(Some(p), "fFireDmg"),
             })
         })
         .collect())
@@ -124,8 +128,18 @@ pub fn parse_regions(lib: &[u8]) -> Result<Vec<RegionProfile>> {
 pub fn regions_to_text(profiles: &[RegionProfile]) -> String {
     profiles
         .iter()
-        .map(|p| format!("{:x}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", p.key, p.name, p.starting, p.alive, p.extinction, p.dying, p.smoke.0, p.smoke.1, p.fear))
+        .map(|p| {
+            format!(
+                "{:x}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                p.key, p.name, p.starting, p.alive, p.extinction, p.dying, p.smoke.0, p.smoke.1, p.fear, p.damage
+            )
+        })
         .collect()
+}
+
+/// Whether cached region profiles have every number (their harm too).
+pub fn regions_current(text: &str) -> bool {
+    !text.is_empty() && text.lines().all(|l| l.split('\t').count() >= 10)
 }
 
 pub fn regions_from_text(text: &str) -> Vec<RegionProfile> {
@@ -142,6 +156,7 @@ pub fn regions_from_text(text: &str) -> Vec<RegionProfile> {
                 dying: n(5)?,
                 smoke: (n(6)?, n(7)?),
                 fear: n(8)?,
+                damage: n(9).unwrap_or(0.0),
             })
         })
         .collect()
@@ -304,6 +319,9 @@ pub struct StickyProfile {
     /// molotov's), and how far (m) apart they stand (`fResolution`).
     pub kind: u32,
     pub resolution: f32,
+    /// What its fire does each second to whoever stands in it
+    /// (`fFireDmg`: a flamer's and a Disciple's molotov's little).
+    pub damage: f32,
 }
 
 pub fn parse_sticky(lib: &[u8]) -> Result<Vec<StickyProfile>> {
@@ -323,6 +341,7 @@ pub fn parse_sticky(lib: &[u8]) -> Result<Vec<StickyProfile>> {
                 burn: f(p.child("Fire_BurnStim"), "fRadius"),
                 kind: p.field("selTypeOfStickyFlames").and_then(|b| b.first()).copied().unwrap_or(0) as u32,
                 resolution: f(p.child("BurnParams"), "fResolution"),
+                damage: f(Some(p), "fFireDmg"),
             })
         })
         .collect())
@@ -332,8 +351,13 @@ pub fn parse_sticky(lib: &[u8]) -> Result<Vec<StickyProfile>> {
 pub fn sticky_to_text(profiles: &[StickyProfile]) -> String {
     profiles
         .iter()
-        .map(|p| format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", p.name, p.starting, p.alive, p.extinction, p.dying, p.burn, p.kind, p.resolution))
+        .map(|p| format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", p.name, p.starting, p.alive, p.extinction, p.dying, p.burn, p.kind, p.resolution, p.damage))
         .collect()
+}
+
+/// Whether cached sticky profiles have every number (their harm too).
+pub fn sticky_current(text: &str) -> bool {
+    !text.is_empty() && text.lines().all(|l| l.split('\t').count() >= 9)
 }
 
 pub fn sticky_from_text(text: &str) -> Vec<StickyProfile> {
@@ -350,6 +374,7 @@ pub fn sticky_from_text(text: &str) -> Vec<StickyProfile> {
                 burn: n(5)?,
                 kind: f.get(6)?.parse().ok()?,
                 resolution: n(7)?,
+                damage: n(8).unwrap_or(0.0),
             })
         })
         .collect()
@@ -408,8 +433,17 @@ mod tests {
 
     #[test]
     fn sticky_profiles_read_back() {
-        let profiles =
-            vec![StickyProfile { name: MOLOTOV.into(), starting: 0.3, alive: 6.0, extinction: 0.0, dying: 1.0, burn: 2.0, kind: 1, resolution: 0.7 }];
+        let profiles = vec![StickyProfile {
+            name: MOLOTOV.into(),
+            starting: 0.3,
+            alive: 6.0,
+            extinction: 0.0,
+            dying: 1.0,
+            burn: 2.0,
+            kind: 1,
+            resolution: 0.7,
+            damage: 15.0,
+        }];
         assert_eq!(sticky_from_text(&sticky_to_text(&profiles)), profiles);
     }
 
@@ -433,7 +467,17 @@ mod tests {
     #[test]
     fn region_profiles_read_back() {
         let profiles = vec![
-            RegionProfile { key: 0x47fd_f013, name: SAVANNAH.into(), starting: 5.0, alive: 5.0, extinction: 5.0, dying: 13.0, smoke: (15.0, 25.0), fear: 20.0 },
+            RegionProfile {
+                key: 0x47fd_f013,
+                name: SAVANNAH.into(),
+                starting: 5.0,
+                alive: 5.0,
+                extinction: 5.0,
+                dying: 13.0,
+                smoke: (15.0, 25.0),
+                fear: 20.0,
+                damage: 15.0,
+            },
             RegionProfile { key: 0x6c74, name: "Region/Other".into(), starting: 0.5, ..Default::default() },
         ];
         assert_eq!(regions_from_text(&regions_to_text(&profiles)), profiles);

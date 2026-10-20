@@ -7,14 +7,16 @@
 //! a multiplier for each kind of harm, an animal's own health and head
 //! multiplier), with an animal's attack from its AI personality
 //! (`AttackDamage`) and a character's close-quarters strike from its own
-//! (`Melee`). The cache keeps them as text ([`DAMAGE_REL`]).
+//! (`Melee`); and when fire sets them alight (the component's `Burn`, the
+//! player's in the service's `StatsAndCounters.Health`). The cache keeps
+//! them as text ([`DAMAGE_REL`]).
 
 use anyhow::{bail, Result};
 
 use crate::fcb::Object;
 
 pub const DAMAGE_REL: &str = "characters/damage.txt";
-const MAGIC: &str = "fc3-damage 5";
+const MAGIC: &str = "fc3-damage 6";
 const SERVICE: &str = "countersservice:counters.countersservice";
 
 /// A character's health and how much of it each body part can lose before
@@ -36,16 +38,58 @@ impl Default for HealthTable {
 /// The player's health by difficulty (casual, normal, hardcore, infamous):
 /// how much each health bar holds against the normal level
 /// (`HealthDifficultySettings`' `fHealthTierValueMultiplier`), and the
-/// seconds after a hurt before it regenerates (`HealthRegenerationDelays`).
+/// seconds after a hurt before it regenerates (`HealthRegenerationDelays`);
+/// when fire sets him alight, and what fire does to him at each level
+/// (`StimBurnMultiplierPerLevel`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlayerHealth {
     pub bar_scale: [f32; 4],
     pub regen_delay: [f32; 4],
+    pub burn: Option<PlayerBurn>,
+    pub burn_taken: [f32; 4],
 }
 
 impl Default for PlayerHealth {
     fn default() -> Self {
-        PlayerHealth { bar_scale: [1.0; 4], regen_delay: [5.0; 4] }
+        PlayerHealth { bar_scale: [1.0; 4], regen_delay: [5.0; 4], burn: None, burn_taken: [1.0; 4] }
+    }
+}
+
+/// The player catches fire once fire has done him `threshold` within
+/// `window` seconds (`fBurnOnFireDamageThreshold`, `fBurnOnFireTimeLimit`),
+/// and alight takes `rate` more each second (`fBurnOnFireDamageRate`);
+/// `expiry` is his burn's `fBurnDamageExpiryDelay` (s; its note is a copy
+/// of the rate's).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlayerBurn {
+    pub threshold: f32,
+    pub window: f32,
+    pub rate: f32,
+    pub expiry: f32,
+}
+
+/// A character catches fire once fire has done it `threshold` within
+/// `window` seconds (its counters' `Burn`: `fAccumulatedDamageBeforeBurning`,
+/// `fBurnDamageAccumulateTime`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CatchFire {
+    pub window: f32,
+    pub threshold: f32,
+}
+
+impl CatchFire {
+    fn from_component(c: &Object) -> Option<CatchFire> {
+        let b = c.child("Burn")?;
+        Some(CatchFire { window: float(b, "fBurnDamageAccumulateTime")?, threshold: float(b, "fAccumulatedDamageBeforeBurning")? })
+    }
+
+    fn text(c: Option<CatchFire>) -> String {
+        c.map_or("-".to_string(), |c| format!("{},{}", c.window, c.threshold))
+    }
+
+    fn parse(s: Option<&str>) -> Option<CatchFire> {
+        let (w, t) = s?.split_once(',')?;
+        Some(CatchFire { window: w.parse().ok()?, threshold: t.parse().ok()? })
     }
 }
 
@@ -104,6 +148,8 @@ pub struct Vulnerability {
     pub attack: Option<Attack>,
     /// A character's strike at arm's length.
     pub melee: Option<Melee>,
+    /// When fire sets a character alight.
+    pub burn: Option<CatchFire>,
 }
 
 /// A character's close-quarters strike (its personality's `Melee`): how far
@@ -152,6 +198,7 @@ impl Default for Vulnerability {
             harms: [1.0; 10],
             attack: None,
             melee: None,
+            burn: None,
         }
     }
 }
@@ -184,6 +231,7 @@ impl Vulnerability {
                 v.harms[i] = f(s, n).unwrap_or(1.0);
             }
         }
+        v.burn = CatchFire::from_component(c);
         v
     }
 }
@@ -203,6 +251,25 @@ pub struct Damage {
     pub table: HealthTable,
     pub player: PlayerHealth,
     pub archetypes: Vec<Vulnerability>,
+    /// When fire sets alight a character of no archetype here (villagers,
+    /// companions: the villagers' base prototype's).
+    pub others_burn: Option<CatchFire>,
+}
+
+/// The prototype whose counters give the villagers' and companions' burn.
+const VILLAGER: &str = "FC3_NPC:Villagers/BaseVillager_FC3";
+
+/// When fire sets alight the characters without an archetype of their own.
+pub fn others_burn(library: &Object) -> Option<CatchFire> {
+    let mut out = None;
+    library.walk(&mut |o, _| {
+        if out.is_some() || !o.is("EntityPrototype") {
+            return;
+        }
+        let Some(e) = o.child("Entity").filter(|e| e.str("hidName").is_some_and(|n| n == VILLAGER)) else { return };
+        out = e.child("Components").and_then(|c| c.child("CFCXCountersComponentAI")).and_then(|c| CatchFire::from_component(c));
+    });
+    out
 }
 
 impl Damage {
@@ -235,10 +302,25 @@ pub fn player_health(templates: &Object) -> Option<PlayerHealth> {
                 }
             }
         }
-        if let Some(delays) = o.child("StatsAndCounters").and_then(|s| s.child("Health")).and_then(|h| h.child("HealthRegenerationDelays")) {
+        let health = o.child("StatsAndCounters").and_then(|s| s.child("Health"));
+        if let Some(delays) = health.and_then(|h| h.child("HealthRegenerationDelays")) {
             for (i, level) in delays.children_named("DifficultyLevel").take(4).enumerate() {
                 if let Some(v) = float(level, "RegenDelay").filter(|v| *v > 0.0) {
                     p.regen_delay[i] = v;
+                }
+            }
+        }
+        if let Some(h) = health {
+            if let (Some(threshold), Some(window), Some(rate)) =
+                (float(h, "fBurnOnFireDamageThreshold"), float(h, "fBurnOnFireTimeLimit"), float(h, "fBurnOnFireDamageRate"))
+            {
+                p.burn = Some(PlayerBurn { threshold, window, rate, expiry: float(h, "fBurnDamageExpiryDelay").unwrap_or(0.0) });
+            }
+            if let Some(m) = h.child("StimBurnMultiplierPerLevel") {
+                for (i, level) in ["CASUAL", "EXPERIMENTED", "HARDCORE", "INFAMOUS"].iter().enumerate() {
+                    if let Some(v) = float(m, &format!("fStimBurnMultiplier{level}")) {
+                        p.burn_taken[i] = v;
+                    }
                 }
             }
         }
@@ -356,20 +438,23 @@ pub fn to_text(d: &Damage) -> String {
     let t = d.table;
     let mut s = format!("{MAGIC}\ntable\t{}\t{}\t{}\t{}\n", t.global, t.head, t.torso, t.legs);
     let list = |v: &[f32; 4]| v.map(|x| x.to_string()).join(",");
-    s += &format!("player\t{}\t{}\n", list(&d.player.bar_scale), list(&d.player.regen_delay));
+    let burn = d.player.burn.map_or("-".to_string(), |b| format!("{},{},{},{}", b.threshold, b.window, b.rate, b.expiry));
+    s += &format!("player\t{}\t{}\t{burn}\t{}\n", list(&d.player.bar_scale), list(&d.player.regen_delay), list(&d.player.burn_taken));
+    s += &format!("burn\t{}\n", CatchFire::text(d.others_burn));
     for v in &d.archetypes {
         let harms = v.harms.iter().map(|h| h.to_string()).collect::<Vec<_>>().join(",");
         let attack = v.attack.map_or("-".to_string(), |a| format!("{},{},{},{}", a.min, a.max, a.percent, a.per_level));
         let melee = v.melee.map_or("-".to_string(), |m| format!("{},{},{},{},{}", m.reach, m.angle, m.damage, m.cooldown, m.speed));
         s += &format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{harms}\t{}\t{attack}\t{melee}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{harms}\t{}\t{attack}\t{melee}\t{}\n",
             v.name,
             v.health.unwrap_or(-1.0),
             v.body,
             v.head,
             v.torso,
             v.legs,
-            u8::from(v.animal)
+            u8::from(v.animal),
+            CatchFire::text(v.burn)
         );
     }
     s
@@ -399,7 +484,13 @@ pub fn from_text(text: &str) -> Result<Damage> {
         if f[0] == "table" && f.len() >= 5 {
             out.table = HealthTable { global: n(1), head: n(2), torso: n(3), legs: n(4) };
         } else if f[0] == "player" && f.len() >= 3 {
-            out.player = PlayerHealth { bar_scale: four(1, 1.0), regen_delay: four(2, 5.0) };
+            let burn = f.get(3).and_then(|b| {
+                let v: Vec<f32> = b.split(',').filter_map(|x| x.parse().ok()).collect();
+                (v.len() == 4).then(|| PlayerBurn { threshold: v[0], window: v[1], rate: v[2], expiry: v[3] })
+            });
+            out.player = PlayerHealth { bar_scale: four(1, 1.0), regen_delay: four(2, 5.0), burn, burn_taken: four(4, 1.0) };
+        } else if f[0] == "burn" {
+            out.others_burn = CatchFire::parse(f.get(1).copied());
         } else if f.len() >= 7 {
             let mut harms = [1.0; 10];
             for (i, h) in f[6].split(',').take(10).enumerate() {
@@ -416,6 +507,7 @@ pub fn from_text(text: &str) -> Result<Damage> {
                     let v: Vec<f32> = m.split(',').filter_map(|x| x.parse().ok()).collect();
                     (v.len() == 5).then(|| Melee { reach: v[0], angle: v[1], damage: v[2], cooldown: v[3], speed: v[4] })
                 }),
+                burn: CatchFire::parse(f.get(10).copied()),
                 health: Some(n(1)).filter(|h| *h > 0.0),
                 body: n(2),
                 head: n(3),
@@ -435,21 +527,31 @@ mod tests {
     #[test]
     fn round_trips_and_finds_derived_archetypes() {
         let melee = Melee { reach: 1.5, angle: 70.0, damage: 12.0, cooldown: 4.0, speed: 3.0 };
-        let mut heavy = Vulnerability { name: "Pirate_HeavyGunner".into(), torso: 0.025, legs: 0.04, melee: Some(melee), ..Default::default() };
+        let burn = CatchFire { window: 8.0, threshold: 25.0 };
+        let mut heavy =
+            Vulnerability { name: "Pirate_HeavyGunner".into(), torso: 0.025, legs: 0.04, melee: Some(melee), burn: Some(burn), ..Default::default() };
         heavy.harms[9] = 4.0;
         let attack = Attack { min: 40.0, max: 70.0, percent: 0.5, per_level: 0.06 };
         let tiger = Vulnerability { name: "Tiger".into(), animal: true, health: Some(800.0), head: 2.3, attack: Some(attack), ..Default::default() };
         assert_eq!(attack.to_player(100.0, 0.0), Some(50.0));
         assert!((attack.to_player(200.0, 4.0).unwrap() - 52.0).abs() < 1e-3);
         assert_eq!(Attack { percent: 0.0, ..attack }.to_player(100.0, 0.0), None);
-        let player = PlayerHealth { bar_scale: [1.5, 1.0, 0.6, 0.3], regen_delay: [5.0; 4] };
-        let d = Damage { table: HealthTable::default(), player, archetypes: vec![heavy.clone(), tiger.clone()] };
+        let player = PlayerHealth {
+            bar_scale: [1.5, 1.0, 0.6, 0.3],
+            regen_delay: [5.0; 4],
+            burn: Some(PlayerBurn { threshold: 45.0, window: 8.0, rate: 5.0, expiry: 2.0 }),
+            burn_taken: [1.2, 1.0, 0.7, 0.3],
+        };
+        let others_burn = Some(CatchFire { window: 8.0, threshold: 50.0 });
+        let d = Damage { table: HealthTable::default(), player, archetypes: vec![heavy.clone(), tiger.clone()], others_burn };
         let back = from_text(&to_text(&d)).unwrap();
         assert_eq!(back, d);
         assert_eq!(back.get("pirate_heavygunner_elite").map(|v| v.torso), Some(0.025));
         assert_eq!(back.get("Pirate_HeavyGunner").unwrap().harm(Harm::Arrow), 4.0);
         assert_eq!(back.get("Pirate_HeavyGunner").unwrap().melee, Some(melee));
-        assert!(is_current(&to_text(&d)) && !is_current("fc3-damage 4\n"));
+        assert!(is_current(&to_text(&d)) && !is_current("fc3-damage 5\n"));
+        assert_eq!(back.get("Pirate_HeavyGunner").unwrap().burn, Some(burn));
+        assert_eq!(back.get("Tiger").unwrap().burn, None);
         assert_eq!(back.get("Tiger").and_then(|v| v.health), Some(800.0));
         assert!(back.get("Pirate").is_none());
     }

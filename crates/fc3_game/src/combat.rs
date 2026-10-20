@@ -386,6 +386,10 @@ fn apply_damage(
         // The difficulty: the game's health bars hold more or less of a hit.
         let difficulty = table.0.as_ref().map_or(settings.difficulty.damage_taken(), |d| 1.0 / d.player.bar_scale[settings.difficulty.index()].max(0.05));
         let mut amount = if ps.is_some() { ev.amount * perks.damage_taken * resist * difficulty } else { ev.amount };
+        // (Fire's harm to the player has its own share at each level.)
+        if ps.is_some() && ev.kind == DamageKind::Fire {
+            amount *= table.0.as_ref().map_or(1.0, |d| d.player.burn_taken[settings.difficulty.index()]);
+        }
         if let Some(a) = armour.filter(|_| ev.kind == DamageKind::Bullet && !ev.headshot && counters.is_none()) {
             amount *= a.0;
         }

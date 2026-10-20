@@ -807,7 +807,7 @@ fn fx_test(
         }
         "fire" => {
             *next = f32::INFINITY;
-            shot.ignite.write(crate::fire::Ignite { at, radius: 3.0, instigator: None });
+            shot.ignite.write(crate::fire::Ignite { at, radius: 3.0, instigator: None, damage: None });
         }
         "splash" => {
             *next = t + 0.4;
