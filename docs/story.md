@@ -149,6 +149,30 @@ is the story's own:
   timing in the story. Visible named timers expose their localized labels
   and current values to the host HUD; hidden timers still run and deliver
   callbacks. Water-level commands still need host integration.
+* **Engine events the boxes listen for.** A sweep of every event class
+  and name single-player scripts register found several nothing sent. They
+  are now raised from what the host reports:
+  * the player's detection meter as it changes (`CStealthIndicatorEvent`,
+    to the hundredth: JAS_020's tutorials, the outposts' defence);
+  * shots, the player's and the story's characters' (`CFCXWeaponShootEvent`
+    on the shooter's groups: wielder, weapon name, class id, rounds left;
+    WIL_020's flamethrower barks, WIL_040's guards);
+  * a collectible picked up (`CCollectibleCollectedEvent` on the player:
+    the POI controller keeping a relic's find);
+  * a watched vehicle's health (`OnVehicleHealthChanged`, in its data's
+    terms: JAS_130 B50's pirates bail out of a technical shot to 900);
+  * a placed prop broken (`StaticBreakable_Break`: JAS_130's melee
+    tutorial's door);
+  * a picture taken as the camera's shutter goes (`Picture_Taken`:
+    JAS_200 B30's barks);
+  * a contextual action free again once its idle `CoolDownTime` has passed
+    since it ended (`CA_Available`: JAS_020 B10's skinner goes back to his
+    animal);
+  * a GSF `Rumble` pulses the pad (Grant's death scene's heartbeat).
+
+  What is left unsent is coop's, a photo map no single-player script
+  plugs, the shopkeepers' UI hand-off (our shop opens at shopkeepers by
+  itself), and the water listener (coop's rafting).
 
 ## In the game
 
