@@ -1642,11 +1642,22 @@ fn run_story(
     view.player_state.look_angles = [p.pitch.to_degrees(), 0.0, -p.yaw.to_degrees()];
     // (Story helicopters too: G3's trial's, flying in.)
     for (heli, at, health) in &helis {
-        view.spawned.insert(heli.vehicle, fc3_story::Live { pos: to_dunia(at.translation), alive: !health.dead, health: health.current, ai_state: 0 });
+        view.spawned.insert(
+            heli.vehicle,
+            fc3_story::Live { pos: to_dunia(at.translation), alive: !health.dead, health: health.current, max_health: health.max, ai_state: 0 },
+        );
     }
     for (entity, vehicle, at, health) in &vehicle_views {
-        view.spawned.insert(vehicle.story_id(), fc3_story::Live { pos: to_dunia(at.translation), alive: health.is_none_or(|h| !h.dead),
-            health: health.map_or(1.0, |h| h.current), ai_state: 0 });
+        view.spawned.insert(
+            vehicle.story_id(),
+            fc3_story::Live {
+                pos: to_dunia(at.translation),
+                alive: health.is_none_or(|h| !h.dead),
+                health: health.map_or(1.0, |h| h.current),
+                max_health: health.map_or(1.0, |h| h.max),
+                ai_state: 0,
+            },
+        );
         view.pawn_vehicles.extend(vehicle.npc_occupants());
         // (On its mounted gun, in its gunner seat: HUR_040's barge.)
         let gunning = p.mounted.and_then(|m| guns.get(m.turret).ok()).and_then(|g| g.on_vehicle()) == Some(entity);
@@ -1709,8 +1720,10 @@ fn run_story(
             Some(crate::npc::NpcState::Combat) => 3,
             _ => 0,
         };
-        view.spawned
-            .insert(a.id, fc3_story::Live { pos: to_dunia(at.translation - Vec3::Y * crate::player::HALF_HEIGHT), alive: !a.dead, health: 1.0, ai_state });
+        view.spawned.insert(
+            a.id,
+            fc3_story::Live { pos: to_dunia(at.translation - Vec3::Y * crate::player::HALF_HEIGHT), alive: !a.dead, health: 1.0, max_health: 1.0, ai_state },
+        );
     }
     // (Not swimming while held after a move or played by a scene: the flag
     // is the last the movement saw, the sea a reload took him from;

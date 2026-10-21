@@ -72,6 +72,8 @@ pub struct Live {
     pub pos: [f32; 3],
     pub alive: bool,
     pub health: f32,
+    /// Its health when whole (a vehicle's health listeners hear both).
+    pub max_health: f32,
     /// AI state: 0 relaxed or cautious, 1 investigating, 2 alert, 3 in
     /// combat.
     pub ai_state: u8,
@@ -494,6 +496,30 @@ impl Story {
             let stealth = meter(view.player_state.stealth);
             if meter(c.view.player_state.stealth) != stealth && c.time > 0.0 {
                 c.raise(&Listen::Entity(PLAYER, "CStealthIndicatorEvent".into()), vec![Arg::Num(stealth)]);
+            }
+            // A watched vehicle's health changing (`OnVehicleHealthChanged`:
+            // its health and its full health; JAS_130 B50's pirates bail out
+            // of a technical shot down to 900). Told in its own data's terms
+            // where it has them (a technical's 1000): the host's own figures
+            // for how much a vehicle takes aren't the game's.
+            let health_watched: std::collections::BTreeSet<u64> = c
+                .listeners
+                .values()
+                .filter_map(|l| match &l.on {
+                    Listen::Entity(id, e) if e == "OnVehicleHealthChanged" => Some(*id),
+                    _ => None,
+                })
+                .collect();
+            for id in health_watched {
+                let (Some(was), Some(now)) = (c.view.spawned.get(&id), view.spawned.get(&id)) else { continue };
+                if (was.health - now.health).abs() > 1e-3 {
+                    let (health, full) = match c.data.entities.get(&id).and_then(vehicles::max_health) {
+                        Some(full) if now.max_health > 0.0 => (now.health / now.max_health * full, full),
+                        _ => (now.health, now.max_health.max(now.health)),
+                    };
+                    let args = vec![Arg::Num(health as f64), Arg::Num(full as f64)];
+                    c.raise(&Listen::Entity(id, "OnVehicleHealthChanged".into()), args);
+                }
             }
             c.view = view;
             for (id, was_loaded) in before {
@@ -3085,6 +3111,32 @@ mod tests {
         assert_eq!(heard, [0.3, 0.85, 1.0]);
     }
 
+    /// A watched vehicle's health changing is told with its health and full
+    /// health (`VehicleHealthListener_v2`); unchanged, it isn't.
+    #[test]
+    fn a_watched_vehicles_health_changes_are_told() {
+        let mut story = empty_story();
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            heard = {}
+            local box = { _type = { OnHealth = function(self, health, full) heard[#heard + 1] = health .. "/" .. full end } }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("70", box, "OnHealth", "OnVehicleHealthChanged")
+        "#,
+            )
+            .exec()
+            .unwrap();
+        let mut view = View::default();
+        for health in [1000.0, 1000.0, 850.0, 850.0, 0.0] {
+            view.spawned.insert(70, Live { alive: health > 0.0, health, max_health: 1000.0, ..Default::default() });
+            story.update(0.1, view.clone());
+        }
+        let heard: Vec<String> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        assert_eq!(heard, ["850/1000", "0/1000"]);
+    }
+
     /// A collectible picked up is told on the player with its id (the
     /// `CollectibleListener` a POI waits on its relic with); another pickup
     /// isn't.
@@ -3221,7 +3273,7 @@ mod tests {
             .unwrap();
         // He has walked 20 m east; the player stands 10 m behind, looking at him.
         let mut view = View { player: [20.0, 10.0, 0.0], look: [1.0, 0.0, 0.0], fov: 60.0, ..View::default() };
-        view.spawned.insert(100, Live { pos: [30.0, 10.0, 0.0], alive: true, health: 1.0, ai_state: 0 });
+        view.spawned.insert(100, Live { pos: [30.0, 10.0, 0.0], alive: true, health: 1.0, max_health: 1.0, ai_state: 0 });
         story.update(0.1, view);
         let tails = story.tail_targets();
         assert_eq!(tails.len(), 1);

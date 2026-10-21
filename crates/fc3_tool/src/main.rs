@@ -2631,7 +2631,7 @@ fn main() -> Result<()> {
                         Due::Answer(id) => story.box_answered(id, true),
                         Due::Group(pawn, _event, ca) => {
                             if let Some(p) = data.position(ca) {
-                                view.spawned.insert(pawn, fc3_story::Live { pos: p, alive: true, health: 1.0, ai_state: 0 });
+                                view.spawned.insert(pawn, fc3_story::Live { pos: p, alive: true, health: 1.0, max_health: 1.0, ai_state: 0 });
                             }
                             story.action_started(pawn);
                         }
