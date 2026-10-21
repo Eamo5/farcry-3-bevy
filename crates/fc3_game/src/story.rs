@@ -3157,6 +3157,18 @@ fn run_story(
                             }
                         }
                     }
+                    // Nothing for the host to do: kept by the story itself
+                    // (who holds a character, a companion's lead, contextual
+                    // actions' states), or already so here (a weapon a script
+                    // spawned is carried as it spawns; the camera's near
+                    // plane is a centimetre already for close-ups; inputs
+                    // aren't held over).
+                    "CAPI_AI.AcquireControl"
+                    | "CAPI_Companion.CompanionSetLead"
+                    | "ToggleContextualActionState"
+                    | "CAPI_Pawn.AddWeapon"
+                    | "CAPI_Player.SetCloseUpCamera"
+                    | "CAPI_Player.ResetInputs" => {}
                     // (Told once a run, for finding what scripts ask that
                     // nothing plays.)
                     other => {
