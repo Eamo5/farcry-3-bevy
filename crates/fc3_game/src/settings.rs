@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use bevy::audio::{GlobalVolume, Volume};
 use bevy::prelude::*;
@@ -589,6 +590,13 @@ fn apply_effects(settings: Res<Settings>, cameras: Query<(Entity, Ref<crate::pla
     }
 }
 
+/// `FC3_MUTE` (tests): every sound silent, but still played and mixed
+/// through (the mixer's levels and limiter as they would be).
+pub fn muted() -> bool {
+    static MUTED: LazyLock<bool> = LazyLock::new(|| std::env::var_os("FC3_MUTE").is_some());
+    *MUTED
+}
+
 fn apply_settings(
     settings: Res<Settings>,
     displays: Res<Displays>,
@@ -600,7 +608,8 @@ fn apply_settings(
     if !settings.is_changed() {
         return;
     }
-    volume.volume = Volume::Linear(settings.master_volume);
+    // (Muted: silent from their start, videos' soundtracks too.)
+    volume.volume = Volume::Linear(if muted() { 0.0 } else { settings.master_volume });
     if let Ok(mut w) = windows.single_mut() {
         let present = if settings.vsync { PresentMode::AutoVsync } else { PresentMode::AutoNoVsync };
         if w.present_mode != present {

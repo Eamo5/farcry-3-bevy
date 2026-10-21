@@ -15,7 +15,7 @@ use std::collections::HashMap;
 
 use std::sync::{Arc, LazyLock};
 
-use bevy::audio::{AudioSink, AudioSinkPlayback, GlobalVolume, PlaybackMode, SpatialAudioSink, SpatialListener, SpatialScale, Volume};
+use bevy::audio::{AudioSink, AudioSinkPlayback, PlaybackMode, SpatialAudioSink, SpatialListener, SpatialScale, Volume};
 use bevy::prelude::*;
 use fc3_formats::audio::Curve;
 
@@ -34,6 +34,7 @@ impl Plugin for SoundPlugin {
             .add_message::<LoopSfx>()
             .init_resource::<Mixer>()
             .init_resource::<Mixings>()
+            .init_resource::<MixLimit>()
             .init_resource::<SoundRegions>()
             .add_systems(OnExit(crate::menu::GameState::Loading), (load_bank, load_sound_points, load_regions, crate::mixer::load_rooms))
             .add_systems(PostStartup, attach_listener)
@@ -508,6 +509,58 @@ struct LoopEmitter {
     tracks: Option<(u32, u32, f32)>,
 }
 
+/// The most one-shot voices one event plays at once (each layer of each
+/// instance counting): a gun's shots ring over each other only so far, the
+/// oldest giving way.
+const EVENT_VOICES: usize = 8;
+/// The most voices playing at once: past it, the quietest one-shots give
+/// way. (Every voice is mixed sample by sample on the one audio thread; a
+/// firefight's hundred and more starved it, and crackled.)
+const MAX_VOICES: usize = 48;
+/// One-shots quieter than this where they start aren't played at all.
+const INAUDIBLE: f32 = 1e-3;
+/// How long a voice that gives way takes to fade out (s): cut at once, it
+/// clicks.
+const STEAL_FADE: f32 = 0.06;
+
+/// The whole mix's gain now, as the limiter keeps it from clipping: the
+/// voices' levels together (their squares' sum's root) under `LIMIT_RMS`
+/// and the loudest under `LIMIT_PEAK`, after the master volume. It comes
+/// down at once and back up `LIMIT_RELEASE` dB a second. (The mix is
+/// lifted `MIX_LIFT` and the loudest voices reach past full scale on their
+/// own: a fight clipped, and crackled.)
+#[derive(Resource)]
+pub struct MixLimit {
+    pub gain: f32,
+}
+
+impl Default for MixLimit {
+    fn default() -> Self {
+        MixLimit { gain: 1.0 }
+    }
+}
+
+const LIMIT_RMS: f32 = 0.7;
+const LIMIT_PEAK: f32 = 0.95;
+const LIMIT_RELEASE: f32 = 6.0;
+
+impl MixLimit {
+    /// The gain for a mix whose levels (after the master) come to `rms`
+    /// together and `peak` at the loudest, `dt` seconds on.
+    fn follow(&mut self, rms: f32, peak: f32, dt: f32) {
+        let want = (LIMIT_RMS / rms.max(1e-6)).min(LIMIT_PEAK / peak.max(1e-6)).min(1.0);
+        self.gain = if want < self.gain { want } else { want.min(self.gain * 10f32.powf(LIMIT_RELEASE * dt / 20.0)) };
+    }
+}
+
+/// When a one-shot voice started (s, real time), to know the oldest.
+#[derive(Component)]
+struct Born(f32);
+
+/// A voice giving way: the fade's time left.
+#[derive(Component)]
+struct Stolen(f32);
+
 /// A playing sound as heard: its mix level within the event and the
 /// sender's volume, how it fades with distance, and in blended events how it
 /// follows distance and the game's parameters.
@@ -527,6 +580,8 @@ struct Heard {
     /// A bed's layer, and its share now (day and night tracks).
     layer: Option<u32>,
     share: f32,
+    /// The event it plays for (its voices are counted together).
+    event: u32,
 }
 
 impl Heard {
@@ -544,20 +599,28 @@ impl Heard {
 #[allow(clippy::type_complexity)]
 fn hear(
     listener: Query<&GlobalTransform, With<SpatialListener>>,
-    master: Res<GlobalVolume>,
+    settings: Res<crate::settings::Settings>,
     (bank, mut mixer): (Option<Res<SoundBank>>, ResMut<Mixer>),
     mut commands: Commands,
-    mut voices: Query<(Entity, &Heard, &GlobalTransform, Option<&mut AudioSink>, Option<&mut SpatialAudioSink>)>,
-    (time, mut shown): (Res<Time<Real>>, Local<f32>),
+    mut voices: Query<(Entity, &Heard, &GlobalTransform, Option<&mut AudioSink>, Option<&mut SpatialAudioSink>, Option<&mut Stolen>)>,
+    (time, mut shown, mut limit): (Res<Time<Real>>, Local<f32>, ResMut<MixLimit>),
 ) {
+    let dt = time.delta_secs();
+    // (The one-shots that could give way, by how loud they are now.)
+    let mut playing = 0;
+    let mut quietest: Vec<(f32, Entity)> = Vec::new();
+    // (How loud they all are together: the sum of their levels, of their
+    // squares, and the loudest.)
+    let (mut sum, mut squares, mut loudest) = (0.0f32, 0.0f32, 0.0f32);
+    let mut loudest_event = 0;
     let ear = listener.single().ok().map(|t| t.translation());
-    let master = master.volume.to_linear();
+    let master = settings.master_volume;
     // (RUST_LOG=farcry3::sound=debug: what the mixer does to the playing
     // sounds, every few seconds.)
     *shown += time.delta_secs();
     let tally = *shown > 3.0;
-    let (mut held, mut lowered, mut all) = (0, 0, 0);
-    for (e, heard, t, sink, spatial) in &mut voices {
+    let (mut held, mut lowered, mut all, mut stolen) = (0, 0, 0, 0);
+    for (e, heard, t, sink, spatial, steal) in &mut voices {
         let (db, paused, stopped) = match (heard.bus, bank.as_deref()) {
             (Some(bus), Some(bank)) => mixer.on_bus(&bank.mix, bus),
             _ => (0.0, false, false),
@@ -570,7 +633,33 @@ fn hear(
             continue;
         }
         let (v, speed) = heard.at(ear.map_or(0.0, |e| e.distance(t.translation())));
-        let v = Volume::Linear(v * master * gain_of(db));
+        // (Its level in the mix, then under the master volume and the
+        // limiter.)
+        let level = v * gain_of(db);
+        let mut v = level * master * limit.gain;
+        // (Giving way: faded out, then gone.)
+        if let Some(mut steal) = steal {
+            stolen += 1;
+            steal.0 -= dt;
+            if steal.0 <= 0.0 {
+                commands.entity(e).despawn();
+                continue;
+            }
+            v *= steal.0 / STEAL_FADE;
+        } else {
+            playing += 1;
+            if !heard.looping {
+                quietest.push((v, e));
+            }
+        }
+        if !paused {
+            sum += level;
+            squares += level * level;
+            if level > loudest {
+                (loudest, loudest_event) = (level, heard.event);
+            }
+        }
+        let v = Volume::Linear(if crate::settings::muted() { 0.0 } else { v });
         if let Some(mut s) = sink {
             s.set_volume(v);
             s.set_speed(speed);
@@ -595,9 +684,22 @@ fn hear(
         }
     }
     mixer.clear_stops();
+    limit.follow(squares.sqrt() * master, loudest * master, dt);
+    // Too many: the quietest one-shots give way.
+    if playing > MAX_VOICES {
+        quietest.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for &(_, e) in quietest.iter().take(playing - MAX_VOICES) {
+            commands.entity(e).insert(Stolen(STEAL_FADE));
+        }
+    }
     if tally {
         *shown = 0.0;
-        debug!("mixer: {all} sounds, {held} paused, {lowered} lowered, low-passes {:?}", mixer.filters_on());
+        debug!("mixer: {all} sounds ({stolen} giving way), {held} paused, {lowered} lowered, low-passes {:?}", mixer.filters_on());
+        debug!(
+            "mixer: levels sum {sum:.2}, rms {:.2}, loudest {loudest:.2} ({loudest_event:08x}) (before the master {master:.2}), limiter {:+.1} dB",
+            squares.sqrt(),
+            20.0 * limit.gain.log10()
+        );
         if let Some(p) = crate::mixer::reverb() {
             debug!("mixer: reverb {:.1} s, tail {:+.0} dB after {:.0} ms, reflections {:+.0} dB after {:.0} ms", p[4], p[2], p[7], p[12], p[1]);
         }
@@ -724,10 +826,28 @@ fn play_one_shots(
     mut rng: ResMut<Rng>,
     mut commands: Commands,
     listener: Query<&GlobalTransform, With<SpatialListener>>,
+    (time, voices, limit): (Res<Time<Real>>, Query<(Entity, &Heard, &Born), Without<Stolen>>, Res<MixLimit>),
+    mut tally: Local<(f32, HashMap<u32, u32>)>,
 ) {
     let Some(bank) = bank else { return };
     let ear = listener.single().ok().map(|t| t.translation());
+    let now = time.elapsed_secs();
+    // (RUST_LOG=farcry3::sound=debug: the events played most these few
+    // seconds, to catch one started over and over.)
+    tally.0 += time.delta_secs();
+    if tally.0 > 3.0 {
+        let mut most: Vec<(u32, u32)> = tally.1.drain().collect();
+        most.sort_by(|a, b| b.1.cmp(&a.1));
+        most.truncate(6);
+        if !most.is_empty() {
+            debug!("mixer: most played {:?}", most.iter().map(|(e, n)| format!("{e:08x} x{n}")).collect::<Vec<_>>());
+        }
+        tally.0 = 0.0;
+    }
+    // (Each event's one-shot voices playing, oldest first; made when needed.)
+    let mut by_event: Option<HashMap<u32, Vec<(f32, Option<Entity>)>>> = None;
     for ev in events.read() {
+        *tally.1.entry(ev.event).or_default() += 1;
         // (Its pushes and pops of mixer states.)
         mixer.apply(&bank.mix, ev.event);
         let (files, vol) = bank.resolve_case(&loop_token(ev.event, &[]), ev.event, &mut rng);
@@ -751,15 +871,41 @@ fn play_one_shots(
                 bus,
                 layer: None,
                 share: 1.0,
+                event: ev.event,
             };
             let (v, speed) = heard.at(d);
             if std::env::var("FC3_SFX_DEBUG").is_ok() {
                 info!("  {f} at {v:.3}");
             }
+            // (Not heard where it starts: not played.)
+            if ev.at.is_some() && ear.is_some() && v < INAUDIBLE {
+                continue;
+            }
+            // (The event's oldest voice gives way past its most.)
+            let mine = by_event
+                .get_or_insert_with(|| {
+                    let mut map: HashMap<u32, Vec<(f32, Option<Entity>)>> = HashMap::new();
+                    for (e, h, born) in &voices {
+                        if !h.looping {
+                            map.entry(h.event).or_default().push((born.0, Some(e)));
+                        }
+                    }
+                    map.values_mut().for_each(|l| l.sort_by(|a, b| a.0.total_cmp(&b.0)));
+                    map
+                })
+                .entry(ev.event)
+                .or_default();
+            if mine.len() >= EVENT_VOICES {
+                if let (_, Some(oldest)) = mine.remove(0) {
+                    commands.entity(oldest).insert(Stolen(STEAL_FADE));
+                }
+            }
+            mine.push((now, None));
             commands.spawn((
                 AudioPlayer::<Sfx>(server.load(cache_path(&f))),
-                PlaybackSettings { speed, ..settings(PlaybackMode::Despawn, v, ev.at.is_some()) },
+                PlaybackSettings { speed, ..settings(PlaybackMode::Despawn, v * limit.gain, ev.at.is_some()) },
                 heard,
+                Born(now),
                 Transform::from_translation(ev.at.unwrap_or(Vec3::ZERO)),
             ));
         }
@@ -842,6 +988,7 @@ fn update_loops(
                 bus,
                 layer,
                 share: track_share(ev.tracks, layer),
+                event: ev.event,
             };
             let (v, speed) = heard.at(d);
             if std::env::var("FC3_SFX_DEBUG").is_ok() {
@@ -1161,6 +1308,26 @@ fn ambience(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_limiter_brings_a_fight_down_at_once_and_lets_it_back_slowly() {
+        let mut limit = MixLimit::default();
+        // A quiet scene: left as it is.
+        limit.follow(0.4, 0.3, 0.016);
+        assert_eq!(limit.gain, 1.0);
+        // A fight past full scale (as measured: the voices together at 1.2,
+        // the loudest at 1.0 after the master): down at once.
+        limit.follow(1.2, 1.0, 0.016);
+        assert!((limit.gain - 0.7 / 1.2).abs() < 1e-5);
+        // Quiet again: back up 6 dB a second, no faster.
+        let before = limit.gain;
+        limit.follow(0.2, 0.1, 0.5);
+        assert!((20.0 * (limit.gain / before).log10() - 3.0).abs() < 1e-3);
+        for _ in 0..10 {
+            limit.follow(0.2, 0.1, 0.5);
+        }
+        assert_eq!(limit.gain, 1.0);
+    }
 
     #[test]
     fn a_beds_day_tracks_give_way_to_its_night_ones() {

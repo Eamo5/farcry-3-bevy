@@ -486,7 +486,30 @@ lines as it's made, not on the audio thread when it first rings.
 The authored mix sits low: dialogue near -7 dB, the player's gun -12,
 music -12, other people's gunfire -14 to -17, ambience -14 to -20 (the
 world's sound points 9 dB under that, by their bus) and footsteps -21. The game raises the whole mix by 6 dB (`MIX_LIFT`) so that
-dialogue plays near full scale. Music takes its gains the same way.
+dialogue plays near full scale. Music takes its gains the same way, and
+the master volume over them.
+
+Voices are kept in hand (`sound::hear`, `play_one_shots`), as a firefight
+started more than 120 at once and the one audio thread, mixing each sample
+by sample, fell behind and crackled:
+
+* A placed one-shot too faint to hear where it starts (under 1/1000) isn't
+  played.
+* One event plays at most 8 one-shot voices at once (each layer of each
+  instance counting); past that its oldest gives way.
+* At most 48 voices play at once; past that the quietest one-shots give
+  way. Loops are never stolen.
+* A voice giving way fades out over 60 ms rather than cutting off, which
+  clicks.
+
+Rodio adds the voices up with nothing to stop them clipping, and with the
+lift the loudest gunshots pass full scale on their own. A limiter
+(`MixLimit`) watches the voices' levels after the master volume: their
+squares' sum's root kept under 0.7, the loudest under 0.95. It comes down
+at once and back up 6 dB a second. `RUST_LOG=farcry3::sound=debug` logs the
+voices, how many are giving way, the levels and the limiter's gain every
+few seconds. `FC3_MUTE=1` silences everything but still plays and mixes it
+through (for test runs).
 
 The game (`sound::hear`) sets each playing sound's volume every frame from its distance to
 the listener. Unknown ones fade by a stand-in curve: full to 5 m and gone at 100 m. Bevy's
