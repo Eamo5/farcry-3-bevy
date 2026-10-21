@@ -1408,7 +1408,9 @@ impl Story {
     }
 
     /// Something was destroyed (a blast, a script's word): the scripts
-    /// waiting on it hear `CDestroyEvent` (its final state), once.
+    /// waiting on it hear `CDestroyEvent` (its final state), once, and those
+    /// waiting on a prop broken `StaticBreakable_Break` (JAS_130's melee
+    /// tutorial's hotel door).
     pub fn destroyed(&mut self, id: u64) {
         let n = {
             let mut c = self.core.borrow_mut();
@@ -1416,6 +1418,7 @@ impl Story {
                 return;
             }
             c.raise(&Listen::Entity(id, "CDestroyEvent".into()), vec![Arg::Num(1.0)])
+                + c.raise(&Listen::Entity(id, "StaticBreakable_Break".into()), vec![Arg::id(id)])
         };
         if n > 0 {
             self.pump();
@@ -3109,6 +3112,27 @@ mod tests {
         }
         let heard: Vec<f64> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
         assert_eq!(heard, [0.3, 0.85, 1.0]);
+    }
+
+    /// A prop broken is told to its `StaticBreakableListener`, once.
+    #[test]
+    fn a_broken_prop_is_told_once() {
+        let mut story = empty_story();
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            broken = 0
+            local box = { _type = { OnBreak = function(self) broken = broken + 1 end } }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("80", box, "OnBreak", "StaticBreakable_Break")
+        "#,
+            )
+            .exec()
+            .unwrap();
+        story.destroyed(80);
+        story.destroyed(80);
+        assert_eq!(story.domino().lua().globals().get::<u32>("broken").unwrap(), 1);
     }
 
     /// A watched vehicle's health changing is told with its health and full
