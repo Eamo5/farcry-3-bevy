@@ -954,6 +954,18 @@ pub struct ScriptedPlayer {
     /// The player's weapon put away for a scene (`CAPI_Pawn.SetNoWeaponMode`:
     /// the narrative scenes' setup, until their cleanup).
     pub no_weapon: bool,
+    /// Where the maps show the player while a script says (Bevy space;
+    /// `OverridePlayerPosition`: BAM_020's sunken ship and the other
+    /// places under the world, shown where they lie on it).
+    pub map_position: Option<Vec3>,
+}
+
+impl ScriptedPlayer {
+    /// The player's place on the maps: theirs, or where a script shows
+    /// them.
+    pub fn on_map(&self, t: &Transform) -> Transform {
+        Transform { translation: self.map_position.unwrap_or(t.translation), ..*t }
+    }
 }
 
 /// A health bar a script put up: whose, the name it shows (a string id) and
@@ -991,6 +1003,7 @@ impl Default for ScriptedPlayer {
             hud_parts_hidden: Default::default(),
             health_bar: None,
             no_weapon: false,
+            map_position: None,
         }
     }
 }
@@ -2800,6 +2813,11 @@ fn run_story(
                         scripted.camera_drawn = scripted.has_camera();
                     }
                     "CAPI_Pawn.Holster" | "CAPI_Pawn.ForceHolster" if a(0) == fc3_story::PLAYER.to_string() => scripted.camera_drawn = false,
+                    // The player shown elsewhere on the maps (`on, x, y, z`).
+                    "OverridePlayerPosition" => {
+                        let f = |i: usize| a(i).parse::<f32>().unwrap_or(0.0);
+                        scripted.map_position = (a(0) == "true" || a(0) == "1").then(|| to_bevy([f(1), f(2), f(3)]));
+                    }
                     "CAPI_Pawn.SetNoWeaponMode" if a(0) == fc3_story::PLAYER.to_string() => {
                         scripted.no_weapon = a(1) == "true" || a(1) == "1";
                         debug!("story: weapon {}", if scripted.no_weapon { "put away" } else { "back" });
@@ -5351,6 +5369,19 @@ mod tests {
         // One a script gave by its own archetype goes by that name.
         let granted = [(index("1911"), "weapons:FC3/Kimber.Special".to_string())].into_iter().collect();
         assert_eq!(story_weapons(&defs, &slots, 1, &shop, &granted).1.as_deref(), Some("weapons:FC3/Kimber.Special"));
+    }
+
+    #[test]
+    fn scripts_show_the_player_elsewhere_on_the_maps() {
+        // BAM_020's sunken ship: on the maps where it lies, turned as the
+        // player is.
+        let mut scripted = ScriptedPlayer::default();
+        let t = Transform::from_xyz(1.0, -20.0, 3.0).with_rotation(Quat::from_rotation_y(0.5));
+        assert_eq!(scripted.on_map(&t), t);
+        scripted.map_position = Some(to_bevy([3382.0, 2316.0, 108.0]));
+        let shown = scripted.on_map(&t);
+        assert_eq!(shown.translation, Vec3::new(3382.0, 108.0, -2316.0));
+        assert_eq!(shown.rotation, t.rotation);
     }
 
     #[test]

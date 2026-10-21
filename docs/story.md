@@ -192,6 +192,12 @@ is the story's own:
 * **The HUD's parts.** `UISendEventToPlayer` to the HUD hides and shows
   its parts (`HideUIElement Radar|Reticule|Ammo`); our minimap hides with
   the radar.
+* **The player shown elsewhere on the maps.** `OverridePlayerPosition
+  <on> <x> <y> <z>` (the `OverridePlayerMapPosition` box, 94 uses:
+  BAM_020's sunken ship and the other places under the world) puts the
+  player, on the radar, the minimap and its dots, the map page and the
+  full map, at a place on the island while it's on
+  (`ScriptedPlayer::on_map`); a reload takes it off.
 * **Health bars.** `DisplayHealthBar <show> <entity> <name id>` puts a
   character's or vehicle's health on the HUD while it matters: JAS_100's
   and SAM_015's companions, WIL_040's VIP, HUR_040's barge, JAS_220's

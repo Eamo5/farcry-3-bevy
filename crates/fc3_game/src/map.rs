@@ -589,6 +589,8 @@ fn update_minimap(
         return;
     }
     let Some(mut m) = materials.get_mut(&node.0) else { return };
+    // (Where a script shows the player, while it does.)
+    let t = &scripted.on_map(t);
     let player = map_uv(t.translation);
     let half = reach.radius / worldmap::METRES_PER_PIXEL / MAP_SIZE as f32;
     m.params = MapParams {
@@ -624,7 +626,7 @@ fn update_full_map(
     scroll: Res<AccumulatedMouseScroll>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut view: ResMut<FullMapView>,
-    (mut waypoint, gps, original): (ResMut<Waypoint>, Res<Gps>, Res<crate::menu::OriginalPause>),
+    (mut waypoint, gps, original, scripted): (ResMut<Waypoint>, Res<Gps>, Res<crate::menu::OriginalPause>, Res<crate::story::ScriptedPlayer>),
     players: Query<(&Transform, &Player)>,
     mut full: Query<(&MaterialNode<MapMaterial>, &mut Visibility, &ComputedNode), (With<FullMap>, Without<FullMapHint>)>,
     mut hint: Query<&mut Visibility, (With<FullMapHint>, Without<FullMap>)>,
@@ -642,6 +644,7 @@ fn update_full_map(
         return;
     }
     let Ok((t, p)) = players.single() else { return };
+    let t = &scripted.on_map(t);
     let size = computed.size() * computed.inverse_scale_factor();
     let aspect = size.x / size.y.max(1.0);
     // Gamepad: left stick pans, the triggers zoom, Y recentres, X sets a waypoint.
@@ -721,7 +724,12 @@ fn update_minimap_icons(
     mut commands: Commands,
     objectives: Res<crate::story::ObjectiveMarkers>,
     reach: Res<MinimapReach>,
-    (hud, pickups, original): (Res<HudParams>, Query<(&GlobalTransform, &crate::pickups::Pickup)>, Res<crate::hud::OriginalHud>),
+    (hud, pickups, original, scripted): (
+        Res<HudParams>,
+        Query<(&GlobalTransform, &crate::pickups::Pickup)>,
+        Res<crate::hud::OriginalHud>,
+        Res<crate::story::ScriptedPlayer>,
+    ),
 ) {
     for e in &dots {
         commands.entity(e).despawn();
@@ -731,6 +739,7 @@ fn update_minimap_icons(
         return;
     }
     let (Ok((t, p)), Ok(mini)) = (players.single(), minimap.single()) else { return };
+    let t = &scripted.on_map(t);
     let rot = Rot2::radians(heading(p));
     // Mission objectives: held on the rim when further than the map shows.
     for &at in &objectives.0 {

@@ -1078,7 +1078,12 @@ fn drive_map_page(
         Res<crate::story::ObjectiveMarkers>,
     ),
     (mut waypoint, explored): (ResMut<crate::map::Waypoint>, Res<crate::map::Explored>),
-    (island, treasure, world): (Res<crate::treasure_maps::Island>, Res<crate::treasure_maps::TreasureMaps>, Res<crate::pickups::WorldState>),
+    (island, treasure, world, scripted_player): (
+        Res<crate::treasure_maps::Island>,
+        Res<crate::treasure_maps::TreasureMaps>,
+        Res<crate::pickups::WorldState>,
+        Res<crate::story::ScriptedPlayer>,
+    ),
     mut story: Option<NonSendMut<crate::story::StoryHost>>,
     mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
     (mut cursor, buttons, windows): (MessageReader<CursorMoved>, Res<ButtonInput<bevy::input::mouse::MouseButton>>, Query<&Window, With<PrimaryWindow>>),
@@ -1140,8 +1145,9 @@ fn drive_map_page(
                     items.push(fields);
                 };
                 if let Ok((t, p)) = players.single() {
-                    // (Its turn clockwise from north, as the movie turns it.)
-                    icon(map_icon::PLAYER, t.translation, "", -p.yaw.to_degrees(), false);
+                    // (Its turn clockwise from north, as the movie turns it;
+                    // where a script shows the player, while it does.)
+                    icon(map_icon::PLAYER, scripted_player.on_map(t).translation, "", -p.yaw.to_degrees(), false);
                 }
                 // The markers scripts show, as what they are (a quest's giver,
                 // a mission's, else an objective), and those standing in the
@@ -4671,10 +4677,16 @@ fn drive_radar(
     mut last: Local<Option<Radar>>,
     (story, time, mut standing): (Option<NonSend<crate::story::StoryHost>>, Res<Time<Real>>, Local<(f32, Vec<(f64, Vec3)>)>),
     mut plants: Local<Option<std::collections::HashMap<crate::syringes::Plant, &'static str>>>,
-    (mut sites, actors): (ResMut<crate::npc::EncounterSites>, Query<(&GlobalTransform, &crate::story_actors::StoryActor)>),
+    (mut sites, actors, scripted_player): (
+        ResMut<crate::npc::EncounterSites>,
+        Query<(&GlobalTransform, &crate::story_actors::StoryActor)>,
+        Res<crate::story::ScriptedPlayer>,
+    ),
 ) {
     let Interface::Running(host) = &*state else { return };
     let Ok((at, player)) = players.single() else { return };
+    // (Where a script shows the player, while it does.)
+    let at = &scripted_player.on_map(at);
     // The story's markers: the standing ones looked over once a second.
     let now_secs = time.elapsed_secs();
     // (With the safehouses the story opens, to travel to or not yet.)
