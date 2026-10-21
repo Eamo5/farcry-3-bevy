@@ -204,6 +204,18 @@ is the story's own:
   (the narrative scenes' setup, once their holster has had its time, and
   their cleanup) takes the weapon out of the player's hands for the
   scene: it isn't drawn and doesn't fire until the scene gives it back.
+* **Effects on characters.** `CAPI_Pawn.SpawnParticle <pawn> <effect>
+  <bone> <handle> <tag> <turn> <x> <y> <z>` (the `SpawnParticle_v4` box:
+  the Ink Monster's smoke arms, the waterfalls' spray over the player's
+  head, Grant's neck in the prologue, the cave's mushroom puff) plays an
+  authored effect on a bone (`pawn_fx`): the player's on the camera, a
+  character's on the bone named (its head for one it lacks), until
+  `StopToDestroyParticle` or `DestroyParticle` with the same tag, when
+  it stops emitting and what it put out lives out. The effect comes as
+  its name's path hash (`GetPathID`), the hash the cache files authored
+  effects by; the bone as its name's (`GetStringID`), the rigs' own. The
+  converter caches the effects the scripts load
+  (`ScriptPack::particle_resources`: seven of them).
 
 ## In the game
 

@@ -1403,13 +1403,14 @@ fn run_story(
     mut ui: ResMut<StoryUi>,
     mut layers: ResMut<MissionLayers>,
     mut hud: ResMut<crate::hud::HudState>,
-    (mut players, mut stats, perks, mount, state, actor_health): (
+    (mut players, mut stats, perks, mount, state, actor_health, mut pawn_fx): (
         Query<(&mut Transform, &mut Player, Option<&mut crate::combat::Health>)>,
         Query<&mut crate::combat::PlayerStats, With<Player>>,
         Res<crate::progression::Perks>,
         Res<crate::traversal::Mount>,
         Res<State<GameState>>,
         Query<(&crate::story_actors::StoryActor, &crate::combat::Health), Without<Player>>,
+        ResMut<crate::pawn_fx::PawnFx>,
     ),
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     actors: Query<(&crate::story_actors::StoryActor, &Transform, Option<&crate::npc::Npc>), Without<Player>>,
@@ -1588,6 +1589,7 @@ fn run_story(
             host.near_at.clear();
             env_overrides.active.clear();
             env_overrides.storm = None;
+            pawn_fx.clear = true;
             layers.present.clear();
             layers.reset = true;
             orders.0.clear();
@@ -3081,6 +3083,20 @@ fn run_story(
                         let kind = &n["Remove".len()..n.len() - "Override".len()];
                         if env_overrides.active.get(kind).is_some_and(|g| !a(0).starts_with('{') || *g == a(0)) {
                             env_overrides.active.remove(kind);
+                        }
+                    }
+                    // An effect on a character's bone (`pawn, effect, bone,
+                    // handle, tag, turn, offset`), and stopped by its tag.
+                    "CAPI_Pawn.SpawnParticle" => {
+                        if let (Ok(pawn), Ok(effect)) = (a(0).parse::<u64>(), a(1).parse::<u64>()) {
+                            let f = |i: usize| a(i).parse::<f32>().unwrap_or(0.0);
+                            let (bone, tag) = (a(2).parse().unwrap_or(0), a(4).parse().unwrap_or(0));
+                            pawn_fx.requests.push(crate::pawn_fx::Request { pawn, effect, bone, tag, offset: [f(6), f(7), f(8)] });
+                        }
+                    }
+                    "CAPI_Pawn.StopToDestroyParticle" | "CAPI_Pawn.DestroyParticle" => {
+                        if let Ok(pawn) = a(0).parse::<u64>() {
+                            pawn_fx.stops.push((pawn, a(1).parse().unwrap_or(0)));
                         }
                     }
                     // A character's or vehicle's health on the HUD, by the

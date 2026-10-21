@@ -120,11 +120,43 @@ impl ScriptPack {
     pub fn paths(&self) -> impl Iterator<Item = &str> {
         self.index.values().map(|(p, _, _)| p.as_str())
     }
+
+    /// The particle effects the scripts load to play on characters
+    /// (`LoadResource([[name]], "CParticlesSystemParamResource")`, for
+    /// `CAPI_Pawn.SpawnParticle`), each once, sorted.
+    pub fn particle_resources(&self) -> Vec<String> {
+        let mut names = std::collections::BTreeSet::new();
+        for path in self.paths() {
+            let Some(text) = self.get(path) else { continue };
+            names.extend(particle_resources_in(&text));
+        }
+        names.into_iter().collect()
+    }
+}
+
+/// The particle effects one script loads (see `ScriptPack::particle_resources`).
+pub fn particle_resources_in(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for (at, _) in text.match_indices("LoadResource([[") {
+        let rest = &text[at + "LoadResource([[".len()..];
+        let Some(end) = rest.find("]]") else { continue };
+        if rest[end..].trim_start_matches([']', ',', ' ']).starts_with("\"CParticlesSystemParamResource\"") {
+            out.push(rest[..end].to_string());
+        }
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scripts_name_the_particles_they_load() {
+        let text = r#"cbox:LoadResource([[FC3_Gameplay_Water.Player.ScreenDropplets]], "CParticlesSystemParamResource");
+cbox:LoadResource([[weapons:FC3/AK47]], "CEntityArchetypeResource");"#;
+        assert_eq!(particle_resources_in(text), vec!["FC3_Gameplay_Water.Player.ScreenDropplets".to_string()]);
+    }
 
     #[test]
     fn pack_roundtrip() {

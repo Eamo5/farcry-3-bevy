@@ -149,6 +149,12 @@ pub fn authored_rel(name: &str) -> String {
     format!("particles/{}.xml", crate::cache::hash_name(&name.to_ascii_lowercase()))
 }
 
+/// An authored effect's cache file by its name's path hash (as scripts name
+/// it, `GetPathID`: the hash `authored_rel` files it by).
+pub fn authored_rel_by_hash(hash: u64) -> String {
+    format!("particles/{hash:016x}.xml")
+}
+
 /// The particle effect the player's lens drops come from: the player
 /// prototype's `ScreenDropletParticle` `psScreenDroplet`.
 pub fn player_screen_droplets(library: &crate::fcb::Object) -> Option<String> {

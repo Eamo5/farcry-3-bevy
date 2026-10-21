@@ -2086,6 +2086,19 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
             }
         }
     }
+    // The scripts' own, played on characters (`CAPI_Pawn.SpawnParticle`:
+    // the waterfalls' spray on the player, the Ink Monster's smoke arms).
+    if let Ok(pack) = std::fs::read(job.root().join(fc3_formats::scripts::DOMINO_PACK_REL))
+        .map_err(anyhow::Error::from)
+        .and_then(|b| fc3_formats::scripts::ScriptPack::from_bytes(&b))
+    {
+        for n in pack.particle_resources() {
+            if !names.iter().any(|m| m.eq_ignore_ascii_case(&n)) {
+                names.push(n.clone());
+                optional.push(n);
+            }
+        }
+    }
     // The Ink Monster's fight's (its GSF entry's `m_particle...`).
     if let Ok(s) =
         std::fs::read(job.root().join(fc3_formats::gsf::CACHE_REL)).map_err(anyhow::Error::from).and_then(|b| fc3_formats::gsf::BossFightSettings::parse(&b))

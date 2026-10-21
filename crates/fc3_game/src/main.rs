@@ -97,6 +97,7 @@ mod sky_probe;
 mod sound;
 mod sound_source;
 mod splines;
+mod pawn_fx;
 mod prop_anims;
 mod stealth;
 mod sticky_fire;
@@ -457,6 +458,7 @@ fn main() {
         .add_plugins(barks::BarksPlugin)
         .add_plugins(shake::ShakePlugin)
         .add_plugins(prop_anims::PropAnimsPlugin)
+        .add_plugins(pawn_fx::PawnFxPlugin)
         .add_plugins(aim_assist::AimAssistPlugin)
         .add_plugins(pawn_anims::PawnAnimsPlugin)
         .add_plugins(breakables::BreakablesPlugin)
