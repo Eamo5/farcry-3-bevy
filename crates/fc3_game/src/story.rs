@@ -947,6 +947,19 @@ pub struct ScriptedPlayer {
     /// HUD, `HideUIElement Radar|Reticule|Ammo`, until `ShowUIElement`),
     /// lower case.
     pub hud_parts_hidden: std::collections::BTreeSet<String>,
+    /// The character or vehicle whose health a script has the HUD show
+    /// (`DisplayHealthBar`: an escort, HUR_040's barge, JAS_220's
+    /// helicopter).
+    pub health_bar: Option<HealthBar>,
+}
+
+/// A health bar a script put up: whose, the name it shows (a string id) and
+/// the health left (0 to 1).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct HealthBar {
+    pub entity: u64,
+    pub name: u32,
+    pub fraction: f32,
 }
 
 struct InventoryBackup {
@@ -973,6 +986,7 @@ impl Default for ScriptedPlayer {
             granted: HashMap::new(),
             animal_looting: true, plant_looting: true, camera_drawn: false, camera_up: false,
             hud_parts_hidden: Default::default(),
+            health_bar: None,
         }
     }
 }
@@ -1385,12 +1399,13 @@ fn run_story(
     mut ui: ResMut<StoryUi>,
     mut layers: ResMut<MissionLayers>,
     mut hud: ResMut<crate::hud::HudState>,
-    (mut players, mut stats, perks, mount, state): (
+    (mut players, mut stats, perks, mount, state, actor_health): (
         Query<(&mut Transform, &mut Player, Option<&mut crate::combat::Health>)>,
         Query<&mut crate::combat::PlayerStats, With<Player>>,
         Res<crate::progression::Perks>,
         Res<crate::traversal::Mount>,
         Res<State<GameState>>,
+        Query<(&crate::story_actors::StoryActor, &crate::combat::Health), Without<Player>>,
     ),
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     actors: Query<(&crate::story_actors::StoryActor, &Transform, Option<&crate::npc::Npc>), Without<Player>>,
@@ -1740,6 +1755,13 @@ fn run_story(
             a.id,
             fc3_story::Live { pos: to_dunia(at.translation - Vec3::Y * crate::player::HALF_HEIGHT), alive: !a.dead, health: 1.0, max_health: 1.0, ai_state },
         );
+    }
+    // The health a script's bar shows: a character's, else a vehicle's
+    // (none left once it's gone).
+    if let Some(bar) = scripted.health_bar.as_mut() {
+        let character = actor_health.iter().find(|(a, _)| a.id == bar.entity).map(|(a, h)| if a.dead { 0.0 } else { h.fraction() });
+        let vehicle = || view.spawned.get(&bar.entity).map(|l| if l.alive && l.max_health > 0.0 { (l.health / l.max_health).clamp(0.0, 1.0) } else { 0.0 });
+        bar.fraction = character.or_else(vehicle).unwrap_or(bar.fraction);
     }
     // (Not swimming while held after a move or played by a scene: the flag
     // is the last the movement saw, the sea a reload took him from;
@@ -3052,6 +3074,12 @@ fn run_story(
                         if env_overrides.active.get(kind).is_some_and(|g| !a(0).starts_with('{') || *g == a(0)) {
                             env_overrides.active.remove(kind);
                         }
+                    }
+                    // A character's or vehicle's health on the HUD, by the
+                    // name given (`show, entity, name id`), or taken off.
+                    "DisplayHealthBar" => {
+                        scripted.health_bar =
+                            (a(0) == "true").then(|| HealthBar { entity: a(1).parse().unwrap_or(0), name: a(2).parse().unwrap_or(0), fraction: 1.0 });
                     }
                     // The HUD's parts hidden and shown again (a tutorial's,
                     // a scene's): `<movie> HideUIElement|ShowUIElement <parts>`.

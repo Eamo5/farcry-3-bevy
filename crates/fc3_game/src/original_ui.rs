@@ -66,7 +66,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_grenades,
                     drive_radar,
                     drive_potions,
-                    (drive_camera, drive_script_hud),
+                    (drive_camera, drive_script_hud, drive_health_bar),
                     drive_credits,
                     (drive_loading, frontend::drive_frontend),
                     drive_gallery,
@@ -3302,6 +3302,37 @@ fn drive_script_hud(state: NonSend<Interface>, scripted: Res<crate::story::Scrip
         host.event("ShowUIElement", &[&show.join("|")]);
     }
     *sent = scripted.hud_parts_hidden.clone();
+}
+
+/// A character's or vehicle's health a script has the HUD show
+/// (`DisplayHealthBar`: JAS_100's Dennis, HUR_040's barge, JAS_220's
+/// helicopter), in the HUD's repair indicator (`H_RepairIndicator`): its
+/// title the name the script gives, its bar (`RepairBarAnimation`, frames 1
+/// to 50, empty to full) the health left; faded in as it is put up and out
+/// as it is taken down.
+fn drive_health_bar(state: NonSend<Interface>, scripted: Res<crate::story::ScriptedPlayer>, mut shown: Local<Option<(u32, u32)>>) {
+    use fc3_ui::ExternalValue as V;
+    let Interface::Running(host) = &*state else { return };
+    let want = scripted.health_bar.map(|b| (b.name, 1 + (b.fraction.clamp(0.0, 1.0) * 49.0).round() as u32));
+    if *shown == want {
+        return;
+    }
+    let mut ok = true;
+    if let Some((name, frame)) = want {
+        if shown.is_none_or(|(was, _)| was != name) {
+            ok &= host.dps_text("RepairBarText", &host.text(name));
+        }
+        ok &= host.dps_frame("RepairBarAnimation", V::Number(frame as f64));
+        if shown.is_none() {
+            ok &= host.dps_play("RepairBarContainer", V::String("FadeIn".into()));
+        }
+    } else {
+        ok &= host.dps_play("RepairBarContainer", V::String("FadeOut".into()));
+    }
+    if ok {
+        debug!("health bar: {want:?}");
+        *shown = want;
+    }
 }
 
 /// The camera's viewfinder (`H_Camera`), over the HUD while the camera is

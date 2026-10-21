@@ -192,6 +192,14 @@ is the story's own:
 * **The HUD's parts.** `UISendEventToPlayer` to the HUD hides and shows
   its parts (`HideUIElement Radar|Reticule|Ammo`); our minimap hides with
   the radar.
+* **Health bars.** `DisplayHealthBar <show> <entity> <name id>` puts a
+  character's or vehicle's health on the HUD while it matters: JAS_100's
+  and SAM_015's companions, WIL_040's VIP, HUR_040's barge, JAS_220's
+  helicopter. It is the HUD's repair indicator (`H_RepairIndicator`): the
+  name in its title, the health left in its bar (`RepairBarAnimation`,
+  frames 1 to 50, empty to full), faded in and out (`FadeIn`,
+  `FadeOut`). A character's health is its own; a vehicle's, what the
+  story sees of it.
 
 ## In the game
 
