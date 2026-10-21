@@ -200,6 +200,10 @@ is the story's own:
   frames 1 to 50, empty to full), faded in and out (`FadeIn`,
   `FadeOut`). A character's health is its own; a vehicle's, what the
   story sees of it.
+* **The weapon put away.** `CAPI_Pawn.SetNoWeaponMode <player> <on>`
+  (the narrative scenes' setup, once their holster has had its time, and
+  their cleanup) takes the weapon out of the player's hands for the
+  scene: it isn't drawn and doesn't fire until the scene gives it back.
 
 ## In the game
 

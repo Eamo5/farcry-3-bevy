@@ -1649,6 +1649,7 @@ fn fire(
         Query<&crate::npc::HeadPos>,
         Res<crate::weapon_wheel::WeaponWheel>,
         Res<crate::aim_assist::AimAssist>,
+        Option<Res<crate::story::ScriptedPlayer>>,
     ),
     args: Res<crate::Args>,
     script: Res<TestScript>,
@@ -1680,7 +1681,7 @@ fn fire(
 ) {
     use crate::controls::Action;
     use crate::particles::fx;
-    let (bino, actions, captured, perks, busy, heads, wheel, assist) = inputs;
+    let (bino, actions, captured, perks, busy, heads, wheel, assist, story_player) = inputs;
     // (The steady-aim syringe: far less kick.)
     let steady = if boosts.as_ref().is_some_and(|b| b.active(crate::syringes::Syringe::Steady)) { 0.3 } else { 1.0 };
     let (mut damage, mut markers, mut noise, mut world_hits) = writers;
@@ -1716,6 +1717,8 @@ fn fire(
     let zip_ok = !matches!(*mount, crate::traversal::Mount::Zip { .. }) || (perks.zip_shoot && inv.def().class == WeaponClass::Pistol);
     let can_act = (captured.0 || scripted || story_input)
         && !health.dead
+        // (Nor with the weapon put away for a scene.)
+        && !story_player.as_ref().is_some_and(|s| s.no_weapon)
         // (A scene's view holds the body, but a gameplay may let him fire
         // from it: JAS_150's ride.)
         && (!player.noclip || cinema.free_aim.is_some())
@@ -2534,7 +2537,7 @@ fn update_view_model(
     mut cams: Query<&mut Projection, With<PlayerCamera>>,
     fp: Res<crate::fp::FpState>,
     speed_fov: Option<Res<crate::vehicles::SpeedFov>>,
-    (poker, minigame): (Option<Res<crate::poker::PokerTable>>, Option<Res<crate::hud::Minigame>>),
+    (poker, minigame, story_player): (Option<Res<crate::poker::PokerTable>>, Option<Res<crate::hud::Minigame>>, Option<Res<crate::story::ScriptedPlayer>>),
 ) {
     let Ok((inv, player, health)) = players.single() else { return };
     let Ok((mut v, mut t, mut vis)) = vm.single_mut() else { return };
@@ -2545,8 +2548,10 @@ fn update_view_model(
     // Swimming and driving put the weapon away; the arms may still show what they're doing.
     // (And at a poker table, or a minigame unless the arms play its part:
     // the knife thrower's.)
+    // (And while a scene has it put away.)
     let busy = ((player.swimming || (player.driving && !player.armed_passenger) || minigame.is_some_and(|m| m.holds_player())) && !fp.in_context())
-        || poker.is_some_and(|p| p.holds_player());
+        || poker.is_some_and(|p| p.holds_player())
+        || story_player.is_some_and(|s| s.no_weapon);
     *vis = if in_menu || health.dead || player.noclip || busy || bino.blend > 0.5 || inv.scoped() { Visibility::Hidden } else { Visibility::Visible };
     let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
     if player.grounded {

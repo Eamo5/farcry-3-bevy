@@ -951,6 +951,9 @@ pub struct ScriptedPlayer {
     /// (`DisplayHealthBar`: an escort, HUR_040's barge, JAS_220's
     /// helicopter).
     pub health_bar: Option<HealthBar>,
+    /// The player's weapon put away for a scene (`CAPI_Pawn.SetNoWeaponMode`:
+    /// the narrative scenes' setup, until their cleanup).
+    pub no_weapon: bool,
 }
 
 /// A health bar a script put up: whose, the name it shows (a string id) and
@@ -987,6 +990,7 @@ impl Default for ScriptedPlayer {
             animal_looting: true, plant_looting: true, camera_drawn: false, camera_up: false,
             hud_parts_hidden: Default::default(),
             health_bar: None,
+            no_weapon: false,
         }
     }
 }
@@ -2792,6 +2796,10 @@ fn run_story(
                         scripted.camera_drawn = scripted.has_camera();
                     }
                     "CAPI_Pawn.Holster" | "CAPI_Pawn.ForceHolster" if a(0) == fc3_story::PLAYER.to_string() => scripted.camera_drawn = false,
+                    "CAPI_Pawn.SetNoWeaponMode" if a(0) == fc3_story::PLAYER.to_string() => {
+                        scripted.no_weapon = a(1) == "true" || a(1) == "1";
+                        debug!("story: weapon {}", if scripted.no_weapon { "put away" } else { "back" });
+                    }
                     "CAPI_Pawn.SetAutoDraw" if a(0) == fc3_story::PLAYER.to_string() => {
                         scripted.auto_draw = a(1) == "1" || a(1) == "true";
                         if let (true, Some(def), Ok(mut inv)) = (scripted.auto_draw, scripted.last_granted.take(), inventory.single_mut()) {
