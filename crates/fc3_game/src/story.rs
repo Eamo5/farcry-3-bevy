@@ -1568,6 +1568,7 @@ fn run_story(
             host.used.clear();
             host.near_at.clear();
             env_overrides.active.clear();
+            env_overrides.storm = None;
             layers.present.clear();
             layers.reset = true;
             orders.0.clear();
@@ -3035,6 +3036,12 @@ fn run_story(
                             scripted.restore_inventory(&mut inv);
                         }
                     }
+                    // A storm brought on, or the sky left fair, for a while
+                    // (`<factor> <seconds>`), and let go (`<seconds>`).
+                    "SetScriptedStormFactorOverride" => {
+                        env_overrides.storm = Some((a(0).parse().unwrap_or(1.0), a(1).parse().unwrap_or(0.0)));
+                    }
+                    "RemoveScriptedStormFactorOverride" => env_overrides.storm = None,
                     // A preset put over the world's environment, or taken off
                     // (`Set<Kind>Override <guid> <seconds>`, `Remove<Kind>Override`).
                     n if n.starts_with("Set") && n.ends_with("Override") && a(0).starts_with('{') => {

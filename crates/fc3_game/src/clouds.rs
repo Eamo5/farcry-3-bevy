@@ -61,6 +61,8 @@ pub struct Weather {
     flash_light: f32,
     next_flash: f32,
     pub flashes: u32,
+    /// A script holds the sky (`EnvOverrides::storm`).
+    scripted: bool,
 }
 
 /// Without the game's weather (an old cache): its single-player rhythm.
@@ -95,6 +97,7 @@ impl Weather {
             flash_light: 0.0,
             next_flash: 0.0,
             flashes: 0,
+            scripted: false,
         }
     }
 
@@ -348,7 +351,13 @@ fn follow_camera(cameras: Query<&GlobalTransform, With<PlayerCamera>>, mut dome:
 /// says (`CEnvironmentWeather`: 2,000 to 4,840 s), gathers into heavy
 /// cloud, comes on over its transition (10 s) and lasts as long as it says
 /// (120 to 240 s), its lightning striking every few seconds (4 to 16).
-fn update_weather(time: Res<Time>, mut weather: ResMut<Weather>, mut rng: ResMut<Rng>, env: Res<crate::sky::GameEnvironment>) {
+fn update_weather(
+    time: Res<Time>,
+    mut weather: ResMut<Weather>,
+    mut rng: ResMut<Rng>,
+    env: Res<crate::sky::GameEnvironment>,
+    overrides: Option<Res<crate::sky::EnvOverrides>>,
+) {
     let dt = time.delta_secs();
     let mut times = env.0.as_ref().and_then(|e| e.weather).unwrap_or(WEATHER_TIMES);
     // `FC3_LIGHTNING_GAP=<s>` (tests): a flash that often.
@@ -362,8 +371,21 @@ fn update_weather(time: Res<Time>, mut weather: ResMut<Weather>, mut rng: ResMut
         _ => 3.0,
     };
     let range = |rng: &mut Rng, (a, b): (f32, f32)| rng.range(a, b.max(a));
+    // A script's storm, coming on (or clearing to fair) over the time it
+    // gives; the rhythm takes over again, fair, once it lets go.
+    let storm = overrides.as_ref().and_then(|o| o.storm);
+    if let Some((factor, seconds)) = storm {
+        weather.target = 1.0 + (STORM - 1.0) * factor.clamp(0.0, 1.0);
+        let step = if seconds > 0.0 { (STORM - 1.0) * dt / seconds } else { f32::INFINITY };
+        weather.state += (weather.target - weather.state).clamp(-step, step);
+    } else if weather.scripted {
+        weather.target = 1.0;
+        weather.change_in = rng.range(240.0, 540.0);
+        weather.storm_in = range(&mut rng, times.clear);
+    }
+    weather.scripted = storm.is_some();
     // (`FC3_WEATHER` pins it.)
-    if weather.change_in.is_finite() {
+    if weather.change_in.is_finite() && !weather.scripted {
         if weather.target == STORM {
             // The storm's time runs once it has gathered.
             if weather.state >= 3.0 {
@@ -390,7 +412,9 @@ fn update_weather(time: Res<Time>, mut weather: ResMut<Weather>, mut rng: ResMut
     // over its transition.
     let stormy = weather.state >= 3.0 && (weather.target == STORM || weather.state > 3.0);
     let step = dt / if stormy { times.transition.max(1.0) } else { 90.0 };
-    weather.state += (weather.target - weather.state).clamp(-step, step);
+    if !weather.scripted {
+        weather.state += (weather.target - weather.state).clamp(-step, step);
+    }
     // Lightning while the storm is on: each flash fading at its speed.
     weather.flash *= (-times.lightning_speed.max(0.1) * dt).exp();
     weather.flash_light = times.lightning;
@@ -589,5 +613,35 @@ mod tests {
             let got = [shown.red, shown.green, shown.blue];
             assert!(got.iter().zip(srgb).all(|(a, b)| (a - b).abs() < 0.01), "{srgb:?} -> {got:?}");
         }
+    }
+
+    #[test]
+    fn a_scripts_storm_comes_on_over_its_time_and_lets_go() {
+        // DEN_060's storm (factor 1 over 10 s), from a calm sky; let go, the
+        // rhythm takes over again from fair.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(250)))
+            .insert_resource(Weather::calm())
+            .insert_resource(crate::weapons::Rng::seeded(7))
+            .init_resource::<crate::sky::GameEnvironment>()
+            .init_resource::<crate::sky::EnvOverrides>()
+            .add_systems(Update, update_weather);
+        app.update();
+        app.world_mut().resource_mut::<crate::sky::EnvOverrides>().storm = Some((1.0, 10.0));
+        for _ in 0..20 {
+            app.update();
+        }
+        let half = app.world().resource::<Weather>().state;
+        assert!(half > 1.5 && half < STORM, "halfway: {half}");
+        for _ in 0..24 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<Weather>().storm(), 1.0);
+        app.world_mut().resource_mut::<crate::sky::EnvOverrides>().storm = None;
+        app.update();
+        let w = app.world().resource::<Weather>();
+        assert_eq!(w.target, 1.0);
+        assert!(w.state < STORM && !w.scripted, "clearing: {}", w.state);
     }
 }

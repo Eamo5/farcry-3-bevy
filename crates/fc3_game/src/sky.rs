@@ -72,6 +72,9 @@ pub struct GameEnvironment(pub Option<fc3_formats::environment::Environment>);
 #[derive(Resource, Default)]
 pub struct EnvOverrides {
     pub active: std::collections::BTreeMap<String, String>,
+    /// A script's storm (`SetScriptedStormFactorOverride`: DEN_060's), 0
+    /// fair to 1 a full storm, and the seconds it takes to come on or clear.
+    pub storm: Option<(f32, f32)>,
     applied: std::collections::BTreeMap<String, String>,
     /// The world's own environment, kept while presets are over it.
     base: Option<fc3_formats::environment::Environment>,

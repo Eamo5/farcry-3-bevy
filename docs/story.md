@@ -181,10 +181,14 @@ is the story's own:
   is. Fog, lighting, exposure, sky, bloom (its intensity) and depth of
   field are put over the world's (`Environment::apply_preset`) while
   they are on, and the world's come back as they are taken off; a reload
-  clears them. Wind, clouds, shadows, motion blur and the storm factor
-  are not modelled, and the transition is not blended. Seen: DOC_020's
-  trip switching between its two bloom presets (intensity 30, the cave
-  glowing) as its trigger turns.
+  clears them. Wind, clouds, shadows and motion blur are not modelled,
+  and the transition is not blended. Seen: DOC_020's trip switching
+  between its two bloom presets (intensity 30, the cave glowing) as its
+  trigger turns. The storm factor (`SetScriptedStormFactorOverride
+  <0..1> <seconds>`: DEN_060's storm, JAS_240 keeping the sky fair) holds
+  the weather (`EnvOverrides::storm`): the sky goes from fair to a full
+  storm, rain and lightning with it, over the seconds given, and the
+  weather's own rhythm takes over again, fair, once it is let go.
 * **The HUD's parts.** `UISendEventToPlayer` to the HUD hides and shows
   its parts (`HideUIElement Radar|Reticule|Ammo`); our minimap hides with
   the radar.
