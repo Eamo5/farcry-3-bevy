@@ -218,6 +218,10 @@ pub struct Environment {
     pub shafts_fade: (f32, f32),
     /// The weather's rhythm and lightning ([`WEATHER`]).
     pub weather: Option<WeatherTimes>,
+    /// The sun (and moon) switched off, its light and shadows with it: a
+    /// shadow preset's `bEnableSun` 0, put over the world's under it (the
+    /// mines, the ULCs' caves).
+    pub sun_off: bool,
 }
 
 fn knots(o: &Object, name: &str) -> Vec<Arc<Object>> {
@@ -334,18 +338,23 @@ impl Environment {
             storm_fog_end: storm_fog.and_then(|f| f.f32("fMaximumDistance")).unwrap_or(0.0),
             storm_fog_sky: storm_fog.and_then(|f| f.f32("fSkyColorFactor")).unwrap_or(0.0),
             storm_sky_fog: storm_fog.map_or((0.0, 1.0), |f| (f.f32("fSkyFogIntensity").unwrap_or(0.0), f.f32("fSkyFogPower").unwrap_or(1.0))),
+            sun_off: false,
         })
     }
 
-    /// A preset by its GUID (as scripts name it, braces and all): its class
+    /// A preset as scripts name it, by its GUID (braces and all) or its
+    /// template's name (`SHA_Quest_Mines:Common.Mines_Fog`): its class
     /// (`CEnvironmentFog`, `CEnvironmentLighting`...) and its body.
-    pub fn preset_by_guid(managers: &[u8], guid: &str) -> Option<(String, Arc<Object>)> {
+    pub fn preset_by_guid(managers: &[u8], key: &str) -> Option<(String, Arc<Object>)> {
         let start = managers.windows(4).position(|w| w == b"nbCF")?;
         let root = fcb::parse(&managers[start..]).ok()?;
         let inner = name_hash("Template");
+        // (Some scripts' names carry a space after.)
+        let key = key.trim();
+        let field = if key.starts_with('{') { TEMPLATE_GUID } else { TEMPLATE_NAME };
         let mut found = None;
         root.walk(&mut |o, _| {
-            if found.is_none() && o.str_h(TEMPLATE_GUID).is_some_and(|g| g.eq_ignore_ascii_case(guid)) {
+            if found.is_none() && o.str_h(field).is_some_and(|g| g.trim().eq_ignore_ascii_case(key)) {
                 found = o.children.iter().find(|c| c.name_hash == inner).and_then(|b| Some((b.str_h(TEMPLATE_CLASS)?, b.clone())));
             }
         });
@@ -353,8 +362,8 @@ impl Environment {
     }
 
     /// Puts a preset over the matching part of this environment (a scene's
-    /// fog, lighting, exposure, sky, bloom or depth of field); false for a
-    /// kind it doesn't model.
+    /// fog, lighting, exposure, sky, bloom, depth of field or its sun
+    /// switched off); false for a kind it doesn't model.
     pub fn apply_preset(&mut self, class: &str, body: &Object) -> bool {
         match class {
             "CEnvironmentFog" => {
@@ -382,6 +391,7 @@ impl Environment {
             }
             "CEnvironmentAdaptiveBloom" => self.bloom_intensity = body.f32("fIntensity").unwrap_or(self.bloom_intensity),
             "CEnvironmentDepthOfField" => self.dof = dof(body),
+            "CEnvironmentShadow" => self.sun_off = body.field("bEnableSun").and_then(|b| b.first().copied()) == Some(0),
             _ => return false,
         }
         true
@@ -507,6 +517,13 @@ mod tests {
         assert!(e.apply_preset(&class, &body));
         assert_eq!(e.bloom_intensity, 30.0);
         assert!(Environment::preset_by_guid(&managers, "{00000000-0000-0000-0000-000000000000}").is_none());
+        // By its name too (the mines' fog), a space after and all.
+        let (class, _) = Environment::preset_by_guid(&managers, "SHA_Quest_Mines:Common.Mines_Fog ").unwrap();
+        assert_eq!(class, "CEnvironmentFog");
+        // The mines' shadow preset switches the sun off.
+        let (class, body) = Environment::preset_by_guid(&managers, "SHA_Quest_Mines:Common.Mines_Shadow").unwrap();
+        let mut under = Environment::default();
+        assert!(under.apply_preset(&class, &body) && under.sun_off);
     }
 
     #[test]

@@ -3106,13 +3106,14 @@ fn run_story(
                     }
                     "RemoveScriptedStormFactorOverride" => env_overrides.storm = None,
                     // A preset put over the world's environment, or taken off
-                    // (`Set<Kind>Override <guid> <seconds>`, `Remove<Kind>Override`).
-                    n if n.starts_with("Set") && n.ends_with("Override") && a(0).starts_with('{') => {
+                    // (`Set<Kind>Override <guid or name> <seconds>`,
+                    // `Remove<Kind>Override` with the same).
+                    n if n.starts_with("Set") && n.ends_with("Override") && !a(0).trim().is_empty() => {
                         env_overrides.active.insert(n["Set".len()..n.len() - "Override".len()].to_string(), a(0));
                     }
                     n if n.starts_with("Remove") && n.ends_with("Override") => {
                         let kind = &n["Remove".len()..n.len() - "Override".len()];
-                        if env_overrides.active.get(kind).is_some_and(|g| !a(0).starts_with('{') || *g == a(0)) {
+                        if env_overrides.active.get(kind).is_some_and(|g| g.trim().eq_ignore_ascii_case(a(0).trim())) {
                             env_overrides.active.remove(kind);
                         }
                     }

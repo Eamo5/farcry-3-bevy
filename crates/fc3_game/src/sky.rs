@@ -363,7 +363,8 @@ pub(crate) fn advance_time(
         (tod.moon_dir(), MOON_LUX * smoothstep(-0.12, -0.25, elevation), color, 0.0)
     };
     *t = Transform::from_translation(dir).looking_at(Vec3::ZERO, Vec3::Y);
-    light.illuminance = illuminance;
+    // (None under the world, where a script's preset switches it off.)
+    light.illuminance = if env.0.as_ref().is_some_and(|e| e.sun_off) { 0.0 } else { illuminance };
     light.color = color;
     if disk.intensity != disk_intensity {
         disk.intensity = disk_intensity;

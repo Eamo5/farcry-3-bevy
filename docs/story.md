@@ -175,14 +175,19 @@ is the story's own:
   itself), and the water listener (coop's rafting).
 * **Environment overrides.** `OverrideEnvironment` boxes (62 scripts:
   Buck's caves and boat, BAM_040's temple, DOC_020's trip) put presets
-  over the world's environment: `Set<Kind>Override <guid> <seconds>`
-  until `Remove<Kind>Override`. A preset is a template in the managers
-  file named by its GUID (`D854F1C7`), its body's class saying what it
-  is. Fog, lighting, exposure, sky, bloom (its intensity) and depth of
-  field are put over the world's (`Environment::apply_preset`) while
-  they are on, and the world's come back as they are taken off; a reload
-  clears them. Wind, clouds, shadows and motion blur are not modelled,
-  and the transition is not blended. Seen: DOC_020's trip switching
+  over the world's environment: `Set<Kind>Override <preset> <seconds>`
+  until `Remove<Kind>Override` with the same. A preset is a template in
+  the managers file, named by its GUID (`D854F1C7`) or, more often, its
+  template's name (`D97A7AA9`: `SHA_Quest_Mines:Common.Mines_Fog`, some
+  with a space after), its body's class saying what it is. Fog,
+  lighting, exposure, sky, bloom (its intensity), depth of field and the
+  sun (a shadow preset's `bEnableSun` 0: the mines' and the ULCs' caves
+  switch it off, its light and shadows with it) are put over the world's
+  (`Environment::apply_preset`) while they are on, and the world's come
+  back as they are taken off; a reload clears them. Wind, clouds and
+  motion blur (`Preview_MotionBlur`: `bEnabled`, `fIntensity`,
+  `fMaxBlurModifier`) are not modelled, and the transition is not
+  blended. Seen: DOC_020's trip switching
   between its two bloom presets (intensity 30, the cave glowing) as its
   trigger turns. The storm factor (`SetScriptedStormFactorOverride
   <0..1> <seconds>`: DEN_060's storm, JAS_240 keeping the sky fair) holds
