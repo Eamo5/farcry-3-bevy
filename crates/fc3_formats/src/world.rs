@@ -37,15 +37,18 @@ pub mod h {
     pub const ARCHETYPE_PATH: u32 = 0x2A7BCA49;
     pub const SECTOR_X: u32 = 0xB7B2364B;
     pub const SECTOR_Y: u32 = 0xC0B506DD;
-    /// Graphic component: per-slot material override list.
-    pub const MATERIAL_OVERRIDES: u32 = 0x8576A3A6;
+    /// Graphic component: per-slot material override list
+    /// (`MaterialOverrides`).
+    pub const MATERIAL_OVERRIDES: u32 = 0x0FA60B61;
+    /// Graphic component: the materials its slots wear with its light
+    /// switched on (`MaterialLightSwitch`, the same layout): an outpost's
+    /// flag and tarps in the rebels' blue, a parked car's headlights lit.
+    pub const MATERIAL_LIGHT_SWITCH: u32 = 0x8576A3A6;
     pub const MATERIAL_LIST: u32 = 0xB3864C0F;
     pub const MATERIAL_NAME: u32 = 0x8BAC1025;
     /// The material file an override entry puts in that slot, when it names
     /// one (the name above is then the slot's own material).
     pub const MATERIAL_FILE: u32 = 0x9301DFBD;
-    /// Graphic component: the instance's own material list (same layout).
-    pub const INSTANCE_MATERIALS: u32 = 0x0FA60B61;
     /// `CSoundComponent`, and its sound event (a u64 holding the event id).
     pub const SOUND_COMPONENT: u32 = 0x35FD2B44;
     pub const SOUND_EVENT: u32 = 0xEEACC4D5;
@@ -96,6 +99,8 @@ pub struct WorldEntity {
     /// Override entries that swap a slot's own material (by name) for
     /// another (by name): placeholder waterfalls get their flowing water.
     pub material_replacements: Vec<(String, String)>,
+    /// The swaps its light switch makes (the same way), when switched on.
+    pub light_switch: Vec<(String, String)>,
     /// Light settings, for light entities.
     pub light: Option<crate::lights::LightParams>,
     /// Cable to another entity (zip lines, power lines).
@@ -206,10 +211,12 @@ pub fn parse_entity(e: &Object) -> WorldEntity {
                 if let Some(p) = str_field(c, h::MESH_PATH) {
                     out.meshes.push(p);
                 }
-                // The default list, then the instance's own: entries in either
-                // that name a file swap their slot's material for it.
-                for (container, listed) in [(h::MATERIAL_OVERRIDES, true), (h::INSTANCE_MATERIALS, false)] {
+                // The overrides, then the light switch: entries in either that
+                // name a file swap their slot's material for it (the light
+                // switch's only while it's on).
+                for container in [h::MATERIAL_OVERRIDES, h::MATERIAL_LIGHT_SWITCH] {
                     let Some(list) = c.children.iter().find(|o| o.name_hash == container) else { continue };
+                    let lit = container == h::MATERIAL_LIGHT_SWITCH;
                     for group in list.children.iter().filter(|o| o.name_hash == h::MATERIAL_LIST) {
                         for m in group.children_named("Material") {
                             let name = str_field(m, h::MATERIAL_NAME).unwrap_or_default();
@@ -220,11 +227,12 @@ pub fn parse_entity(e: &Object) -> WorldEntity {
                             });
                             if let Some(f) = file.filter(|f| *f != name.to_ascii_lowercase()) {
                                 let swap = (name.to_ascii_lowercase(), f);
-                                if !out.material_replacements.contains(&swap) {
-                                    out.material_replacements.push(swap);
+                                let swaps = if lit { &mut out.light_switch } else { &mut out.material_replacements };
+                                if !swaps.contains(&swap) {
+                                    swaps.push(swap);
                                 }
                             }
-                            if listed {
+                            if !lit {
                                 out.material_overrides.push(name);
                             }
                         }

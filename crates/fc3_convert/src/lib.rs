@@ -560,10 +560,13 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     // ---- sectors
     // (Sectors with placed RealTrees are written again once, now they're read.
     // Everything placed is written again once with entities turned yaw, roll,
-    // pitch: sectors and the spots, ladders and lights taken from them.)
+    // pitch: sectors and the spots, ladders and lights taken from them. And
+    // sectors and the archetypes' materials once with their light switches
+    // told from their overrides.)
     let refresh_realtrees = !exists(job.root(), REALTREE_ENTITIES_STAMP);
     let reorder = opts.only_sectors.is_none() && !exists(job.root(), ENTITY_ORDER_STAMP);
-    let sector_results: Vec<SectorResult> = job.run(Stage::Sectors, &sectors, |&id| match convert_sector(&job, id, refresh_realtrees, reorder) {
+    let relight = opts.only_sectors.is_none() && !exists(job.root(), LIGHT_SWITCH_STAMP);
+    let sector_results: Vec<SectorResult> = job.run(Stage::Sectors, &sectors, |&id| match convert_sector(&job, id, refresh_realtrees, reorder || relight) {
         Ok(r) => r,
         Err(e) => {
             job.error(format!("sector {id}: {e:#}"));
@@ -988,7 +991,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     // placement's are, and converted with the rest.
     if opts.only_sectors.is_none() {
         let table = (|| -> Result<String> {
-            if exists(job.root(), fc3_formats::story::ARCHETYPE_MATERIALS_REL) {
+            if exists(job.root(), fc3_formats::story::ARCHETYPE_MATERIALS_REL) && !relight {
                 return Ok(std::fs::read_to_string(job.root().join(fc3_formats::story::ARCHETYPE_MATERIALS_REL))?);
             }
             let archetypes = fc3_formats::story::from_bytes(&std::fs::read(job.root().join(fc3_formats::story::ARCHETYPES_REL))?)?;
@@ -1014,6 +1017,11 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
                 for m in fc3_formats::story::archetype_materials_from_text(&text).into_values().flatten() {
                     if seen.insert(m.clone()) {
                         material_paths.push(m);
+                    }
+                }
+                if relight {
+                    if let Err(e) = write_atomic(job.root(), LIGHT_SWITCH_STAMP, b"light switches told from overrides\n", job.ctx) {
+                        job.error(format!("light switch stamp: {e:#}"));
                     }
                 }
             }
@@ -3232,6 +3240,10 @@ const REALTREE_ENTITIES_STAMP: &str = "sectors/stamp-realtree-entities.txt";
 /// Written once sectors place entities turned yaw, roll, pitch
 /// (`world::angles_to_bevy_quat`).
 const ENTITY_ORDER_STAMP: &str = "sectors/stamp-entity-order.txt";
+/// Written once sectors and the archetypes' materials tell an entity's
+/// light switch (`MaterialLightSwitch`) from its overrides: its materials
+/// were taken from the light switch before.
+const LIGHT_SWITCH_STAMP: &str = "sectors/stamp-light-switch.txt";
 
 fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool, reorder: bool) -> Result<Option<SectorResult>> {
     let c = SectorCoord::from_id(id);
@@ -3406,11 +3418,9 @@ fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool, reorder: bool) ->
             next
         });
         let own = job.model_materials(&lower);
-        let raw = if e.material_replacements.is_empty() { Vec::new() } else { job.model_materials_raw(&lower) };
+        let raw = if e.material_replacements.is_empty() && e.light_switch.is_empty() { Vec::new() } else { job.model_materials_raw(&lower) };
         let resolved = resolve_overrides(&lower, &own, &raw, &e.material_overrides, &e.material_replacements);
-        let material_set = if resolved == *own {
-            NO_MATERIAL_SET
-        } else {
+        let mut set_of = |resolved: &[String]| {
             override_materials.extend(resolved.iter().cloned());
             let rels: Vec<String> = resolved.iter().map(|m| cache::material_rel(m)).collect();
             let next = s.material_sets.len() as u32;
@@ -3419,7 +3429,17 @@ fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool, reorder: bool) ->
                 next
             })
         };
-        s.placements.push(Placement { model, translation, rotation, scale: 1.0, entity: entity_index, material_set });
+        let material_set = if resolved == *own { NO_MATERIAL_SET } else { set_of(&resolved) };
+        // (With its light switched on: its swaps before the overrides'.)
+        let lit = (!e.light_switch.is_empty()).then(|| {
+            let swaps: Vec<(String, String)> = e.light_switch.iter().chain(&e.material_replacements).cloned().collect();
+            resolve_overrides(&lower, &own, &raw, &e.material_overrides, &swaps)
+        });
+        let light_set = match lit.filter(|lit| *lit != resolved) {
+            Some(lit) => set_of(&lit),
+            None => NO_MATERIAL_SET,
+        };
+        s.placements.push(Placement { model, translation, rotation, scale: 1.0, entity: entity_index, material_set, light_set });
     }
     let rel = cache::sector_rel(id);
     let realtrees = || data.entities.iter().any(|e| e.meshes.first().is_some_and(|m| m.to_ascii_lowercase().ends_with(".rtx")));

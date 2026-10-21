@@ -2198,6 +2198,66 @@ fn main() -> Result<()> {
                 println!("  {e}");
             }
         }
+        "light-switch-survey" => {
+            // Placed entities' material lists, raw: how many fill their
+            // `MaterialOverrides` and their `MaterialLightSwitch` (names,
+            // files), and what the switched ones are: light-switch-survey [filter]
+            let filter = args.get(1).cloned().unwrap_or_else(|| "worldsectors".into());
+            let (ovr_h, light_h) = (fc3_formats::hash::name_hash("MaterialOverrides"), fc3_formats::hash::name_hash("MaterialLightSwitch"));
+            let entries = |g: &fc3_formats::fcb::Object, container: u32| -> Vec<(String, Option<String>)> {
+                let mut out = Vec::new();
+                for list in g.children.iter().filter(|o| o.name_hash == container) {
+                    for slots in &list.children {
+                        for m in &slots.children {
+                            let name = m.str_h(0x8BAC1025).unwrap_or_default().to_ascii_lowercase();
+                            let file = m.str_h(0x9301DFBD).filter(|f| !f.is_empty()).map(|f| f.to_ascii_lowercase());
+                            out.push((name, file));
+                        }
+                    }
+                }
+                out
+            };
+            let (mut graphics, mut ovr_named, mut ovr_files, mut light_named, mut light_files, mut both_files, mut lit) = (0, 0, 0, 0, 0, 0, 0);
+            let mut by_mesh: BTreeMap<String, usize> = BTreeMap::new();
+            let mut shown = 0;
+            for (h, name) in &vfs.names {
+                if !name.contains(&filter) || !name.ends_with(".data.fcb") {
+                    continue;
+                }
+                let Ok(root) = vfs.read_hash(*h).and_then(|b| fc3_formats::fcb::parse(&b)) else { continue };
+                for (_, e) in fc3_formats::world::layered_entities(&root) {
+                    let Some(comps) = e.child("Components") else { continue };
+                    let Some(g) = comps.children.iter().find(|c| c.name_hash == fc3_formats::world::h::GRAPHIC_COMPONENT) else { continue };
+                    graphics += 1;
+                    let (o, l) = (entries(g, ovr_h), entries(g, light_h));
+                    let filed = |v: &[(String, Option<String>)]| v.iter().any(|(n, f)| f.as_ref().is_some_and(|f| !f.contains(n.as_str())));
+                    ovr_named += (!o.is_empty()) as usize;
+                    light_named += (!l.is_empty()) as usize;
+                    ovr_files += filed(&o) as usize;
+                    light_files += filed(&l) as usize;
+                    both_files += (filed(&o) && filed(&l)) as usize;
+                    if filed(&l) {
+                        let w = fc3_formats::world::parse_entity(&e);
+                        // (light-switch-survey <filter> <mesh text>: its entries.)
+                        if let Some(t) = args.get(2).filter(|t| w.meshes.iter().any(|m| m.to_ascii_lowercase().contains(t.as_str()))) {
+                            if shown < 4 {
+                                shown += 1;
+                                println!("{t} {}: overrides {o:?}\n    light {l:?}", w.name);
+                            }
+                        }
+                        lit += w.light.is_some() as usize;
+                        let mesh = w.meshes.first().map(|m| m.rsplit('\\').next().unwrap_or(m).to_ascii_lowercase()).unwrap_or_default();
+                        *by_mesh.entry(format!("{mesh} ({})", w.name.split(['/', '.']).next().unwrap_or_default())).or_default() += 1;
+                    }
+                }
+            }
+            println!("graphics {graphics}: overrides named {ovr_named}, with files {ovr_files}; light switch named {light_named}, with files {light_files}; both with files {both_files}; switched with a light {lit}");
+            let mut v: Vec<_> = by_mesh.into_iter().collect();
+            v.sort_by(|a, b| b.1.cmp(&a.1));
+            for (m, n) in v.iter().take(40) {
+                println!("  {n:5} {m}");
+            }
+        }
         "world-overview" => {
             // Writes a 160x160 grid of per-sector min/max heights as CSV, plus a 2560x2560 PGM heightmap (16 px/sector).
             use fc3_formats::terrain::{parse_sdat, SectorCoord};

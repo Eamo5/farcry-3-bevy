@@ -1612,6 +1612,9 @@ pub struct Placement {
     pub entity: u32,
     /// Index into `CachedSector::material_sets`, or `NO_MATERIAL_SET`.
     pub material_set: u32,
+    /// What it wears with its light switched on: an index into
+    /// `CachedSector::material_sets`, or `NO_MATERIAL_SET`.
+    pub light_set: u32,
 }
 
 pub const NO_MATERIAL_SET: u32 = u32::MAX;
@@ -1663,6 +1666,14 @@ impl CachedSector {
                 w.u32(p.material_set);
             }
         });
+        // Light switches, when any placement has one.
+        if self.placements.iter().any(|p| p.light_set != NO_MATERIAL_SET) {
+            w.chunk(b"LSET", |w| {
+                for p in &self.placements {
+                    w.u32(p.light_set);
+                }
+            });
+        }
         w.chunk(b"MSET", |w| {
             w.u32(self.material_sets.len() as u32);
             for set in &self.material_sets {
@@ -1718,7 +1729,13 @@ impl CachedSector {
                             scale: c.f32()?,
                             entity: c.u32()?,
                             material_set: c.u32()?,
+                            light_set: NO_MATERIAL_SET,
                         });
+                    }
+                }
+                b"LSET" => {
+                    for p in &mut s.placements {
+                        p.light_set = c.u32()?;
                     }
                 }
                 b"MSET" => {
@@ -2359,7 +2376,26 @@ mod tests {
         let s = CachedSector {
             sector_id: 18000,
             models: vec!["models/x.fcm".into()],
-            placements: vec![Placement { model: 0, translation: [1.0, 2.0, 3.0], rotation: [0.0, 0.0, 0.0, 1.0], scale: 1.0, entity: 0, material_set: 0 }],
+            placements: vec![
+                Placement {
+                    model: 0,
+                    translation: [1.0, 2.0, 3.0],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: 1.0,
+                    entity: 0,
+                    material_set: 0,
+                    light_set: NO_MATERIAL_SET,
+                },
+                Placement {
+                    model: 0,
+                    translation: [4.0, 5.0, 6.0],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    scale: 1.0,
+                    entity: 0,
+                    material_set: NO_MATERIAL_SET,
+                    light_set: 0,
+                },
+            ],
             entities: vec![CachedEntity { id: 7, class: "CEntity".into(), ..Default::default() }],
             material_sets: vec![vec!["materials/b.fcmat".into()]],
         };
