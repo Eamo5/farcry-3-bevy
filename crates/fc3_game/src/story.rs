@@ -520,12 +520,19 @@ fn forward_camera(
             targets.awaited = awaited;
         }
     }
+    let mut taken = false;
     for s in saw.read() {
         debug!("story: camera took in {}", s.id);
         host.story.entity_event(s.id, "Entity_Discovered", vec![Arg::id(s.id)]);
         if s.tagged {
             host.story.entity_event(s.id, "Entity_Tagged", vec![Arg::id(s.id)]);
         }
+        taken = true;
+    }
+    // (The shutter went: a picture taken, on the player, `GadgetCameraListener`:
+    // JAS_200 B30's barks over the pictures.)
+    if taken {
+        host.story.entity_event(fc3_story::PLAYER, "Picture_Taken", vec![]);
     }
 }
 
