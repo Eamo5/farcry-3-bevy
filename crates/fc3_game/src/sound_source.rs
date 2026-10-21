@@ -230,6 +230,19 @@ pub(crate) struct Reverb {
 
 impl Reverb {
     pub(crate) fn new(sends: Arc<[u8]>, tail: bool, channels: usize, rate: f32) -> Reverb {
+        // (Its lines made now, as it's made, for a sound that sends at all:
+        // made on the audio thread when it first rings, they glitched it.)
+        let len = |ms: f32| ((ms / 1000.0) * rate.max(1.0)) as usize + 1;
+        let sending = !sends.is_empty();
+        let (pre, combs, allpasses) = if sending {
+            (
+                vec![0.0; len(MAX_DELAY_MS * 2.0 + 10.0)],
+                COMBS_MS.iter().map(|&ms| (vec![0.0; len(ms)], 0, 0.0)).collect(),
+                ALLPASS_MS.iter().map(|&ms| (vec![0.0; len(ms)], 0)).collect(),
+            )
+        } else {
+            (Vec::new(), Vec::new(), Vec::new())
+        };
         Reverb {
             sends,
             tail,
@@ -247,10 +260,10 @@ impl Reverb {
             diffusion: 0.5,
             norm: 1.0,
             decay: 1.0,
-            pre: Vec::new(),
+            pre,
             pre_pos: 0,
-            combs: Vec::new(),
-            allpasses: Vec::new(),
+            combs,
+            allpasses,
             wet: 0.0,
             rung: false,
             left: None,
@@ -279,11 +292,9 @@ impl Reverb {
         self.norm = 0.5 * (1.0 - g * g).max(1e-4).sqrt();
         self.damp = 1.0 - (-std::f32::consts::TAU * p[6].clamp(500.0, 20_000.0) / self.rate).exp();
         self.diffusion = (p[9] / 100.0).clamp(0.0, 1.0) * 0.7;
+        // (One that sends nowhere has no lines: it stays off.)
         if self.pre.is_empty() {
-            let len = |ms: f32| ((ms / 1000.0) * self.rate) as usize + 1;
-            self.pre = vec![0.0; len(MAX_DELAY_MS * 2.0 + 10.0)];
-            self.combs = COMBS_MS.iter().map(|&ms| (vec![0.0; len(ms)], 0, 0.0)).collect();
-            self.allpasses = ALLPASS_MS.iter().map(|&ms| (vec![0.0; len(ms)], 0)).collect();
+            self.on = false;
         }
     }
 
@@ -548,7 +559,8 @@ mod tests {
         let mut p = [0.0f32; crate::mixer::REVERB_PARAMS];
         (p[0], p[1], p[2], p[4], p[6], p[7], p[9], p[12]) = (1.0, 5.0, -2.0, 2.0, 9000.0, 20.0, 100.0, -2.0);
         let rate = 48000.0;
-        let mut r = Reverb::new(Arc::from([]), true, 1, rate);
+        // (Sending through one slot: one that sends nowhere has no lines.)
+        let mut r = Reverb::new(Arc::from([0u8]), true, 1, rate);
         r.refresh(Some(p), 1.0);
         // White noise for a second, then nothing.
         let mut seed = 12345u32;

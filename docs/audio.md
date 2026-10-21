@@ -466,6 +466,11 @@ listener is in, else that of the sound region the listener is in (see
 Ambience), else the outdoors' (the one most regions have, `0x470ED`). The
 grassland's (`0x18F693`) and the mountain peaks' (`0x1A6DD8`) differ.
 The mixer publishes the latest preset's parameters and each bus's send.
+The reverb rings only where the listener is enclosed: in a room, cave or
+bunker with a preset of its own. Out in the open it rests. The open-air
+presets send every bus at 0 dB into a 5.5 s tail, and rung on every shot
+and footstep that washed the whole mix (what the engine does with them
+isn't known; the sounds' far layers carry their own echo already).
 Each sound (`sound_source::Reverb`) rings its own reverb, after its
 filters and before its volume and panning, so a distant sound's reverb is
 as faint as it is. Its first channel goes in at its buses' strongest send,
@@ -474,7 +479,9 @@ frequency, each losing 60 dB over the decay, into two all-passes. The
 result is added to every channel. Once a sound ends its tail rings on, up
 to 6 s or until quiet. A looped sound plays its `#loop` asset (the loader
 adds it), whose reverb stops at its end so the loop doesn't break. With no
-preset on, or no send, nothing runs. `FC3_REVERB=0` turns it off.
+preset on, or no send, nothing runs. A sound that sends makes its delay
+lines as it's made, not on the audio thread when it first rings.
+`FC3_REVERB=0` turns it off.
 
 The authored mix sits low: dialogue near -7 dB, the player's gun -12,
 music -12, other people's gunfire -14 to -17, ambience -14 to -20 (the

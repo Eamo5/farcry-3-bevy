@@ -57,6 +57,12 @@ pub struct MixData {
 pub const REVERB_PARAMS: usize = 16;
 static REVERB: [AtomicU32; REVERB_PARAMS] = [const { AtomicU32::new(0) }; REVERB_PARAMS];
 static REVERB_ON: AtomicBool = AtomicBool::new(false);
+/// The listener is enclosed: in a room, cave or bunker with a reverb preset
+/// of its own. Out in the open the reverb rests: the open-air presets (all
+/// buses sent at 0 dB into a 5.5 s tail, read from how presets differ, not
+/// from the engine) washed every shot and footstep, whose own echo is
+/// authored into the sounds already (the far layers of their blends).
+static ENCLOSED: AtomicBool = AtomicBool::new(false);
 /// Each sending bus's send now (linear; 0: none), by slot.
 static SENDS: [AtomicU32; SLOTS] = [const { AtomicU32::new(0) }; SLOTS];
 /// The send slots on each sound's way to the mix, by file stem.
@@ -65,7 +71,7 @@ static SEND_SLOTS: LazyLock<RwLock<HashMap<String, Arc<[u8]>>>> = LazyLock::new(
 /// The reverb's parameters now, if a preset has it on (`FC3_REVERB=0`
 /// turns it off).
 pub fn reverb() -> Option<[f32; REVERB_PARAMS]> {
-    if !REVERB_ON.load(Ordering::Relaxed) {
+    if !REVERB_ON.load(Ordering::Relaxed) || !ENCLOSED.load(Ordering::Relaxed) {
         return None;
     }
     Some(std::array::from_fn(|i| f32::from_bits(REVERB[i].load(Ordering::Relaxed))))
@@ -389,7 +395,9 @@ pub fn room_mixings(
     // pushes the mixer's reverb state; the latest pushed wins).
     let set = |r: &u32| *r != 0 && *r != u32::MAX;
     let outside = regions.as_deref().and_then(|r| r.here()).map(|r| r.reverb).filter(set).unwrap_or(rooms.outdoors);
-    let reverb = now.map(|i| rooms.rooms[i].reverb).filter(set).unwrap_or(outside);
+    let own = now.map(|i| rooms.rooms[i].reverb).filter(set);
+    ENCLOSED.store(own.is_some(), Ordering::Relaxed);
+    let reverb = own.unwrap_or(outside);
     if reverb != 0 && rooms.reverb != Some(reverb) {
         debug!("room: reverb preset {reverb:08x}");
         mixings.1.push(reverb);
