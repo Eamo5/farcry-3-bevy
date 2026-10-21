@@ -326,7 +326,10 @@ fn play_music(
             continue;
         }
         if let Some(mut s) = sink {
-            s.set_volume(Volume::Linear(v.level * v.gain * settings.music_volume));
+            // (Under the master volume too: set here, the sink's own
+            // volume stands in for the one it started at.)
+            let master = if crate::settings::muted() { 0.0 } else { settings.master_volume };
+            s.set_volume(Volume::Linear(v.level * v.gain * settings.music_volume * master));
         }
     }
     let Some(key) = want else { return };
