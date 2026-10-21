@@ -2128,6 +2128,36 @@ mod tests {
         assert_eq!(story.errors(), 0);
     }
 
+    /// A shot told on the player's groups reaches the game's own
+    /// `PawnWeaponFiredListener` filtering on its class (WIL_020's
+    /// flamethrower barks), with the rounds left; another class is passed by.
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
+    fn installed_weapon_fired_listener_hears_the_players_shots_by_class() {
+        let cache = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let pack = ScriptPack::from_bytes(&std::fs::read(cache.join(fc3_formats::scripts::DOMINO_PACK_REL)).unwrap()).unwrap();
+        let mut story = Story::new(pack, StoryData::default()).unwrap();
+        story.update(0.0, View::default());
+        let listener = story.domino().create("Domino/System/PawnWeaponFiredListener.lua").unwrap();
+        let lua = story.domino().lua();
+        listener.set("classFilter", "FlameThrower").unwrap();
+        listener.set("autoDisable", false).unwrap();
+        for output in ["Enabled", "Disabled"] {
+            listener.set(output, lua.globals().get::<mlua::Function>("DummyFunction").unwrap()).unwrap();
+        }
+        listener.set("OnFired", lua.load("return function(self) self.heard = (self.heard or 0) + 1 end").eval::<mlua::Function>().unwrap()).unwrap();
+        story.domino().call(&listener, "Enable").unwrap();
+        let shot = |weapon: &str, class: &str, ammo: f64| {
+            let class = fc3_formats::hash::crc32(class.to_ascii_lowercase().as_bytes()) as f64;
+            vec![Arg::id(PLAYER), Arg::Str(weapon.into()), Arg::Num(class), Arg::Num(ammo)]
+        };
+        story.group_event(PLAYER, "CFCXWeaponShootEvent", shot("AK47", "Assault", 29.0));
+        story.group_event(PLAYER, "CFCXWeaponShootEvent", shot("Flamethrower", "FlameThrower", 45.0));
+        assert_eq!(listener.get::<u32>("heard").unwrap(), 1);
+        assert_eq!(listener.get::<f64>("remainingAmmo").unwrap(), 45.0);
+        assert_eq!(story.errors(), 0);
+    }
+
     /// The camera raised: a gadget listener filtering on its category
     /// hears it drawn, and put away, holstered.
     #[test]

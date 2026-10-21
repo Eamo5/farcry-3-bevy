@@ -42,7 +42,7 @@ impl Plugin for StoryPlugin {
             .add_systems(Update, apply_entity_poses.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, apply_entity_physics.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, draw_markers.after(StorySet))
-            .add_systems(Update, weapon_events.after(StorySet).run_if(in_state(GameState::Playing)))
+            .add_systems(Update, (weapon_events, shot_events).after(StorySet).run_if(in_state(GameState::Playing)))
             .add_systems(Update, (player_landings, autopilot_drop).after(StorySet).run_if(in_state(GameState::Playing)))
             .add_systems(Update, story_blasts.after(StorySet).before(crate::breakables::BreakablesSet))
             .add_systems(Update, (story_damage, story_searches).after(StorySet))
@@ -3754,6 +3754,80 @@ fn weapon_events(
     if *last == Some((slot.def, false)) && inv.switching == 0.0 {
         host.story.group_event(fc3_story::PLAYER, "CWeaponDrawFinishedEvent", args(slot.def, slot.mag + slot.reserve));
         *last = Some((slot.def, true));
+    }
+}
+
+/// The scripts hear shots (`CFCXWeaponShootEvent` on the shooter's groups:
+/// the wielder, the weapon's name, its class as `GetNoCaseStringID` gives
+/// it, the rounds left in it), the player's and the story's characters'.
+/// WIL_020's barks as the flamethrower runs low and over the burning fields
+/// listen for the player's; WIL_040's stealth listener for its guards'.
+fn shot_events(
+    host: Option<NonSendMut<StoryHost>>,
+    players: Query<&crate::weapons::Inventory, With<crate::player::Player>>,
+    npcs: Query<(Entity, &crate::story_actors::StoryActor, &crate::npc::Npc)>,
+    mut last: Local<(Option<u32>, HashMap<Entity, f32>)>,
+) {
+    let Some(mut host) = host else { return };
+    let class = |c: &str| Arg::Num(fc3_formats::hash::crc32(c.to_ascii_lowercase().as_bytes()) as f64);
+    let (shots, since) = &mut *last;
+    if let Ok(inv) = players.single() {
+        let fired = shots.is_some_and(|n| inv.shots_fired > n);
+        *shots = Some(inv.shots_fired);
+        let held = inv.slots.get(inv.current).map(|s| (&inv.defs[s.def], s.mag));
+        if let Some((def, mag)) = held.filter(|_| fired) {
+            if let Some(c) = shot_class(def.class) {
+                let args = vec![Arg::id(fc3_story::PLAYER), Arg::Str(def.name.into()), class(c), Arg::Num(mag as f64)];
+                host.story.group_event(fc3_story::PLAYER, "CFCXWeaponShootEvent", args);
+            }
+        }
+    }
+    // (A character's shot resets its time since firing.)
+    let mut now = HashMap::new();
+    for (e, actor, npc) in &npcs {
+        now.insert(e, npc.since_fired);
+        if since.get(&e).is_none_or(|&t| npc.since_fired >= t) {
+            continue;
+        }
+        let Some((weapon, c)) = role_weapon(npc.role) else { continue };
+        let args = vec![Arg::id(actor.id), Arg::Str(weapon.into()), class(c), Arg::Num(npc.mag as f64)];
+        host.story.group_event(actor.id, "CFCXWeaponShootEvent", args);
+    }
+    *since = now;
+}
+
+/// A weapon class as the scripts' shot listeners name it (`classFilter`:
+/// Pistol, Assault, SMG, Shotgun, Sniper, LMG, RPG, FlameThrower...); none
+/// for a blade.
+fn shot_class(class: crate::weapons::WeaponClass) -> Option<&'static str> {
+    use crate::weapons::WeaponClass::*;
+    Some(match class {
+        Melee => return None,
+        Pistol => "Pistol",
+        Smg => "SMG",
+        Rifle => "Assault",
+        Shotgun => "Shotgun",
+        Sniper => "Sniper",
+        Lmg | Mounted => "LMG",
+        Launcher => "RPG",
+        Bow => "Bow",
+        Flamethrower => "FlameThrower",
+        GrenadeLauncher => "GrenadeLauncher",
+    })
+}
+
+/// The weapon an enemy's role shoots with, and its class (none: a
+/// firebomb's thrown, a machete's swung).
+fn role_weapon(role: crate::npc::Role) -> Option<(&'static str, &'static str)> {
+    use crate::npc::Role::*;
+    match role {
+        Assault => Some(("AK47", "Assault")),
+        Shotgunner => Some(("M133", "Shotgun")),
+        Sniper => Some(("SVD", "Sniper")),
+        Heavy => Some(("PKM", "LMG")),
+        Rocket => Some(("RPG7", "RPG")),
+        Flamer => Some(("Flamethrower", "FlameThrower")),
+        Molotov | Charger => None,
     }
 }
 
