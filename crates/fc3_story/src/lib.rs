@@ -1548,6 +1548,12 @@ impl Story {
     /// A pickup was picked up: scripts waiting on it (a `PickupListener` on
     /// its id or its group) hear `DominoCallbackPickupPicked` with its id.
     pub fn pickup_picked(&mut self, pickup: u64) {
+        // (A collectible's is told on the player too, `CCollectibleCollectedEvent`:
+        // a POI's relic found, its layer switched for good.)
+        let collectible = self.core.borrow().data.entities.get(&pickup).is_some_and(|e| e.component("CPickupCollectible").is_some());
+        if collectible {
+            self.core.borrow_mut().raise(&Listen::Entity(PLAYER, "CCollectibleCollectedEvent".into()), vec![Arg::id(pickup)]);
+        }
         self.group_event(pickup, "DominoCallbackPickupPicked", vec![Arg::id(pickup)]);
     }
 
@@ -3077,6 +3083,47 @@ mod tests {
         }
         let heard: Vec<f64> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
         assert_eq!(heard, [0.3, 0.85, 1.0]);
+    }
+
+    /// A collectible picked up is told on the player with its id (the
+    /// `CollectibleListener` a POI waits on its relic with); another pickup
+    /// isn't.
+    #[test]
+    fn a_collectible_picked_up_is_told_on_the_player() {
+        use fc3_formats::{fcb::Object, hash::name_hash};
+        use std::sync::Arc;
+        let object = |name: &str, children| Arc::new(Object { name_hash: name_hash(name), fields: Default::default(), children });
+        let entry = |id: u64, component: &str| data::Entry {
+            id,
+            name: format!("e{id}"),
+            class: "CEntity".into(),
+            pos: [0.0; 3],
+            angles: [0.0; 3],
+            layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
+            origin: data::Origin::Global,
+            components: object("Components", vec![object(component, vec![])]),
+            fields: object("Entity", vec![]),
+        };
+        let mut data = StoryData::default();
+        data.entities.insert(50, entry(50, "CPickupCollectible"));
+        data.entities.insert(51, entry(51, "CPickupAmmo"));
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            heard = {}
+            local box = { _type = { OnCollected = function(self, id) heard[#heard + 1] = id end } }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback(GetLocalPlayerId(), box, "OnCollected", "CCollectibleCollectedEvent")
+        "#,
+            )
+            .exec()
+            .unwrap();
+        story.pickup_picked(51);
+        story.pickup_picked(50);
+        let heard: Vec<String> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        assert_eq!(heard, ["50"]);
     }
 
     /// A character placed under its scripts' control takes up by itself only
