@@ -580,6 +580,7 @@ fn update_minimap(
     let show = *state.get() == GameState::Playing
         && !h.dead
         && !scripted.hud_hidden
+        && !scripted.hud_parts_hidden.contains("radar")
         && cinema.view.is_none()
         && !poker.is_some_and(|p| p.holds_player())
         && !minigame.is_some_and(|m| m.holds_player());

@@ -66,7 +66,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_grenades,
                     drive_radar,
                     drive_potions,
-                    drive_camera,
+                    (drive_camera, drive_script_hud),
                     drive_credits,
                     (drive_loading, frontend::drive_frontend),
                     drive_gallery,
@@ -3281,6 +3281,27 @@ fn drive_stealth(
     if ok {
         *last = Some(now);
     }
+}
+
+/// The HUD's parts scripts hide and show (`ScriptedPlayer::hud_parts_hidden`:
+/// a tutorial's radar and reticule, a scene's whole HUD), told to the HUD
+/// as they change (`HideUIElement` / `ShowUIElement` with the parts joined
+/// by `|`, as the scripts send them); a reload, clearing them, shows them
+/// again.
+fn drive_script_hud(state: NonSend<Interface>, scripted: Res<crate::story::ScriptedPlayer>, mut sent: Local<std::collections::BTreeSet<String>>) {
+    let Interface::Running(host) = &*state else { return };
+    if *sent == scripted.hud_parts_hidden {
+        return;
+    }
+    let hide: Vec<&str> = scripted.hud_parts_hidden.difference(&sent).map(String::as_str).collect();
+    let show: Vec<&str> = sent.difference(&scripted.hud_parts_hidden).map(String::as_str).collect();
+    if !hide.is_empty() {
+        host.event("HideUIElement", &[&hide.join("|")]);
+    }
+    if !show.is_empty() {
+        host.event("ShowUIElement", &[&show.join("|")]);
+    }
+    *sent = scripted.hud_parts_hidden.clone();
 }
 
 /// The camera's viewfinder (`H_Camera`), over the HUD while the camera is

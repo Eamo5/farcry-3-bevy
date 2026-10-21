@@ -943,6 +943,10 @@ pub struct ScriptedPlayer {
     pub camera_up: bool,
     pub animal_looting: bool,
     pub plant_looting: bool,
+    /// The HUD's parts scripts have hidden (`UISendEventToPlayer` to the
+    /// HUD, `HideUIElement Radar|Reticule|Ammo`, until `ShowUIElement`),
+    /// lower case.
+    pub hud_parts_hidden: std::collections::BTreeSet<String>,
 }
 
 struct InventoryBackup {
@@ -968,6 +972,7 @@ impl Default for ScriptedPlayer {
             gadgets: ["gadgets:FC3/Rock".into(), "gadgets:Equipped/Tablet".into()].into_iter().collect(),
             granted: HashMap::new(),
             animal_looting: true, plant_looting: true, camera_drawn: false, camera_up: false,
+            hud_parts_hidden: Default::default(),
         }
     }
 }
@@ -3025,6 +3030,18 @@ fn run_story(
                     "CAPI_Pawn.RestoreBackupInventory" if a(0) == fc3_story::PLAYER.to_string() => {
                         if let Ok(mut inv) = inventory.single_mut() {
                             scripted.restore_inventory(&mut inv);
+                        }
+                    }
+                    // The HUD's parts hidden and shown again (a tutorial's,
+                    // a scene's): `<movie> HideUIElement|ShowUIElement <parts>`.
+                    "UISendEventToPlayer" if a(0).eq_ignore_ascii_case("SINGLE HUD") && matches!(a(1).as_str(), "HideUIElement" | "ShowUIElement") => {
+                        let hide = a(1) == "HideUIElement";
+                        for part in a(2).split('|').map(|p| p.trim().to_ascii_lowercase()).filter(|p| !p.is_empty()) {
+                            if hide {
+                                scripted.hud_parts_hidden.insert(part);
+                            } else {
+                                scripted.hud_parts_hidden.remove(&part);
+                            }
                         }
                     }
                     // (Told once a run, for finding what scripts ask that
