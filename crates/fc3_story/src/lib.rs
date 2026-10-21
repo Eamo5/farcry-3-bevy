@@ -335,11 +335,19 @@ impl Story {
 
     /// Visible named timers, in registration order. Hidden timers still run
     /// and deliver their callbacks, but take no space in the HUD.
+    /// The HUD's objective timer and gauge come first (ids 0 and 1).
     pub fn timers(&self) -> Vec<Timer> {
-        self.core.borrow().media.timers.iter().filter(|(_, t)| t.shown).map(|(&id, t)| Timer {
+        let c = self.core.borrow();
+        let objective = [(0, &c.media.objective_timer), (1, &c.media.gage_timer)].into_iter().filter_map(|(id, t)| {
+            let t = t.as_ref()?;
+            let label = t.text.and_then(|s| c.data.strings.get(s)).unwrap_or_default().to_string();
+            Some(Timer { id, label, seconds: t.left, increasing: false, append_time: true })
+        });
+        let named = c.media.timers.iter().filter(|(_, t)| t.shown).map(|(&id, t)| Timer {
             id, label: t.label.clone(), seconds: t.value,
             increasing: t.increasing, append_time: t.append_time,
-        }).collect()
+        });
+        objective.chain(named).collect()
     }
 
     /// Starts a new game: the blocks active from the start, then the master
@@ -2072,6 +2080,24 @@ mod tests {
 
     fn empty_story() -> Story {
         Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), StoryData::default()).unwrap()
+    }
+
+    #[test]
+    fn objective_timers_count_down_on_the_hud_until_hidden() {
+        let mut story = empty_story();
+        let lua = story.domino().lua().clone();
+        lua.load("ShowObjectiveTimer(90, false); ShowObjectiveGageTimer(30, -1, false); PauseObjectiveGageTimer(true)").exec().unwrap();
+        story.update(1.5, View::default());
+        let t = story.timers();
+        assert_eq!(t.iter().map(|t| t.id).collect::<Vec<_>>(), [0, 1]);
+        assert!((t[0].seconds - 88.5).abs() < 1e-6 && !t[0].increasing && t[0].append_time);
+        assert_eq!(t[1].seconds, 30.0);
+        lua.load("PauseObjectiveGageTimer(false); ShowObjectiveTimer(-1, false)").exec().unwrap();
+        story.update(1.0, View::default());
+        let t = story.timers();
+        assert_eq!(t.len(), 1);
+        assert_eq!((t[0].id, t[0].seconds), (1, 29.0));
+        assert_eq!(story.errors(), 0);
     }
 
     #[test]

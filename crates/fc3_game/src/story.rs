@@ -692,6 +692,8 @@ pub struct StoryHost {
     /// Harm scripts deal (`HealthModifier`'s `DamagePawn`: JAS_190's
     /// fall into the cenote's depths kills), by pawn.
     pub damages: Vec<(u64, f32)>,
+    /// Health scripts set (`SetPawnHealth`), by pawn.
+    pub health_sets: Vec<(u64, f32)>,
     /// Props scripts spawned, not yet drawn.
     pub spawned_props: Vec<crate::story_props::SpawnedProp>,
     /// Specific gameplays the game doesn't play, and how long each has run
@@ -839,6 +841,7 @@ impl StoryHost {
             tag_now: Default::default(),
             end_of_game: false,
             damages: Vec::new(),
+            health_sets: Vec::new(),
             spawned_props: Vec::new(),
             unplayed: HashMap::new(),
         }
@@ -2539,6 +2542,13 @@ fn run_story(
                             host.damages.push((pawn, amount));
                         }
                     }
+                    // `pawn, origin, health` (the `HealthModifier` box's Set:
+                    // a beaten civilian left weak, a cage's door).
+                    "CAPI_Pawn.SetPawnHealth" => {
+                        if let (Ok(pawn), Ok(health)) = (a(0).parse::<u64>(), a(2).parse::<f32>()) {
+                            host.health_sets.push((pawn, health));
+                        }
+                    }
                     // `id, archetype, x, y, z, angles`
                     "SpawnEntityFromArchetype" => {
                         let f = |i: usize| a(i).parse::<f32>().unwrap_or(0.0);
@@ -3462,9 +3472,26 @@ fn story_damage(
     host: Option<NonSendMut<StoryHost>>,
     players: Query<Entity, With<Player>>,
     actors: Query<(Entity, &crate::story_actors::StoryActor)>,
+    mut healths: Query<&mut crate::combat::Health>,
     mut damage: MessageWriter<crate::combat::DamageEvent>,
 ) {
     let Some(mut host) = host else { return };
+    // Health a script sets: so much left (as much as it holds), or none, a
+    // death as the harm below is.
+    for (pawn, health) in std::mem::take(&mut host.health_sets) {
+        let target = if pawn == fc3_story::PLAYER { players.single().ok() } else { actors.iter().find(|(_, a)| a.id == pawn).map(|(e, _)| e) };
+        let Some(target) = target else { continue };
+        let Ok(mut h) = healths.get_mut(target) else { continue };
+        if h.dead {
+            continue;
+        }
+        debug!("story: a script sets {pawn}'s health to {health}");
+        if health > 0.0 {
+            h.current = health.min(h.max);
+        } else {
+            host.damages.push((pawn, h.current + 1.0));
+        }
+    }
     for (pawn, amount) in std::mem::take(&mut host.damages) {
         let target = if pawn == fc3_story::PLAYER { players.single().ok() } else { actors.iter().find(|(_, a)| a.id == pawn).map(|(e, _)| e) };
         let Some(target) = target else { continue };

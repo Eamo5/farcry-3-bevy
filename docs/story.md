@@ -243,6 +243,16 @@ is the story's own:
   frames 1 to 50, empty to full), faded in and out (`FadeIn`,
   `FadeOut`). A character's health is its own; a vehicle's, what the
   story sees of it.
+* **Objective timers.** `ShowObjectiveTimer <seconds>` (the
+  `ObjectiveTimer_v2` box, 23 graphs: supply runs' and hunts' time limits,
+  the expiration timers) and `ShowObjectiveGageTimer <seconds>
+  <objective>` (the outpost defences' gauge, with its objective's string)
+  put a countdown on the HUD's mission timer, ahead of the named timers;
+  `Pause...` holds it and a negative time takes it away. Their boxes'
+  own delays say when time is up.
+* **Health set.** `CAPI_Pawn.SetPawnHealth <pawn> <origin> <health>` (the
+  `HealthModifier` box's Set) leaves the player or a story character with
+  that much health (as much as he holds), or kills him at 0.
 * **The player's air.** `CAPI_Player.SetOxygenLevel <player> <breathes>
   <0..1>` (the `OxygenModifier` box: BAM_020's oxygen bottles in the
   sunken ship, the drowning pirate's struggle) puts his air at that share

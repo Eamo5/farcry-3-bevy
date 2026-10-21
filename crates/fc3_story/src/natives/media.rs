@@ -59,6 +59,19 @@ pub struct Media {
     /// were given.
     pub fills: BTreeMap<u64, Fill>,
     pub sun_yaw: f64,
+    /// The HUD's objective timer (`ShowObjectiveTimer`: a supply run's or
+    /// a hunt's time left) and its gauge (`ShowObjectiveGageTimer`: an
+    /// outpost held against its attack), counting down while shown.
+    pub objective_timer: Option<ObjectiveTimer>,
+    pub gage_timer: Option<ObjectiveTimer>,
+}
+
+/// An objective timer on the HUD: seconds left, what it's for (a string
+/// id, the gauge's), and whether it's held.
+pub struct ObjectiveTimer {
+    pub left: f64,
+    pub text: Option<u32>,
+    pub paused: bool,
 }
 
 /// A sector's water rising or falling to a level (`FillWater`,
@@ -193,6 +206,12 @@ impl Core {
         }
         for (cb, value) in fire {
             self.raise(&Listen::Generic(format!("NamedTimerCallback_{cb}")), vec![Arg::Num(value)]);
+        }
+        // (Their boxes' own delays say when they run out; these only show.)
+        for t in [&mut self.media.objective_timer, &mut self.media.gage_timer].into_iter().flatten() {
+            if !t.paused {
+                t.left = (t.left - dt).max(0.0);
+            }
         }
         self.update_water(dt);
     }
@@ -391,6 +410,27 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         if let Some(t) = timer.0 {
             c.media.timers.remove(&(t as u64));
             c.emit(Command::Native { name: "HideTimer".into(), args: vec![(t as u64).to_string()] });
+        }
+    })?;
+    // The HUD's objective timer and gauge (`ObjectiveTimer_v2`,
+    // `ObjectiveGageTimer`): a negative time takes it away.
+    r.f("ShowObjectiveTimer", |c, (time, _reversed): (Num, Flag)| {
+        let time = time.or(-1.0);
+        c.media.objective_timer = (time >= 0.0).then_some(ObjectiveTimer { left: time, text: None, paused: false });
+    })?;
+    r.f("PauseObjectiveTimer", |c, paused: Flag| {
+        if let Some(t) = &mut c.media.objective_timer {
+            t.paused = paused.0;
+        }
+    })?;
+    r.f("ShowObjectiveGageTimer", |c, (time, objective, _reversed): (Num, Num, Flag)| {
+        let time = time.or(-1.0);
+        let text = objective.0.filter(|o| *o >= 0.0).map(|o| o as u32);
+        c.media.gage_timer = (time >= 0.0).then_some(ObjectiveTimer { left: time, text, paused: false });
+    })?;
+    r.f("PauseObjectiveGageTimer", |c, paused: Flag| {
+        if let Some(t) = &mut c.media.gage_timer {
+            t.paused = paused.0;
         }
     })?;
 
