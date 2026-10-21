@@ -5022,8 +5022,21 @@ table's own movie (`ACTI_Poker.feu`, `docs/ui.md`).
   `PokerScriptedEntities`). Seen: HOY_040 B10 from its checkpoint, the four
   scenes and the optional one with hands between, BET LIFE in the hand
   before the reveal, `JasonLeavesPoker`, B10 completed.
-* **Not yet.** The faces of the scenes' scripted cards (every one is the
-  same model in the data: the engine dealt them their rigged cards).
+* **The scenes' cards.** Hoyt's table lists the cards its scenes deal and
+  show (`PokerScriptedEntities`' fourteen `PokerCards`, all modelled as the
+  two of clubs: the engine gave them their faces). Once a scene holding
+  them plays, each takes a face from the hand on the table
+  (`scene_card_faces`). Where the scene first sets it down at the table's
+  height decides which: out toward a chair someone plays from (more than
+  0.25 m along it, within 45 degrees of it), that seat's two cards in turn
+  across it; else the board's, across the table as the player sees it.
+  Past what the hand dealt, the deck's next cards. It is drawn on the
+  table's own card models in its place. The authored scenes lay three
+  pairs out about 90 degrees apart and the board in a row of five toward
+  the empty chair (B10C_02); B10C_01 deals them from the dealer's hand. A
+  test covers the rule; it has not been seen in a run, as no checkpoint
+  reaches HOY_040 now. The engine's own rigged deal isn't in the data, so
+  the faces are the hand's, not the original's.
 
 ### Trials of the Rakyat
 

@@ -655,6 +655,10 @@ pub struct PokerSettings {
     pub difficulties: Vec<PokerDifficulty>,
     /// The story's scenes played between hands (`ScriptedSequenceIDList`).
     pub scenes: usize,
+    /// The cards the story's scenes deal and show (`PokerScriptedEntities`'
+    /// `PokerCards`): world entities all modelled as one card, which the
+    /// game gives faces.
+    pub scripted_cards: Vec<u64>,
 }
 
 /// A computer player: its character, how it plays (`PlayerType`: 0
@@ -712,6 +716,11 @@ impl PokerSettings {
             npcs,
             difficulties,
             scenes: o.child("ScriptedSequenceIDList").map_or(0, |c| c.children.len().max(c.fields.len())),
+            scripted_cards: o
+                .child("PokerScriptedEntities")
+                .and_then(|c| c.child("PokerCards"))
+                .map(|c| c.children.iter().filter_map(|u| u.u64("U64")).filter(|e| *e != 0 && *e != u64::MAX).collect())
+                .unwrap_or_default(),
         })
     }
 }
@@ -1165,6 +1174,9 @@ mod tests {
         let hoyt = PokerSettings::parse(&bytes, "CPokerMiniGame_JAS_220_PokerGym_G3").unwrap();
         assert_eq!((hoyt.kind, hoyt.leave, hoyt.npcs.len()), (3, false, 2));
         assert_eq!((hoyt.npcs[0].player_type, hoyt.npcs[0].dialog, hoyt.npcs[1].player_type), (1, 5, 2));
+        // (Its scenes' fourteen cards, the first HOY_040_B10_PokerCard_01; the
+        // bars' tables have none.)
+        assert_eq!((hoyt.scripted_cards.len(), hoyt.scripted_cards[0], bar.scripted_cards.len()), (14, 0x1cd127b6afa048f6, 0));
         let sqc = PokerSettings::parse(&bytes, "SQC_100_OBJ20_Pokerminigame").unwrap();
         assert_eq!(sqc.difficulties.iter().map(|d| d.enabled).collect::<Vec<_>>(), vec![false, true, false, false]);
         let race = RaceSettings::parse(&bytes, "CRacingMiniGame_G3_WaypointRace").unwrap();

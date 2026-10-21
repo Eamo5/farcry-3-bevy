@@ -41,7 +41,8 @@ impl Plugin for PokerPlugin {
             .add_systems(PreUpdate, hold_controls.after(crate::controls::apply_action_maps))
             .add_systems(Update, play_poker.after(crate::story::StorySet).before(crate::cinema::CinemaSet).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(Update, hold_seat.after(crate::player::player_move))
-            .add_systems(Update, set_table.after(play_poker))
+            .add_systems(Update, face_scene_cards.after(play_poker).after(crate::cinema::CinemaSet))
+            .add_systems(Update, set_table.after(face_scene_cards))
             .add_systems(Update, pose_players.after(play_poker).before(crate::cinema::CinemaSet));
     }
 }
@@ -384,6 +385,9 @@ struct Game {
     odds: Option<(Vec<Card>, [f32; 10])>,
     /// Hoyt's last hand is being played (`BET_LIFE_SCENE` waited for).
     bet_life: bool,
+    /// The faces the story's scripted cards show, and the scene they were
+    /// given for (`scene_card_faces`).
+    scene_faces: Option<(String, HashMap<u64, Card>)>,
     /// What's said: the table's lines, those asked for (a computer player's
     /// seat or the player, the event, its chance), until when the table is
     /// talking, and how long since a computer player called the player over.
@@ -615,6 +619,7 @@ fn play_poker(
             help: None,
             odds: None,
             bet_life: false,
+            scene_faces: None,
             voices,
             speech: Vec::new(),
             quiet_until: 0.0,
@@ -1388,6 +1393,8 @@ enum PropKey {
     Bet(usize, usize),
     Pot(usize),
     Deck,
+    /// A story scene's scripted card, by its entity.
+    Scene(u64),
 }
 
 #[derive(Component)]
@@ -1484,8 +1491,106 @@ fn table_props(place: &Place, table: &Table, player: usize, stake: u32) -> Vec<(
     out
 }
 
+/// How far apart (s) a scene's scripted cards are followed to where they
+/// are set down.
+const SCENE_CARD_STEP: f32 = 1.0 / 15.0;
+
+/// A story's scenes deal its scripted cards (Hoyt's table: all modelled as
+/// one card, the game gave them their faces): once a scene holding them
+/// plays, each gets a face from the hand on the table by where the scene
+/// first sets it down (`scene_card_faces`).
+fn face_scene_cards(mut poker: ResMut<PokerTable>, cinema: Res<crate::cinema::Cinema>, clips: Res<Assets<crate::cache_assets::Fc3Clip>>) {
+    let Some(game) = poker.game.as_mut() else { return };
+    let Some((scene, _)) = game.scene.as_ref().filter(|_| game.story() && !game.settings.scripted_cards.is_empty()) else { return };
+    if game.scene_faces.as_ref().is_some_and(|(s, _)| s == scene) {
+        return;
+    }
+    let (Some(place), Some(table)) = (game.place.as_ref(), game.table.as_ref()) else { return };
+    let mut paths = Vec::new();
+    for &id in &game.settings.scripted_cards {
+        if let Some(path) = cinema.prop_path(&clips, id, SCENE_CARD_STEP) {
+            paths.push((id, path));
+        }
+    }
+    // (Not until the scene holds them and its clips are in.)
+    if paths.is_empty() {
+        return;
+    }
+    let faces = scene_card_faces(place, table, game.player_seat, &paths);
+    info!(
+        "poker: scene {scene}'s {} cards: {} given faces {:?}",
+        paths.len(),
+        faces.len(),
+        faces.iter().map(|(id, c)| (id, card_text(*c))).collect::<Vec<_>>()
+    );
+    game.scene_faces = Some((scene.clone(), faces));
+}
+
+/// Where a scene first sets a card down: the first place it lies still a
+/// moment at, at the table's height.
+fn set_down(path: &[Vec3], top: f32) -> Option<Vec3> {
+    (0..path.len().saturating_sub(3)).find_map(|i| {
+        let p = path[i];
+        ((p.y - top).abs() < 0.06 && path[i + 1..i + 4].iter().all(|q| q.distance(p) < 0.01)).then_some(p)
+    })
+}
+
+/// The faces a scene's scripted cards show (their paths sampled from the
+/// scene's start): each set down by a seat (out toward its chair) is one of
+/// that seat's two cards, in turn across it; one set down in the middle is
+/// one of the board's, across the table as the player sees it. Past what
+/// the hand has dealt, the deck's next cards.
+fn scene_card_faces(place: &Place, table: &Table, player: usize, paths: &[(u64, Vec<Vec3>)]) -> HashMap<u64, Card> {
+    let toward = |s: usize| (place.chairs[s] - place.centre).with_y(0.0).normalize_or(Vec3::Z);
+    let seat_of = |at: Vec3| {
+        let d = (at - place.centre).with_y(0.0);
+        // (Only chairs someone plays from: Hoyt's table's board runs toward
+        // its empty one.)
+        (0..4)
+            .filter(|&s| table.seats.get(s).is_some_and(|seat| seat.hole.is_some() || !seat.out))
+            .filter_map(|s| {
+                let along = d.dot(toward(s));
+                let across = (d - toward(s) * along).length();
+                (along > 0.25 && across < along).then_some((s, along - across))
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(s, _)| s)
+    };
+    let mut seats: [Vec<(f32, u64)>; 4] = Default::default();
+    let mut board = Vec::new();
+    for (id, path) in paths {
+        let Some(at) = set_down(path, place.centre.y) else { continue };
+        let d = (at - place.centre).with_y(0.0);
+        match seat_of(at) {
+            Some(s) => seats[s].push((d.dot(Vec3::Y.cross(toward(s))), *id)),
+            None => board.push((d.dot(Vec3::Y.cross(toward(player))), *id)),
+        }
+    }
+    let mut fresh = table.upcoming();
+    let mut faces = HashMap::new();
+    board.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (i, (_, id)) in board.iter().enumerate() {
+        if let Some(c) = table.board.get(i).copied().or_else(|| fresh.next()) {
+            faces.insert(*id, c);
+        }
+    }
+    for (s, cards) in seats.iter_mut().enumerate() {
+        cards.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let hole = table.seats.get(s).and_then(|seat| seat.hole);
+        for (k, (_, id)) in cards.iter().enumerate() {
+            if let Some(c) = hole.and_then(|h| h.get(k).copied()).or_else(|| fresh.next()) {
+                faces.insert(*id, c);
+            }
+        }
+    }
+    faces
+}
+
 /// The cards and chips on the table while the player sits at it, set out
-/// as its game goes (each prop once, moved where it goes next).
+/// as its game goes (each prop once, moved where it goes next); and a
+/// story's scripted cards with their faces where its scenes put them, in
+/// place of their own.
+#[allow(clippy::too_many_arguments)]
 fn set_table(
     poker: Res<PokerTable>,
     server: Res<AssetServer>,
@@ -1494,14 +1599,34 @@ fn set_table(
     mut handles: Local<HashMap<String, Handle<Fc3Model>>>,
     mut fixed: Local<HashMap<&'static str, Handle<StandardMaterial>>>,
     mut props: Query<(Entity, &TableProp, &mut Transform)>,
+    mut placed: Query<(&crate::objects::PlacedId, &Transform, &mut Visibility), Without<TableProp>>,
+    mut hidden: Local<Vec<u64>>,
     mut commands: Commands,
 ) {
-    let want = poker
+    let mut want = poker
         .game
         .as_ref()
         .filter(|g| g.seated && g.scene.is_none())
         .and_then(|g| Some(table_props(g.place.as_ref()?, g.table.as_ref()?, g.player_seat, g.stake)))
         .unwrap_or_default();
+    let faces = poker.game.as_ref().and_then(|g| g.scene_faces.as_ref()).map(|(_, f)| f);
+    let shown: std::collections::HashSet<u64> = props.iter().filter_map(|(_, p, _)| if let PropKey::Scene(id) = p.0 { Some(id) } else { None }).collect();
+    let any = faces.is_some() || !hidden.is_empty();
+    for (id, t, mut v) in placed.iter_mut().filter(|_| any) {
+        let face = faces.and_then(|f| f.get(&id.0));
+        if let Some(&card) = face {
+            want.push((PropKey::Scene(id.0), card_model(card), *t));
+        }
+        // (Hidden once its face is out; back when the faces go.)
+        let hide = face.is_some() && shown.contains(&id.0);
+        if hide && *v != Visibility::Hidden {
+            *v = Visibility::Hidden;
+            hidden.push(id.0);
+        } else if !hide && hidden.contains(&id.0) {
+            *v = Visibility::Inherited;
+            hidden.retain(|h| *h != id.0);
+        }
+    }
     if want.is_empty() && props.is_empty() {
         return;
     }
@@ -1678,6 +1803,50 @@ mod tests {
     /// The cards' models by suit and rank; after the deal the player's cards
     /// lie face up, the others' face down, the blinds' bets out, each prop
     /// once and all on the table.
+    #[test]
+    fn scene_cards_take_the_faces_of_the_hand_by_where_they_are_set_down() {
+        // Four chairs a metre out; the player at +Z, the scene's cards
+        // dealt (paths start in the dealer's hand, below the top) to the
+        // player and the chair at +X, and three to the board.
+        let place = Place {
+            centre: Vec3::new(0.0, 0.7, 0.0),
+            chairs: [Vec3::new(0.0, 0.5, 1.0), Vec3::new(1.0, 0.5, 0.0), Vec3::new(0.0, 0.5, -1.0), Vec3::new(-1.0, 0.5, 0.0)],
+            facing: [Quat::IDENTITY; 4],
+        };
+        let mut table = Table::new(&[100, 100, 100, 100], 1, 2);
+        table.deal(&mut Dealer::new(7));
+        let still = |to: Vec3| {
+            let mut p = vec![Vec3::new(0.0, 0.4, 0.0); 3];
+            p.extend((1..=6).map(|i| Vec3::new(0.0, 0.4, 0.0).lerp(to, i as f32 / 6.0)));
+            p.extend([to; 6]);
+            p
+        };
+        let paths = vec![
+            (1, still(Vec3::new(0.05, 0.7, 0.4))),
+            (2, still(Vec3::new(-0.05, 0.7, 0.4))),
+            (3, still(Vec3::new(0.45, 0.7, 0.04))),
+            (4, still(Vec3::new(0.45, 0.7, -0.04))),
+            (5, still(Vec3::new(0.09, 0.7, 0.0))),
+            (6, still(Vec3::new(-0.09, 0.7, 0.0))),
+            (7, still(Vec3::new(0.0, 0.7, 0.0))),
+            // (Held in a hand all along: never set down, no face.)
+            (8, vec![Vec3::new(0.0, 0.3, 0.0); 12]),
+        ];
+        let faces = scene_card_faces(&place, &table, 0, &paths);
+        let hole = |s: usize| table.seats[s].hole.unwrap();
+        // Across a seat as it faces the table: its first card on the left.
+        let side = Vec3::Y.cross(Vec3::Z);
+        let (left, right) = if Vec3::new(-0.05, 0.0, 0.0).dot(side) < Vec3::new(0.05, 0.0, 0.0).dot(side) { (2, 1) } else { (1, 2) };
+        assert_eq!((faces[&left], faces[&right]), (hole(0)[0], hole(0)[1]));
+        assert!([faces[&3], faces[&4]].iter().all(|c| hole(1).contains(c)));
+        // The board's three, none dealt yet: the deck's next, across it.
+        let next: Vec<Card> = table.upcoming().take(3).collect();
+        let mut board: Vec<(f32, Card)> = [5, 6, 7].iter().map(|id| (paths[*id as usize - 1].1.last().unwrap().dot(side), faces[id])).collect();
+        board.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(board.iter().map(|b| b.1).collect::<Vec<_>>(), next);
+        assert!(!faces.contains_key(&8));
+    }
+
     #[test]
     fn table_props_lay_out_the_deal() {
         assert_eq!(card_model(Card::new(10, 0)), format!("{MISC}pokercardct.xbg"));

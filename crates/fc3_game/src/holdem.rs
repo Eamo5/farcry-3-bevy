@@ -274,6 +274,11 @@ impl Table {
         s.put_in += amount;
     }
 
+    /// The cards still in the deck, in the order they would be dealt.
+    pub fn upcoming(&self) -> impl Iterator<Item = Card> + '_ {
+        self.deck.iter().rev().copied()
+    }
+
     /// Deals a new hand: the button moves on, the blinds go in, two cards
     /// each, and the first to act after the big blind is to act.
     pub fn deal(&mut self, dealer: &mut Dealer) {

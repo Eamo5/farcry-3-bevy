@@ -130,6 +130,27 @@ impl Cinema {
             .or_else(|| self.built.iter().find(|b| b.name == name).map(|b| (0.0, b.seq.duration)))
     }
 
+    /// Where a prop a scene playing holds goes (Bevy space), sampled every
+    /// `step` s from the scene's start (while a clip has it); `None` while
+    /// it is in none or their clips are loading.
+    pub fn prop_path(&self, clips: &Assets<Fc3Clip>, id: u64, step: f32) -> Option<Vec<Vec3>> {
+        let (p, g) = self
+            .playing
+            .iter()
+            .find_map(|p| p.seq.groups.iter().find(|g| g.kind == GroupKind::Generic && p.bindings.get(&g.uid) == Some(&id)).map(|g| (p, g)))?;
+        let duration = |s: &str| p.clips.get(s).and_then(|h| clips.get(h)).map(|c| c.0.duration);
+        let mut out = Vec::new();
+        let mut t = 0.0;
+        while t <= p.seq.duration {
+            if let Some((source, ct)) = clip_at(&g.clips, t, duration) {
+                let clip = clips.get(p.clips.get(source)?)?;
+                out.push((p.origin * clip_root(&clip.0, ct) * prop_node(&clip.0, ct)).translation);
+            }
+            t += step.max(0.01);
+        }
+        Some(out)
+    }
+
     /// Ends a built sequence now.
     pub fn stop_built(&mut self, name: &str) {
         self.built_results.remove(name);
@@ -430,6 +451,19 @@ fn facial_at(clips: &[cinema::Clip], t: f32) -> Option<(&str, u32, f32)> {
         ClipKind::Facial { source, from, .. } if t >= c.start && t <= c.start + c.duration.max(0.05) => Some((source.as_str(), *from, t - c.start)),
         _ => None,
     })
+}
+
+/// A prop's own node on its clip at `t` (its first bone's key).
+fn prop_node(clip: &fc3_formats::anim::Clip, t: f32) -> Transform {
+    clip.tracks
+        .iter()
+        .min_by_key(|k| k.bone)
+        .map(|k| Transform {
+            translation: k.sample_translation(t).map(Vec3::from_array).unwrap_or_default(),
+            rotation: k.sample_rotation(t).map(Quat::from_array).unwrap_or_default(),
+            scale: Vec3::ONE,
+        })
+        .unwrap_or_default()
 }
 
 pub(crate) fn clip_root(clip: &fc3_formats::anim::Clip, t: f32) -> Transform {
@@ -742,12 +776,7 @@ fn play_scenes(
             let Some((source, ct)) = clip_at(&g.clips, p.t, |s| p.clips.get(s).and_then(|h| clips.get(h)).map(|c| c.0.duration)) else { continue };
             let Some(clip) = p.clips.get(source).and_then(|h| clips.get(h)) else { continue };
             let Some((_, mut at, _)) = props.iter_mut().find(|(pid, _, _)| pid.0 == id) else { continue };
-            let node = clip.0.tracks.iter().min_by_key(|t| t.bone).map(|t| Transform {
-                translation: t.sample_translation(ct).map(Vec3::from_array).unwrap_or_default(),
-                rotation: t.sample_rotation(ct).map(Quat::from_array).unwrap_or_default(),
-                scale: Vec3::ONE,
-            });
-            let to = p.origin * clip_root(&clip.0, ct) * node.unwrap_or_default();
+            let to = p.origin * clip_root(&clip.0, ct) * prop_node(&clip.0, ct);
             if p.t < 0.5 {
                 debug!(
                     "cinema {}: prop {id} placed {:.2?} scene {:.2?} ({:.2} m)",
