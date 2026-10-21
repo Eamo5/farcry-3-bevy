@@ -250,6 +250,15 @@ is the story's own:
   put a countdown on the HUD's mission timer, ahead of the named timers;
   `Pause...` holds it and a negative time takes it away. Their boxes'
   own delays say when time is up.
+* **Impaired characters.** `SetImpairedState <group> <0|1|2>` (the
+  `PawnSetImpairedState` box, 28 graphs: the outpost defences, the rebels
+  cheering a supply run, captives) holds a group's senses as the box's
+  notes say: fully impaired (a captive tied to a tree) is held as the
+  script holds a character, its senses off: it sees, hears and fights
+  nothing and forgets the fight it was in; minimally impaired (held at
+  gunpoint) doesn't see the player, its foes or interesting sounds (rocks,
+  steps, shouts), but gunfire and blasts still put it on guard. A reload
+  lets them all go (`npc::Impaired`).
 * **Health set.** `CAPI_Pawn.SetPawnHealth <pawn> <origin> <health>` (the
   `HealthModifier` box's Set) leaves the player or a story character with
   that much health (as much as he holds), or kills him at 0.

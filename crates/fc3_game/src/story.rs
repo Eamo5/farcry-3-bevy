@@ -85,6 +85,22 @@ fn apply_sides(
     if let Some(choice) = host.throw_choice.take() {
         thrown.0 = Some(choice);
     }
+    // Senses a script holds: a captive tied up forgets the fight.
+    if !host.impaired.is_empty() {
+        for (actor, mut npc) in &mut npcs {
+            let Some(&state) = host.impaired.get(&actor.id) else { continue };
+            let impaired = crate::npc::Impaired::from_state(state);
+            if npc.impaired != impaired {
+                debug!("story: {} impaired {impaired:?}", actor.id);
+                npc.impaired = impaired;
+                if impaired == crate::npc::Impaired::Fully {
+                    npc.foe = None;
+                    npc.awareness = 0.0;
+                    npc.state = crate::npc::NpcState::Idle;
+                }
+            }
+        }
+    }
     if host.armies.is_empty() {
         return;
     }
@@ -692,6 +708,8 @@ pub struct StoryHost {
     /// Harm scripts deal (`HealthModifier`'s `DamagePawn`: JAS_190's
     /// fall into the cenote's depths kills), by pawn.
     pub damages: Vec<(u64, f32)>,
+    /// Characters' senses as scripts hold them (`SetImpairedState`), by id.
+    pub impaired: HashMap<u64, u8>,
     /// Health scripts set (`SetPawnHealth`), by pawn.
     pub health_sets: Vec<(u64, f32)>,
     /// Props scripts spawned, not yet drawn.
@@ -841,6 +859,7 @@ impl StoryHost {
             tag_now: Default::default(),
             end_of_game: false,
             damages: Vec::new(),
+            impaired: HashMap::new(),
             health_sets: Vec::new(),
             spawned_props: Vec::new(),
             unplayed: HashMap::new(),
@@ -1629,6 +1648,7 @@ fn run_story(
             // reload, was never lured again.)
             host.used.clear();
             host.near_at.clear();
+            host.impaired.clear();
             env_overrides.active.clear();
             env_overrides.seconds = 0.0;
             env_overrides.storm = None;
@@ -3065,6 +3085,16 @@ fn run_story(
                         if let (Ok(id), Ok(army)) = (a(0).parse::<u64>(), a(1).parse::<u8>()) {
                             debug!("story: {id} to army {army}");
                             host.armies.insert(id, army);
+                        }
+                    }
+                    // A group's senses held (`PawnSetImpairedState`: 0 not,
+                    // 1 fully, a captive tied up; 2 minimally, one held at
+                    // gunpoint).
+                    "SetImpairedState" => {
+                        let state = a(1).parse::<f32>().unwrap_or(0.0) as u8;
+                        for id in host.story.group_members(&a(0)) {
+                            debug!("story: {id} impaired {state}");
+                            host.impaired.insert(id, state);
                         }
                     }
                     // Tagging allowed on a character (1) or not (0, its tag

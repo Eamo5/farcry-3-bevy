@@ -500,6 +500,10 @@ pub struct Npc {
     /// Out of the fight: its army made neutral by a script
     /// (`CAPI_NPC.SwitchArmy`): no one's foe, nor anyone its.
     pub neutral: bool,
+    /// Impaired by a script (`SetImpairedState`): fully (tied up: senses
+    /// off, as if held by the script) or minimally (held at gunpoint: the
+    /// player seen and interesting sounds go unnoticed).
+    pub impaired: Impaired,
     pub role: Role,
     pub state: NpcState,
     pub post: Vec3,
@@ -563,6 +567,38 @@ pub struct Npc {
     /// Seconds left of getting up from a guard spot, startled (its move's
     /// abort clip, in the hit's slot): he stands where he is meanwhile.
     pub(crate) breaking_off: f32,
+}
+
+/// A script's hold on an NPC's senses (`SetImpairedState`'s 0, 1, 2).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Impaired {
+    #[default]
+    Not,
+    Fully,
+    Minimally,
+}
+
+impl Impaired {
+    pub fn from_state(n: u8) -> Impaired {
+        match n {
+            1 => Impaired::Fully,
+            2 => Impaired::Minimally,
+            _ => Impaired::Not,
+        }
+    }
+
+    /// Whether the player can be seen, and a sound of this kind heard.
+    pub fn sees(self) -> bool {
+        self == Impaired::Not
+    }
+
+    pub fn hears(self, kind: NoiseKind) -> bool {
+        match self {
+            Impaired::Not => true,
+            Impaired::Fully => false,
+            Impaired::Minimally => kind != NoiseKind::Interesting,
+        }
+    }
 }
 
 /// How an enemy was moving, where it was hit and from which side, for its
@@ -1527,6 +1563,7 @@ pub(crate) fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker
         lap: LapState::default(),
         faction,
         neutral: false,
+        impaired: Impaired::Not,
         role,
         state: NpcState::Idle,
         post: feet,
@@ -1744,6 +1781,14 @@ fn perceive(
         if h.dead {
             continue;
         }
+        // Tied up (a script's full impairment): he senses nothing.
+        if npc.impaired == Impaired::Fully {
+            npc.sees_player = false;
+            npc.foe = None;
+            npc.foe_seen = false;
+            continue;
+        }
+        let impaired = npc.impaired;
         let friendly = !npc.hostile();
         let eye = t.translation + Vec3::Y * 0.75;
         let to = chest - eye;
@@ -1776,7 +1821,7 @@ fn perceive(
             None => cos > fov_cos,
         };
         let mut visible = false;
-        if !friendly && !ph.dead && !unseen && dist < reach && (in_view || dist < sixth.0) {
+        if !friendly && impaired.sees() && !ph.dead && !unseen && dist < reach && (in_view || dist < sixth.0) {
             if let Ok(dir) = Dir3::new(to) {
                 let filter = SpatialQueryFilter::from_excluded_entities([e]);
                 visible = match spatial.cast_ray(eye, dir, dist, true, &filter) {
@@ -1800,7 +1845,7 @@ fn perceive(
             npc.foe = None;
             npc.foe_seen = false;
         }
-        if npc.scan <= 0.0 {
+        if npc.scan <= 0.0 && impaired.sees() {
             npc.scan = 0.4;
             let mut seen = None;
             let fought = npc.foe;
@@ -1963,7 +2008,7 @@ fn perceive(
         }
         // Steps heard out of sight: a sprint carries farthest, a crouch
         // hardly at all (`SP_SilentRun` quietens them).
-        if !friendly && !visible && !ph.dead && !unseen && !player.driving && player.grounded && time.elapsed_secs() - player.spawned_at >= 5.0 {
+        if !friendly && impaired.sees() && !visible && !ph.dead && !unseen && !player.driving && player.grounded && time.elapsed_secs() - player.spawned_at >= 5.0 {
             let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
             let heard = footstep_range(speed, player.crouching, player.sprinting) * perks.footstep_noise;
             if dist < heard {
@@ -1973,7 +2018,7 @@ fn perceive(
                 }
             }
         }
-        for n in noises.iter().filter(|n| !friendly && !n.aside) {
+        for n in noises.iter().filter(|n| !friendly && !n.aside && impaired.hears(n.kind)) {
             if t.translation.distance(n.at) < n.radius {
                 npc.awareness = npc.awareness.max(0.6);
                 npc.last_known = Some(n.at);
@@ -3715,6 +3760,23 @@ pub fn player_noise(writer: &mut MessageWriter<Noise>, at: Vec3, radius: f32, ki
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn impaired_npcs_sense_as_their_box_says() {
+        let kinds = [NoiseKind::Interesting, NoiseKind::Threatening, NoiseKind::Explosion];
+        // Not impaired: everything.
+        let not = Impaired::from_state(0);
+        assert!(not.sees() && kinds.iter().all(|k| not.hears(*k)));
+        // Tied up: nothing.
+        let fully = Impaired::from_state(1);
+        assert!(!fully.sees() && kinds.iter().all(|k| !fully.hears(*k)));
+        // At gunpoint: not the player seen nor an interesting sound, but
+        // gunfire and blasts.
+        let minimally = Impaired::from_state(2);
+        assert!(!minimally.sees() && !minimally.hears(NoiseKind::Interesting));
+        assert!(minimally.hears(NoiseKind::Threatening) && minimally.hears(NoiseKind::Explosion));
+        assert_eq!(Impaired::from_state(7), Impaired::Not);
+    }
 
     #[test]
     fn encounter_pawns_take_their_archetypes_side_and_role() {
