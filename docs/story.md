@@ -243,6 +243,11 @@ is the story's own:
   frames 1 to 50, empty to full), faded in and out (`FadeIn`,
   `FadeOut`). A character's health is its own; a vehicle's, what the
   story sees of it.
+* **The player's air.** `CAPI_Player.SetOxygenLevel <player> <breathes>
+  <0..1>` (the `OxygenModifier` box: BAM_020's oxygen bottles in the
+  sunken ship, the drowning pirate's struggle) puts his air at that share
+  of its most, and while he doesn't breathe (`bUseOxygen` false, until a
+  script sets it again) he can't drown.
 * **The weapon put away.** `CAPI_Pawn.SetNoWeaponMode <player> <on>`
   (the narrative scenes' setup, once their holster has had its time, and
   their cleanup) takes the weapon out of the player's hands for the

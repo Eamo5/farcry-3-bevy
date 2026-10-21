@@ -972,6 +972,12 @@ pub struct ScriptedPlayer {
     /// `CAPI_Player.SetPlayerFOV`: JAS_100's car ride), and the seconds it
     /// takes to get there or back.
     pub fov: (Option<f32>, f32),
+    /// The player's air as a script last set it (a share of the most), to
+    /// put on once; and whether the player breathes at all
+    /// (`CAPI_Player.SetOxygenLevel`: BAM_020's oxygen bottles and the
+    /// drowning pirate's struggle). Without air to use he can't drown.
+    pub oxygen: Option<f32>,
+    pub no_drowning: bool,
 }
 
 impl ScriptedPlayer {
@@ -1020,6 +1026,8 @@ impl Default for ScriptedPlayer {
             weapon_hidden: false,
             map_position: None,
             fov: (None, 0.0),
+            oxygen: None,
+            no_drowning: false,
         }
     }
 }
@@ -2834,6 +2842,12 @@ fn run_story(
                     "CAPI_Pawn.Holster" | "CAPI_Pawn.ForceHolster" if a(0) == fc3_story::PLAYER.to_string() => scripted.camera_drawn = false,
                     // The player's field of view set, or given back (`player,
                     // degrees, seconds, on`).
+                    // The player's air (`player, use oxygen, level 0..1`).
+                    "CAPI_Player.SetOxygenLevel" if a(0) == fc3_story::PLAYER.to_string() => {
+                        scripted.no_drowning = a(1) == "false" || a(1) == "0";
+                        scripted.oxygen = Some(a(2).parse::<f32>().unwrap_or(1.0).clamp(0.0, 1.0));
+                        debug!("story: oxygen {:?}{}", scripted.oxygen, if scripted.no_drowning { " (no drowning)" } else { "" });
+                    }
                     "CAPI_Player.SetPlayerFOV" if a(0) == fc3_story::PLAYER.to_string() => {
                         let on = a(3) == "1" || a(3) == "true";
                         scripted.fov = (on.then(|| a(1).parse::<f32>().ok()).flatten(), a(2).parse().unwrap_or(0.0));

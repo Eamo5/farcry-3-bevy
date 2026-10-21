@@ -331,6 +331,7 @@ fn breath(
     mut damage: MessageWriter<DamageEvent>,
     mut hud: ResMut<crate::hud::HudState>,
     heights: Res<crate::terrain::Heightfield>,
+    scripted: Option<ResMut<crate::story::ScriptedPlayer>>,
 ) {
     let dt = time.delta_secs();
     let Ok((pe, p, h)) = players.single() else { return };
@@ -341,7 +342,16 @@ fn breath(
     // under takes and in the air gives back, and what drowning costs.
     let oxygen = body.as_ref().and_then(|b| b.0.oxygen).unwrap_or(fc3_formats::body::Oxygen { max: AIR, drain: 1.0, refill: 8.0, drown: 12.0 });
     air.max = oxygen.max * lungs * if boosts.active(Syringe::NeverDrown) { 4.0 } else { 1.0 };
-    let under = p.swimming && crate::water::submerged(cam.translation(), &heights, 0.15) && !h.dead;
+    // A script's air (an oxygen bottle filling him up) and whether he can
+    // drown at all.
+    let mut breathless = false;
+    if let Some(mut s) = scripted {
+        if let Some(share) = s.oxygen.take() {
+            air.left = air.max * share;
+        }
+        breathless = s.no_drowning;
+    }
+    let under = p.swimming && crate::water::submerged(cam.translation(), &heights, 0.15) && !h.dead && !breathless;
     air.under = under;
     if !under {
         air.left = (air.left + dt * oxygen.refill).min(air.max);
