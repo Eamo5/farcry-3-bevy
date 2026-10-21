@@ -43,6 +43,17 @@ pub struct ShadowSize(pub f32);
 #[derive(Component)]
 struct DistanceCulled;
 
+/// How a fresh copy of a part casts: its own size, if it is a sized caster,
+/// and whether it casts at all, whatever its proxy or the distance (which
+/// only culls sized casters) now has it doing.
+pub(crate) fn casting(size: Option<&ShadowSize>, proxy: Option<&ShadowProxy>, no_shadow: bool) -> (Option<ShadowSize>, bool) {
+    match (proxy, size) {
+        (Some(p), _) => (p.size.map(ShadowSize), true),
+        (None, Some(s)) => (Some(*s), true),
+        (None, None) => (None, !no_shadow),
+    }
+}
+
 /// The render layer only the sun sees: shadow proxies.
 pub const SHADOW_LAYER: usize = 1;
 
@@ -53,7 +64,7 @@ struct ProxyMaterial(Handle<StandardMaterial>);
 /// On a caster casting through a proxy: the proxy, and the caster's own size
 /// (if it has one) to give back when it leaves the original shaders.
 #[derive(Component)]
-struct ShadowProxy {
+pub(crate) struct ShadowProxy {
     proxy: Entity,
     size: Option<f32>,
 }

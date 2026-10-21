@@ -10,8 +10,8 @@ use bevy::prelude::*;
 use fc3_formats::cache;
 
 use crate::cache_assets::{cache_path, skinned_cache_path, Fc3Model, ModelSettings};
-use crate::characters::{spawn_rig_with, AnimKind, ClipSet};
-use crate::objects::{PlacedId, WorldObject};
+use crate::characters::{spawn_dressed_rig, AnimKind, ClipSet, Dressed};
+use crate::objects::{PlacedId, SlotMaterials, WorldObject};
 
 pub struct PropAnimsPlugin;
 
@@ -78,11 +78,11 @@ fn rig_animated(
     time: Res<Time>,
     server: Res<AssetServer>,
     models: Res<Assets<Fc3Model>>,
-    mut pending: Query<(Entity, &mut Pending, Option<&Children>)>,
+    mut pending: Query<(Entity, &mut Pending, Option<&Children>, Option<&SlotMaterials>)>,
     mut shown: Query<&mut Visibility>,
     mut commands: Commands,
 ) {
-    for (e, mut p, children) in &mut pending {
+    for (e, mut p, children, slots) in &mut pending {
         p.waited += time.delta_secs();
         if !(p.set.ready(&server) && crate::cache_assets::usable(&server, p.model.id())) {
             if p.waited > GIVE_UP {
@@ -95,7 +95,12 @@ fn rig_animated(
         // (Its static meshes hidden: the rig draws it now. One whose model
         // has no bones stays as it was.)
         let statics: Vec<Entity> = children.map(|c| c.iter().collect()).unwrap_or_default();
-        let Some(rig) = spawn_rig_with(&mut commands, e, &[model], None, p.set.clone(), Vec3::ZERO, None) else { continue };
+        // (Wearing its placement's materials: an outpost's flag its colours,
+        // not the model's plain cloth.)
+        let swaps = slots
+            .map(|s| model.lods.iter().flat_map(|l| &l.parts).filter_map(|part| Some((part.material.id(), s.0.get(part.slot as usize)?.clone()))).collect())
+            .unwrap_or_default();
+        let Some(rig) = spawn_dressed_rig(&mut commands, e, &[Dressed { model, swaps }], None, p.set.clone(), Vec3::ZERO, None) else { continue };
         for c in statics {
             if let Ok(mut v) = shown.get_mut(c) {
                 *v = Visibility::Hidden;

@@ -96,8 +96,23 @@ pub fn swap_next_frame<M: Material>(commands: &mut Commands, part: Entity, next:
 
 /// Puts on the materials `swap_next_frame` set aside (in `PreUpdate`, so a
 /// frame after they were taken off in `Update`).
-pub fn finish_swaps<M: Material>(mut commands: Commands, parts: Query<(Entity, &SwapNextFrame<M>)>) {
-    for (e, next) in &parts {
+#[allow(clippy::type_complexity)]
+pub fn finish_swaps<M: Material>(
+    mut commands: Commands,
+    parts: Query<(Entity, &SwapNextFrame<M>, Has<MeshMaterial3d<OriginalMaterial>>, Has<OriginalSwap>)>,
+) {
+    for (e, next, original, swap) in &parts {
+        // (A part just spawned can have its original material looked up, or
+        // put on, after it was set aside in the same frame: those are the
+        // old material's. Off with them first, a frame before the new one
+        // goes on if one was drawing it: an outpost's flag came back in the
+        // pirates' colours.)
+        if original || swap {
+            commands.entity(e).remove::<(OriginalSwap, MeshMaterial3d<OriginalMaterial>)>();
+            if original {
+                continue;
+            }
+        }
         commands.entity(e).remove::<SwapNextFrame<M>>().insert(MeshMaterial3d(next.0.clone()));
     }
 }
@@ -1157,7 +1172,9 @@ fn attach_swaps(
         // skinned vertex shader and vertex layout.
         let path = if skinned { path.clone_owned().with_source(crate::cache_assets::SKINNED_SOURCE) } else { path.clone_owned() };
         let original: Handle<OriginalMaterial> = server.load(path);
-        commands.entity(e).insert(OriginalSwap { standard: standard.0.clone(), original });
+        // (A part may be gone by then: a light switched puts a fresh one in
+        // its place.)
+        commands.entity(e).try_insert(OriginalSwap { standard: standard.0.clone(), original });
     }
 }
 
@@ -1218,9 +1235,9 @@ fn apply_original_materials(
         let reach = range + if on_original { ORIGINAL_PROP_SLACK } else { 0.0 };
         let want = settings.enabled && usable && t.translation().distance(eye) < reach;
         if want && !on_original {
-            commands.entity(e).remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(swap.original.clone()));
+            commands.entity(e).try_remove::<MeshMaterial3d<StandardMaterial>>().try_insert(MeshMaterial3d(swap.original.clone()));
         } else if !want && on_original {
-            commands.entity(e).remove::<MeshMaterial3d<OriginalMaterial>>().insert(MeshMaterial3d(swap.standard.clone()));
+            commands.entity(e).try_remove::<MeshMaterial3d<OriginalMaterial>>().try_insert(MeshMaterial3d(swap.standard.clone()));
         }
     }
 }

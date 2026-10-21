@@ -3770,13 +3770,19 @@ fn main() -> Result<()> {
             let mut shaders: BTreeMap<String, (usize, usize, usize)> = BTreeMap::new();
             // FC3_SURVEY_FAMILY=<shader> prints each unpaired material of one family.
             let only = std::env::var("FC3_SURVEY_FAMILY").ok();
+            // FC3_SURVEY_MATERIAL=<cache stem> prints one material, paired or not.
+            let one = std::env::var("FC3_SURVEY_MATERIAL").ok();
             for e in std::fs::read_dir(root.join("materials"))? {
                 let path = e?.path();
+                let picked = one.as_ref().is_some_and(|s| path.file_stem().is_some_and(|f| f.to_string_lossy() == *s));
+                if one.is_some() && !picked {
+                    continue;
+                }
                 let Ok(m) = CachedMaterial::from_bytes(&std::fs::read(&path)?) else { continue };
                 if only.as_ref().is_some_and(|f| *f != m.shader) {
                     continue;
                 }
-                if only.is_some() && m.original.is_none() {
+                if picked || (only.is_some() && m.original.is_none()) {
                     println!("{} diffuse {}", path.display(), m.diffuse);
                     for (h, t) in &m.textures {
                         println!("  tex {h:08x} {t}");

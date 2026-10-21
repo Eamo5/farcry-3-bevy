@@ -408,10 +408,18 @@ pub fn spawn_placement(commands: &mut Commands, root: Entity, sector: &Fc3Sector
     if let Some(set) = sector.material_sets.get(p.material_set as usize).filter(|_| p.material_set != cache::NO_MATERIAL_SET) {
         commands.entity(obj).insert(SlotMaterials(set.clone()));
     }
-    // (And what it wears with its light switched on, when it has a switch.)
-    let lit = sector.material_sets.get(p.light_set as usize).filter(|_| p.light_set != cache::NO_MATERIAL_SET);
-    if lit.is_some() {
-        commands.entity(obj).insert(crate::light_switch::LightSwitch::default());
+    // (And what it wears with its light switched on, when it has a switch:
+    // each part's material off and on.)
+    if let Some(lit) = sector.material_sets.get(p.light_set as usize).filter(|_| p.light_set != cache::NO_MATERIAL_SET) {
+        let mut swaps: Vec<(Handle<StandardMaterial>, Handle<StandardMaterial>)> = Vec::new();
+        for part in model.lods.iter().flat_map(|l| &l.parts) {
+            let Some(on) = lit.get(part.slot as usize) else { continue };
+            let off = sector.part_material(p, part);
+            if off != *on && !swaps.iter().any(|(o, _)| *o == off) {
+                swaps.push((off, on.clone()));
+            }
+        }
+        commands.entity(obj).insert(crate::light_switch::LightSwitch { on: false, swaps });
     }
     let small = model.radius() < 1.5;
     for (li, lod) in model.lods.iter().enumerate() {
@@ -435,9 +443,6 @@ pub fn spawn_placement(commands: &mut Commands, root: Entity, sector: &Fc3Sector
                 e.insert(NotShadowCaster);
             } else {
                 e.insert(crate::shadow_lod::ShadowSize(model.radius() * p.scale));
-            }
-            if let Some(lit) = lit.and_then(|set| set.get(part.slot as usize)) {
-                e.insert(crate::light_switch::SwitchedPart { off: sector.part_material(p, part), lit: lit.clone() });
             }
         }
     }
