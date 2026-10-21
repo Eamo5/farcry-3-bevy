@@ -459,6 +459,13 @@ struct Compiled {
     /// people's, heat haze over them): turned only about the vertical to
     /// face the camera, so it stays standing when seen from above.
     upright: bool,
+    /// Standing along its emitter's axis (the way it emits: Dunia's Y
+    /// turned by its `RotOffset`), turned only about it to face the camera
+    /// (`Orientation` 4: columns of smoke rising from a blast, smoke out of
+    /// a bullet hole, sand kicked up by a step, water running down a wall,
+    /// a wheel's spray thrown back at its tilt): as `upright`, whose axis
+    /// is the world's, and as 8, whose is the particle's heading.
+    axial: bool,
     /// Facing along its emitter's axis, standing along the frame's Z
     /// (`Orientation` 131072: blood spurting back along a shot, a boat's
     /// wake turned to lie on the water): fixed, not turned to the view.
@@ -626,6 +633,7 @@ impl Compiled {
             local: s.child("Flags").is_some_and(|f| f.bool("LocalEmitterSpace") == Some(true)),
             oriented: s.child("Flags").is_some_and(|f| f.bool("Orientation") == Some(true)),
             upright: s.child("Flags").and_then(|f| f.f32("Orientation")) == Some(16.0),
+            axial: s.child("Flags").and_then(|f| f.f32("Orientation")) == Some(4.0),
             sheet: s.child("Flags").and_then(|f| f.f32("Orientation")) == Some(131072.0),
             fixed: s.child("Flags").and_then(|f| f.f32("Orientation")) == Some(262144.0),
             basis: {
@@ -1180,18 +1188,20 @@ fn draw(
             let mut centre = pos - origin;
             // (Edge-on: its plane's normal, or its heading, as the camera sees it.)
             let mut edge: Option<(Vec3, bool)> = None;
-            // (Upright: the camera's side, levelled.)
-            let level = Vec3::new(right.x, 0.0, right.z).normalize_or(view.cross(Vec3::Y).normalize_or(Vec3::X));
-            let (x, y) = if em.upright && !em.uniform {
+            // (Upright: the camera's side, levelled; standing along the
+            // emitter's axis, square to it.)
+            let axis = if em.axial { p.world_vector(p.basis * Vec3::NEG_Z).normalize_or(Vec3::Y) } else { Vec3::Y };
+            let level = (right - axis * right.dot(axis)).normalize_or(view.cross(axis).normalize_or(Vec3::X));
+            let (x, y) = if (em.upright || em.axial) && !em.uniform {
                 // Its width across and its length up, hung from its point by
                 // its pivot.
-                edge = Some((Vec3::Y, false));
+                edge = Some((axis, false));
                 let (width, length) = (half.max(0.003), (p.size * em.part_length.at(t) * near).max(0.003));
-                centre += level * (width * em.pivot.x) + Vec3::Y * (length * em.pivot.y);
-                (level * width, Vec3::Y * length)
-            } else if em.upright {
+                centre += level * (width * em.pivot.x) + axis * (length * em.pivot.y);
+                (level * width, axis * length)
+            } else if em.upright || em.axial {
                 let (s, c) = p.rot.sin_cos();
-                (level * (c * half) + Vec3::Y * (s * half), Vec3::Y * (c * half) - level * (s * half))
+                (level * (c * half) + axis * (s * half), axis * (c * half) - level * (s * half))
             } else if em.fixed || em.sheet {
                 // Fixed in its emitter's frame: its width along the frame's
                 // X; its height (or length) along the frame's Y (Dunia's,

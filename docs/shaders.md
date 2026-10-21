@@ -625,8 +625,16 @@ at 45 degrees either way, a vehicle's splash sheets. One with 131072 faces
 along the emitter's axis and stands along the frame's Z: a shot's blood
 spurt facing back along the shot, a boat's wake turned (`RotOffset` X 90)
 to lie on the water. Their `FadeAngle` (a takedown's blood splat, the
-embers) fades them edge-on as for the flat ones. 4 and 65536 (the sky's
-clouds) aren't read. `FadeAngle` fades a flat one out as the line of sight nears its plane,
+embers) fades them edge-on as for the flat ones. One with 4 stands along
+its emitter's axis (the way it emits: Dunia's Y turned by its `RotOffset`),
+turned only about it to face the camera, as one with 16 stands along the
+world's vertical and one with 8 along its heading: sand kicked up by a step
+or an impact, smoke out of a bullet hole, columns of smoke rising from a
+blast, water running down a wall, a wheel's spray thrown back at its tilt.
+(Seen: a sand impact's grains rise as a fan, where they had been a round
+puff.) 65536 (the sky's clouds, a vista's, a helicopter's lights) is drawn
+facing the view, as the unflagged ones are; nothing in the data or the
+binaries says how the engine's differs. `FadeAngle` fades a flat one out as the line of sight nears its plane,
 and a stretched one as it nears its heading, over that many degrees, so
 neither shows edge-on as a sliver.
 An emitter in its own space (`Flags` `LocalEmitterSpace`) keeps its particles in
