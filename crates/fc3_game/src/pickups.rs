@@ -423,7 +423,8 @@ pub struct Pickup {
 }
 
 /// Pickups and unsearched bodies this near the player catch the light now
-/// and then: a brief white glint, each on its own beat.
+/// and then: a brief white glint, each on its own beat (not a pickup
+/// showing its own highlight: `shimmer`).
 const GLINT_RANGE: f32 = 28.0;
 const GLINT_EVERY: f32 = 2.4;
 
@@ -434,6 +435,7 @@ fn glint(
     visuals: Query<&GlobalTransform>,
     bodies: Query<(Entity, &GlobalTransform), With<LootableBody>>,
     mut particles: ResMut<crate::particles::Particles>,
+    shimmers: Option<Res<crate::shimmer::Shimmers>>,
 ) {
     use crate::particles::{Particle, Sheet};
     let Ok(pt) = players.single() else { return };
@@ -456,7 +458,7 @@ fn glint(
         g.colour = Vec4::new(1.0, 0.97, 0.88, 0.9 * k);
         particles.sprite(g);
     };
-    for (e, gt, p) in &pickups {
+    for (e, gt, p) in pickups.iter().filter(|(_, _, p)| !shimmers.as_ref().is_some_and(|s| s.lit(p.id))) {
         let at = p.visual.and_then(|v| visuals.get(v).ok()).map_or(gt.translation(), |v| v.translation());
         flash(e, at + Vec3::Y * 0.45);
     }

@@ -216,6 +216,19 @@ is the story's own:
   effects by; the bone as its name's (`GetStringID`), the rigs' own. The
   converter caches the effects the scripts load
   (`ScriptPack::particle_resources`: seven of them).
+* **Highlights.** A placed object's graphic component can carry a
+  highlight (`bHighLight`): the plants to gather, loot containers,
+  collectibles, a radio tower's panel, the doctor's mushrooms. It pulses
+  between its two colours (`clrHighLightColor2`, `clrHighLightColor`: a
+  warm gold) `fHighLightSpeed` times a second (`shimmer`: the object's
+  meshes drawn again over themselves, added on). Scripts switch it on
+  and off over that (`CAPI_Entity.SetShimmerOnEntity <entity> <on> <r>
+  <g> <b> <rate>`, the `ShimmerModifier` box, 141 uses: side-quest
+  givers, doors, oxygen bottles; a picked-up mushroom's taken off), their
+  colour and rate over the object's own (`-1`: the object's). Our white
+  glint stays for pickups without one, and for bodies. Seen: a kelp
+  pickup at JAS_100's outpost lit gold (`FC3_NO_HIGHLIGHTS=1`, for a
+  comparison, leaves it dark).
 
 ## In the game
 

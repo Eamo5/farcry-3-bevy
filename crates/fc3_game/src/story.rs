@@ -1403,7 +1403,7 @@ fn run_story(
     mut ui: ResMut<StoryUi>,
     mut layers: ResMut<MissionLayers>,
     mut hud: ResMut<crate::hud::HudState>,
-    (mut players, mut stats, perks, mount, state, actor_health, mut pawn_fx): (
+    (mut players, mut stats, perks, mount, state, actor_health, mut pawn_fx, mut shimmers): (
         Query<(&mut Transform, &mut Player, Option<&mut crate::combat::Health>)>,
         Query<&mut crate::combat::PlayerStats, With<Player>>,
         Res<crate::progression::Perks>,
@@ -1411,6 +1411,7 @@ fn run_story(
         Res<State<GameState>>,
         Query<(&crate::story_actors::StoryActor, &crate::combat::Health), Without<Player>>,
         ResMut<crate::pawn_fx::PawnFx>,
+        ResMut<crate::shimmer::Shimmers>,
     ),
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     actors: Query<(&crate::story_actors::StoryActor, &Transform, Option<&crate::npc::Npc>), Without<Player>>,
@@ -1590,6 +1591,7 @@ fn run_story(
             env_overrides.active.clear();
             env_overrides.storm = None;
             pawn_fx.clear = true;
+            shimmers.script.clear();
             layers.present.clear();
             layers.reset = true;
             orders.0.clear();
@@ -3092,6 +3094,15 @@ fn run_story(
                             let f = |i: usize| a(i).parse::<f32>().unwrap_or(0.0);
                             let (bone, tag) = (a(2).parse().unwrap_or(0), a(4).parse().unwrap_or(0));
                             pawn_fx.requests.push(crate::pawn_fx::Request { pawn, effect, bone, tag, offset: [f(6), f(7), f(8)] });
+                        }
+                    }
+                    // Something flashing for the player's eye (`entity, on,
+                    // r, g, b, flashes a second`), or not.
+                    "CAPI_Entity.SetShimmerOnEntity" => {
+                        if let Ok(id) = a(0).parse::<u64>() {
+                            let f = |i: usize| a(i).parse::<f32>().unwrap_or(-1.0);
+                            let on = a(1) == "true" || a(1) == "1";
+                            shimmers.script.insert(id, on.then(|| ([f(2), f(3), f(4)], f(5))));
                         }
                     }
                     "CAPI_Pawn.StopToDestroyParticle" | "CAPI_Pawn.DestroyParticle" => {
