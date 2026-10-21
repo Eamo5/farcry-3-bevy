@@ -198,6 +198,11 @@ is the story's own:
   player, on the radar, the minimap and its dots, the map page and the
   full map, at a place on the island while it's on
   (`ScriptedPlayer::on_map`); a reload takes it off.
+* **The player's field of view.** `CAPI_Player.SetPlayerFOV <player>
+  <degrees> <seconds> <on>` (an `OverrideEnvironment` box's `zoomFov`:
+  JAS_100's car ride at 65) narrows or widens the view to that over the
+  seconds given, and gives the player's own back as slowly when it's off;
+  aiming and the camera narrow from it as from the player's own.
 * **Health bars.** `DisplayHealthBar <show> <entity> <name id>` puts a
   character's or vehicle's health on the HUD while it matters: JAS_100's
   and SAM_015's companions, WIL_040's VIP, HUR_040's barge, JAS_220's

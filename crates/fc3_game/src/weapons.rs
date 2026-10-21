@@ -2521,6 +2521,30 @@ fn fade_effects(time: Res<Time>, mut commands: Commands, mut q: Query<(Entity, &
     }
 }
 
+/// The player's field of view as a script moves it (`ScriptedPlayer::fov`):
+/// where it is, where it's going and how fast (degrees a second).
+#[derive(Default)]
+struct ScriptedFov {
+    now: Option<f32>,
+    toward: f32,
+    rate: f32,
+}
+
+impl ScriptedFov {
+    /// One frame on toward `want`, getting there over `seconds` from when
+    /// it was asked for.
+    fn step(&mut self, want: f32, seconds: f32, dt: f32) -> f32 {
+        let now = *self.now.get_or_insert(want);
+        if want != self.toward {
+            self.toward = want;
+            self.rate = if seconds > 0.0 { (want - now).abs() / seconds } else { f32::INFINITY };
+        }
+        let next = now + (want - now).clamp(-self.rate * dt, self.rate * dt);
+        self.now = Some(next);
+        next
+    }
+}
+
 /// Positions the view model: hold pose, ADS, bob, sway, recoil, reload and switch motion.
 /// The held weapon's size seated in a vehicle (see `update_view_model`).
 pub(crate) const SEATED_VIEW_SCALE: f32 = 0.3;
@@ -2538,6 +2562,7 @@ fn update_view_model(
     fp: Res<crate::fp::FpState>,
     speed_fov: Option<Res<crate::vehicles::SpeedFov>>,
     (poker, minigame, story_player): (Option<Res<crate::poker::PokerTable>>, Option<Res<crate::hud::Minigame>>, Option<Res<crate::story::ScriptedPlayer>>),
+    mut scripted_fov: Local<ScriptedFov>,
 ) {
     let Ok((inv, player, health)) = players.single() else { return };
     let Ok((mut v, mut t, mut vis)) = vm.single_mut() else { return };
@@ -2551,7 +2576,7 @@ fn update_view_model(
     // (And while a scene has it put away.)
     let busy = ((player.swimming || (player.driving && !player.armed_passenger) || minigame.is_some_and(|m| m.holds_player())) && !fp.in_context())
         || poker.is_some_and(|p| p.holds_player())
-        || story_player.is_some_and(|s| s.no_weapon);
+        || story_player.as_ref().is_some_and(|s| s.no_weapon);
     *vis = if in_menu || health.dead || player.noclip || busy || bino.blend > 0.5 || inv.scoped() { Visibility::Hidden } else { Visibility::Visible };
     let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
     if player.grounded {
@@ -2603,8 +2628,10 @@ fn update_view_model(
     t.scale = Vec3::splat(k);
     if let Ok(mut proj) = cams.single_mut() {
         if let Projection::Perspective(p) = &mut *proj {
-            // Aiming narrows from the player's FOV toward the weapon's.
-            let base = settings.fov;
+            // Aiming narrows from the player's FOV toward the weapon's (a
+            // script's while it sets one).
+            let scripted = story_player.as_ref().map_or((None, 0.0), |s| s.fov);
+            let base = scripted_fov.step(scripted.0.unwrap_or(settings.fov), scripted.1, dt);
             let fov = base + (d.ads_fov.min(base) - base) * inv.aim_blend;
             // Binoculars zoom further still (by the camera's own
             // magnification); a vehicle's camera widens with speed.
@@ -2755,6 +2782,19 @@ pub(crate) fn test_inventory() -> Inventory {
 #[cfg(test)]
 mod stats_tests {
     use super::*;
+
+    /// JAS_100's car ride: the view narrows to 65 degrees over 2 s, and
+    /// widens back as slowly when the script gives it back.
+    #[test]
+    fn a_scripts_field_of_view_comes_and_goes_over_its_time() {
+        let mut fov = ScriptedFov::default();
+        assert_eq!(fov.step(75.0, 0.0, 0.1), 75.0);
+        assert!((fov.step(65.0, 2.0, 1.0) - 70.0).abs() < 1e-4);
+        assert!((fov.step(65.0, 2.0, 1.0) - 65.0).abs() < 1e-4);
+        assert!((fov.step(75.0, 2.0, 1.0) - 70.0).abs() < 1e-4);
+        // At once when it takes no time.
+        assert_eq!(fov.step(90.0, 0.0, 0.01), 90.0);
+    }
 
     /// A shot into a vehicle goes on into a rider it passes close to, just
     /// inside the hull; not one it passes wide of, nor one far behind.

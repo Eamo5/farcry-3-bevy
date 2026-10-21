@@ -958,6 +958,10 @@ pub struct ScriptedPlayer {
     /// `OverridePlayerPosition`: BAM_020's sunken ship and the other
     /// places under the world, shown where they lie on it).
     pub map_position: Option<Vec3>,
+    /// The player's field of view while a script sets it (degrees;
+    /// `CAPI_Player.SetPlayerFOV`: JAS_100's car ride), and the seconds it
+    /// takes to get there or back.
+    pub fov: (Option<f32>, f32),
 }
 
 impl ScriptedPlayer {
@@ -1004,6 +1008,7 @@ impl Default for ScriptedPlayer {
             health_bar: None,
             no_weapon: false,
             map_position: None,
+            fov: (None, 0.0),
         }
     }
 }
@@ -2813,6 +2818,12 @@ fn run_story(
                         scripted.camera_drawn = scripted.has_camera();
                     }
                     "CAPI_Pawn.Holster" | "CAPI_Pawn.ForceHolster" if a(0) == fc3_story::PLAYER.to_string() => scripted.camera_drawn = false,
+                    // The player's field of view set, or given back (`player,
+                    // degrees, seconds, on`).
+                    "CAPI_Player.SetPlayerFOV" if a(0) == fc3_story::PLAYER.to_string() => {
+                        let on = a(3) == "1" || a(3) == "true";
+                        scripted.fov = (on.then(|| a(1).parse::<f32>().ok()).flatten(), a(2).parse().unwrap_or(0.0));
+                    }
                     // The player shown elsewhere on the maps (`on, x, y, z`).
                     "OverridePlayerPosition" => {
                         let f = |i: usize| a(i).parse::<f32>().unwrap_or(0.0);
