@@ -46,6 +46,9 @@ pub struct Actions {
     pub next_offer: f64,
     /// Points that found no one, told once (for working out a stall).
     pub unclaimed: std::collections::HashSet<u64>,
+    /// Points ended or broken off, when each is free again (its idle
+    /// `CoolDownTime` on) and who was on it: `CA_Available` then.
+    pub cooling: Vec<(f64, u64, u64)>,
 }
 
 impl Actions {
@@ -127,6 +130,10 @@ impl Core {
     pub fn action_event(&mut self, action: u64, event: &str, user: u64) {
         if event == "CA_Interrupt" {
             self.warn(format!("contextual action {action}: {user} interrupted"));
+        }
+        if matches!(event, "CA_End" | "CA_Interrupt") {
+            let rest = self.data.entities.get(&action).and_then(|e| e.component("CAIContextualActionComponent")?.child("Idle")?.f32("CoolDownTime"));
+            self.ca.cooling.push((self.time + rest.filter(|r| r.is_finite() && *r > 0.0).unwrap_or(0.0) as f64, action, user));
         }
         let text = action.to_string();
         self.raise(&Listen::Group(text, event.to_string()), vec![Arg::Str(event.to_string()), Arg::id(user)]);
@@ -229,6 +236,18 @@ impl Core {
                     tell(format!("{name}Stop"), 0);
                 }
             }
+        }
+    }
+
+    /// Points whose cooldown has run out since they were ended or broken
+    /// off: the scripts listening hear them available again (`CA_Available`:
+    /// JAS_020 B10's skinner sent back to his animal each time).
+    pub fn cooled_actions(&mut self) {
+        let now = self.time;
+        let (due, cooling): (Vec<_>, Vec<_>) = std::mem::take(&mut self.ca.cooling).into_iter().partition(|c| c.0 <= now);
+        self.ca.cooling = cooling;
+        for (_, action, user) in due {
+            self.raise(&Listen::Group(action.to_string(), "CA_Available".into()), vec![Arg::Str("CA_Available".into()), Arg::id(user)]);
         }
     }
 

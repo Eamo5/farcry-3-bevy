@@ -557,6 +557,7 @@ impl Story {
             c.update_media(dt as f64);
             c.update_dialogs(dt as f64);
             c.update_moves(dt as f64);
+            c.cooled_actions();
             c.offer_enabled_actions();
             // The world streamed in round a teleported player.
             if c.world_ready_at.is_some_and(|at| c.time >= at) {
@@ -3112,6 +3113,31 @@ mod tests {
         }
         let heard: Vec<f64> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
         assert_eq!(heard, [0.3, 0.85, 1.0]);
+    }
+
+    /// A point ended is available again once its cooldown has run out (none
+    /// set: at the next update), told once to those listening.
+    #[test]
+    fn an_ended_action_is_available_again_after_its_cooldown() {
+        let mut story = empty_story();
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            heard = {}
+            local box = { _type = { Got = function(self, event, user) heard[#heard + 1] = event .. " " .. tostring(user) end } }
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("60", "CA_Available", box, "Got")
+        "#,
+            )
+            .exec()
+            .unwrap();
+        story.update(0.1, View::default());
+        story.core.borrow_mut().action_event(60, "CA_End", 7);
+        story.update(0.1, View::default());
+        story.update(0.1, View::default());
+        let heard: Vec<String> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        assert_eq!(heard, ["CA_Available 7"]);
     }
 
     /// A prop broken is told to its `StaticBreakableListener`, once.
