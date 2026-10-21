@@ -1466,6 +1466,7 @@ fn run_story(
             mut gallery,
             (poker, minigame, mut races, mut trials),
             detection,
+            mut env_overrides,
         ),
     ): (
         MessageWriter<crate::progression::XpGain>,
@@ -1494,6 +1495,7 @@ fn run_story(
             ResMut<crate::shooting_gallery::Gallery>,
             (Res<crate::poker::PokerTable>, Res<crate::hud::Minigame>, ResMut<crate::races::Races>, ResMut<crate::trials::Trials>),
             Res<crate::stealth::Detection>,
+            ResMut<crate::sky::EnvOverrides>,
         ),
     ),
 ) {
@@ -1565,6 +1567,7 @@ fn run_story(
             // reload, was never lured again.)
             host.used.clear();
             host.near_at.clear();
+            env_overrides.active.clear();
             layers.present.clear();
             layers.reset = true;
             orders.0.clear();
@@ -3030,6 +3033,17 @@ fn run_story(
                     "CAPI_Pawn.RestoreBackupInventory" if a(0) == fc3_story::PLAYER.to_string() => {
                         if let Ok(mut inv) = inventory.single_mut() {
                             scripted.restore_inventory(&mut inv);
+                        }
+                    }
+                    // A preset put over the world's environment, or taken off
+                    // (`Set<Kind>Override <guid> <seconds>`, `Remove<Kind>Override`).
+                    n if n.starts_with("Set") && n.ends_with("Override") && a(0).starts_with('{') => {
+                        env_overrides.active.insert(n["Set".len()..n.len() - "Override".len()].to_string(), a(0));
+                    }
+                    n if n.starts_with("Remove") && n.ends_with("Override") => {
+                        let kind = &n["Remove".len()..n.len() - "Override".len()];
+                        if env_overrides.active.get(kind).is_some_and(|g| !a(0).starts_with('{') || *g == a(0)) {
+                            env_overrides.active.remove(kind);
                         }
                     }
                     // The HUD's parts hidden and shown again (a tutorial's,

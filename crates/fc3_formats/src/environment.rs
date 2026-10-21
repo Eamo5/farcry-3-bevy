@@ -41,6 +41,11 @@ pub struct WeatherTimes {
 }
 /// Field holding a database template's name.
 const TEMPLATE_NAME: u32 = 0xD97A_7AA9;
+/// Field holding a database template's GUID (`{...}`), by which scripts
+/// name the presets they put over the world's (`SetFogOverride`...).
+const TEMPLATE_GUID: u32 = 0xD854_F1C7;
+/// Field holding a template body's class (`CEnvironmentFog`...).
+const TEMPLATE_CLASS: u32 = 0xCF68_E402;
 
 /// A value over the day, as (time of day 0..1, value) knots.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -236,6 +241,16 @@ fn gradient(o: &Object, name: &str) -> Gradient {
     Gradient(knots(o, name).iter().filter_map(|k| Some((k.f32("Position").unwrap_or(0.0), k.vec3("Color")?))).collect())
 }
 
+/// A depth of field preset's focus, near and far distances, blur scale,
+/// circle of confusion and whether it blurs the sky; `None` when off.
+fn dof(d: &Object) -> Option<[f32; 6]> {
+    (d.field("bEnabled").and_then(|b| b.first().copied()).unwrap_or(0) != 0).then(|| {
+        let f = |n: &str| d.f32(n).unwrap_or(0.0);
+        let sky = d.field("bApplyDOFToSky").and_then(|b| b.first().copied()).unwrap_or(0) as f32;
+        [f("fFocusDistance"), f("fNearDistance"), f("fFarDistance"), f("fBlurScale"), f("fCircleOfConfusion"), sky]
+    })
+}
+
 fn keyed_gradient(o: &Object, name: &str) -> KeyedGradient {
     KeyedGradient(knots(o, name).iter().map(|k| (k.f32("Position").unwrap_or(0.0), gradient(k, "Gradient"))).filter(|(_, g)| !g.0.is_empty()).collect())
 }
@@ -275,11 +290,7 @@ impl Environment {
         let (lighting, fog, exposure, sky) = (get("Lighting")?, get("Fog")?, get("Exposure")?, get("Sky")?);
         let rays = get("GodRays").ok();
         let bloom_intensity = get("AdaptiveBloom").ok().and_then(|b| b.f32("fIntensity")).unwrap_or(1.0);
-        let dof = get("DoF").ok().filter(|d| d.field("bEnabled").and_then(|b| b.first().copied()).unwrap_or(0) != 0).map(|d| {
-            let f = |n: &str| d.f32(n).unwrap_or(0.0);
-            let sky = d.field("bApplyDOFToSky").and_then(|b| b.first().copied()).unwrap_or(0) as f32;
-            [f("fFocusDistance"), f("fNearDistance"), f("fFarDistance"), f("fBlurScale"), f("fCircleOfConfusion"), sky]
-        });
+        let dof = get("DoF").ok().and_then(|d| dof(d));
         let storm = |kind: &str| templates.get(&format!("{STORM}{kind}"));
         let (storm_sky, storm_cloud, storm_fog) = (storm("Sky"), storm("Cloud"), storm("Fog"));
         let angle = |name: &str, default: f32| rays.and_then(|r| r.f32(name)).unwrap_or(default);
@@ -324,6 +335,56 @@ impl Environment {
             storm_fog_sky: storm_fog.and_then(|f| f.f32("fSkyColorFactor")).unwrap_or(0.0),
             storm_sky_fog: storm_fog.map_or((0.0, 1.0), |f| (f.f32("fSkyFogIntensity").unwrap_or(0.0), f.f32("fSkyFogPower").unwrap_or(1.0))),
         })
+    }
+
+    /// A preset by its GUID (as scripts name it, braces and all): its class
+    /// (`CEnvironmentFog`, `CEnvironmentLighting`...) and its body.
+    pub fn preset_by_guid(managers: &[u8], guid: &str) -> Option<(String, Arc<Object>)> {
+        let start = managers.windows(4).position(|w| w == b"nbCF")?;
+        let root = fcb::parse(&managers[start..]).ok()?;
+        let inner = name_hash("Template");
+        let mut found = None;
+        root.walk(&mut |o, _| {
+            if found.is_none() && o.str_h(TEMPLATE_GUID).is_some_and(|g| g.eq_ignore_ascii_case(guid)) {
+                found = o.children.iter().find(|c| c.name_hash == inner).and_then(|b| Some((b.str_h(TEMPLATE_CLASS)?, b.clone())));
+            }
+        });
+        found
+    }
+
+    /// Puts a preset over the matching part of this environment (a scene's
+    /// fog, lighting, exposure, sky, bloom or depth of field); false for a
+    /// kind it doesn't model.
+    pub fn apply_preset(&mut self, class: &str, body: &Object) -> bool {
+        match class {
+            "CEnvironmentFog" => {
+                self.fog_density = curve(body, "curveFogDensity");
+                self.fog_start = body.f32("fMinimumDistance").unwrap_or(0.0);
+                self.fog_end = body.f32("fMaximumDistance").unwrap_or(0.0);
+            }
+            "CEnvironmentLighting" => {
+                self.sun_color = gradient(body, "gradSunLightColor");
+                self.moon_color = gradient(body, "gradMoonLightColor");
+                self.light_hdr = curve(body, "curveLightHDRMul");
+                self.probe_scale = curve(body, "curveProbeScale");
+                self.probe_hdr = curve(body, "curveProbeHDRMul");
+            }
+            "CEnvironmentExposure" => {
+                self.middle_grey = curve(body, "curveMiddleGrey");
+                self.exposure_min = curve(body, "curveExposureMin");
+                self.exposure_max = curve(body, "curveExposureMax");
+            }
+            "CEnvironmentSky" => {
+                self.sky_hdr = curve(body, "curveSkyColorHDRMul");
+                self.sky_saturation = curve(body, "curveSkyLightSaturation");
+                self.sky_sun_side = keyed_gradient(body, "kfgradSkyDomeColorSunSide");
+                self.sky_far_side = keyed_gradient(body, "kfgradSkyDomeColorSunOppositeSide");
+            }
+            "CEnvironmentAdaptiveBloom" => self.bloom_intensity = body.f32("fIntensity").unwrap_or(self.bloom_intensity),
+            "CEnvironmentDepthOfField" => self.dof = dof(body),
+            _ => return false,
+        }
+        true
     }
 
     /// Plain-text form for the cache: one `name time values...` line per knot.
@@ -432,6 +493,21 @@ impl Environment {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scene's preset found by its GUID in the installed managers file
+    /// (DOC_020's trip's bloom) and put over the world's.
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
+    fn installed_preset_by_guid_overrides_its_part() {
+        let cache = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let managers = std::fs::read(cache.join("story/managers.fcb")).unwrap();
+        let (class, body) = Environment::preset_by_guid(&managers, "{4E7036EA-9C9B-4A5B-8E64-6504A6218F64}").unwrap();
+        assert_eq!(class, "CEnvironmentAdaptiveBloom");
+        let mut e = Environment { bloom_intensity: 1.0, ..Default::default() };
+        assert!(e.apply_preset(&class, &body));
+        assert_eq!(e.bloom_intensity, 30.0);
+        assert!(Environment::preset_by_guid(&managers, "{00000000-0000-0000-0000-000000000000}").is_none());
+    }
 
     #[test]
     fn curves_interpolate_and_round_trip() {

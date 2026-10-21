@@ -19,8 +19,9 @@ impl Plugin for SkyPlugin {
             .insert_resource(GlobalAmbientLight { color: Color::srgb(0.75, 0.85, 1.0), brightness: 150.0, ..default() })
             .init_resource::<Indoors>()
             .init_resource::<SceneExposure>()
+            .init_resource::<EnvOverrides>()
             .add_systems(Startup, setup_sky)
-            .add_systems(Update, (advance_time, indoors));
+            .add_systems(Update, (advance_time, indoors, apply_env_overrides));
     }
 }
 
@@ -63,6 +64,50 @@ fn indoors(
 /// the cache; absent in an old cache).
 #[derive(Resource, Default)]
 pub struct GameEnvironment(pub Option<fc3_formats::environment::Environment>);
+
+/// The presets scripts put over the world's environment for a while
+/// (`OverrideEnvironment`: `SetFogOverride`, `SetLightingOverride`... with a
+/// preset's GUID; Buck's caves and boat, BAM_040's temple, DOC_020's trip),
+/// by kind, until they take them off again.
+#[derive(Resource, Default)]
+pub struct EnvOverrides {
+    pub active: std::collections::BTreeMap<String, String>,
+    applied: std::collections::BTreeMap<String, String>,
+    /// The world's own environment, kept while presets are over it.
+    base: Option<fc3_formats::environment::Environment>,
+    /// The managers file the presets are in, and presets found by GUID.
+    managers: Option<Vec<u8>>,
+    found: std::collections::HashMap<String, Option<(String, std::sync::Arc<fc3_formats::fcb::Object>)>>,
+}
+
+/// Puts the scripts' presets over the world's environment as they change
+/// (the world's own back as they are taken off).
+fn apply_env_overrides(mut env: ResMut<GameEnvironment>, mut overrides: ResMut<EnvOverrides>) {
+    let o = &mut *overrides;
+    if o.active == o.applied {
+        return;
+    }
+    o.applied = o.active.clone();
+    let Some(base) = o.base.clone().or_else(|| env.0.clone()) else { return };
+    if o.active.is_empty() {
+        env.0 = Some(base);
+        o.base = None;
+        return;
+    }
+    o.base = Some(base.clone());
+    let managers =
+        o.managers.get_or_insert_with(|| std::fs::read(fc3_formats::cache::default_cache_root().join("story").join("managers.fcb")).unwrap_or_default());
+    let mut over = base;
+    for (kind, guid) in &o.active {
+        let preset = o.found.entry(guid.clone()).or_insert_with(|| fc3_formats::environment::Environment::preset_by_guid(managers, guid));
+        match preset {
+            Some((class, body)) if over.apply_preset(class, body) => info!("environment: {kind} {guid} ({class}) over the world's"),
+            Some((class, _)) => debug!("environment: {kind} {guid} ({class}) not modelled"),
+            None => warn!("environment: no {kind} preset {guid}"),
+        }
+    }
+    env.0 = Some(over);
+}
 
 fn load_environment() -> GameEnvironment {
     let path = fc3_formats::cache::default_cache_root().join(fc3_formats::cache::ENVIRONMENT_REL);

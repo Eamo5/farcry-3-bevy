@@ -173,6 +173,21 @@ is the story's own:
   What is left unsent is coop's, a photo map no single-player script
   plugs, the shopkeepers' UI hand-off (our shop opens at shopkeepers by
   itself), and the water listener (coop's rafting).
+* **Environment overrides.** `OverrideEnvironment` boxes (62 scripts:
+  Buck's caves and boat, BAM_040's temple, DOC_020's trip) put presets
+  over the world's environment: `Set<Kind>Override <guid> <seconds>`
+  until `Remove<Kind>Override`. A preset is a template in the managers
+  file named by its GUID (`D854F1C7`), its body's class saying what it
+  is. Fog, lighting, exposure, sky, bloom (its intensity) and depth of
+  field are put over the world's (`Environment::apply_preset`) while
+  they are on, and the world's come back as they are taken off; a reload
+  clears them. Wind, clouds, shadows, motion blur and the storm factor
+  are not modelled, and the transition is not blended. Seen: DOC_020's
+  trip switching between its two bloom presets (intensity 30, the cave
+  glowing) as its trigger turns.
+* **The HUD's parts.** `UISendEventToPlayer` to the HUD hides and shows
+  its parts (`HideUIElement Radar|Reticule|Ammo`); our minimap hides with
+  the radar.
 
 ## In the game
 

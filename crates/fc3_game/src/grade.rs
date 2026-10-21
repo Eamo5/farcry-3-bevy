@@ -37,7 +37,7 @@ impl Plugin for GradePlugin {
         bevy::asset::embedded_asset!(app, "grade.wgsl");
         app.add_plugins((ExtractComponentPlugin::<GameGraded>::default(), ExtractResourcePlugin::<GameGrade>::default()))
             .add_systems(Startup, load_grade)
-            .add_systems(Update, attach_grade);
+            .add_systems(Update, (attach_grade, follow_bloom));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else { return };
         render_app
             .init_gpu_resource::<SpecializedRenderPipelines<GradePipeline>>()
@@ -101,6 +101,16 @@ fn load_grade(mut commands: Commands, mut images: ResMut<Assets<Image>>, env: Re
 }
 
 /// Whether the game's grade is in use (FC3_GRADE=0 keeps Bevy's AgX).
+/// The bloom's strength as the environment has it now (a scene's preset
+/// over the world's: DOC_020's trip's, 30).
+fn follow_bloom(env: Res<crate::sky::GameEnvironment>, grade: Option<ResMut<GameGrade>>) {
+    let Some(mut grade) = grade.filter(|_| env.is_changed()) else { return };
+    let bloom = env.0.as_ref().map_or(1.0, |e| e.bloom_intensity);
+    if grade.uniform.params.z != bloom {
+        grade.uniform.params.z = bloom;
+    }
+}
+
 pub fn enabled(grade: Option<&GameGrade>) -> bool {
     grade.is_some() && std::env::var("FC3_GRADE").as_deref() != Ok("0")
 }
