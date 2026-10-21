@@ -189,8 +189,10 @@ is the story's own:
   environment mixes from what shows toward what's wanted
   (`Environment::mix`: curves and colours over both's knots, distances
   and bloom between, the depth of field and the sun switching halfway).
-  Wind, clouds and motion blur (`Preview_MotionBlur`: `bEnabled`,
-  `fIntensity`, `fMaxBlurModifier`) are not modelled. Seen: DOC_020's trip switching
+  A motion blur preset (`Preview_MotionBlur`: `fIntensity` and
+  `fMaxBlurModifier` while `bEnabled`, 32 scripts' scenes) smears the
+  view as it turns, as a post-effect clip's does (under any clip's
+  own). Wind and clouds are not modelled. Seen: DOC_020's trip switching
   between its two bloom presets (intensity 30, the cave glowing) as its
   trigger turns. The storm factor (`SetScriptedStormFactorOverride
   <0..1> <seconds>`: DEN_060's storm, JAS_240 keeping the sky fair) holds

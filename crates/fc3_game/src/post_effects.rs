@@ -737,6 +737,7 @@ fn play(
     cameras: Query<Entity, With<PlayerCamera>>,
     settings: Res<crate::settings::Settings>,
     mut commands: Commands,
+    env: Res<crate::sky::GameEnvironment>,
 ) {
     let fixed = std::env::var("FC3_POSTFX_TEST_TIME").ok().and_then(|s| s.parse::<f32>().ok());
     let playing = *state.get() == crate::menu::GameState::Playing;
@@ -754,6 +755,10 @@ fn play(
         let Some((seq, t)) = fx.current(p) else { continue };
         let w = (p.weight * if p.effect.intensity_control != 0 { p.intensity } else { 1.0 }).clamp(0.0, 1.0);
         mix.add(&seq, t, w, p.effect.priority, p.order, seconds);
+    }
+    // (And a script's environment preset's, under any clip's.)
+    if let Some(blur) = env.0.as_ref().and_then(|e| e.motion_blur) {
+        better(&mut mix.motion, (f32::MIN, f32::MIN, 0), blur);
     }
     let (bloom, exposure) = mix.bloom.map_or((1.0, 1.0), |(_, (b, e))| (b, e));
     *light = PostLight { exposure, bloom };

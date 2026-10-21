@@ -269,6 +269,9 @@ pub struct Environment {
     /// shadow preset's `bEnableSun` 0, put over the world's under it (the
     /// mines, the ULCs' caves).
     pub sun_off: bool,
+    /// Motion blur a preset puts on (`CEnvironmentMotionBlur`: `fIntensity`
+    /// and `fMaxBlurModifier` while `bEnabled`; scripts' scenes).
+    pub motion_blur: Option<(f32, f32)>,
 }
 
 fn knots(o: &Object, name: &str) -> Vec<Arc<Object>> {
@@ -386,6 +389,7 @@ impl Environment {
             storm_fog_sky: storm_fog.and_then(|f| f.f32("fSkyColorFactor")).unwrap_or(0.0),
             storm_sky_fog: storm_fog.map_or((0.0, 1.0), |f| (f.f32("fSkyFogIntensity").unwrap_or(0.0), f.f32("fSkyFogPower").unwrap_or(1.0))),
             sun_off: false,
+            motion_blur: None,
         })
     }
 
@@ -409,8 +413,8 @@ impl Environment {
     }
 
     /// Puts a preset over the matching part of this environment (a scene's
-    /// fog, lighting, exposure, sky, bloom, depth of field or its sun
-    /// switched off); false for a kind it doesn't model.
+    /// fog, lighting, exposure, sky, bloom, depth of field, motion blur or
+    /// its sun switched off); false for a kind it doesn't model.
     pub fn apply_preset(&mut self, class: &str, body: &Object) -> bool {
         match class {
             "CEnvironmentFog" => {
@@ -439,6 +443,10 @@ impl Environment {
             "CEnvironmentAdaptiveBloom" => self.bloom_intensity = body.f32("fIntensity").unwrap_or(self.bloom_intensity),
             "CEnvironmentDepthOfField" => self.dof = dof(body),
             "CEnvironmentShadow" => self.sun_off = body.field("bEnableSun").and_then(|b| b.first().copied()) == Some(0),
+            "CEnvironmentMotionBlur" => {
+                let on = body.field("bEnabled").and_then(|b| b.first().copied()).unwrap_or(0) != 0;
+                self.motion_blur = on.then(|| (body.f32("fIntensity").unwrap_or(0.0), body.f32("fMaxBlurModifier").unwrap_or(1.0)));
+            }
             _ => return false,
         }
         true
@@ -479,6 +487,16 @@ impl Environment {
                 }
             },
             sun_off: if k < 0.5 { self.sun_off } else { other.sun_off },
+            motion_blur: match (self.motion_blur, other.motion_blur) {
+                (Some(a), Some(b)) => Some((num(a.0, b.0), num(a.1, b.1))),
+                (a, b) => {
+                    if k < 0.5 {
+                        a
+                    } else {
+                        b
+                    }
+                }
+            },
             // (What presets don't change: the other's.)
             ..other.clone()
         }
@@ -611,6 +629,10 @@ mod tests {
         let (class, body) = Environment::preset_by_guid(&managers, "SHA_Quest_Mines:Common.Mines_Shadow").unwrap();
         let mut under = Environment::default();
         assert!(under.apply_preset(&class, &body) && under.sun_off);
+        // The scenes' motion blur.
+        let (class, body) = Environment::preset_by_guid(&managers, "Preview_Lighting:Preview_MotionBlur").unwrap();
+        assert!(under.apply_preset(&class, &body));
+        assert_eq!(under.motion_blur, Some((0.65, 1.0)));
     }
 
     #[test]
