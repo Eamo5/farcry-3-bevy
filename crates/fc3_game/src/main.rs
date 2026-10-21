@@ -97,6 +97,7 @@ mod sky_probe;
 mod sound;
 mod sound_source;
 mod splines;
+mod prop_anims;
 mod stealth;
 mod sticky_fire;
 mod story;
@@ -455,6 +456,7 @@ fn main() {
         .add_plugins(tattoo::TattooPlugin)
         .add_plugins(barks::BarksPlugin)
         .add_plugins(shake::ShakePlugin)
+        .add_plugins(prop_anims::PropAnimsPlugin)
         .add_plugins(aim_assist::AimAssistPlugin)
         .add_plugins(pawn_anims::PawnAnimsPlugin)
         .add_plugins(breakables::BreakablesPlugin)

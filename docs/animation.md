@@ -687,6 +687,21 @@ Close quarters:
   plus `cqchitrt_-180bk` for blows from behind. These are picked by the side the blow came
   from. They are hit reactions, not attacks, despite living under `melee`.
 
+### Props that move by themselves
+
+A placed entity's `CSimpleAnimationComponent` names a skeleton (its
+`fileSkeleton`'s path, field `0xF9F2D5F4`) and, on some, an animation
+(`Animation`'s path, field `0xFCAC35BB`) that plays over and over: the
+outposts' flags (`flag_wave.mab`, 17 of the first 4,000 such entities), a
+windmill's sails, a ceiling fan, a weathervane, a lift's weights. Most of
+the 11,804 entities with the component name none (plant pickups). The
+sectors' placements don't carry either path, but the story's entity table
+has the component. A placed object whose entry names both is drawn by a
+rig of its own model, loaded skinned, looping that clip; its static meshes
+are hidden (`prop_anims`). One whose model has no bones stays as it was.
+Seen: an outpost's flag at (-1420.7, 2712.3) changes shape from frame to
+frame over ten seconds, where it had hung stiff.
+
 ### Paired takedown clips
 
 Takedowns are pairs under `melee\takedown\` and `melee\stealthtakedown_above\`: the player's
