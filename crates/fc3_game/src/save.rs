@@ -70,8 +70,9 @@ pub struct SaveGame {
     pub explored: Vec<u8>,
     /// Map waypoint (Bevy-space ground position).
     pub waypoint: Option<Vec3>,
-    /// Liberated outposts (indices into the outpost table).
-    pub liberated: Vec<u32>,
+    /// Liberated outposts: by their flag poles (`taken`), and by their
+    /// index in older outpost tables (`liberated`).
+    pub liberated: crate::outposts::Taken,
     /// Weapon attachments: weapon name and attachment bits (bought, and the
     /// fitted sight's in the high half).
     pub attachments: Vec<(String, u32)>,
@@ -118,8 +119,12 @@ impl SaveGame {
         if let Some(w) = self.waypoint {
             out += &format!("waypoint {} {} {}\n", w.x, w.y, w.z);
         }
-        if !self.liberated.is_empty() {
-            let ids: Vec<String> = self.liberated.iter().map(|i| i.to_string()).collect();
+        if !self.liberated.flags.is_empty() {
+            let ids: Vec<String> = self.liberated.flags.iter().map(|id| format!("{id:x}")).collect();
+            out += &format!("taken {}\n", ids.join(" "));
+        }
+        if !self.liberated.legacy.is_empty() {
+            let ids: Vec<String> = self.liberated.legacy.iter().map(|i| i.to_string()).collect();
             out += &format!("liberated {}\n", ids.join(" "));
         }
         out += &self.progress.to_lines();
@@ -185,7 +190,8 @@ impl SaveGame {
                     s.explored = (0..rest.len() / 2).filter_map(|i| u8::from_str_radix(rest.get(i * 2..i * 2 + 2)?, 16).ok()).collect();
                 }
                 "waypoint" => s.waypoint = Some(Vec3::new(f(), f(), f())),
-                "liberated" => s.liberated.extend(rest.split_whitespace().filter_map(|v| v.parse::<u32>().ok())),
+                "taken" => s.liberated.flags.extend(rest.split_whitespace().filter_map(|v| u64::from_str_radix(v, 16).ok())),
+                "liberated" => s.liberated.legacy.extend(rest.split_whitespace().filter_map(|v| v.parse::<u32>().ok())),
                 _ => {
                     s.progress.read_line(key, rest);
                 }
@@ -342,7 +348,7 @@ impl SaveSources<'_, '_> {
             removed,
             explored: self.explored.to_bits(),
             waypoint: self.waypoint.0,
-            liberated: self.outposts.liberated_ids(),
+            liberated: self.outposts.taken(),
             progress: self.progress.clone(),
         })
     }
@@ -761,7 +767,7 @@ mod tests {
             removed: (0..40).map(|i| 0xABCDEF00 + i).collect(),
             explored: vec![0, 3, 255, 16],
             waypoint: Some(Vec3::new(10.0, 0.0, -20.5)),
-            liberated: vec![0, 7, 31],
+            liberated: crate::outposts::Taken { flags: vec![0x1cd5_0000_1234_abcd, 7], legacy: vec![0, 31] },
             attachments: vec![("AK-74M Rifle".into(), 5), ("MK23 Pistol".into(), 4)],
             paints: vec![("AK-74M Rifle".into(), "Tiger".into())],
             progress: {

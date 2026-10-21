@@ -4915,9 +4915,19 @@ taking (the flag raised, `flag_sequence`); the outposts manager
 (a mission block layer each, with its signs, and a map marker). Nothing
 told the story of an outpost taken, so no activity ever opened.
 
-* **The pairing.** Our outposts come from the alarm markers; each is
-  paired with the nearest safe house (`CSafeHouseComponent`) within its
-  bounds and 40 m past them (34 of 37). One taken unlocks its safe house
+* **The pairing.** Our outposts are the world's 34 flag poles (the
+  encounter prefabs the flag controller runs on, `FlagPole_Pirate_*` and
+  `FlagPole_Privateer_*`), each reaching as far as the alarm markers
+  clustered nearest it. They used to be the alarm clusters alone, which
+  made 37: five were story places with alarms (Badtown, the compounds),
+  garrisoned and "liberated" as if outposts, while the fish market on the
+  north island (`D3_28`, no alarm) and JAS_100's outpost (`C4_JAS_10`,
+  its alarms on the mission's layer) were missing. Saves name a liberated
+  outpost by its flag pole (`taken <id>`); an older save's indices are
+  mapped through each outpost's index in the old table (`legacy`, kept in
+  `world/outposts.txt`). Each is paired with the nearest safe house
+  (`CSafeHouseComponent`) within its bounds and 40 m past them. One taken
+  unlocks its safe house
   (`Story::unlock_safe_house`, as `UnlockSafeHouse` does: the state
   scripts read, `SafeHouseUnlockedEvent` raised once); one a script
   unlocks has its outpost taken with it; on a load the two agree again
@@ -4945,7 +4955,14 @@ told the story of an outpost taken, so no activity ever opened.
   as are the archetypes' materials). The flag controller switches its flag
   as it plays the taking (`CAPI_Entity.LightMaterialOveride`), and every
   liberated outpost's flag is switched on with it so it stays blue after a
-  load (`light_switch`). The success screen it shows
+  load (`light_switch`), the waving flag's rig as well as its static
+  meshes (the rig now wears its placement's materials, not the model's
+  plain cloth). A switched part is put in again as a fresh entity: one
+  drawn with one original material and given another was still drawn with
+  the first (the flag stayed red on the original shaders while it showed
+  blue on the standard ones), and a part switched as it streamed in could
+  have its old original material put back on in the same frame
+  (`original_shaders::finish_swaps` now takes that off). The success screen it shows
   (`DisplaySuccessScreenUI`, the outpost-liberated string) is a card,
   dropped when the outpost's own card has just shown the news; the
   player's weapon is hidden while the flag goes up

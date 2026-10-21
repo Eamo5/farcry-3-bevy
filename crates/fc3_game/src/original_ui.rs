@@ -496,7 +496,7 @@ fn drive_pause(
                 if let Some(book) = handbook.as_deref().and_then(|b| b.0.as_ref()) {
                     let extra = crate::statistics::Extra {
                         recipes: crafting.as_ref().map_or(0, |c| c.recipes.iter().filter(|r| c.available(&progress, r)).count()),
-                        outposts: outposts.liberated_ids().len(),
+                        outposts: outposts.liberated_count(),
                     };
                     send_handbook(host, book, &progress, extra, arg(1).parse().unwrap_or(0), arg(2));
                 }

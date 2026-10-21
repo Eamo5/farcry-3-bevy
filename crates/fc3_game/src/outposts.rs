@@ -134,12 +134,18 @@ pub struct OutpostState {
     engaged: bool,
     /// Guard posts inside (marker ids), filled from loaded sectors.
     pub posts: Vec<(u64, Vec3)>,
+    /// Its flag pole's entity id, which saves name it by.
+    pub flag: Option<u64>,
+    /// Its index in older tables, which older saves name it by.
+    legacy: Option<u32>,
 }
 
 impl OutpostState {
     fn new(o: &Outpost) -> OutpostState {
         let v = |p: [f32; 3]| Vec3::from_array(p);
         OutpostState {
+            flag: o.flag,
+            legacy: o.legacy,
             centre: v(o.centre),
             radius: o.radius,
             alarms: o.alarms.iter().copied().map(v).collect(),
@@ -168,8 +174,16 @@ impl OutpostState {
 pub struct Outposts {
     pub list: Vec<OutpostState>,
     loaded: bool,
-    /// Liberated indices restored from a save before the table loaded.
-    pending: Vec<u32>,
+    /// Liberated outposts restored from a save before the table loaded.
+    pending: Option<Taken>,
+}
+
+/// Liberated outposts as a save names them: by their flag pole's id, or
+/// (older saves, and outposts without one) by their index in older tables.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Taken {
+    pub flags: Vec<u64>,
+    pub legacy: Vec<u32>,
 }
 
 impl Outposts {
@@ -189,17 +203,30 @@ impl Outposts {
             .is_some_and(|(_, liberated)| liberated)
     }
 
-    pub fn liberated_ids(&self) -> Vec<u32> {
-        self.list.iter().enumerate().filter(|(_, o)| o.liberated).map(|(i, _)| i as u32).collect()
+    pub fn liberated_count(&self) -> usize {
+        self.list.iter().filter(|o| o.liberated).count()
     }
 
-    pub fn set_liberated(&mut self, ids: &[u32]) {
+    /// The liberated outposts, as saves name them.
+    pub fn taken(&self) -> Taken {
+        let mut t = Taken::default();
+        for o in self.list.iter().filter(|o| o.liberated) {
+            match (o.flag, o.legacy) {
+                (Some(id), _) => t.flags.push(id),
+                (None, Some(n)) => t.legacy.push(n),
+                (None, None) => {}
+            }
+        }
+        t
+    }
+
+    pub fn set_liberated(&mut self, taken: &Taken) {
         if !self.loaded {
-            self.pending = ids.to_vec();
+            self.pending = Some(taken.clone());
             return;
         }
-        for (i, o) in self.list.iter_mut().enumerate() {
-            o.liberated = ids.contains(&(i as u32));
+        for o in self.list.iter_mut() {
+            o.liberated = o.flag.is_some_and(|id| taken.flags.contains(&id)) || o.legacy.is_some_and(|n| taken.legacy.contains(&n));
         }
     }
 }
@@ -216,8 +243,7 @@ fn load_outposts(info: Res<CacheInfo>, mut outposts: ResMut<Outposts>) {
     outposts.loaded = true;
     let text = std::fs::read_to_string(info.root.join(fc3_formats::cache::OUTPOSTS_REL)).unwrap_or_default();
     outposts.list = fc3_formats::outposts::from_text(&text).iter().map(OutpostState::new).collect();
-    let pending = std::mem::take(&mut outposts.pending);
-    if !pending.is_empty() {
+    if let Some(pending) = outposts.pending.take() {
         outposts.set_liberated(&pending);
     }
     info!("{} outposts", outposts.list.len());

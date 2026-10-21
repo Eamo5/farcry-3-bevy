@@ -731,7 +731,9 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             None => job.error("flicker: the engine's flicker routine wasn't found in FC3.dll (lights will burn steady)".to_string()),
         }
     }
-    if opts.only_sectors.is_none() && job.should_write(cache::OUTPOSTS_REL) {
+    // (Rewritten while it lacks the flag poles.)
+    let outposts_current = std::fs::read_to_string(job.root().join(cache::OUTPOSTS_REL)).is_ok_and(|t| t.lines().next() == Some(fc3_formats::outposts::HEADER));
+    if opts.only_sectors.is_none() && (job.should_write(cache::OUTPOSTS_REL) || !outposts_current) {
         outpost_markers.retain(|(_, p)| !fc3_formats::worldmap::in_test_area(p[0], -p[2]));
         let outposts = fc3_formats::outposts::cluster(&outpost_markers);
         if let Err(e) = write_atomic(job.root(), cache::OUTPOSTS_REL, fc3_formats::outposts::to_text(&outposts).as_bytes(), job.ctx) {
@@ -3303,6 +3305,8 @@ fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool, reorder: bool) ->
             }
             if let Some(kind) = fc3_formats::outposts::marker_kind(&e.name) {
                 outpost_markers.push((kind, translation));
+            } else if fc3_formats::outposts::is_flag_pole(&e.name) {
+                outpost_markers.push((fc3_formats::outposts::MarkerKind::FlagPole(e.id), translation));
             }
             if let Some(params) = e.light {
                 use fc3_formats::lights::{LightKind, WorldLight};

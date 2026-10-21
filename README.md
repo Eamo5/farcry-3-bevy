@@ -171,7 +171,8 @@ No game data is included in this repository, and none is written into it.
   dressed from the game's own outfit kits (a weighted part per slot, dyed cloth and matching skin
   tones), so no two look quite alike. Troops flush a hidden player out with grenades, and the HUD
   marks grenades that land nearby.
-- **Outposts**: 37 enemy outposts recovered from the world's alarm entities. Guards run for the alarm
+- **Outposts**: the island's 34 enemy outposts, found by their flag poles and reaching as far as
+  their alarms; each flies the pirates' or privateers' flag until it is taken, then the rebels'. Guards run for the alarm
   boxes when they spot you (the siren brings reinforcements, who drive in by technical from the
   nearest road or open ground and pile out to fight); sabotage the alarms first, clear the
   garrison to liberate the outpost (the game's safe-house XP, with its outposts' script's bonus for
