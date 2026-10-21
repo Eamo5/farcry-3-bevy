@@ -208,6 +208,12 @@ is the story's own:
   player, on the radar, the minimap and its dots, the map page and the
   full map, at a place on the island while it's on
   (`ScriptedPlayer::on_map`); a reload takes it off.
+* **Loot kept for a mission.** `CAPI_Pawn.AddProtectedLootItem <player>
+  <item> <how many>` (the `ProtectedLootItemModifier` box: JAS_080's
+  leaves for Dennis) keeps that many of an item back from the shop
+  (`Progress::protected_loot`, saved with the game): selling it all
+  leaves them, and one line sells only the rest, until
+  `RemoveProtectedLootItem`.
 * **The player's field of view.** `CAPI_Player.SetPlayerFOV <player>
   <degrees> <seconds> <on>` (an `OverrideEnvironment` box's `zoomFov`:
   JAS_100's car ride at 65) narrows or widens the view to that over the

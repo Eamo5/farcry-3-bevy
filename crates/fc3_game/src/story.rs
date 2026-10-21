@@ -2856,6 +2856,18 @@ fn run_story(
                         progress.bonus_plans.remove(&a(1).to_ascii_lowercase());
                         progress.removed_plans.insert(a(1).to_ascii_lowercase());
                     }
+                    // Loot a mission needs kept back from the shop (`player,
+                    // item, how many`), and let go.
+                    "CAPI_Pawn.AddProtectedLootItem" if a(0) == fc3_story::PLAYER.to_string() => {
+                        if let (Ok(id), Ok(n)) = (a(1).parse::<f64>(), a(2).parse::<f64>()) {
+                            progress.protected_loot.insert(id as u32, n.max(0.0) as u32);
+                        }
+                    }
+                    "CAPI_Pawn.RemoveProtectedLootItem" if a(0) == fc3_story::PLAYER.to_string() => {
+                        if let Ok(id) = a(1).parse::<f64>() {
+                            progress.protected_loot.remove(&(id as u32));
+                        }
+                    }
                     "CAPI_Player.RemoveLootItem" if a(0) == fc3_story::PLAYER.to_string() => {
                         if let (Ok(id), Ok(n)) = (a(1).parse::<f64>(), a(2).parse::<f64>()) {
                             let id = id as u32;

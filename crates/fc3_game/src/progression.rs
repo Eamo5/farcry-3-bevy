@@ -435,6 +435,9 @@ pub struct Progress {
     pub armour: f32,
     /// Loot items carried to sell, by item id.
     pub loot: std::collections::BTreeMap<u32, u32>,
+    /// Loot a mission needs kept (`CAPI_Pawn.AddProtectedLootItem`: JAS_080's
+    /// leaves for Dennis): how many of each the shop won't buy.
+    pub protected_loot: std::collections::BTreeMap<u32, u32>,
     /// Script groups the story has opened (`UnlockItemsFromScript`).
     pub unlocks: std::collections::BTreeSet<String>,
     /// Handbook pages opened by meeting what they describe (by page key).
@@ -484,6 +487,7 @@ impl Default for Progress {
             potions: Default::default(),
             armour: 0.0,
             loot: Default::default(),
+            protected_loot: Default::default(),
             unlocks: Default::default(),
             met: Default::default(),
             whole_tattoo: false,
@@ -603,6 +607,9 @@ impl Progress {
         for (id, n) in self.loot.iter().filter(|(_, n)| **n > 0) {
             s += &format!("loot {id} {n}\n");
         }
+        for (id, n) in &self.protected_loot {
+            s += &format!("protectedloot {id} {n}\n");
+        }
         for group in &self.unlocks {
             s += &format!("unlock {group}\n");
         }
@@ -706,6 +713,11 @@ impl Progress {
             "loot" => {
                 if let (Some(id), Some(n)) = (it.next().and_then(|v| v.parse().ok()), it.next().and_then(|v| v.parse().ok())) {
                     self.loot.insert(id, n);
+                }
+            }
+            "protectedloot" => {
+                if let (Some(id), Some(n)) = (it.next().and_then(|v| v.parse().ok()), it.next().and_then(|v| v.parse().ok())) {
+                    self.protected_loot.insert(id, n);
                 }
             }
             "potion" => {
@@ -2467,9 +2479,16 @@ pub(crate) fn supply(item: &fc3_formats::progression::Item) -> Option<Supply> {
     })
 }
 
+/// How many of a loot item the shop will buy: those carried, less any a
+/// mission needs kept.
+pub(crate) fn sellable(progress: &Progress, id: u32) -> u32 {
+    progress.loot.get(&id).copied().unwrap_or(0).saturating_sub(progress.protected_loot.get(&id).copied().unwrap_or(0))
+}
+
 /// The loot carried that sells, most valuable first, after selling it all.
 pub(crate) fn sell_items(progress: &Progress, crafting: &crate::crafting::CraftCatalog) -> Vec<ShopItem> {
-    let mut held: Vec<(u32, u32)> = progress.loot.iter().filter(|(id, n)| **n > 0 && crafting.item(**id).is_some_and(|i| i.cost > 0)).map(|(id, n)| (*id, *n)).collect();
+    let mut held: Vec<(u32, u32)> =
+        progress.loot.keys().map(|&id| (id, sellable(progress, id))).filter(|&(id, n)| n > 0 && crafting.item(id).is_some_and(|i| i.cost > 0)).collect();
     held.sort_by_key(|(id, n)| std::cmp::Reverse(crafting.item(*id).map_or(0, |i| i.cost) * n));
     let mut list = vec![ShopItem::SellAll];
     list.extend(held.into_iter().map(|(id, _)| ShopItem::Sell(id)));
@@ -2479,7 +2498,7 @@ pub(crate) fn sell_items(progress: &Progress, crafting: &crate::crafting::CraftC
 
 /// What selling a line pays.
 pub(crate) fn sale_value(item: ShopItem, progress: &Progress, crafting: &crate::crafting::CraftCatalog, perks: &Perks) -> u32 {
-    let stack = |id: u32| crafting.sale_price(id, perks) * progress.loot.get(&id).copied().unwrap_or(0);
+    let stack = |id: u32| crafting.sale_price(id, perks) * sellable(progress, id);
     match item {
         ShopItem::SellAll => progress.loot.keys().map(|&id| stack(id)).sum(),
         ShopItem::Sell(id) => stack(id),
@@ -3103,8 +3122,14 @@ pub(crate) fn trade(
             hud.notify("Nothing to sell");
             return None;
         }
+        // (What a mission needs kept stays.)
         for id in sold {
-            progress.loot.remove(&id);
+            let kept = progress.protected_loot.get(&id).copied().unwrap_or(0).min(progress.loot.get(&id).copied().unwrap_or(0));
+            if kept > 0 {
+                progress.loot.insert(id, kept);
+            } else {
+                progress.loot.remove(&id);
+            }
         }
         let paid = progress.add_money(value);
         hud.notify(&if paid < value { format!("Sold for ${value} (wallet full: ${paid} kept)") } else { format!("Sold for ${value}") });
@@ -3952,6 +3977,36 @@ mod shop_tests {
         assert_eq!(sale_value(ShopItem::SellAll, &progress, &crafting, &perks), 75);
         perks.sale_price = 1.25;
         assert_eq!(sale_value(ShopItem::Sell(1), &progress, &crafting, &perks), 39);
+    }
+
+    #[test]
+    fn loot_a_mission_needs_kept_isnt_sold() {
+        // JAS_080: two of the five leaves kept for Dennis; the rest sell.
+        use fc3_formats::progression::Item;
+        let item = |id: u32, cost: u32| Item { id, cost, loot: true, ..Default::default() };
+        let crafting = crate::crafting::CraftCatalog { items: vec![item(1, 10), item(2, 45)], ..Default::default() };
+        let mut progress = Progress::default();
+        progress.loot.extend([(1, 5), (2, 1)]);
+        progress.protected_loot.insert(1, 2);
+        progress.protected_loot.insert(2, 1);
+        let perks = Perks::default();
+        assert_eq!(sellable(&progress, 1), 3);
+        assert!(matches!(sell_items(&progress, &crafting).as_slice(), [ShopItem::SellAll, ShopItem::Sell(1)]));
+        assert_eq!(sale_value(ShopItem::SellAll, &progress, &crafting, &perks), 30);
+        let mut stats = PlayerStats {
+            medkits: 0, kills: 0, deaths: 0, respawn_timer: 0.0,
+            spawn_point: Vec3::ZERO, hurt_dir: None, burning: 0.0, last_hurt: DamageKind::Bullet,
+        };
+        let mut inv = inventory();
+        trade(ShopItem::SellAll, &mut inv, &mut stats, &mut progress, &perks, &ShopCatalog::default(), &crafting, &mut HudState::default());
+        assert_eq!((progress.loot.get(&1), progress.loot.get(&2), progress.money), (Some(&2), Some(&1), 150 + 30));
+        // Kept over a save.
+        let mut loaded = Progress::default();
+        for line in progress.to_lines().lines() {
+            let (key, rest) = line.split_once(' ').unwrap_or((line, ""));
+            loaded.read_line(key, rest);
+        }
+        assert_eq!(loaded.protected_loot, progress.protected_loot);
     }
 
     #[test]
