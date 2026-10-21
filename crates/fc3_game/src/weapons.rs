@@ -2539,7 +2539,8 @@ impl ScriptedFov {
             self.toward = want;
             self.rate = if seconds > 0.0 { (want - now).abs() / seconds } else { f32::INFINITY };
         }
-        let next = now + (want - now).clamp(-self.rate * dt, self.rate * dt);
+        // (One taking no time is there at once, paused frames and all.)
+        let next = if self.rate.is_finite() { now + (want - now).clamp(-self.rate * dt, self.rate * dt) } else { want };
         self.now = Some(next);
         next
     }
@@ -2792,8 +2793,11 @@ mod stats_tests {
         assert!((fov.step(65.0, 2.0, 1.0) - 70.0).abs() < 1e-4);
         assert!((fov.step(65.0, 2.0, 1.0) - 65.0).abs() < 1e-4);
         assert!((fov.step(75.0, 2.0, 1.0) - 70.0).abs() < 1e-4);
-        // At once when it takes no time.
+        // At once when it takes no time, a paused frame too.
         assert_eq!(fov.step(90.0, 0.0, 0.01), 90.0);
+        assert_eq!(fov.step(80.0, 0.0, 0.0), 80.0);
+        let mut first = ScriptedFov::default();
+        assert_eq!(first.step(75.0, 0.0, 0.0), 75.0);
     }
 
     /// A shot into a vehicle goes on into a rider it passes close to, just
