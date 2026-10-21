@@ -1615,7 +1615,8 @@ row, for two reasons:
   only on a frame where time moves.
 
 From B15's checkpoint the next run completed B15, B20C and B30, then
-JAS_030's B10.
+JAS_030's B10. A second run from the same checkpoint also completed B15:
+this time the second lure's rock was in hand when the autopilot aimed.
 
 DOC_020 B10E then stalled in the cave, waiting for the mushroom's trip to
 end. There were three causes:
@@ -1652,7 +1653,9 @@ It puts the player at the foot again after 4 s off the ladder
 From B20E's checkpoint the climb began 2 s after the vine was armed. After
 its 6 s the dolly ran and the stand-up played, and the script heard
 `vine_climbing_ended`. The run went on through the greenhouse's triggers
-and completed B20E 97 s in. B30 started.
+and completed B20E 97 s in. It went on through B30, B40 and B50C to
+Daisy's 168 s scene, which ended B60C, and DOC_020 completed. DEN_020
+started.
 
 The notes below are the earlier investigation.
 
