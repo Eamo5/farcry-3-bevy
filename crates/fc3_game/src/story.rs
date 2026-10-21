@@ -2578,6 +2578,12 @@ fn run_story(
                             races.gates.push(crate::races::GateRegistration { id, index, tolerance: a(6).parse().unwrap_or(1.0) });
                         }
                     }
+                    // A pulse of the pad (`Rumble <low> <high> <seconds>`:
+                    // JAS_020's Grant's death scene, with each heartbeat).
+                    "SendGSFGenericEventToEntity" if a(2) == "Rumble" => {
+                        let f = |i| a(i).parse().unwrap_or(0.0f32);
+                        shakes.write(crate::shake::Shake::pulse(f(3), f(4), f(5)));
+                    }
                     "SendGSFGenericEventToEntity" => {
                         intoxication.events.push(a(2).to_string());
                         host.gsf_events.push(a(2).to_string());

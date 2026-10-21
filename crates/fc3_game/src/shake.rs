@@ -57,16 +57,24 @@ fn shake_test(
     }
 }
 
-/// Starts one of the player's effects ("explosionrumble"), scaled.
+/// Starts one of the player's effects ("explosionrumble"), scaled, or a
+/// pulse of the pad's motors.
 #[derive(Message, Clone)]
 pub struct Shake {
     pub effect: String,
     pub intensity: f32,
+    /// A pulse a script asks for instead (GSF `Rumble`): the low and high
+    /// motors, and for how many seconds (0: one beat, `BEAT`).
+    pub pulse: Option<[f32; 3]>,
 }
 
 impl Shake {
     pub fn new(effect: &str, intensity: f32) -> Self {
-        Shake { effect: effect.to_ascii_lowercase(), intensity }
+        Shake { effect: effect.to_ascii_lowercase(), intensity, pulse: None }
+    }
+
+    pub fn pulse(low: f32, high: f32, seconds: f32) -> Self {
+        Shake { effect: String::new(), intensity: 0.0, pulse: Some([low, high, seconds]) }
     }
 }
 
@@ -87,6 +95,8 @@ pub struct ShakeTable {
     /// until another may start.
     hits: Vec<(f32, f32, f32)>,
     hit_wait: f32,
+    /// Pulses scripts asked for: (seconds left, low motor, high motor).
+    pulses: Vec<(f32, f32, f32)>,
     /// Seconds until the pad's motors are next set.
     rumble_wait: f32,
     rumbling: bool,
@@ -94,6 +104,9 @@ pub struct ShakeTable {
 
 /// How often the pad's motors follow the curves.
 const RUMBLE_STEP: f32 = 0.08;
+/// How long a script's pulse given no length lasts (s): one beat (JAS_020's
+/// Grant's death scene pulses the pad with each heartbeat).
+const BEAT: f32 = 0.15;
 /// No more effects than this at once (a barrage stays a barrage).
 const MAX_ACTIVE: usize = 12;
 /// The most the view rolls or pitches however many effects add up.
@@ -213,8 +226,12 @@ fn run_shakes(
     mut rumble: MessageWriter<GamepadRumbleRequest>,
 ) {
     let dt = time.delta_secs();
-    let ShakeTable { table, active, rumble_wait, rumbling, hits, .. } = &mut *table;
+    let ShakeTable { table, active, pulses, rumble_wait, rumbling, hits, .. } = &mut *table;
     for r in requests.read() {
+        if let Some([low, high, seconds]) = r.pulse {
+            pulses.push((if seconds > 0.0 { seconds } else { BEAT }, low.max(0.0), high.max(0.0)));
+            continue;
+        }
         match table.effects.iter().position(|e| e.name == r.effect) {
             Some(i) if r.intensity > 0.0 && active.len() < MAX_ACTIVE => active.push((i, 0.0, r.intensity)),
             Some(_) => {}
@@ -230,6 +247,12 @@ fn run_shakes(
         high += sample(&e.rumble_high, *t).max(0.0) * *intensity;
         low += sample(&e.rumble_low, *t).max(0.0) * *intensity;
         *t < e.length()
+    });
+    pulses.retain_mut(|(left, l, h)| {
+        low += *l;
+        high += *h;
+        *left -= dt;
+        *left > 0.0
     });
     let mut yaw = 0.0f32;
     if let Some(hit) = &table.hit {
@@ -298,5 +321,31 @@ mod tests {
         assert!(peak > 0.02 && peak <= 0.1 + 1e-4, "half intensity peaks under the curve's 0.2: {peak}");
         assert_eq!(app.world().resource::<ViewShake>().roll, 0.0, "settled once the curve ends");
         assert!(app.world().resource::<ShakeTable>().active.is_empty());
+    }
+
+    /// A script's pulse given no length runs the pad's motors for one beat,
+    /// without shaking the view.
+    #[test]
+    fn a_scripts_pulse_rumbles_for_a_beat() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<Shake>()
+            .add_message::<GamepadRumbleRequest>()
+            .init_resource::<ViewShake>()
+            .insert_resource(crate::settings::Settings { vibration: true, ..default() })
+            .init_resource::<ShakeTable>()
+            .add_systems(Update, run_shakes);
+        app.world_mut().write_message(Shake::pulse(0.1, 0.2, 0.0));
+        app.update();
+        let table = app.world().resource::<ShakeTable>();
+        assert!(table.rumbling && table.pulses.len() == 1, "the pad rumbles");
+        assert_eq!(app.world().resource::<ViewShake>().roll, 0.0);
+        let start = std::time::Instant::now();
+        while start.elapsed().as_secs_f32() < BEAT + 2.0 * RUMBLE_STEP + 0.1 {
+            std::thread::sleep(Duration::from_millis(10));
+            app.update();
+        }
+        let table = app.world().resource::<ShakeTable>();
+        assert!(!table.rumbling && table.pulses.is_empty(), "and stops after the beat");
     }
 }
