@@ -1453,6 +1453,7 @@ fn run_story(
             mut car_chase,
             mut gallery,
             (poker, minigame, mut races, mut trials),
+            detection,
         ),
     ): (
         MessageWriter<crate::progression::XpGain>,
@@ -1480,6 +1481,7 @@ fn run_story(
             ResMut<crate::car_chase::CarChase>,
             ResMut<crate::shooting_gallery::Gallery>,
             (Res<crate::poker::PokerTable>, Res<crate::hud::Minigame>, ResMut<crate::races::Races>, ResMut<crate::trials::Trials>),
+            Res<crate::stealth::Detection>,
         ),
     ),
 ) {
@@ -1713,6 +1715,7 @@ fn run_story(
     // (Not swimming while held after a move or played by a scene: the flag
     // is the last the movement saw, the sea a reload took him from;
     // JAS_170's plane-crash scene failed at once for "landing" in it.)
+    view.player_state.stealth = detection.0;
     view.player_state.stance = if p.swimming && !p.spawning && !cinema.plays_player() {
         2
     } else if p.crouching {

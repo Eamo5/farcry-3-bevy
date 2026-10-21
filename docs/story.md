@@ -1652,6 +1652,18 @@ the window's scene played once, and the autopilot went through the
 locked house's trigger with no failure. B15, B20C and B30 completed,
 then JAS_030's B10.
 
+The rock tutorial can also fail the mission while Grant opens the window:
+if the player's detection meter reaches 0.8. Its `StealthIndicatorListener`
+hears `CStealthIndicatorEvent` on the player, with the meter's new value.
+B10's poker and crouch tutorials react to the meter too (at 0.1 and 0.8),
+and so do the outposts' defence scripts (a full meter starts their combat
+music). The story never sent it. The host now passes the meter with the
+player's state each update, and the story tells each change to the
+hundredth. The meter is the strongest suspicion among the enemies noticing
+the player, or 1 once one has spotted him, as the HUD's indicators show it
+(`stealth::Detection`). With it, B10 (from a new game) and B15 (from its
+checkpoint) still completed.
+
 DOC_020 B10E then stalled in the cave, waiting for the mushroom's trip to
 end. There were three causes:
 

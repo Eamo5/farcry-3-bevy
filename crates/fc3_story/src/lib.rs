@@ -118,6 +118,9 @@ pub struct PlayerView {
     /// Unlocked skills (lower-case names).
     pub skills: HashSet<String>,
     pub on_zipline: bool,
+    /// How near the enemies are to spotting the player (the detection
+    /// meter): 0 unnoticed .. 1 spotted.
+    pub stealth: f32,
 }
 
 /// What the scripts may read of the world, refreshed by the host.
@@ -484,6 +487,13 @@ impl Story {
             if c.view.player_state.stance != stance && c.time > 0.0 {
                 let event = ["new_stance_stand", "new_stance_crouch", "new_stance_swim"][(stance as usize).min(2)];
                 c.raise(&Listen::Entity(PLAYER, event.into()), vec![Arg::id(PLAYER)]);
+            }
+            // So are the detection meter's (`CStealthIndicatorEvent`, with its
+            // new value, to hundredths).
+            let meter = |v: f32| (v.clamp(0.0, 1.0) as f64 * 100.0).round() / 100.0;
+            let stealth = meter(view.player_state.stealth);
+            if meter(c.view.player_state.stealth) != stealth && c.time > 0.0 {
+                c.raise(&Listen::Entity(PLAYER, "CStealthIndicatorEvent".into()), vec![Arg::Num(stealth)]);
             }
             c.view = view;
             for (id, was_loaded) in before {
@@ -3010,6 +3020,33 @@ mod tests {
         let mut view = View::default();
         view.spawned.insert(11, Live { pos: [1.0, 0.0, 0.0], alive: true, ..Default::default() });
         assert_eq!(given(story.update(1.0, view)), [(11, Some(20))]);
+    }
+
+    /// The detection meter's changes reach the scripts listening on the
+    /// player (`StealthIndicatorListener`), to hundredths, once each.
+    #[test]
+    fn the_detection_meter_is_told_as_it_changes() {
+        let mut story = empty_story();
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            heard = {}
+            local box = { _type = { OnValue = function(self, value) heard[#heard + 1] = value end } }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback(GetLocalPlayerId(), box, "OnValue", "CStealthIndicatorEvent")
+        "#,
+            )
+            .exec()
+            .unwrap();
+        let mut view = View::default();
+        story.update(0.1, view.clone());
+        for value in [0.304, 0.3, 0.85, 1.2, 1.0] {
+            view.player_state.stealth = value;
+            story.update(0.1, view.clone());
+        }
+        let heard: Vec<f64> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        assert_eq!(heard, [0.3, 0.85, 1.0]);
     }
 
     /// A character placed under its scripts' control takes up by itself only

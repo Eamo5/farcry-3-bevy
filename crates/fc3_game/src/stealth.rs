@@ -31,12 +31,13 @@ impl Plugin for StealthPlugin {
             .add_message::<CameraSaw>()
             .init_resource::<RockAimTest>()
             .init_resource::<Takedown>()
+            .init_resource::<Detection>()
             .add_systems(PreUpdate, aim_test_rock.after(crate::controls::update_actions).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(PreUpdate, (takedown_test, below_test, takedown).chain().after(crate::controls::update_actions))
             .add_systems(Startup, load_rock)
             .add_systems(
                 Update,
-                ((tag_test, binoculars, camera_shot).chain(), takedown_prompt.before(crate::hud::HudSet), detection_markers, throw_rock, fly_rocks)
+                ((tag_test, binoculars, camera_shot).chain(), takedown_prompt.before(crate::hud::HudSet), detection_markers, detection, throw_rock, fly_rocks)
                     .run_if(in_state(crate::menu::GameState::Playing)),
             );
     }
@@ -45,6 +46,21 @@ impl Plugin for StealthPlugin {
 /// An enemy the player has tagged.
 #[derive(Component)]
 pub struct Tagged;
+
+/// How near the enemies are to spotting the player, as the detection meter
+/// shows it: 0 unnoticed .. 1 spotted, the strongest suspicion among those
+/// noticing him (not busy with other foes). Scripts hear it change
+/// (`CStealthIndicatorEvent`: JAS_020's tutorials, an outpost's defence).
+#[derive(Resource, Default)]
+pub struct Detection(pub f32);
+
+fn detection(npcs: Query<(&Npc, &Health)>, mut detection: ResMut<Detection>) {
+    detection.0 = npcs
+        .iter()
+        .filter(|(n, h)| !h.dead && n.hostile() && n.foe.is_none())
+        .map(|(n, _)| if n.state == NpcState::Combat && n.sees_player { 1.0 } else { n.awareness.clamp(0.0, 1.0) })
+        .fold(0.0, f32::max);
+}
 
 /// A character a script keeps from being tagged (`TaggingModifier`'s
 /// Disable: a target to be met, a friend among foes).
