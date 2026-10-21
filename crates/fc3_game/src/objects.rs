@@ -47,7 +47,8 @@ fn near_debug(
     players: Query<&GlobalTransform, With<crate::player::Player>>,
     objects: Query<(&GlobalTransform, &WorldObject, &ChildOf, &Children)>,
     roots: Query<&SectorObjects>,
-    parts: Query<&MeshMaterial3d<StandardMaterial>>,
+    parts: Query<(Option<&MeshMaterial3d<StandardMaterial>>, Option<&crate::original_shaders::OriginalSwap>, Has<crate::original_shaders::PropPart>)>,
+    originals: Res<Assets<crate::original_shaders::OriginalMaterial>>,
 ) {
     let Ok(radius) = std::env::var("FC3_NEAR_DEBUG") else { return };
     if *done || time.elapsed_secs() < 25.0 {
@@ -67,7 +68,25 @@ fn near_debug(
             .and_then(|s| s.entities.get(o.entity_index as usize))
             .map(|e| e.name.clone())
             .unwrap_or_default();
-        let mats: Vec<String> = children.iter().filter_map(|c| parts.get(c).ok()).filter_map(|m| server.get_path(m.0.id()).map(|p| p.to_string())).collect();
+        // (Each part: its standard material, or "original" when it draws
+        // with its pair; and why not, when it has one it doesn't use.)
+        let mats: Vec<String> = children
+            .iter()
+            .filter_map(|c| parts.get(c).ok())
+            .map(|(standard, swap, prop)| {
+                let path = standard.and_then(|m| server.get_path(m.0.id())).map(|p| p.to_string());
+                let pair = swap.map(|s| match originals.get(&s.original) {
+                    Some(o) if o.key.vs != 0 => "pair",
+                    Some(_) => "no pair",
+                    None => "pair loading",
+                });
+                match (path, pair) {
+                    (None, _) => "original".to_string(),
+                    (Some(p), Some(pair)) => format!("{p} ({pair})"),
+                    (Some(p), None) => format!("{p} ({})", if prop { "no swap yet" } else { "not a prop part" }),
+                }
+            })
+            .collect();
         info!("near: {name} at {:.1?} model {:?} materials {mats:?}", gt.translation(), server.get_path(o.model.id()).map(|p| p.to_string()));
     }
 }

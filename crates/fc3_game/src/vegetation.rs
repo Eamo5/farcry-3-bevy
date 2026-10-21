@@ -617,7 +617,17 @@ fn spawn_vegetation(
                                     .clone();
                                 commands.spawn((Mesh3d(part.mesh.clone()), MeshMaterial3d(foliage), vis.clone(), ChildOf(obj)))
                             }
-                            None => commands.spawn((Mesh3d(part.mesh.clone()), MeshMaterial3d(material), vis.clone(), ChildOf(obj))),
+                            None => {
+                                let mut e = commands.spawn((Mesh3d(part.mesh.clone()), MeshMaterial3d(material), vis.clone(), ChildOf(obj)));
+                                // Rocks and other solid clutter draw with the
+                                // game's own shaders near the eye, as placed
+                                // props do (their detail maps: plain, a
+                                // boulder up close was a smear).
+                                if solid && std::env::var_os("FC3_NO_CLUTTER_ORIGINAL").is_none() {
+                                    e.insert(crate::original_shaders::PropPart);
+                                }
+                                e
+                            }
                         };
                         if is_grass {
                             e.insert(grass_tint_tag(inst.tint));
