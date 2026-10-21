@@ -146,6 +146,21 @@ pub struct StoryData {
     /// sequence's own event clips.
     pub action_markups: HashMap<u64, Vec<(f64, String)>>,
     pub group_names: HashMap<u32, String>,
+    /// The world's water levels by sector id, as its sectors have them
+    /// (what `CDominoWaterLevelManager:GetWaterLevel` gives before a script
+    /// moves one).
+    pub water: HashMap<u32, f64>,
+}
+
+/// Water levels by sector id from the cache's `world/water_planes.txt`
+/// (`<sector> <level>` a line).
+pub fn water_levels(text: &str) -> HashMap<u32, f64> {
+    text.lines()
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
+        })
+        .collect()
 }
 
 /// A counted array of u64 (u32 count, then the values).
@@ -325,6 +340,7 @@ impl StoryData {
                 }
             });
         }
+        d.water = water_levels(&std::fs::read_to_string(root.join(fc3_formats::cache::WATER_PLANES_REL)).unwrap_or_default());
         match std::fs::read(root.join("story/strings.bin")).map_err(anyhow::Error::from).and_then(|b| Strings::from_bytes(&b)) {
             Ok(s) => d.strings = s,
             Err(e) => eprintln!("story: strings: {e:#}"),

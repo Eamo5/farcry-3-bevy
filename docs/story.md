@@ -148,7 +148,23 @@ is the story's own:
 * **Script control**, **on-screen timers**, **water levels**: state and
   timing in the story. Visible named timers expose their localized labels
   and current values to the host HUD; hidden timers still run and deliver
-  callbacks. Water-level commands still need host integration.
+  callbacks.
+* **Water levels** (`CDominoWaterLevelManager`: BAM_020's sinking ship,
+  BAM_030's flooding tunnel, BAM_055's sub). A sector's level starts as
+  the world has it (`world/water_planes.txt`, in `StoryData::water`), so
+  `GetWaterLevel` reports it before any script moves it: BAM_055 B50
+  discharges its sub from the authored 201.67 m, which the box refused
+  when the story said 0. `SetWaterLevel` puts a level at once;
+  `FillWater` and `DischargeWater` move it there at their speed (fills of
+  one sector add up, as the modifier box's notes say), calling back as it
+  arrives, and `StopChangingWaterLevel` leaves it where it is. The game
+  puts the story's levels over the world's each frame
+  (`water::set_scripted`): the plane rises and falls, swimming, boats and
+  the underwater view follow it, and its depth texture is built again
+  every quarter metre. A script's water stands where there is no terrain
+  too (the missions' rooms out past the islands). `FC3_WATER_TEST=<s>,
+  <metres>,<m/s>` has a script fill the water round the player that
+  much higher that far in.
 * **Engine events the boxes listen for.** A sweep of every event class
   and name single-player scripts register found several nothing sent. They
   are now raised from what the host reports:

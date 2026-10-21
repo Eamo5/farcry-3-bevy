@@ -992,6 +992,17 @@ impl Story {
         self.core.borrow().safehouses_unlocked.contains(&id)
     }
 
+    /// The water levels scripts have set or are moving, by sector id, as
+    /// they stand. (Single-player has the one world, whatever name a box
+    /// gives it: `SetWaterLevel`'s default is `world2`, the modifier's
+    /// `fc3_main`.)
+    pub fn water_levels(&self) -> Vec<(u32, f32)> {
+        let c = self.core.borrow();
+        let mut out: Vec<(u32, f32)> = c.media.water.iter().map(|(s, l)| (*s, *l as f32)).collect();
+        out.sort_by_key(|w| w.0);
+        out
+    }
+
     /// A safe house the player has taken (an outpost liberated), as the
     /// engine unlocks one: the state scripts read, and their listeners told
     /// (an outpost's flag controller; the outposts manager, which opens the
@@ -2061,6 +2072,42 @@ mod tests {
 
     fn empty_story() -> Story {
         Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), StoryData::default()).unwrap()
+    }
+
+    #[test]
+    fn water_rises_from_the_worlds_level_and_calls_back_when_there() {
+        let mut data = StoryData::default();
+        data.water.insert(1428, 201.673);
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        let lua = story.domino().lua().clone();
+        let level = |s: &str| lua.load(format!("return CDominoWaterLevelManager_GetInstance():GetWaterLevel('fc3_main', {s})")).eval::<f64>().unwrap();
+        // The world's own level until a script moves it.
+        assert!((level("1428") - 201.673).abs() < 1e-4);
+        assert_eq!(level("7"), 0.0);
+        lua.load(
+            "box = { Done = function(self) self.done = (self.done or 0) + 1 end }
+             box._type = box
+             fill = CDominoWaterLevelManager_GetInstance():FillWater('fc3_main', 3678, 2, 139, box, 'Done')
+             down = CDominoWaterLevelManager_GetInstance():DischargeWater('world2', 1428, 0.1, 201.0, box, 'Done')
+             CDominoWaterLevelManager_GetInstance():SetWaterLevel('fc3_main', 3678, 135)",
+        )
+        .exec()
+        .unwrap();
+        story.update(1.0, View::default());
+        assert!((level("3678") - 137.0).abs() < 1e-4);
+        assert!((level("1428") - 201.573).abs() < 1e-4);
+        story.update(1.0, View::default());
+        assert!((level("3678") - 139.0).abs() < 1e-4);
+        assert_eq!(lua.load("return box.done").eval::<u32>().unwrap(), 1);
+        // A fill stopped stays where it stopped and calls nobody.
+        lua.load("CDominoWaterLevelManager_GetInstance():StopChangingWaterLevel(down)").exec().unwrap();
+        story.update(5.0, View::default());
+        assert!((level("1428") - 201.473).abs() < 1e-4, "{}", level("1428"));
+        assert_eq!(lua.load("return box.done").eval::<u32>().unwrap(), 1);
+        let levels = story.water_levels();
+        assert_eq!(levels.iter().map(|l| l.0).collect::<Vec<_>>(), [1428, 3678]);
+        assert!((levels[0].1 - 201.473).abs() < 1e-3 && (levels[1].1 - 139.0).abs() < 1e-3);
+        assert_eq!(story.errors(), 0);
     }
 
     #[test]

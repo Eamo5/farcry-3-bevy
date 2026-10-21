@@ -52,8 +52,54 @@ pub struct Media {
     pub timers: BTreeMap<u64, NamedTimer>,
     /// The last sync point each sequence reached (scene, file).
     pub sync_points: HashMap<(String, String), String>,
-    pub water: HashMap<(String, u32), f64>,
+    /// Water levels scripts have set or moved, by sector id (whatever
+    /// world a box names: single-player has the one).
+    pub water: HashMap<u32, f64>,
+    /// Water levels being filled or discharged, by the id their scripts
+    /// were given.
+    pub fills: BTreeMap<u64, Fill>,
     pub sun_yaw: f64,
+}
+
+/// A sector's water rising or falling to a level (`FillWater`,
+/// `DischargeWater`): fills of the same sector add their speeds, as the
+/// engine's do.
+pub struct Fill {
+    pub sector: u32,
+    pub to: f64,
+    /// Metres a second.
+    pub speed: f64,
+    pub callback: Option<Callback>,
+}
+
+impl Core {
+    /// A sector's water level: as a script last set or moved it, else as
+    /// the world has it.
+    pub fn water_level(&self, sector: u32) -> f64 {
+        self.media.water.get(&sector).copied().or_else(|| self.data.water.get(&sector).copied()).unwrap_or(0.0)
+    }
+
+    /// Moves the water being filled or discharged, and calls back each fill
+    /// that has reached its level.
+    fn update_water(&mut self, dt: f64) {
+        let mut done = Vec::new();
+        let ids: Vec<u64> = self.media.fills.keys().copied().collect();
+        for id in ids {
+            let Some(f) = self.media.fills.get(&id) else { continue };
+            let (sector, to, step) = (f.sector, f.to, f.speed.abs() * dt);
+            let now = self.water_level(sector);
+            let next = if now < to { (now + step).min(to) } else { (now - step).max(to) };
+            self.media.water.insert(sector, next);
+            if (next - to).abs() < 1e-6 {
+                done.push(id);
+            }
+        }
+        for id in done {
+            if let Some(cb) = self.media.fills.remove(&id).and_then(|f| f.callback) {
+                self.call(cb, vec![]);
+            }
+        }
+    }
 }
 
 /// A string's first printf placeholder (`%ls`, `%s`, `%d`) filled in.
@@ -148,6 +194,7 @@ impl Core {
         for (cb, value) in fire {
             self.raise(&Listen::Generic(format!("NamedTimerCallback_{cb}")), vec![Arg::Num(value)]);
         }
+        self.update_water(dt);
     }
 }
 
@@ -424,30 +471,27 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         c.media.sun_yaw = yaw.or(0.0);
         c.emit(Command::Native { name: "SetSunYaw".into(), args: vec![yaw.or(0.0).to_string()] });
     })?;
-    r.f("CDominoWaterLevelManager:GetWaterLevel", |c, (world, sector): (Text, Num)| {
-        c.media.water.get(&(world.0, sector.or(0.0) as u32)).copied().unwrap_or(0.0)
-    })?;
+    // Water levels: the story moves them (the host shows what
+    // `Story::water_levels` gives).
+    r.f("CDominoWaterLevelManager:GetWaterLevel", |c, (_world, sector): (Text, Num)| c.water_level(sector.or(0.0) as u32))?;
     for name in ["FillWater", "DischargeWater"] {
         r.f(
             &format!("CDominoWaterLevelManager:{name}"),
-            move |c, (world, sector, speed, level, target, method): (Text, Num, Num, Num, Value, Option<String>)| {
-                let sector = sector.or(0.0) as u32;
-                let level = level.or(0.0);
-                let from = c.media.water.get(&(world.0.clone(), sector)).copied().unwrap_or(0.0);
-                c.media.water.insert((world.0.clone(), sector), level);
-                c.emit(Command::Native { name: "WaterLevel".into(), args: vec![world.0, sector.to_string(), level.to_string(), speed.or(1.0).to_string()] });
+            move |c, (_world, sector, speed, level, target, method): (Text, Num, Num, Num, Value, Option<String>)| {
                 let id = c.next_id();
-                if let Some(cb) = callback(target, method) {
-                    let seconds = ((level - from).abs() / speed.or(1.0).max(0.01)).max(0.1);
-                    c.delays.insert(id, crate::core::Delay { seconds, elapsed: 0.0, running: true, callback: cb });
-                }
+                let fill = Fill { sector: sector.or(0.0) as u32, to: level.or(0.0), speed: speed.or(1.0), callback: callback(target, method) };
+                c.media.fills.insert(id, fill);
                 id.to_string()
             },
         )?;
     }
-    r.f("CDominoWaterLevelManager:SetWaterLevel", |c, (world, sector, level): (Text, Num, Num)| {
-        c.media.water.insert((world.0.clone(), sector.or(0.0) as u32), level.or(0.0));
-        c.emit(Command::Native { name: "WaterLevel".into(), args: vec![world.0, sector.or(0.0).to_string(), level.or(0.0).to_string(), "0".into()] });
+    r.f("CDominoWaterLevelManager:StopChangingWaterLevel", |c, id: Text| {
+        if let Ok(id) = id.0.parse::<u64>() {
+            c.media.fills.remove(&id);
+        }
+    })?;
+    r.f("CDominoWaterLevelManager:SetWaterLevel", |c, (_world, sector, level): (Text, Num, Num)| {
+        c.media.water.insert(sector.or(0.0) as u32, level.or(0.0));
     })?;
     Ok(())
 }

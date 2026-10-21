@@ -26,7 +26,7 @@ use bevy::tasks::{futures::check_ready, AsyncComputeTaskPool, Task};
 use fc3_formats::cache;
 use fc3_formats::terrain::SectorCoord;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock, RwLock};
 
 use crate::cache_assets::cache_path;
 use crate::data::CacheInfo;
@@ -44,7 +44,8 @@ impl Plugin for WaterPlugin {
         app.add_plugins(MaterialPlugin::<WaterMaterial>::default()).add_systems(
             Update,
             (setup_water.run_if(resource_exists::<CacheInfo>), water_quality, follow_camera, update_floor, inland_water, update_fog, caustic_light),
-        );
+        )
+        .add_systems(Update, (story_levels, follow_levels).chain().after(crate::story::StorySet).before(inland_water));
     }
 }
 
@@ -63,19 +64,51 @@ pub struct WaterParams {
 /// Inland water levels by sector id, read once from the cache.
 static PLANES: OnceLock<HashMap<u32, f32>> = OnceLock::new();
 
-/// The water plane over `p`'s sector: a river's or lake's level, or the sea's.
+/// Water levels the story's scripts have set or are moving, by sector id
+/// (`CDominoWaterLevelManager`: BAM_020's sinking ship, BAM_030's flooding
+/// tunnel, BAM_055's sub), over the world's own.
+static SCRIPTED: LazyLock<RwLock<HashMap<u32, f32>>> = LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// Puts the scripts' water levels over the world's (all of them: one not
+/// given is the world's again).
+pub fn set_scripted(levels: &[(u32, f32)]) {
+    let mut s = SCRIPTED.write().unwrap_or_else(|e| e.into_inner());
+    if s.len() != levels.len() || levels.iter().any(|(id, l)| s.get(id) != Some(l)) {
+        *s = levels.iter().copied().collect();
+    }
+}
+
+fn scripted(id: u32) -> Option<f32> {
+    SCRIPTED.read().unwrap_or_else(|e| e.into_inner()).get(&id).copied()
+}
+
+/// A sector's water level (a script's, else the world's), if it has one.
+fn sector_level(id: u32) -> Option<f32> {
+    scripted(id).or_else(|| PLANES.get().and_then(|m| m.get(&id)).copied())
+}
+
+/// The water plane over `p`'s sector: a river's or lake's level (or as a
+/// script has it), or the sea's.
 pub fn plane_level(p: Vec3) -> f32 {
+    sector_level(sector_of(p)).unwrap_or(SEA_LEVEL)
+}
+
+fn sector_of(p: Vec3) -> u32 {
     let d = crate::data::to_dunia(p);
-    let id = SectorCoord::containing(d[0], d[1]).id();
-    PLANES.get().and_then(|m| m.get(&id)).copied().unwrap_or(SEA_LEVEL)
+    SectorCoord::containing(d[0], d[1]).id()
 }
 
 /// The height of the water's surface over `p`, given the ground there: an
 /// inland plane's level where the ground lies below it (not over a cave
-/// mouth), otherwise the sea's.
+/// mouth), otherwise the sea's. A level a script sets holds where there is
+/// no ground either (the missions' rooms placed out past the islands).
 pub fn surface(p: Vec3, ground: Option<f32>) -> f32 {
-    let level = plane_level(p);
-    if level > SEA_LEVEL && ground.is_some_and(|g| g < level) {
+    let id = sector_of(p);
+    let (level, script) = match scripted(id) {
+        Some(l) => (l, true),
+        None => (PLANES.get().and_then(|m| m.get(&id)).copied().unwrap_or(SEA_LEVEL), false),
+    };
+    if level > SEA_LEVEL && ground.map_or(script, |g| g < level) {
         level
     } else {
         SEA_LEVEL
@@ -164,6 +197,8 @@ struct Inland {
     shown: HashMap<u32, Entity>,
     corner: Vec2,
     built_sectors: usize,
+    /// The scripts' levels the depth texture was built for.
+    built_levels: HashMap<u32, f32>,
     /// The depth texture being built in the background (corner, texels).
     task: Option<Task<(Vec2, Vec<u8>)>>,
 }
@@ -354,6 +389,7 @@ fn setup_water(
         shown: HashMap::new(),
         corner: Vec2::splat(f32::MAX),
         built_sectors: 0,
+        built_levels: HashMap::new(),
         task: None,
     });
     // (High's grid; `water_quality` puts the setting's on.)
@@ -515,11 +551,24 @@ fn inland_water(
         let o = c.origin();
         Vec2::new(o[0], -o[1] - size)
     };
-    for (&id, &level) in planes {
+    // The world's planes, and the scripts' over them.
+    let scripts: HashMap<u32, f32> = SCRIPTED.read().unwrap_or_else(|e| e.into_inner()).clone();
+    let mut levels = planes.clone();
+    levels.extend(scripts.iter().map(|(id, l)| (*id, *l)));
+    // (A plane whose level is gone: a script's, reloaded away.)
+    inland.shown.retain(|id, e| {
+        let keep = levels.contains_key(id);
+        if !keep {
+            commands.entity(*e).despawn();
+        }
+        keep
+    });
+    for (&id, &level) in &levels {
         let c = SectorCoord::from_id(id);
         let corner = corner_of(c);
         let d = (corner + Vec2::splat(size * 0.5)).distance(Vec2::new(p.x, p.z));
-        let loaded = heights.sectors.contains_key(&c);
+        // (A script's water stands where there's no terrain too.)
+        let loaded = heights.sectors.contains_key(&c) || scripts.contains_key(&id);
         match inland.shown.get(&id).copied() {
             Some(e) if d > INLAND_HIDE || !loaded => {
                 commands.entity(e).despawn();
@@ -546,11 +595,15 @@ fn inland_water(
     // reflections.
     let corner = Vec2::new(((p.x - FLOOR_SIZE / 2.0) / size).round() * size, ((p.z - FLOOR_SIZE / 2.0) / size).round() * size);
     let moved = corner.distance(inland.corner) > 256.0;
-    if inland.task.is_some() || (!moved && heights.sectors.len() == inland.built_sectors) {
+    // (Rising or falling water deepens or shallows its texture.)
+    let risen = scripts.len() != inland.built_levels.len()
+        || scripts.iter().any(|(id, l)| inland.built_levels.get(id).is_none_or(|b| (b - l).abs() > LEVEL_REBUILD));
+    if inland.task.is_some() || (!moved && !risen && heights.sectors.len() == inland.built_sectors) {
         return;
     }
     inland.corner = corner;
     inland.built_sectors = heights.sectors.len();
+    inland.built_levels = scripts;
     let around: std::collections::HashSet<SectorCoord> = inland
         .shown
         .keys()
@@ -560,7 +613,64 @@ fn inland_water(
         })
         .collect();
     let heights = heights.clone();
-    inland.task = Some(AsyncComputeTaskPool::get().spawn(async move { (corner, inland_texels(&heights, planes, &around, corner)) }));
+    inland.task = Some(AsyncComputeTaskPool::get().spawn(async move { (corner, inland_texels(&heights, &levels, &around, corner)) }));
+}
+
+/// How far (m) a script's water moves before its depth texture is built
+/// again.
+const LEVEL_REBUILD: f32 = 0.25;
+
+/// Keeps the scripts' water planes at their levels as they rise and fall
+/// (each frame; `inland_water` shows and hides them).
+fn follow_levels(inland: Option<Res<Inland>>, mut planes: Query<&mut Transform, With<InlandWater>>) {
+    let Some(inland) = inland else { return };
+    let scripts = SCRIPTED.read().unwrap_or_else(|e| e.into_inner());
+    if scripts.is_empty() {
+        return;
+    }
+    for (id, e) in &inland.shown {
+        if let (Some(level), Ok(mut t)) = (scripts.get(id), planes.get_mut(*e)) {
+            if t.translation.y != *level {
+                t.translation.y = *level;
+            }
+        }
+    }
+}
+
+/// Puts the story's water levels over the world's.
+fn story_levels(
+    time: Res<Time>,
+    mut tested: Local<bool>,
+    host: Option<NonSend<crate::story::StoryHost>>,
+    players: Query<&Transform, With<crate::player::Player>>,
+) {
+    let Some(host) = host else {
+        set_scripted(&[]);
+        return;
+    };
+    // FC3_WATER_TEST=<s>,<rise m>,<m/s> (tests): that far in, a script fills
+    // the water of the sectors round the player that much higher.
+    if let Some(v) = std::env::var("FC3_WATER_TEST").ok().filter(|_| !*tested) {
+        let v: Vec<f32> = v.split(',').filter_map(|s| s.parse().ok()).collect();
+        if let (Some(&at), Ok(p)) = (v.first(), players.single()) {
+            if time.elapsed_secs() >= at {
+                *tested = true;
+                let c = SectorCoord::from_id(sector_of(p.translation));
+                let (rise, speed) = (v.get(1).copied().unwrap_or(3.0), v.get(2).copied().unwrap_or(0.5));
+                for (dx, dy) in (-1..=1).flat_map(|dx| (-1..=1).map(move |dy| (dx, dy))) {
+                    let id = SectorCoord::new(c.x + dx, c.y + dy).id();
+                    let Some(level) = sector_level(id) else { continue };
+                    let to = level + rise;
+                    info!("water test: filling sector {id} from {level:.1} to {to:.1} at {speed} m/s");
+                    let lua = format!("CDominoWaterLevelManager_GetInstance():FillWater('fc3_main', {id}, {speed}, {to}, nil, nil)");
+                    if let Err(e) = host.story.domino().lua().load(lua).exec() {
+                        warn!("water test: {e}");
+                    }
+                }
+            }
+        }
+    }
+    set_scripted(&host.story.water_levels());
 }
 
 /// The inland depth texture's texels (see `inland_water`).
