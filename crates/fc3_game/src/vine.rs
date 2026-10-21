@@ -16,9 +16,16 @@ impl Plugin for VinePlugin {
             run.after(crate::story::StorySet).before(crate::cinema::CinemaSet)
                 .run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(PreUpdate, (restore_shake, restore_dolly_fov))
+            .add_systems(PreUpdate, autopilot_climb.after(crate::controls::update_actions).before(crate::controls::apply_action_maps))
             .add_systems(PostUpdate, (align_dolly_view, shake_view, dolly_fov).chain().in_set(VineView).after(crate::cinema::scene_view)
                 .before(bevy::transform::TransformSystems::Propagate));
     }
+}
+
+/// Whether the game plays the vine gameplay (`CVineClimbingGameplay`):
+/// unless `FC3_VINE_GAMEPLAY_OFF` leaves it unplayed.
+pub fn played() -> bool {
+    std::env::var_os("FC3_VINE_GAMEPLAY_OFF").is_none()
 }
 
 pub struct Start {
@@ -31,9 +38,12 @@ pub struct Vines {
     pub pending: Vec<Start>,
     pub cancelled: Vec<u64>,
     active: Option<Vine>,
+    /// The autopilot has a vine to climb (tests): the story's own steps wait.
+    autopilot: bool,
 }
 impl Vines {
-    pub fn reset(&mut self) { self.pending.clear(); self.cancelled.clear(); self.active = None; }
+    pub fn reset(&mut self) { self.pending.clear(); self.cancelled.clear(); self.active = None; self.autopilot = false; }
+    pub fn autopilot_climbing(&self) -> bool { self.autopilot && self.active.is_some() }
     pub fn owns_ladder(&self, id: u64) -> bool { self.active.as_ref().is_some_and(|v| v.ladder == id) }
     pub(crate) fn puff_phase(&self) -> Option<(f32, f32)> {
         let v = self.active.as_ref()?;
@@ -242,6 +252,75 @@ fn run(
             }
         }
     }
+}
+
+/// How long (s) the autopilot presses on at a vine's foot before it is put
+/// there again.
+const PLACE_AGAIN: f32 = 4.0;
+
+/// Tests (`FC3_STORY_AUTOPILOT`): an armed vine is climbed as a player
+/// would: put at its foot, facing it, then up it until its gameplay takes
+/// the player over (as `traversal_test`'s ladder). Only once the climb can
+/// take its ladder (its layer in, its entity loaded), and again when the
+/// player has not got onto it a while; meanwhile the story's own steps
+/// wait (they took the player out of DOC_020's cave by its teleport).
+fn autopilot_climb(
+    time: Res<Time>,
+    mut vines: ResMut<Vines>,
+    ways: Res<Ways>,
+    mount: Res<Mount>,
+    layers: Res<crate::mission_layers::MissionLayers>,
+    host: Option<NonSend<crate::story::StoryHost>>,
+    mut actions: ResMut<crate::controls::ActionState>,
+    mut players: Query<(&mut Transform, &mut Player)>,
+    mut placed: Local<Option<(u64, f32)>>,
+) {
+    if std::env::var_os("FC3_STORY_AUTOPILOT").is_none() {
+        return;
+    }
+    let Some(v) = vines.active.as_ref().filter(|v| matches!(v.phase, Phase::Waiting | Phase::Climbing(_))) else {
+        *placed = None;
+        vines.autopilot = vines.active.is_some() && vines.autopilot;
+        return;
+    };
+    let (id, ladder) = (v.id, v.ladder);
+    let Some(l) = ways.data.ladders.iter().find(|l| l.id == ladder) else { return };
+    let layer_in = l.mission_layer == fc3_formats::world::DEFAULT_MISSION_LAYER || layers.present.contains(&l.mission_layer);
+    let loaded = host.as_ref().is_none_or(|h| !h.story.data().entities.contains_key(&l.id) || h.story.is_loaded(l.id));
+    if !(layer_in && loaded) {
+        vines.autopilot = false;
+        return;
+    }
+    vines.autopilot = true;
+    let Ok((mut t, mut p)) = players.single_mut() else { return };
+    let mounted = mounted_on(&mount, &ways, ladder);
+    let since = placed.filter(|(v, _)| *v == id).map(|(_, s)| s + time.delta_secs());
+    if !mounted && since.is_none_or(|s| s > PLACE_AGAIN) {
+        let base = Vec3::from(l.base);
+        if since.is_some() {
+            info!(
+                "story autopilot: not on vine {ladder} yet: feet {:.2} (foot {:.2}), {:.2} m off its foot, pressing {}",
+                t.translation.y - crate::player::HALF_HEIGHT,
+                l.base[1],
+                Vec2::new(t.translation.x - base.x, t.translation.z - base.z).length(),
+                actions.movement.y
+            );
+        }
+        // (A ladder faces its wall: the climber stands behind it.)
+        t.translation = base - Vec3::from(l.facing) * 0.7 + Vec3::Y * (crate::player::HALF_HEIGHT + 0.05);
+        let look = base - t.translation;
+        p.yaw = (-look.x).atan2(-look.z);
+        p.velocity = Vec3::ZERO;
+        *placed = Some((id, 0.0));
+        info!("story autopilot: to vine {ladder}'s foot");
+    } else {
+        *placed = Some((id, since.unwrap_or(0.0)));
+    }
+    // Up it half way, then resting on it till the gameplay takes over (all
+    // the way up, the climber would step off it first: DOC_020's is 9 m).
+    let feet = t.translation.y - crate::player::HALF_HEIGHT;
+    let half = l.base[1] + (l.top - l.base[1]) * 0.5;
+    actions.movement.y = if mounted && feet > half { 0.0 } else { 1.0 };
 }
 
 fn mounted_on(mount: &Mount, ways: &Ways, id: u64) -> bool {

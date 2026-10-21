@@ -30,7 +30,6 @@ try {
     if ($Cliffs) { $DarkRoom = $true }
     if ($DarkRoom) { $SecondDoor = $true }
     $env:FC3_STORY = '1'
-    $env:FC3_VINE_GAMEPLAY_TEST = '1'
     $env:FC3_TRAVERSAL_TEST = 'ladder'
     $env:FC3_TRAVERSAL_LADDER_ID = '2078490335079601680'
     $env:FC3_TRAVERSAL_WALK_TO = '-1880,-2460;-1870,-2460;-1870,-2440;-1865,-2430;-1880,-2422;-1890.59,-2413.37;-1892.61,-2406.09;-1894.49,-2398.20'

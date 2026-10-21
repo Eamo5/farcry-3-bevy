@@ -1637,6 +1637,23 @@ end. There were three causes:
 From B10E's checkpoint the run played the trip, ended it and completed
 B10E. B20E armed its vine.
 
+B20E's vine (`CVineClimbingGameplay`) is now played by default.
+`FC3_VINE_GAMEPLAY_OFF` leaves it unplayed, for the autopilot to end as
+before. The autopilot climbs an armed vine as a player would. Once the
+climb can take the vine's ladder (its layer in, its entity loaded), it puts
+the player at the foot, behind the ladder and facing it, and climbs.
+
+In the first run the player was put at the foot the moment the vine was
+armed and never got onto it. 6 s later the trigger step took him out of the
+cave by its teleport. Now the autopilot waits for the ladder to be usable.
+It puts the player at the foot again after 4 s off the ladder
+(`PLACE_AGAIN`). The story's own steps wait while it has a vine to climb.
+
+From B20E's checkpoint the climb began 2 s after the vine was armed. After
+its 6 s the dolly ran and the stand-up played, and the script heard
+`vine_climbing_ended`. The run went on through the greenhouse's triggers
+and completed B20E 97 s in. B30 started.
+
 The notes below are the earlier investigation.
 
 The opening autopilot now requests an aim toward the nearest enabled authored

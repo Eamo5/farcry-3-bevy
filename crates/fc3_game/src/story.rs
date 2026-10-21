@@ -1934,7 +1934,7 @@ fn run_story(
         // A region a running mission waits for the player to leave, him in
         // it (JAS_220's start: out of Hoyt's compound for the airport), the
         // story quiet a while: just outside it.
-        let leave = if host.quiet > LEAVE_AFTER && !p.driving {
+        let leave = if host.quiet > LEAVE_AFTER && !p.driving && !vines.autopilot_climbing() {
             let feet = to_dunia(t.translation - Vec3::Y * crate::player::HALF_HEIGHT);
             host.story.watched_leaves_of(&focus).into_iter().find_map(|(id, shape)| {
                 let key = (id, "Leave".to_string());
@@ -1948,6 +1948,8 @@ fn run_story(
         };
         let next = focused.iter().chain(watched.iter()).find(|w| {
             !awaiting_rock
+                // (A vine being climbed: its gameplay goes on from the top.)
+                && !vines.autopilot_climbing()
                 // (Led, the leader's way is followed; but a while quiet, it
                 // has brought the player where the script wants him: JAS_100's
                 // Dennis, stopped by the outpost's building the player is to
@@ -2480,9 +2482,9 @@ fn run_story(
                             params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                         })
                     }
-                    // Opt-in until anchor/stand-up alignment and visual phases
-                    // have been validated against the authored transition.
-                    "CreateSpecificGameplay" if a(1) == "CVineClimbingGameplay" && std::env::var_os("FC3_VINE_GAMEPLAY_TEST").is_some() => vines.pending.push(crate::vine::Start {
+                    // (`FC3_VINE_GAMEPLAY_OFF`: left to the autopilot to end, as
+                    // before the transition was played.)
+                    "CreateSpecificGameplay" if a(1) == "CVineClimbingGameplay" && crate::vine::played() => vines.pending.push(crate::vine::Start {
                         id: a(0).parse().unwrap_or(0),
                         params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                     }),
@@ -3763,7 +3765,7 @@ fn played_gameplay(host: &StoryHost, id: u64, name: &str) -> bool {
         || shooting_gallery(name)
         || crate::races::race_gameplay(name)
         || crate::races::entice_gameplay(name)
-        || (name == "CVineClimbingGameplay" && std::env::var_os("FC3_VINE_GAMEPLAY_TEST").is_some())
+        || (name == "CVineClimbingGameplay" && crate::vine::played())
 }
 
 /// A sniping set-piece (`CSnipingChallenge_...`): the player shoots its
