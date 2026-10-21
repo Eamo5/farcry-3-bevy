@@ -208,6 +208,9 @@ pub struct Core {
     pub dialogs: crate::natives::dialog::Dialogs,
     /// Script control requests the engine answers next frame.
     pub control_answers: Vec<(u64, String)>,
+    /// Characters scripts have taken from their AI or given back
+    /// (`CAPI_AI.AcquireControl`); the rest as placed (`script_held`).
+    pub script_control: HashMap<u64, bool>,
     /// Characters that died.
     pub dead: HashSet<u64>,
     /// The contextual actions characters are on.
@@ -288,6 +291,7 @@ impl Core {
             growths: BTreeMap::new(),
             dialogs: Default::default(),
             control_answers: Vec::new(),
+            script_control: HashMap::new(),
             dead: HashSet::new(),
             ca,
             companions: HashMap::new(),

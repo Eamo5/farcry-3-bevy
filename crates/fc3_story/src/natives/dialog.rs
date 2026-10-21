@@ -152,6 +152,7 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.f("CAPI_AI.AcquireControl", |c, (pawn, acquire): (Text, Flag)| {
         let Some(p) = pawn.id() else { return false };
         c.emit(Command::Native { name: "CAPI_AI.AcquireControl".into(), args: vec![p.to_string(), acquire.0.to_string()] });
+        c.script_control.insert(p, acquire.0);
         c.control_answers.push((p, if acquire.0 { "Controlled".into() } else { "Released".into() }));
         true
     })?;

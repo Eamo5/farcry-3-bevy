@@ -1618,6 +1618,40 @@ From B15's checkpoint the next run completed B15, B20C and B30, then
 JAS_030's B10. A second run from the same checkpoint also completed B15:
 this time the second lure's rock was in hand when the autopilot aimed.
 
+A later run stalled earlier in B15. Grant's rock-throwing scene waits for
+him to be in the start area by the window (a trigger only he counts in).
+The trigger is armed once B15's first STP starts, some seconds into the
+block. Grant, put back by the window, had already taken up a relax point
+50 m off by himself (his first stop, switched on in its placement) and
+walked out of the area. His AI agent is placed under script control
+(`CFCXAIComponent`'s `bStartOnScriptControl`), as is the guard the first
+lure is for. B15 waits for that guard to take up the sleeping post he is
+placed at, so a held character still takes up a point by itself, but only
+its own post: one both where it stands and where it is placed (within
+2.5 m of each, `HELD_REACH`). Scripts still send it where they want it
+(`DominoCAOverride`), and `CAPI_AI.AcquireControl` lets it go or takes it
+back.
+
+Allowing any point where a held character stands was not enough. Grant
+took up his spot by the window again after the window's scene started from
+it. His next move, into the TV room at the locked house, broke that spot
+off a second time. RockThrowSetup still listens on it, so the window's
+scene started once more and re-armed the rock tutorial's check on the
+guard's state. With the guard gone by then, the check failed the mission
+("escape failed") the moment the autopilot stepped into the locked house's
+trigger.
+
+A reload also left the autopilot unable to lure the guard again: what it
+had done before the reload (`used`, the guard marked lured) was kept. A
+reload now clears it, but it still remembers which steps failed the
+mission.
+
+From B15's checkpoint with both changes the guard took his post at the
+start and Grant stayed by the window. Both lures drew their guards off,
+the window's scene played once, and the autopilot went through the
+locked house's trigger with no failure. B15, B20C and B30 completed,
+then JAS_030's B10.
+
 DOC_020 B10E then stalled in the cave, waiting for the mushroom's trip to
 end. There were three causes:
 

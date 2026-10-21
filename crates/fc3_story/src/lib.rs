@@ -3012,6 +3012,57 @@ mod tests {
         assert_eq!(given(story.update(1.0, view)), [(11, Some(20))]);
     }
 
+    /// A character placed under its scripts' control takes up by itself only
+    /// its own post (where it stands and is placed), not another point it
+    /// stands by, until its scripts let it go.
+    #[test]
+    fn a_held_character_takes_up_only_its_own_post() {
+        use fc3_formats::{fcb::Object, hash::name_hash};
+        use std::sync::Arc;
+        let object = |name: &str, fields: Vec<(&str, Vec<u8>)>, children| {
+            Arc::new(Object { name_hash: name_hash(name), fields: fields.into_iter().map(|(n, v)| (name_hash(n), v)).collect(), children })
+        };
+        let entry = |id: u64, pos: [f32; 3], component: Arc<Object>| data::Entry {
+            id,
+            name: format!("e{id}"),
+            class: "CEntity".into(),
+            pos,
+            angles: [0.0; 3],
+            layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
+            origin: data::Origin::Global,
+            components: object("Components", vec![], vec![component]),
+            fields: object("Entity", vec![], vec![]),
+        };
+        let held = || {
+            let agent = object("CPawnAgent", vec![("bStartOnScriptControl", vec![1])], vec![]);
+            object("CFCXAIComponent", vec![], vec![object("AIObject", vec![], vec![agent])])
+        };
+        let point = || {
+            object(
+                "CAIContextualActionComponent",
+                vec![("GroupFilter", 0xABCu32.to_le_bytes().to_vec())],
+                vec![object("Idle", vec![("Radius", 5f32.to_le_bytes().to_vec())], vec![])],
+            )
+        };
+        let mut data = StoryData::default();
+        data.entities.insert(10, entry(10, [0.0, 0.0, 0.0], held()));
+        data.entities.insert(11, entry(11, [40.0, 0.0, 0.0], held()));
+        data.groups.insert(0xABC, vec![10, 11]);
+        data.entities.insert(20, entry(20, [0.5, 0.0, 0.0], point()));
+        data.entities.insert(21, entry(21, [30.0, 0.0, 0.0], point()));
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        story.domino().lua().load(r#"ToggleContextualActionState("20", true) ToggleContextualActionState("21", true)"#).exec().unwrap();
+        let given = |commands: Vec<Command>| -> Vec<(u64, Option<u64>)> {
+            commands.iter().filter_map(|c| if let Command::Action { pawn, action } = c { Some((*pawn, *action)) } else { None }).collect()
+        };
+        let mut view = View::default();
+        view.spawned.insert(10, Live { pos: [0.0, 0.0, 0.0], alive: true, ..Default::default() });
+        view.spawned.insert(11, Live { pos: [30.5, 0.0, 0.0], alive: true, ..Default::default() });
+        assert_eq!(given(story.update(0.0, view.clone())), [(10, Some(20))]);
+        story.domino().lua().load(r#"CAPI_AI.AcquireControl("11", false)"#).exec().unwrap();
+        assert_eq!(given(story.update(1.5, view)), [(11, Some(21))]);
+    }
+
     /// A look-at trigger placed on a character where it spawns rides with
     /// it: a script keeping the character in sight sees it where the
     /// character has walked to, and the player looking there sees it.

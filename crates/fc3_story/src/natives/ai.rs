@@ -89,9 +89,45 @@ fn offer_of(e: &crate::data::Entry) -> Option<(u32, f32)> {
     Some((group, radius))
 }
 
+/// How near (m, across the ground) a point must be, both to where a
+/// character its scripts hold stands and to where it is placed, for it to
+/// take the point up by itself: its own post (JAS_020's rock-throw guard,
+/// placed asleep at his), not one across the map (Grant's first stop, 50 m
+/// from the window the prologue's lure waits for him at), nor one a scene
+/// left it by (Grant's spot at that window: taken up again, his next move
+/// broke it off once more, and the window's scene, started again, failed
+/// the mission).
+const HELD_REACH: f32 = 2.5;
+
+/// Whether a character is placed under its scripts' control
+/// (`CFCXAIComponent`'s agent's `bStartOnScriptControl`: a mission's own,
+/// JAS_020's Grant), its AI going nowhere by itself until let go.
+pub fn starts_held(e: &crate::data::Entry) -> bool {
+    e.component("CFCXAIComponent")
+        .and_then(|c| c.child("AIObject"))
+        .and_then(|o| o.child("CPawnAgent"))
+        .and_then(|a| a.bool("bStartOnScriptControl"))
+        .unwrap_or(false)
+}
+
 impl Core {
+    /// Whether scripts hold a character (taken with `CAPI_AI.AcquireControl`,
+    /// or placed so and not let go): its AI goes nowhere by itself.
+    pub fn script_held(&self, pawn: u64) -> bool {
+        self.script_control.get(&pawn).copied().unwrap_or_else(|| self.data.entities.get(&pawn).is_some_and(starts_held))
+    }
+
+    /// Whether a character scripts hold takes up by itself a point `d` from
+    /// it (`HELD_REACH`).
+    fn held_takes(&self, pawn: u64, d: f32, point: [f32; 3]) -> bool {
+        d <= HELD_REACH && self.data.entities.get(&pawn).is_some_and(|e| (e.pos[0] - point[0]).hypot(e.pos[1] - point[1]) <= HELD_REACH)
+    }
+
     /// Raises a contextual action's event for the scripts listening on it.
     pub fn action_event(&mut self, action: u64, event: &str, user: u64) {
+        if event == "CA_Interrupt" {
+            self.warn(format!("contextual action {action}: {user} interrupted"));
+        }
         let text = action.to_string();
         self.raise(&Listen::Group(text, event.to_string()), vec![Arg::Str(event.to_string()), Arg::id(user)]);
     }
@@ -129,7 +165,8 @@ impl Core {
             .into_iter()
             .filter(|p| !self.ca.current.contains_key(p) && !busy(p) && self.is_loaded(*p) && fits(self, *p))
             .filter_map(|p| Some((p, near(self.position(p)?))))
-            .filter(|&(_, d)| d <= radius)
+            // (One its scripts hold takes up only its own post.)
+            .filter(|&(p, d)| if self.script_held(p) { self.held_takes(p, d, at) } else { d <= radius })
             .min_by(|a, b| a.1.total_cmp(&b.1));
         if let Some((pawn, _)) = taker {
             self.give_action(pawn, action);
@@ -165,6 +202,16 @@ impl Core {
             }
             // (A group first seen sets its counts: nothing changed yet.)
             let Some(before) = self.group_states.insert(group.clone(), now) else { continue };
+            // (Logged: who is out of idle, as the counts change.)
+            if before != now {
+                let members: Vec<(u64, u8)> = self
+                    .groups(&Text(group.clone()))
+                    .into_iter()
+                    .filter(|&e| self.is_loaded(e) && !self.is_dead(e))
+                    .filter_map(|e| self.view.spawned.get(&e).map(|l| (e, l.ai_state)).filter(|m| m.1 > 0))
+                    .collect();
+                self.warn(format!("group {group}: states {before:?} -> {now:?}, out of idle {members:?}"));
+            }
             for (i, name) in STATES.iter().enumerate() {
                 let (was, is) = (before[i], now[i]);
                 let mut tell = |event: String, count: usize| {
@@ -215,12 +262,14 @@ impl Core {
     /// reach whose group it is in (not the one it has just left).
     pub fn take_up_action(&mut self, pawn: u64, left: u64) {
         let Some(here) = self.position(pawn) else { return };
+        let held = self.script_held(pawn);
         let mut best: Option<(u64, f32)> = None;
         for &action in self.ca.enabled.iter().filter(|&&a| a != left) {
             let Some(e) = self.data.entities.get(&action) else { continue };
             let Some((group, radius)) = offer_of(e) else { continue };
             let d = (here[0] - e.pos[0]).hypot(here[1] - e.pos[1]);
-            if d <= radius && best.is_none_or(|b| d < b.1) && self.groups(&Text(format!("#{group:08X}"))).contains(&pawn) {
+            let reaches = if held { self.held_takes(pawn, d, e.pos) } else { d <= radius };
+            if reaches && best.is_none_or(|b| d < b.1) && self.groups(&Text(format!("#{group:08X}"))).contains(&pawn) {
                 best = Some((action, d));
             }
         }
@@ -314,6 +363,7 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         let on = !matches!(on, mlua::Value::Nil | mlua::Value::Boolean(false));
         c.emit(Command::Native { name: "ToggleContextualActionState".into(), args: vec![action.0.clone(), on.to_string()] });
         let Some(action) = action.id() else { return };
+        c.warn(format!("contextual action {action} switched {}", if on { "on" } else { "off" }));
         if on {
             c.ca.enabled.insert(action);
             c.offer_action(action);
