@@ -81,6 +81,28 @@ impl Curve {
     pub fn eval(&self, x: f32) -> f32 {
         segment(&self.0, x, |a, b, f| a + (b - a) * f, 0.0)
     }
+
+    /// `k` of the way from this curve to another: knots at both's, so
+    /// the mix of the two straight-line pieces is exact (one not given,
+    /// the other once it's halfway).
+    pub fn mix(&self, other: &Curve, k: f32) -> Curve {
+        if self == other || self.0.is_empty() || other.0.is_empty() {
+            return if k < 0.5 { self.clone() } else { other.clone() };
+        }
+        Curve(knots_of(&self.0, &other.0).into_iter().map(|t| (t, self.eval(t) + (other.eval(t) - self.eval(t)) * k)).collect())
+    }
+}
+
+/// Both lists' knot positions, in order, once each.
+fn knots_of<A, B>(a: &[(f32, A)], b: &[(f32, B)]) -> Vec<f32> {
+    let mut at: Vec<f32> = a.iter().map(|k| k.0).chain(b.iter().map(|k| k.0)).collect();
+    at.sort_by(f32::total_cmp);
+    at.dedup();
+    at
+}
+
+fn mix3(a: [f32; 3], b: [f32; 3], k: f32) -> [f32; 3] {
+    std::array::from_fn(|i| a[i] + (b[i] - a[i]) * k)
 }
 
 /// The world's render settings (`Render/WorldSettings` in the generic
@@ -130,6 +152,14 @@ impl Gradient {
     pub fn sample(&self, p: f32) -> [f32; 3] {
         segment(&self.0, p, |a, b, f| std::array::from_fn(|i| a[i] + (b[i] - a[i]) * f), [0.0; 3])
     }
+
+    /// `k` of the way from this gradient to another (as `Curve::mix`).
+    pub fn mix(&self, other: &Gradient, k: f32) -> Gradient {
+        if self == other || self.0.is_empty() || other.0.is_empty() {
+            return if k < 0.5 { self.clone() } else { other.clone() };
+        }
+        Gradient(knots_of(&self.0, &other.0).into_iter().map(|t| (t, mix3(self.sample(t), other.sample(t), k))).collect())
+    }
 }
 
 /// A gradient that changes over the day: (time of day 0..1, gradient) keys.
@@ -156,6 +186,23 @@ impl KeyedGradient {
             }
         }
         keys.last().map_or([0.0; 3], |k| k.1.sample(p))
+    }
+
+    /// `k` of the way from this to another: keys at both's, each a
+    /// gradient with knots at all of both's (exact at them, near between).
+    pub fn mix(&self, other: &KeyedGradient, k: f32) -> KeyedGradient {
+        if self == other || self.0.is_empty() || other.0.is_empty() {
+            return if k < 0.5 { self.clone() } else { other.clone() };
+        }
+        let mut places: Vec<f32> = self.0.iter().chain(&other.0).flat_map(|(_, g)| g.0.iter().map(|p| p.0)).collect();
+        places.sort_by(f32::total_cmp);
+        places.dedup();
+        KeyedGradient(
+            knots_of(&self.0, &other.0)
+                .into_iter()
+                .map(|t| (t, Gradient(places.iter().map(|&p| (p, mix3(self.at(t, p), other.at(t, p), k))).collect())))
+                .collect(),
+        )
     }
 }
 
@@ -397,6 +444,46 @@ impl Environment {
         true
     }
 
+    /// `k` of the way from this environment to another, as a preset comes
+    /// on or goes over the seconds a script gives: its curves and colours
+    /// mixed, its distances and bloom between; what is either on or off
+    /// (the depth of field missing, the sun) switches halfway.
+    pub fn mix(&self, other: &Environment, k: f32) -> Environment {
+        let k = k.clamp(0.0, 1.0);
+        let num = |a: f32, b: f32| a + (b - a) * k;
+        Environment {
+            sun_color: self.sun_color.mix(&other.sun_color, k),
+            moon_color: self.moon_color.mix(&other.moon_color, k),
+            light_hdr: self.light_hdr.mix(&other.light_hdr, k),
+            fog_density: self.fog_density.mix(&other.fog_density, k),
+            fog_start: num(self.fog_start, other.fog_start),
+            fog_end: num(self.fog_end, other.fog_end),
+            middle_grey: self.middle_grey.mix(&other.middle_grey, k),
+            exposure_min: self.exposure_min.mix(&other.exposure_min, k),
+            exposure_max: self.exposure_max.mix(&other.exposure_max, k),
+            sky_hdr: self.sky_hdr.mix(&other.sky_hdr, k),
+            probe_scale: self.probe_scale.mix(&other.probe_scale, k),
+            probe_hdr: self.probe_hdr.mix(&other.probe_hdr, k),
+            sky_saturation: self.sky_saturation.mix(&other.sky_saturation, k),
+            sky_sun_side: self.sky_sun_side.mix(&other.sky_sun_side, k),
+            sky_far_side: self.sky_far_side.mix(&other.sky_far_side, k),
+            bloom_intensity: num(self.bloom_intensity, other.bloom_intensity),
+            dof: match (self.dof, other.dof) {
+                (Some(a), Some(b)) => Some(std::array::from_fn(|i| num(a[i], b[i]))),
+                (a, b) => {
+                    if k < 0.5 {
+                        a
+                    } else {
+                        b
+                    }
+                }
+            },
+            sun_off: if k < 0.5 { self.sun_off } else { other.sun_off },
+            // (What presets don't change: the other's.)
+            ..other.clone()
+        }
+    }
+
     /// Plain-text form for the cache: one `name time values...` line per knot.
     pub fn to_text(&self) -> String {
         let mut out = String::from("# outdoor environment (time of day 0..1)\n");
@@ -524,6 +611,27 @@ mod tests {
         let (class, body) = Environment::preset_by_guid(&managers, "SHA_Quest_Mines:Common.Mines_Shadow").unwrap();
         let mut under = Environment::default();
         assert!(under.apply_preset(&class, &body) && under.sun_off);
+    }
+
+    #[test]
+    fn a_preset_comes_on_by_mixing_curves_and_colours() {
+        // Halfway from a flat fog to a rising one: the mix of the two at
+        // both's knots.
+        let a = Curve(vec![(0.0, 0.0), (1.0, 0.0)]);
+        let b = Curve(vec![(0.0, 0.0), (0.5, 1.0), (1.0, 0.0)]);
+        let half = a.mix(&b, 0.5);
+        assert_eq!(half.0, vec![(0.0, 0.0), (0.5, 0.5), (1.0, 0.0)]);
+        assert_eq!(a.mix(&b, 1.0).eval(0.25), b.eval(0.25));
+        let g = Gradient(vec![(0.0, [1.0, 0.0, 0.0])]).mix(&Gradient(vec![(0.0, [0.0, 0.0, 1.0])]), 0.25);
+        assert_eq!(g.sample(0.0), [0.75, 0.0, 0.25]);
+        // The rest: distances between, what's on or off at the halfway.
+        let from = Environment { fog_end: 400.0, dof: None, ..Default::default() };
+        let to = Environment { fog_end: 100.0, dof: Some([1.0; 6]), sun_off: true, ..Default::default() };
+        let quarter = from.mix(&to, 0.25);
+        assert_eq!((quarter.fog_end, quarter.dof, quarter.sun_off), (325.0, None, false));
+        let most = from.mix(&to, 0.75);
+        assert_eq!((most.fog_end, most.dof, most.sun_off), (175.0, Some([1.0; 6]), true));
+        assert_eq!(from.mix(&to, 1.0), to);
     }
 
     #[test]

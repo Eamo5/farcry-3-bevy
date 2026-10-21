@@ -75,29 +75,48 @@ pub struct EnvOverrides {
     /// A script's storm (`SetScriptedStormFactorOverride`: DEN_060's), 0
     /// fair to 1 a full storm, and the seconds it takes to come on or clear.
     pub storm: Option<(f32, f32)>,
+    /// The seconds the last preset put on or taken off takes to come or go.
+    pub seconds: f32,
     applied: std::collections::BTreeMap<String, String>,
-    /// The world's own environment, kept while presets are over it.
+    /// The world's own environment (kept from when presets first came).
     base: Option<fc3_formats::environment::Environment>,
+    /// From what showed toward what's wanted: how far in, and over how long.
+    blend: Option<(fc3_formats::environment::Environment, fc3_formats::environment::Environment, f32, f32)>,
     /// The managers file the presets are in, and presets found by GUID.
     managers: Option<Vec<u8>>,
     found: std::collections::HashMap<String, Option<(String, std::sync::Arc<fc3_formats::fcb::Object>)>>,
 }
 
 /// Puts the scripts' presets over the world's environment as they change
-/// (the world's own back as they are taken off).
-fn apply_env_overrides(mut env: ResMut<GameEnvironment>, mut overrides: ResMut<EnvOverrides>) {
+/// (the world's own back as they are taken off), over the seconds they give.
+fn apply_env_overrides(time: Res<Time>, mut env: ResMut<GameEnvironment>, mut overrides: ResMut<EnvOverrides>) {
     let o = &mut *overrides;
-    if o.active == o.applied {
-        return;
+    if o.active != o.applied {
+        o.applied = o.active.clone();
+        if let Some(target) = wanted_environment(o, env.0.as_ref()) {
+            // (From what shows now, mid-way through one or not.)
+            match env.0.clone().filter(|_| o.seconds > 0.0) {
+                Some(from) => o.blend = Some((from, target, 0.0, o.seconds)),
+                None => {
+                    env.0 = Some(target);
+                    o.blend = None;
+                }
+            }
+        }
     }
-    o.applied = o.active.clone();
-    let Some(base) = o.base.clone().or_else(|| env.0.clone()) else { return };
-    if o.active.is_empty() {
-        env.0 = Some(base);
-        o.base = None;
-        return;
+    if let Some((from, to, elapsed, seconds)) = o.blend.as_mut() {
+        *elapsed += time.delta_secs();
+        let k = (*elapsed / *seconds).min(1.0);
+        env.0 = Some(from.mix(to, k));
+        if k >= 1.0 {
+            o.blend = None;
+        }
     }
-    o.base = Some(base.clone());
+}
+
+/// The world's environment with the scripts' presets over it.
+fn wanted_environment(o: &mut EnvOverrides, now: Option<&fc3_formats::environment::Environment>) -> Option<fc3_formats::environment::Environment> {
+    let base = o.base.get_or_insert(now?.clone()).clone();
     let managers =
         o.managers.get_or_insert_with(|| std::fs::read(fc3_formats::cache::default_cache_root().join("story").join("managers.fcb")).unwrap_or_default());
     let mut over = base;
@@ -109,7 +128,7 @@ fn apply_env_overrides(mut env: ResMut<GameEnvironment>, mut overrides: ResMut<E
             None => warn!("environment: no {kind} preset {guid}"),
         }
     }
-    env.0 = Some(over);
+    Some(over)
 }
 
 fn load_environment() -> GameEnvironment {

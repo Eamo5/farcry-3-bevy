@@ -184,10 +184,13 @@ is the story's own:
   sun (a shadow preset's `bEnableSun` 0: the mines' and the ULCs' caves
   switch it off, its light and shadows with it) are put over the world's
   (`Environment::apply_preset`) while they are on, and the world's come
-  back as they are taken off; a reload clears them. Wind, clouds and
-  motion blur (`Preview_MotionBlur`: `bEnabled`, `fIntensity`,
-  `fMaxBlurModifier`) are not modelled, and the transition is not
-  blended. Seen: DOC_020's trip switching
+  back as they are taken off; a reload clears them at once. Each comes
+  on and goes over the seconds the script gives (mostly 1 to 3): the
+  environment mixes from what shows toward what's wanted
+  (`Environment::mix`: curves and colours over both's knots, distances
+  and bloom between, the depth of field and the sun switching halfway).
+  Wind, clouds and motion blur (`Preview_MotionBlur`: `bEnabled`,
+  `fIntensity`, `fMaxBlurModifier`) are not modelled. Seen: DOC_020's trip switching
   between its two bloom presets (intensity 30, the cave glowing) as its
   trigger turns. The storm factor (`SetScriptedStormFactorOverride
   <0..1> <seconds>`: DEN_060's storm, JAS_240 keeping the sky fair) holds

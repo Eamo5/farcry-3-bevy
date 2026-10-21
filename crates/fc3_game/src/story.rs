@@ -1607,6 +1607,7 @@ fn run_story(
             host.used.clear();
             host.near_at.clear();
             env_overrides.active.clear();
+            env_overrides.seconds = 0.0;
             env_overrides.storm = None;
             pawn_fx.clear = true;
             shimmers.script.clear();
@@ -3110,11 +3111,13 @@ fn run_story(
                     // `Remove<Kind>Override` with the same).
                     n if n.starts_with("Set") && n.ends_with("Override") && !a(0).trim().is_empty() => {
                         env_overrides.active.insert(n["Set".len()..n.len() - "Override".len()].to_string(), a(0));
+                        env_overrides.seconds = a(1).parse().unwrap_or(0.0);
                     }
                     n if n.starts_with("Remove") && n.ends_with("Override") => {
                         let kind = &n["Remove".len()..n.len() - "Override".len()];
                         if env_overrides.active.get(kind).is_some_and(|g| g.trim().eq_ignore_ascii_case(a(0).trim())) {
                             env_overrides.active.remove(kind);
+                            env_overrides.seconds = a(1).parse().unwrap_or(0.0);
                         }
                     }
                     // An effect on a character's bone (`pawn, effect, bone,
