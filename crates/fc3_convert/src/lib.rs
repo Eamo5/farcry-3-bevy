@@ -1380,6 +1380,18 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             job.error(format!("vehicle handling: {e:#}"));
         }
     }
+    // (And what the vehicles' light switches put on, converted with the rest.)
+    if opts.only_sectors.is_none() {
+        let table = std::fs::read_to_string(job.root().join(fc3_formats::handling::HANDLING_REL)).unwrap_or_default();
+        let mut seen: HashSet<String> = material_paths.iter().cloned().collect();
+        for h in fc3_formats::handling::from_text(&table).unwrap_or_default() {
+            for (_, file) in h.lights.iter().flat_map(|l| &l.swaps) {
+                if job.vfs.exists(file) && seen.insert(file.clone()) {
+                    material_paths.push(file.clone());
+                }
+            }
+        }
+    }
 
     // ---- how animals notice threats and behave
     let current = std::fs::read_to_string(job.root().join(fc3_formats::animals::ANIMALS_REL)).is_ok_and(|t| fc3_formats::animals::is_current(&t));

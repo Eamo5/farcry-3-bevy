@@ -257,7 +257,10 @@ No game data is included in this repository, and none is written into it.
   cars barely up, the hang glider far down). Every vehicle's
   driving camera widens with speed by its own angles (the 4x4's 85 to 115 degrees by 55 km/h, as a share
   of your field of view). Wheels roll with the
-  ground, the front ones and the steering wheel turn with the steering. Parked vehicles keep their brake on. Vehicles take damage (hulls shrug off rounds but
+  ground, the front ones and the steering wheel turn with the steering. Parked vehicles keep their brake on.
+  From the hour each vehicle's light settings turn them on (17:45) to the one they go off (6:30), a vehicle
+  being driven lights its lamps (the lit glass its light switch puts on), throws its one headlight beam ahead
+  (from its model's `DynamicLight` node, its range and cone), and its tail lamps glow red, brighter as it brakes. Vehicles take damage (hulls shrug off rounds but
   not rockets, C4 or grenades; enemy fire into a car you're driving gets through to you too):
   they smoke, then catch fire and blow up a few seconds later, leaving a charred, smouldering
   wreck that can't be driven. Hold E at a damaged one (a tap still gets in) to patch it up with

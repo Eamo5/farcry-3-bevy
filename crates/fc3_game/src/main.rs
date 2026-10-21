@@ -31,6 +31,7 @@ mod lens_drops;
 mod lens_flare;
 mod light_shafts;
 mod light_switch;
+mod vehicle_lights;
 mod map;
 mod menu;
 mod mesh_slabs;
@@ -463,6 +464,7 @@ fn main() {
         .add_plugins(pawn_fx::PawnFxPlugin)
         .add_plugins(shimmer::ShimmerPlugin)
         .add_plugins(light_switch::LightSwitchPlugin)
+        .add_plugins(vehicle_lights::VehicleLightsPlugin)
         .add_plugins(aim_assist::AimAssistPlugin)
         .add_plugins(pawn_anims::PawnAnimsPlugin)
         .add_plugins(breakables::BreakablesPlugin)

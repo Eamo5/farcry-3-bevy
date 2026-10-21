@@ -632,10 +632,16 @@ fn main() -> Result<()> {
             println!("{hits} sectors");
         }
         "fcm" => {
-            // A converted model's bounds, materials and LOD-0 parts: fcm <file.fcm>
-            let p = args.get(1).context("usage: fcm <file.fcm>")?;
+            // A converted model's bounds, materials and LOD-0 parts (and
+            // its nodes, local to their parents): fcm <file.fcm> [bones]
+            let p = args.get(1).context("usage: fcm <file.fcm> [bones]")?;
             let m = fc3_formats::cache::CachedModel::from_bytes(&std::fs::read(p)?)?;
             println!("aabb {:?} .. {:?}, {} lods, {} bones", m.aabb_min, m.aabb_max, m.lods.len(), m.bones.len());
+            if args.get(2).is_some_and(|a| a == "bones") {
+                for (i, b) in m.bones.iter().enumerate() {
+                    println!("  bone {i} {} parent {} at {:.3?} turned {:.3?}", b.name, b.parent, b.translation, b.rotation);
+                }
+            }
             for (i, mat) in m.materials.iter().enumerate() {
                 println!("  material {i} {mat} flags {:#x}", m.material_flags.get(i).copied().unwrap_or(0));
             }

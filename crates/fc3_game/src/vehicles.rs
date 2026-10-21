@@ -267,7 +267,7 @@ pub(crate) fn wingsuit() -> Option<&'static fc3_formats::handling::Handling> {
 }
 
 /// The game's handling for a definition, by its model's folder.
-fn handling_of(def: usize) -> Option<&'static fc3_formats::handling::Handling> {
+pub(crate) fn handling_of(def: usize) -> Option<&'static fc3_formats::handling::Handling> {
     let folder = DEFS[def].model.rsplit_once('\\').map(|(f, _)| f.to_ascii_lowercase())?;
     HANDLING.get()?.iter().find(|h| h.folder == folder)
 }
@@ -1000,6 +1000,21 @@ impl Vehicle {
     }
 
     pub fn story_id(&self) -> u64 { self.spawn_id }
+
+    pub(crate) fn def(&self) -> usize {
+        self.def
+    }
+
+    /// Someone is driving it (the player, an AI driver or a scene's
+    /// recording): its engine and lights are on.
+    pub(crate) fn running(&self) -> bool {
+        self.driver().is_some() || !self.parked || self.recorded_speed.is_some()
+    }
+
+    /// Its brakes are on, or it's being slowed against the way it goes.
+    pub(crate) fn braking(&self) -> bool {
+        self.brake || self.handbrake || self.throttle < -0.1
+    }
 
     pub(crate) fn driver(&self) -> Option<u64> {
         self.seats.iter().find(|s| s.kind == 1).and_then(|s| s.pawn)
@@ -1922,7 +1937,7 @@ fn build_vehicle_inner(commands: &mut Commands, def: usize, model: &Fc3Model, at
 
 /// A part of a vehicle there only while it's whole.
 #[derive(Component)]
-struct WholeOnly;
+pub(crate) struct WholeOnly;
 
 /// A vehicle's wreck parts: its model's broken state (mesh, material).
 #[derive(Component)]

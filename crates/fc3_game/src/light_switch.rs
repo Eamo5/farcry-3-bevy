@@ -54,9 +54,11 @@ pub fn tag(commands: &mut Commands, obj: Entity, name: &str) {
 const FLAG_REACH: f32 = 40.0;
 
 /// A part to put on again as a fresh entity: its mesh, place and how it's
-/// drawn and casts.
+/// drawn and casts. (One that had been drawn with an original material,
+/// given another, was drawn with the first's still: a liberated outpost's
+/// flag stayed red.)
 #[derive(bevy::ecs::query::QueryData)]
-struct PartCopy {
+pub(crate) struct PartCopy {
     mesh: &'static Mesh3d,
     parent: &'static ChildOf,
     transform: &'static Transform,
@@ -69,6 +71,46 @@ struct PartCopy {
     prop: Has<PropPart>,
     skinned: Has<SkinnedPart>,
     unculled: Has<NoFrustumCulling>,
+    whole_only: Has<crate::vehicles::WholeOnly>,
+}
+
+/// Puts a part in again as a fresh entity wearing `material`.
+pub(crate) fn respawn_part(commands: &mut Commands, old: Entity, copy: &PartCopyItem<'_, '_>, material: Handle<StandardMaterial>) -> Entity {
+    let (size, casts) = crate::shadow_lod::casting(copy.size, copy.proxy, copy.no_shadow);
+    let mut part = commands.spawn((
+        copy.mesh.clone(),
+        MeshMaterial3d(material),
+        *copy.transform,
+        copy.visibility.copied().unwrap_or_default(),
+        ChildOf(copy.parent.parent()),
+    ));
+    if let Some(r) = copy.range {
+        part.insert(r.clone());
+    }
+    if let Some(s) = size {
+        part.insert(s);
+    }
+    if !casts {
+        part.insert(NotShadowCaster);
+    }
+    if let Some(skin) = copy.skin {
+        part.insert(skin.clone());
+    }
+    if copy.prop {
+        part.insert(PropPart);
+    }
+    if copy.skinned {
+        part.insert(SkinnedPart);
+    }
+    if copy.unculled {
+        part.insert(NoFrustumCulling);
+    }
+    if copy.whole_only {
+        part.insert(crate::vehicles::WholeOnly);
+    }
+    let new = part.id();
+    commands.entity(old).despawn();
+    new
 }
 
 #[allow(clippy::type_complexity)]
@@ -97,42 +139,14 @@ fn switch_lights(
                 stack.extend(children.iter());
             }
             let Ok((standard, original, copy)) = parts.get(e) else { continue };
-            let Some(now) = standard.map(|m| m.0.id()).or(original.map(|o| o.standard.id())) else { continue };
+            let Some(now) = worn(standard, original) else { continue };
             let Some((off, lit)) = switch.swaps.iter().find(|(off, lit)| if want { off.id() == now } else { lit.id() == now }) else { continue };
-            let next = if want { lit.clone() } else { off.clone() };
-            // (A fresh entity in its place: one that had been drawn with an
-            // original material, given another, was drawn with the first's
-            // still: the flag stayed red.)
-            let (size, casts) = crate::shadow_lod::casting(copy.size, copy.proxy, copy.no_shadow);
-            let mut part = commands.spawn((
-                copy.mesh.clone(),
-                MeshMaterial3d(next),
-                *copy.transform,
-                copy.visibility.copied().unwrap_or_default(),
-                ChildOf(copy.parent.parent()),
-            ));
-            if let Some(r) = copy.range {
-                part.insert(r.clone());
-            }
-            if let Some(s) = size {
-                part.insert(s);
-            }
-            if !casts {
-                part.insert(NotShadowCaster);
-            }
-            if let Some(skin) = copy.skin {
-                part.insert(skin.clone());
-            }
-            if copy.prop {
-                part.insert(PropPart);
-            }
-            if copy.skinned {
-                part.insert(SkinnedPart);
-            }
-            if copy.unculled {
-                part.insert(NoFrustumCulling);
-            }
-            commands.entity(e).despawn();
+            respawn_part(&mut commands, e, &copy, if want { lit.clone() } else { off.clone() });
         }
     }
+}
+
+/// The standard material a part wears (or stands in for its original one).
+pub(crate) fn worn(standard: Option<&MeshMaterial3d<StandardMaterial>>, original: Option<&OriginalSwap>) -> Option<AssetId<StandardMaterial>> {
+    standard.map(|m| m.0.id()).or(original.map(|o| o.standard.id()))
 }

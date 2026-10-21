@@ -13,13 +13,14 @@
 //! braking and top speeds, the sink, and the landing mode near the ground;
 //! and the wingsuit's parachute. And for every vehicle how its
 //! driving camera widens with speed (`FOV`) and how far its driver can look
-//! about (`CFCXVehicle`). Keyed by the folder of the vehicle's descriptor
-//! (`land\4x4`), as vehicles are placed by model.
+//! about (`CFCXVehicle`), and its lights (`VehicleLightSettings`, with what
+//! its light switch puts on its slots). Keyed by the folder of the
+//! vehicle's descriptor (`land\4x4`), as vehicles are placed by model.
 
 use crate::fcb::Object;
 
 pub const HANDLING_REL: &str = "vehicles/handling.txt";
-const MAGIC: &str = "fc3-handling 12";
+const MAGIC: &str = "fc3-handling 13";
 
 /// Whether a cached table is this version's.
 pub fn is_current(text: &str) -> bool {
@@ -343,6 +344,69 @@ pub struct Handling {
     /// down positive: an open 4x4 looks far up and not down, closed cars
     /// barely up, the hang glider and wingsuit far down). 0s: none.
     pub look: [f32; 4],
+    pub lights: Option<Lights>,
+}
+
+/// A vehicle's lights (`CFCXVehicle.VehicleLightSettings`): its dynamic light
+/// (one spot, at the model's `DynamicLight` node), the hours they're on, and
+/// what its light switch (`CGraphicComponent.MaterialLightSwitch`) puts on
+/// its slots then (the lamps' glass, lit).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Lights {
+    /// On from this hour, off at that one.
+    pub on_hour: f32,
+    pub off_hour: f32,
+    /// The spot's reach (m) and where its fall begins.
+    pub range: f32,
+    pub fade_start: f32,
+    /// Its cone's full angles (degrees), inner and outer.
+    pub inner_angle: f32,
+    pub outer_angle: f32,
+    pub intensity: f32,
+    /// The brake lights' share while not braking.
+    pub brake_dim: f32,
+    /// The slots switched (the model's material name) and what they wear.
+    pub swaps: Vec<(String, String)>,
+}
+
+fn lights(components: &Object) -> Option<Lights> {
+    let s = components.child("CFCXVehicle")?.child("VehicleLightSettings")?;
+    let f = |n: &str| float(s, n).unwrap_or(0.0);
+    let mut swaps = Vec::new();
+    if let Some(switch) = components.child("CGraphicComponent").and_then(|g| g.child("MaterialLightSwitch")) {
+        for slots in &switch.children {
+            for m in &slots.children {
+                let (Some(name), Some(file)) = (m.str_h(0x8BAC_1025), m.str_h(0x9301_DFBD)) else { continue };
+                if !name.is_empty() && file.to_ascii_lowercase().ends_with(".material.bin") {
+                    swaps.push((name.to_ascii_lowercase(), file.to_ascii_lowercase()));
+                }
+            }
+        }
+    }
+    let l = Lights {
+        on_hour: f("fLightsOnTimeOfDay"),
+        off_hour: f("fLightsOffTimeOfDay"),
+        range: f("fDynamicLightRange"),
+        fade_start: f("fDynamicLightFadeStartRange"),
+        inner_angle: f("fDynamicLightInnerAngle"),
+        outer_angle: f("fDynamicLightOuterAngle"),
+        intensity: f("fLightIntensity"),
+        brake_dim: float(s, "fBrakeLightDimmedFactor").unwrap_or(1.0),
+        swaps,
+    };
+    (l.range > 0.0 && l.intensity > 0.0).then_some(l)
+}
+
+impl Lights {
+    /// Whether they're on at an hour of the day.
+    pub fn on_at(&self, hour: f32) -> bool {
+        let h = hour.rem_euclid(24.0);
+        if self.on_hour <= self.off_hour {
+            (self.on_hour..self.off_hour).contains(&h)
+        } else {
+            h >= self.on_hour || h < self.off_hour
+        }
+    }
 }
 
 fn float(o: &Object, name: &str) -> Option<f32> {
@@ -520,6 +584,7 @@ pub fn handling(library: &Object) -> Vec<Handling> {
             chute: wing.and_then(chute),
             fov,
             look,
+            lights: lights(components),
         };
         if h.car.is_none() && h.boat.is_none() && h.glider.is_none() && h.fov[1] <= 0.0 {
             return;
@@ -627,7 +692,27 @@ pub fn to_text(list: &[Handling]) -> String {
                 f32::from(u8::from(c.pitch_up)),
             ])
         });
-        s += &format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n", h.folder, h.archetype, h.mass, car, boat, nums(&h.fov), glider, nums(&h.look), chute);
+        let lights = h.lights.as_ref().map_or("-".to_string(), |l| {
+            let swaps: Vec<String> = l.swaps.iter().map(|(slot, file)| format!("{slot}={file}")).collect();
+            format!(
+                "{};{}",
+                nums(&[l.on_hour, l.off_hour, l.range, l.fade_start, l.inner_angle, l.outer_angle, l.intensity, l.brake_dim]),
+                swaps.join("|")
+            )
+        });
+        s += &format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            h.folder,
+            h.archetype,
+            h.mass,
+            car,
+            boat,
+            nums(&h.fov),
+            glider,
+            nums(&h.look),
+            chute,
+            lights
+        );
     }
     s
 }
@@ -732,6 +817,21 @@ pub fn from_text(text: &str) -> anyhow::Result<Vec<Handling>> {
                 auto_hold: v[9],
                 pitch_up: v[10] > 0.0,
             });
+            let lights = f.get(9).filter(|l| **l != "-").and_then(|l| {
+                let (n, swaps) = l.split_once(';').unwrap_or((l, ""));
+                let v = floats(n);
+                (v.len() >= 8).then(|| Lights {
+                    on_hour: v[0],
+                    off_hour: v[1],
+                    range: v[2],
+                    fade_start: v[3],
+                    inner_angle: v[4],
+                    outer_angle: v[5],
+                    intensity: v[6],
+                    brake_dim: v[7],
+                    swaps: swaps.split('|').filter_map(|s| s.split_once('=')).map(|(a, b)| (a.to_string(), b.to_string())).collect(),
+                })
+            });
             Some(Handling {
                 folder: f[0].to_string(),
                 archetype: f[1].to_string(),
@@ -742,6 +842,7 @@ pub fn from_text(text: &str) -> anyhow::Result<Vec<Handling>> {
                 chute,
                 fov: [*fov.first()?, *fov.get(1)?, *fov.get(2)?, *fov.get(3)?],
                 look: [*look.first()?, *look.get(1)?, *look.get(2)?, *look.get(3)?],
+                lights,
             })
         })
         .collect())
@@ -791,6 +892,17 @@ mod tests {
                 chute: None,
                 fov: [1.0, 55.0, 85.0, 115.0],
                 look: [-70.0, 5.0, -80.0, 80.0],
+                lights: Some(Lights {
+                    on_hour: 17.75,
+                    off_hour: 6.5,
+                    range: 30.0,
+                    fade_start: 15.0,
+                    inner_angle: 30.0,
+                    outer_angle: 120.0,
+                    intensity: 1.0,
+                    brake_dim: 0.5,
+                    swaps: vec![("fmadore-m-2011030340291388".into(), r"graphics\_materials\mckoung-m-20120508173554.material.bin".into())],
+                }),
             },
             Handling {
                 folder: r"sea\raft".into(),
@@ -828,6 +940,7 @@ mod tests {
                 chute: None,
                 fov: [1.0, 55.0, 85.0, 105.0],
                 look: [0.0; 4],
+                lights: None,
             },
             Handling {
                 folder: r"air\glider".into(),
@@ -859,8 +972,18 @@ mod tests {
                 }),
                 fov: [30.0, 45.0, 80.0, 95.0],
                 look: [-60.0, 80.0, -50.0, 50.0],
+                lights: Some(Lights { on_hour: 18.0, off_hour: 6.0, range: 20.0, intensity: 0.5, brake_dim: 1.0, ..Default::default() }),
             },
         ];
         assert_eq!(from_text(&to_text(&list)).unwrap(), list);
+    }
+
+    #[test]
+    fn lights_come_on_overnight() {
+        let l = Lights { on_hour: 17.75, off_hour: 6.5, ..Default::default() };
+        assert!(l.on_at(18.0) && l.on_at(23.9) && l.on_at(0.0) && l.on_at(6.4) && l.on_at(30.0));
+        assert!(!l.on_at(6.5) && !l.on_at(12.0) && !l.on_at(17.7));
+        let day = Lights { on_hour: 8.0, off_hour: 9.0, ..Default::default() };
+        assert!(day.on_at(8.5) && !day.on_at(9.5));
     }
 }
