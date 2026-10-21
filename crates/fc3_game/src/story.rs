@@ -3027,7 +3027,14 @@ fn run_story(
                             scripted.restore_inventory(&mut inv);
                         }
                     }
-                    _ => {}
+                    // (Told once a run, for finding what scripts ask that
+                    // nothing plays.)
+                    other => {
+                        static TOLD: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+                        if TOLD.lock().is_ok_and(|mut t| t.get_or_insert_default().insert(other.to_string())) {
+                            debug!("story: native {other} not played ({:?})", args.iter().take(4).collect::<Vec<_>>());
+                        }
+                    }
                 }
             }
             _ => {}
