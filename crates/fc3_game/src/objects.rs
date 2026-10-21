@@ -241,6 +241,9 @@ fn spawn_objects(
             }
             let obj = spawn_placement(&mut commands, root, sector, p, handle, model);
             commands.entity(obj).insert(PlacedId(entity_id));
+            if let Some(e) = sector.entities.get(p.entity as usize) {
+                crate::light_switch::tag(&mut commands, obj, &e.name);
+            }
             placed.insert(p.entity, obj);
             if let Some(e) = sector.entities.get(p.entity as usize).filter(|e| matches!(classify(&e.name), Some(Classified::Explosive))) {
                 let effect = crate::authored_fx::blast::of_prop(&e.name);
@@ -405,6 +408,11 @@ pub fn spawn_placement(commands: &mut Commands, root: Entity, sector: &Fc3Sector
     if let Some(set) = sector.material_sets.get(p.material_set as usize).filter(|_| p.material_set != cache::NO_MATERIAL_SET) {
         commands.entity(obj).insert(SlotMaterials(set.clone()));
     }
+    // (And what it wears with its light switched on, when it has a switch.)
+    let lit = sector.material_sets.get(p.light_set as usize).filter(|_| p.light_set != cache::NO_MATERIAL_SET);
+    if lit.is_some() {
+        commands.entity(obj).insert(crate::light_switch::LightSwitch::default());
+    }
     let small = model.radius() < 1.5;
     for (li, lod) in model.lods.iter().enumerate() {
         let range = lod_range(model, li);
@@ -427,6 +435,9 @@ pub fn spawn_placement(commands: &mut Commands, root: Entity, sector: &Fc3Sector
                 e.insert(NotShadowCaster);
             } else {
                 e.insert(crate::shadow_lod::ShadowSize(model.radius() * p.scale));
+            }
+            if let Some(lit) = lit.and_then(|set| set.get(part.slot as usize)) {
+                e.insert(crate::light_switch::SwitchedPart { off: sector.part_material(p, part), lit: lit.clone() });
             }
         }
     }

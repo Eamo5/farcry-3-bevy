@@ -2793,6 +2793,9 @@ fn drive_objective(
 /// The mission cards' status lines: the game's "MISSION FAILED", and its
 /// "Complete" (the handbook's) in capitals, as the table has no mission's.
 const MISSION_FAILED: u32 = 155587;
+/// How long (s) after an event's card a script's success screen is taken
+/// for the same news.
+const SUCCESS_AFTER_EVENT: f32 = 20.0;
 const MISSION_COMPLETE: u32 = 158104;
 
 /// The story's texts on the HUD: subtitles, the interaction prompt, and the
@@ -2806,7 +2809,7 @@ fn drive_story(
     settings: Res<crate::settings::Settings>,
     hud: Res<crate::hud::HudState>,
     mut last: Local<Option<(Option<String>, Option<String>)>>,
-    (mut commands, time, mut card_shot): (Commands, Res<Time<Real>>, Local<(Option<f32>, u32)>),
+    (mut commands, time, mut card_shot, mut last_event): (Commands, Res<Time<Real>>, Local<(Option<f32>, u32)>, Local<Option<f32>>),
 ) {
     let Interface::Running(host) = &*state else { return };
     // FC3_CARD_SHOT=<prefix> (tests): each card captured a moment in, to
@@ -2835,6 +2838,12 @@ fn drive_story(
             crate::story::MissionCard::Event { text, count } => {
                 let status = count.map(|(id, n)| host.text(id).replace("%d", &n.to_string())).unwrap_or_default();
                 host.event("SetMissionTitle", &[&host.text(text), &status, "1"]);
+                *last_event = Some(time.elapsed_secs());
+            }
+            crate::story::MissionCard::Success { text } => {
+                if last_event.is_none_or(|at| time.elapsed_secs() - at > SUCCESS_AFTER_EVENT) {
+                    host.event("SetMissionTitle", &[&host.text(text), "", "1"]);
+                }
             }
         }
     }

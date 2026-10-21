@@ -145,6 +145,7 @@ fn stream_layers(
                 placed.insert(p.entity, obj);
                 if let Some(e) = entity {
                     commands.entity(obj).insert(crate::objects::PlacedId(e.id));
+                    crate::light_switch::tag(&mut commands, obj, &e.name);
                 }
             }
             for (i, entity) in content.entities.iter().enumerate() {

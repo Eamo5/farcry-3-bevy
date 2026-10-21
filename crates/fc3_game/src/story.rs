@@ -868,6 +868,13 @@ pub enum MissionCard {
         text: u32,
         count: Option<(u32, usize)>,
     },
+    /// A script's success screen, by the game's string: dropped when an
+    /// event's card has just shown the same news (an outpost the player
+    /// takes shows its own, with how it was taken and the count, and its
+    /// flag controller then plays the taking).
+    Success {
+        text: u32,
+    },
 }
 
 /// What the story shows on screen.
@@ -954,6 +961,9 @@ pub struct ScriptedPlayer {
     /// The player's weapon put away for a scene (`CAPI_Pawn.SetNoWeaponMode`:
     /// the narrative scenes' setup, until their cleanup).
     pub no_weapon: bool,
+    /// The player's weapon out of sight, though still in hand
+    /// (`CAPI_Pawn.SetWeaponVisibility`: an outpost's flag being raised).
+    pub weapon_hidden: bool,
     /// Where the maps show the player while a script says (Bevy space;
     /// `OverridePlayerPosition`: BAM_020's sunken ship and the other
     /// places under the world, shown where they lie on it).
@@ -1007,6 +1017,7 @@ impl Default for ScriptedPlayer {
             hud_parts_hidden: Default::default(),
             health_bar: None,
             no_weapon: false,
+            weapon_hidden: false,
             map_position: None,
             fov: (None, 0.0),
         }
@@ -1421,7 +1432,7 @@ fn run_story(
     mut ui: ResMut<StoryUi>,
     mut layers: ResMut<MissionLayers>,
     mut hud: ResMut<crate::hud::HudState>,
-    (mut players, mut stats, perks, mount, state, actor_health, mut pawn_fx, mut shimmers): (
+    (mut players, mut stats, perks, mount, state, actor_health, mut pawn_fx, mut shimmers, mut light_switches): (
         Query<(&mut Transform, &mut Player, Option<&mut crate::combat::Health>)>,
         Query<&mut crate::combat::PlayerStats, With<Player>>,
         Res<crate::progression::Perks>,
@@ -1430,6 +1441,7 @@ fn run_story(
         Query<(&crate::story_actors::StoryActor, &crate::combat::Health), Without<Player>>,
         ResMut<crate::pawn_fx::PawnFx>,
         ResMut<crate::shimmer::Shimmers>,
+        ResMut<crate::light_switch::LightSwitches>,
     ),
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     actors: Query<(&crate::story_actors::StoryActor, &Transform, Option<&crate::npc::Npc>), Without<Player>>,
@@ -1611,6 +1623,7 @@ fn run_story(
             env_overrides.storm = None;
             pawn_fx.clear = true;
             shimmers.script.clear();
+            light_switches.0.clear();
             layers.present.clear();
             layers.reset = true;
             orders.0.clear();
@@ -2829,6 +2842,27 @@ fn run_story(
                     "OverridePlayerPosition" => {
                         let f = |i: usize| a(i).parse::<f32>().unwrap_or(0.0);
                         scripted.map_position = (a(0) == "true" || a(0) == "1").then(|| to_bevy([f(1), f(2), f(3)]));
+                    }
+                    "CAPI_Pawn.SetWeaponVisibility" if a(0) == fc3_story::PLAYER.to_string() => {
+                        scripted.weapon_hidden = !(a(1) == "true" || a(1) == "1");
+                    }
+                    // A placed object's light switch: an outpost's flag in
+                    // the rebels' colours as it's taken.
+                    "CAPI_Entity.LightMaterialOveride" => {
+                        if let Ok(id) = a(0).parse::<u64>() {
+                            if a(1) == "true" || a(1) == "1" {
+                                light_switches.0.insert(id);
+                            } else {
+                                light_switches.0.remove(&id);
+                            }
+                        }
+                    }
+                    // A script's success screen (an outpost's flag
+                    // controller, as it's taken): the game's string as a card.
+                    "DisplaySuccessScreenUI" => {
+                        if let Ok(text) = a(0).parse::<u32>() {
+                            ui.cards.push(MissionCard::Success { text });
+                        }
                     }
                     "CAPI_Pawn.SetNoWeaponMode" if a(0) == fc3_story::PLAYER.to_string() => {
                         scripted.no_weapon = a(1) == "true" || a(1) == "1";

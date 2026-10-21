@@ -4929,6 +4929,33 @@ told the story of an outpost taken, so no activity ever opened.
   appeared.
 * **`CAPI_Player.IsInQTE`.** Asked as the flag scene's action map is
   popped; answered from the QTEs (`PlayerView::in_qte`).
+* **The flag in the rebels' colours.** A graphic component carries two
+  lists of the same layout: `MaterialOverrides` (0x0FA60B61), what its
+  slots wear, and `MaterialLightSwitch` (0x8576A3A6), what they wear with
+  its light switched on. The two hashes had been read the wrong way round,
+  so everything with a light switch wore it: the pirates' outposts flew the
+  rebels' tree on blue and their tarps were blue, parked 4x4s had their
+  headlights lit, string lights were dark. Of 111,000 placed graphics,
+  18,000 override a slot by file and 1,273 switch one (`fc3tool
+  light-switch-survey [filter] [mesh]`): the outposts' flags (red to blue)
+  and pirate tarps (mustard to blue), vehicles' lights, string lights (lit
+  to closed), waterfalls (the same file in both) and some cover rocks.
+  The converter now bakes each placement's light set beside its material
+  set (`LSET`, written once again with `sectors/stamp-light-switch.txt`,
+  as are the archetypes' materials). The flag controller switches its flag
+  as it plays the taking (`CAPI_Entity.LightMaterialOveride`), and every
+  liberated outpost's flag is switched on with it so it stays blue after a
+  load (`light_switch`). The success screen it shows
+  (`DisplaySuccessScreenUI`, the outpost-liberated string) is a card,
+  dropped when the outpost's own card has just shown the news; the
+  player's weapon is hidden while the flag goes up
+  (`CAPI_Pawn.SetWeaponVisibility`). Seen at JAS_100's outpost: the flag
+  wears the pirates' ring before and switches as the outpost is taken (on
+  a later checkpoint's load too). Both flags still look pale: their
+  colour is the Metal shader's dye under a mask (the red's
+  `[0.87, 0.26, 0.26]`), which ours spreads thin over the white emblem.
+  What else switches lights (tarps as an outpost falls, cars' lights at
+  night) isn't known.
 * **Keepers the player can use.** An activity's keeper (a race's, a
   gallery's) is made usable by its script (`SetUsability` on the pawn,
   `PawnInteractionListener`/`PawnInteractiveState`), which nothing read:

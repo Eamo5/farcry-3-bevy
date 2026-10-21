@@ -2577,7 +2577,7 @@ fn update_view_model(
     // (And while a scene has it put away.)
     let busy = ((player.swimming || (player.driving && !player.armed_passenger) || minigame.is_some_and(|m| m.holds_player())) && !fp.in_context())
         || poker.is_some_and(|p| p.holds_player())
-        || story_player.as_ref().is_some_and(|s| s.no_weapon);
+        || story_player.as_ref().is_some_and(|s| s.no_weapon || s.weapon_hidden);
     *vis = if in_menu || health.dead || player.noclip || busy || bino.blend > 0.5 || inv.scoped() { Visibility::Hidden } else { Visibility::Visible };
     let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
     if player.grounded {
