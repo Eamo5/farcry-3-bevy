@@ -1546,6 +1546,11 @@ fn run_story(
             placements.reset(&host.story.data());
             host.hidden_synced = false;
             host.due.clear();
+            // (What the autopilot did since is to do again, but for what
+            // failed the mission: JAS_020 B15's guard, lured off before the
+            // reload, was never lured again.)
+            host.used.clear();
+            host.near_at.clear();
             layers.present.clear();
             layers.reset = true;
             orders.0.clear();
