@@ -102,6 +102,12 @@ mod tests {
         let rules = story.vehicle_rules(100);
         assert!(!rules.exit_disabled && !rules.animated && !rules.unusable && !rules.indestructible);
         assert_eq!(rules.locked, HashSet::from([(3, 2)]));
+        // Its engine damaged, then broken down.
+        assert_eq!(rules.engine, 0);
+        story.domino().lua().load(r#"SendRegisteredEventToEntity("100", "CVehicle_SetEngineMajorDamage", {})"#).exec().unwrap();
+        assert_eq!(story.vehicle_rules(100).engine, 2);
+        story.domino().lua().load(r#"SendRegisteredEventToEntity("100", "CVehicle_SetEngineDisabled", {})"#).exec().unwrap();
+        assert_eq!(story.vehicle_rules(100).engine, 3);
     }
 
     #[test]
@@ -213,6 +219,10 @@ pub struct Rules {
     /// until its defence begins).
     pub indestructible: bool,
     pub locked: HashSet<(i32, i32)>,
+    /// Its engine as scripts left it (`CVehicle_SetEngine...`): 0 sound, 1
+    /// minor and 2 major damage (it smokes), 3 broken or disabled (it won't
+    /// run: a broken-down encounter's, a convoy's stopped).
+    pub engine: u8,
 }
 
 pub(crate) fn occupants(view: &View) -> HashMap<u64, Occupant> {

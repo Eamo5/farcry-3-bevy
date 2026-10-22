@@ -757,6 +757,8 @@ pub struct StoryHost {
     /// Characters scripts made invincible (`PawnInvincibleState`), or let
     /// go again, by id (the player's own).
     pub invincible: HashMap<u64, bool>,
+    /// Vehicles scripts blow up, for `vehicles`.
+    pub vehicle_explosions: Vec<u64>,
     /// Allied fighters sent to a battlefield's point (`SetBattlefields`).
     pub battlefield_posts: HashMap<u64, u64>,
     /// Alarm boxes scripts switched (`SetAlarmState`), for `story_alarms`.
@@ -915,6 +917,7 @@ impl StoryHost {
             battlefield_posts: HashMap::new(),
             npc_damage: HashMap::new(),
             invincible: HashMap::new(),
+            vehicle_explosions: Vec::new(),
             alarm_sets: Vec::new(),
             health_sets: Vec::new(),
             spawned_props: Vec::new(),
@@ -2567,6 +2570,10 @@ fn run_story(
             }
             Command::EntityEvent { entity, event } if event == "CCompoundPhysComponent_ChangeState" => {
                 breaks.break_now(entity);
+            }
+            // A vehicle a script blows up (`VehicleModifier`'s SetExplosion).
+            Command::EntityEvent { entity, event } if event == "CVehicle_SetExplosion" => {
+                host.vehicle_explosions.push(entity);
             }
             // A character (or the player) made invincible and back
             // (`PawnInvincibleState`).

@@ -442,6 +442,9 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
             "CVehicle_SetAsNotAnimated" => c.vehicle_rules.entry(e).or_default().animated = false,
             "CVehicle_SetAsIndestructable" => c.vehicle_rules.entry(e).or_default().indestructible = true,
             "CVehicle_SetAsDestructable" => c.vehicle_rules.entry(e).or_default().indestructible = false,
+            "CVehicle_SetEngineMinorDamage" => c.vehicle_rules.entry(e).or_default().engine = 1,
+            "CVehicle_SetEngineMajorDamage" => c.vehicle_rules.entry(e).or_default().engine = 2,
+            "CVehicle_SetEngineBroken" | "CVehicle_SetEngineDisabled" => c.vehicle_rules.entry(e).or_default().engine = 3,
             _ => {}
         }
         c.emit(Command::EntityEvent { entity: e, event: event.0 });

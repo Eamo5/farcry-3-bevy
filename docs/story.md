@@ -5009,7 +5009,15 @@ while Hurk mends it under attack (B20, B30), and sees it to the beach
   on the gun (the interact key doesn't leave it) until B40 enables it.
 * **Indestructible.** `CVehicle_SetAsIndestructable` and
   `SetAsDestructable` (B10, B20) are kept as a vehicle rule; a vehicle so
-  marked takes no lasting harm (`vehicles::spare_indestructible`).
+  marked takes no lasting harm (`vehicles::spare_indestructible`). The
+  `VehicleModifier` box's engine and explosion inputs are kept too:
+  `CVehicle_SetEngineMinorDamage` and `...MajorDamage` leave the engine
+  smoking (its health held under the smoking share, the major nearer the
+  burning one), `...SetEngineBroken` and `...SetEngineDisabled` (8 graphs:
+  the broken-down encounters, CIT_020's ambushed convoy, SAM_015's escape)
+  stop it pulling, and `CVehicle_SetExplosion` (20 graphs: CIT_020's fuel
+  truck, JAS_130's and WIL_050's vehicles, the burning wrecks) blows it up
+  at once.
 * **Downriver.** B30 and B40 carry the barge in their sequences
   (`sam010_02`, `sam010_03`) with the player at the gun; B40 also sends a
   reinforcement boat along a path to the beach.

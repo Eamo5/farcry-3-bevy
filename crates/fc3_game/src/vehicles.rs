@@ -916,12 +916,32 @@ fn arm_tripod_vehicles(
 
 /// A vehicle a script has made indestructible (HUR_040's barge until its
 /// defence) takes no lasting harm.
-fn spare_indestructible(host: Option<NonSend<crate::story::StoryHost>>, mut vehicles: Query<(&Vehicle, &mut Health, &Wear)>) {
-    let Some(host) = host else { return };
-    for (v, mut h, w) in &mut vehicles {
-        if !w.wrecked && (h.current < h.max || h.dead) && host.story.vehicle_rules(v.spawn_id).indestructible {
+/// Its engine as a script leaves it: damaged, it smokes (at least as much as
+/// its health would make it); broken or disabled, it won't drive (a
+/// broken-down encounter's, a convoy stopped). And one a script blows up
+/// goes up at once (`CVehicle_SetExplosion`).
+fn spare_indestructible(host: Option<NonSendMut<crate::story::StoryHost>>, mut vehicles: Query<(&mut Vehicle, &mut Health, &mut Wear)>) {
+    let Some(mut host) = host else { return };
+    let blow_up = std::mem::take(&mut host.vehicle_explosions);
+    for (mut v, mut h, mut w) in &mut vehicles {
+        let rules = host.story.vehicle_rules(v.spawn_id);
+        if !w.wrecked && (h.current < h.max || h.dead) && rules.indestructible {
             h.current = h.max;
             h.dead = false;
+        }
+        let smoking = match rules.engine {
+            1 => SMOKING * 0.9,
+            2 => (SMOKING + BURNING) * 0.5,
+            _ => 1.0,
+        };
+        if !w.wrecked && h.current > h.max * smoking {
+            h.current = h.max * smoking;
+        }
+        v.engine_dead = rules.engine >= 3;
+        if !w.wrecked && blow_up.contains(&v.spawn_id) {
+            debug!("vehicle {}: blown up by a script", v.spawn_id);
+            h.current = 0.0;
+            w.fuse = Some(0.0);
         }
     }
 }
@@ -954,6 +974,8 @@ pub struct Vehicle {
     revs: f32,
     /// A hang glider's flight while someone flies it.
     glide: Glide,
+    /// Its engine broken or disabled by a script: it won't drive.
+    engine_dead: bool,
 }
 
 #[derive(Clone)]
@@ -1878,6 +1900,7 @@ fn build_vehicle_inner(commands: &mut Commands, def: usize, model: &Fc3Model, at
             recorded_speed: None,
             revs: 0.0,
             glide: Glide::default(),
+            engine_dead: false,
         },
         Health::new(d.armour),
         Wear::default(),
@@ -2205,6 +2228,7 @@ mod story_vehicle_tests {
             recorded_speed: None,
             revs: 0.0,
             glide: Glide::default(),
+            engine_dead: false,
             seats: vec![
                 SeatSlot { kind: 1, index: 0, slot: 0, pose: Transform::from_xyz(-0.6, 0.8, 0.0), pawn: None },
                 SeatSlot { kind: 3, index: 0, slot: 1, pose: Transform::from_xyz(0.6, 0.8, 0.0), pawn: None },
@@ -3005,6 +3029,10 @@ fn drive(
     for (e, t, mut v, body, mut f, mass, patrol) in &mut vehicles {
         if *body != RigidBody::Dynamic { continue; }
         let d = &DEFS[v.def];
+        // (A dead engine pulls nothing.)
+        if v.engine_dead && d.kind != Kind::Glider {
+            v.throttle = 0.0;
+        }
         let tune = tuning(v.def);
         let m = mass.value();
         let up = t.rotation * Vec3::Y;
