@@ -322,7 +322,14 @@ is the story's own:
   `SetMetaBreakableImmuneToDamage <group> <on>` (`MetaBreakableModifier`,
   12 graphs: JAS_130's door kept whole until its moment, DEN_040's caches)
   keep a group whole against blasts until let go; a script can still
-  break one, and a reload lets them all go.
+  break one, and a reload lets them all go. Compound objects the same
+  (`CompoundObjectModifier`, 32 graphs): SetUnDamageable and SetDamageable
+  (`CCompoundPhysComponent_SetAsNotDamageable` / `_SetAsDamageable`, sent
+  to each of a group: DEN_040's sawmill and caches, BAM_040's temple until
+  it collapses), NextState (`_ChangeState`) breaks one, and ForceState
+  (`CAPI_Entity.SendForceState <entity> <state>`: SAM_020's door blown by
+  its C4, DOC_020's windows) breaks one forced past its first, whole
+  state.
 * **The player's stance and sprint.** `CAPI_Pawn.SetPawnStance <player>
   <0|1>` (the `StanceModifier` box, 12 graphs: BAM_020's ship, BNG_010,
   the shooting galleries) stands the player up or crouches him, held so

@@ -2539,6 +2539,16 @@ fn run_story(
             Command::EntityEvent { entity, event } if event == "CStimsEmitterComponent_Enable" || event == "CStimsEmitterComponent_Disable" => {
                 stims.switched.push((entity, event.ends_with("_Enable")));
             }
+            // A compound object kept whole against harm and let go
+            // (`CompoundObjectModifier`'s SetUnDamageable and
+            // SetDamageable: DEN_040's caches, the temple until it
+            // collapses), or broken on to its next state (NextState).
+            Command::EntityEvent { entity, event } if event == "CCompoundPhysComponent_SetAsNotDamageable" || event == "CCompoundPhysComponent_SetAsDamageable" => {
+                breaks.set_immune(entity, event.ends_with("NotDamageable"));
+            }
+            Command::EntityEvent { entity, event } if event == "CCompoundPhysComponent_ChangeState" => {
+                breaks.break_now(entity);
+            }
             // Removed by a script: gone from the world (the story
             // remembers it in its saves).
             Command::Remove(id) => {
@@ -3295,6 +3305,17 @@ fn run_story(
                     "CAPI_Entity.DestroyCompoundObject" | "BreakMetaBreakable" => {
                         if let Ok(id) = a(0).parse::<u64>() {
                             breaks.break_now(id);
+                        }
+                    }
+                    // A compound object forced to a state (`entity, state`:
+                    // 0 its whole one, the first; past it broken, as
+                    // SAM_020's door blown by its C4 and DOC_020's windows
+                    // are).
+                    "CAPI_Entity.SendForceState" => {
+                        if let (Ok(id), Ok(state)) = (a(0).parse::<u64>(), a(1).parse::<f32>()) {
+                            if state >= 1.0 {
+                                breaks.break_now(id);
+                            }
                         }
                     }
                     // Breakables kept whole (`MetaBreakableModifier`: a group
