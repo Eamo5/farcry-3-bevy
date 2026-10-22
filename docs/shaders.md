@@ -320,10 +320,15 @@ them, written to `world/effects.txt`:
 - waterfall and rapids spray, or mist for the `mist` and `fume` names (1,774);
 - the `fc3_area_myst` and `area_mist` mist patches (1,512);
 - glowing flies (875);
-- candles (170) and torches (90).
+- candles (170) and torches (90);
+- the world's ambient life (`ambient`, 1,043): flies buzzing over refuse and
+  carcasses (`fly_3m`), leaves falling through the jungle, the sand blown
+  off the beaches (`sandwind_smoke`), smoke drifting through Amanaki and
+  round the doctor's cliff house and in the caves, dust floating and falling.
+  These play only as authored (nothing stands in where one isn't cached).
 
 The list keeps each one's rotation and effect name too (`kind x y z qx qy qz qw
-name`, after the `# fc3-world-fx 2` header; an older list is written again). The
+name`, after the `# fc3-world-fx 3` header; an older list is written again). The
 converter caches each named effect (109 of them; one the library lacks is
 skipped). `world_fx` plays each as authored (`authored_fx`), turned as placed,
 when it comes within its kind's reach, and takes it away a little past that.

@@ -581,6 +581,7 @@ fn main() -> Result<()> {
             println!("material {}", fc3_formats::cache::material_rel(p));
             println!("texture  {}", fc3_formats::cache::texture_rel(p));
             println!("anim     {}", fc3_formats::cache::anim_rel(p));
+            println!("effect   {}", fc3_formats::particle_effects::authored_rel(p));
         }
         "weapon-stats" => {
             // The weapons' table as the converter writes it (from the cached

@@ -1465,12 +1465,14 @@ pub fn guard_spot_kind(name: &str) -> Option<&'static str> {
 pub const WORLD_FX_REL: &str = "world/effects.txt";
 /// The first line of a [`WORLD_FX_REL`] in this form (older lists lack the
 /// rotation and name, and are written again).
-pub const WORLD_FX_HEADER: &str = "# fc3-world-fx 2";
+pub const WORLD_FX_HEADER: &str = "# fc3-world-fx 3";
 
 /// What a placed effect is, by its library name, for the ones the game plays:
 /// a waterfall's spray where it lands or its mist, low drifting mist,
-/// fireflies, candle and torch flames. Quest and cinematic effects, lamp glows
-/// (the lamps draw their own) and the rest are left out.
+/// fireflies, candle and torch flames, camp fires, and the ambient flies,
+/// falling leaves, smoke and dust (`ambient`, played only as authored).
+/// Quest and cinematic effects, lamp glows (the lamps draw their own) and the
+/// rest are left out.
 pub fn world_fx_kind(name: &str) -> Option<&'static str> {
     let n = name.to_ascii_lowercase();
     if n.starts_with("sha_") || ["cinematic", "jas_", "debug", "interior", "hallucination"].iter().any(|k| n.contains(k)) {
@@ -1497,6 +1499,11 @@ pub fn world_fx_kind(name: &str) -> Option<&'static str> {
     }
     if n.contains("fire.camp_fire") {
         return Some("camp_fire");
+    }
+    // The world's ambient life: flies over refuse and carcasses, leaves
+    // falling through the jungle, smoke, mist and dust drifting.
+    if ["animals.fly_", "fallingleaves", "sandwind_smoke", "moving_smoke", "mysty_smoke", "smoke_mush", "floating_dust", "falling_dust"].iter().any(|k| n.contains(k)) {
+        return Some("ambient");
     }
     None
 }

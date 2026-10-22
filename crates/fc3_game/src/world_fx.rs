@@ -1,7 +1,8 @@
 //! The world's placed effects, played near the player: spray where
 //! waterfalls land and mist rolling off them, low mist drifting through the
 //! valleys, fireflies after dark, candle and torch flames, camp fires
-//! burning and dying down to embers. The converter keeps the kinds it knows
+//! burning and dying down to embers, and the world's ambient life (flies,
+//! falling leaves, drifting smoke and dust). The converter keeps the kinds it knows
 //! (`cache::world_fx_kind`), each with its effect, which plays as authored
 //! (`authored_fx`, turned as placed) where it's cached; else our flipbooks
 //! stand in.
@@ -36,6 +37,8 @@ enum Kind {
     Torch,
     CampFire,
     Embers,
+    /// Flies, falling leaves, smoke and dust: the game's own only.
+    Ambient,
 }
 
 impl Kind {
@@ -49,6 +52,7 @@ impl Kind {
             "torch" => Kind::Torch,
             "camp_fire" => Kind::CampFire,
             "embers" => Kind::Embers,
+            "ambient" => Kind::Ambient,
             _ => return None,
         })
     }
@@ -73,6 +77,7 @@ impl Kind {
             Kind::Fireflies => 45.0,
             Kind::Candle | Kind::Torch => 40.0,
             Kind::CampFire | Kind::Embers => 60.0,
+            Kind::Ambient => 90.0,
         }
     }
 }
@@ -260,6 +265,8 @@ fn play_effects(
                     particles.spawn(s);
                 }
             }
+            // (Not cached: nothing stands in.)
+            Kind::Ambient => {}
         }
     }
 }
