@@ -119,11 +119,32 @@ fn signals(a: Action) -> &'static [&'static str] {
     }
 }
 
-/// Takes away what the map in force doesn't let through.
-pub fn apply_action_maps(maps: Res<ScriptActionMaps>, mut actions: ResMut<ActionState>, mut last: Local<Option<String>>) {
+/// Takes away what the map in force doesn't let through, and the signals a
+/// script has the player ignore (`CAPI_Player.SetIgnorePlayerSignal`: the
+/// view while a look-at turns it, jumping and sprinting through a scene,
+/// the map, the weapons).
+pub fn apply_action_maps(
+    maps: Res<ScriptActionMaps>,
+    scripted: Option<Res<crate::story::ScriptedPlayer>>,
+    mut actions: ResMut<ActionState>,
+    mut last: Local<Option<String>>,
+) {
     if maps.is_changed() && maps.in_force() != last.as_ref() {
         *last = maps.in_force().cloned();
         info!("input action map: {:?} (pushed {:?}, locked {:?})", *last, maps.stack, maps.locked);
+    }
+    if let Some(ignored) = scripted.as_ref().map(|s| &s.ignored).filter(|i| !i.is_empty()) {
+        if ignored.contains("look") {
+            actions.look = Vec2::ZERO;
+        }
+        if ignored.contains("move") {
+            actions.movement = Vec2::ZERO;
+        }
+        for a in Action::ALL {
+            if signals(a).first().is_some_and(|s| ignored.contains(*s)) || (a == Action::Sprint && ignored.contains("lock_sprint")) {
+                actions.suppress(a);
+            }
+        }
     }
     let Some(allowed) = maps.allowed() else { return };
     let has = |s: &str| allowed.contains(s);
@@ -203,6 +224,26 @@ mod action_map_tests {
         // Without the game's hold time, a press uses.
         assert_eq!(use_step(None, true, false, 0.0, 0.016).0, true);
         assert_eq!(use_step(None, true, true, 0.1, 0.016).0, false);
+    }
+
+    /// Signals a script has the player ignore: the view held while a
+    /// look-at turns it, jumping and the map kept from him, the rest left.
+    #[test]
+    fn ignored_signals_are_kept_from_the_player() {
+        let mut scripted = crate::story::ScriptedPlayer::default();
+        scripted.ignored.extend(["look", "jump", "show_map"].map(String::from));
+        let mut actions = ActionState::default();
+        actions.movement = Vec2::Y;
+        actions.look = Vec2::X;
+        for a in [Action::Jump, Action::Map, Action::Fire] {
+            actions.press(a);
+        }
+        let mut app = App::new();
+        app.insert_resource(ScriptActionMaps::default()).insert_resource(scripted).insert_resource(actions).add_systems(Update, apply_action_maps);
+        app.update();
+        let actions = app.world().resource::<ActionState>();
+        assert_eq!((actions.movement, actions.look), (Vec2::Y, Vec2::ZERO));
+        assert!(!actions.pressed(Action::Jump) && !actions.pressed(Action::Map) && actions.pressed(Action::Fire));
     }
 
     #[test]

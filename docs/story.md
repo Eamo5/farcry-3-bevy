@@ -262,6 +262,22 @@ is the story's own:
 * **Health set.** `CAPI_Pawn.SetPawnHealth <pawn> <origin> <health>` (the
   `HealthModifier` box's Set) leaves the player or a story character with
   that much health (as much as he holds), or kills him at 0.
+* **The view turned for the player.** `PlayerLookAtModifier` (20 graphs)
+  turns the player's view to what a mission shows him: at once
+  (`SetPlayerLookAngles`, already played), or blended over its time, a
+  frame at a time, from the view's angles (`GetPlayerLookAngles`) to the
+  target's (`GetAnglesFromDir`) through `SetPlayerLookAnglesFromAngles`,
+  now played. The view's angles were read back with their yaw the wrong
+  way round, so a blend would have swung the long way; they now turn as an
+  entity's do. While it blends the box has the player ignore his `look`
+  signal.
+* **Signals ignored.** `CAPI_Player.SetIgnorePlayerSignal` (the
+  `IgnoreSignal` box: `open_inventory` 32 graphs, `jump` 19, `sprint` 17,
+  `show_map` 12, `throw_rock`, `crouch`, `move`, the weapons, the
+  syringes) was honoured for jumping, sprinting, throwing rocks and using.
+  Each action whose own signal a script ignores is now kept from the
+  player, as an action map does, and `look` and `move` hold the view and
+  the feet (`controls::apply_action_maps`).
 * **Armies and relationships.** Each pawn's AI names its army
   (`CPawnAgent`'s `selArmy`: 0 blue, 1 red, 2 grey, 3 neutral, 4 green, 5
   yellow; the player is grey) and the armies it is hostile to and allied

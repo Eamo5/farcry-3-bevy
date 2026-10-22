@@ -1821,7 +1821,8 @@ fn run_story(
     // either, `HasBonus`.)
     view.player_state.skills = progress.skills.iter().map(|s| s.to_ascii_lowercase()).chain(perks.plans.iter().cloned()).collect();
     view.player_state.on_zipline = matches!(*mount, crate::traversal::Mount::Zip { .. });
-    view.player_state.look_angles = [p.pitch.to_degrees(), 0.0, -p.yaw.to_degrees()];
+    // (Yaw as an entity's and `GetAnglesFromDir`'s: about up from north.)
+    view.player_state.look_angles = [p.pitch.to_degrees(), 0.0, p.yaw.to_degrees()];
     // (Story helicopters too: G3's trial's, flying in.)
     for (heli, at, health) in &helis {
         view.spawned.insert(
@@ -3174,6 +3175,14 @@ fn run_story(
                             p.pitch = d.y.atan2(Vec2::new(d.x, d.z).length());
                         }
                     }
+                    // Turned to angles (`player, pitch, roll, yaw`, degrees;
+                    // the yaw as an entity's, about up from north).
+                    "CAPI_Player.SetPlayerLookAnglesFromAngles" if a(0) == fc3_story::PLAYER.to_string() => {
+                        if let (Ok(pitch), Ok(yaw)) = (a(1).parse::<f32>(), a(3).parse::<f32>()) {
+                            p.pitch = pitch.to_radians().clamp(-1.5, 1.5);
+                            p.yaw = yaw.to_radians();
+                        }
+                    }
                     // A character's army: the player's foe (red), on his
                     // side (grey) or out of the fight (neutral).
                     "CAPI_NPC.SwitchArmy" => {
@@ -3182,9 +3191,6 @@ fn run_story(
                             host.armies.insert(id, army);
                         }
                     }
-                    // A group's senses held (`PawnSetImpairedState`: 0 not,
-                    // 1 fully, a captive tied up; 2 minimally, one held at
-                    // gunpoint).
                     // A pawn's hostility or alliance with armies set or
                     // cleared (`pawn, mask`: blue 1, red 2, grey 4, neutral
                     // 8, green 16, yellow 32).
@@ -3204,6 +3210,9 @@ fn run_story(
                             host.alarm_sets.push((id, state));
                         }
                     }
+                    // A group's senses held (`PawnSetImpairedState`: 0 not,
+                    // 1 fully, a captive tied up; 2 minimally, one held at
+                    // gunpoint).
                     "SetImpairedState" => {
                         let state = a(1).parse::<f32>().unwrap_or(0.0) as u8;
                         for id in host.story.group_members(&a(0)) {

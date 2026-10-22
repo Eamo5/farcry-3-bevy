@@ -2083,6 +2083,27 @@ mod tests {
         assert_eq!(story.loading_screen(), None);
     }
 
+    /// A look-at's blend: the angles a direction has, as the view's are
+    /// read back, go to the host a frame at a time.
+    #[test]
+    fn a_look_at_turns_the_view_by_angles() {
+        let mut story = empty_story();
+        let lua = story.domino().lua().clone();
+        let east: Vec<f64> = lua.load("return GetAnglesFromDir({1, 0, 0})").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        assert_eq!(east, [0.0, 0.0, -90.0]);
+        story.take_commands();
+        lua.load(r#"CAPI_Player.SetPlayerLookAnglesFromAngles(GetLocalPlayerId(), {10, 0, -45})"#).exec().unwrap();
+        let told: Vec<Vec<String>> = story
+            .take_commands()
+            .into_iter()
+            .filter_map(|c| match c {
+                Command::Native { name, args } if name == "CAPI_Player.SetPlayerLookAnglesFromAngles" => Some(args),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(told, [vec![PLAYER.to_string(), "10".into(), "0".into(), "-45".into()]]);
+    }
+
     /// A boss fight's ambience on until its box stops it; stopping another
     /// leaves it on.
     #[test]

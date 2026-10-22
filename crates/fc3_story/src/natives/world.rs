@@ -16,7 +16,7 @@ fn dist(a: [f32; 3], b: [f32; 3], flat: bool) -> f64 {
 }
 
 /// A `{x, y, z}` table's values.
-fn read_vec3(v: &Value) -> [f32; 3] {
+pub(crate) fn read_vec3(v: &Value) -> [f32; 3] {
     match v {
         Value::Table(t) => [1, 2, 3].map(|i| t.get::<Num>(i).map(|n| n.or(0.0) as f32).unwrap_or(0.0)),
         _ => [0.0; 3],

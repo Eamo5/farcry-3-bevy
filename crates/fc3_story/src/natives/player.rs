@@ -150,6 +150,12 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.f("CAPI_Player.GetMovementSensitivity", |_, _p: Text| 1.0)?;
     r.f("CAPI_Player.IsInQTE", |c, _p: Text| c.view.player_state.in_qte)?;
     r.lua("CAPI_Player.GetPlayerLookAngles", |lua, c, _p: Text| vec3(lua, c.view.player_state.look_angles))?;
+    // The view turned to angles (`PlayerLookAtModifier`'s blend, a frame at
+    // a time): pitch, roll, yaw in degrees, as `GetAnglesFromDir` gives.
+    r.f("CAPI_Player.SetPlayerLookAnglesFromAngles", |c, (pawn, angles): (Text, Value)| {
+        let [pitch, roll, yaw] = super::world::read_vec3(&angles);
+        c.emit(Command::Native { name: "CAPI_Player.SetPlayerLookAnglesFromAngles".into(), args: vec![pawn.0, pitch.to_string(), roll.to_string(), yaw.to_string()] });
+    })?;
 
     // Actions with a success result: asked of the host, reported done.
     for name in [
