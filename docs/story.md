@@ -279,6 +279,11 @@ is the story's own:
   `DropWeapon` box: WIL_020's briefing makes room for the flamethrower
   with it) takes the weapon from the player, as `RemoveWeapon` does (it
   isn't left lying as a pickup).
+* **Orders called out.** `PlayAIContextDialog <army> <group> <0|1>` (the
+  `PlayContextDialog` box: HOY_020's VIPs' guards, SAM_020, JAS_150,
+  BAM_055) has the nearest living soldier of the army (of the group, when
+  one is named) call out his voice's regroup or disperse order
+  (`inform_order_regroup`, `inform_order_disperse`; `barks::OrderCalls`).
 * **Cover looked for afresh.** `SetAIFactBool <group> ReEvaluateCover`
   (the `SetReEvaluateCover` box, 47 graphs: a fight moved on) has a group
   give up the cover it holds and look again (`npc::Npc::reevaluate_cover`).

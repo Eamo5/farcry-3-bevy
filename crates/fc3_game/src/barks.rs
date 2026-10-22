@@ -17,6 +17,7 @@ pub struct BarksPlugin;
 impl Plugin for BarksPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BarkTable>()
+            .init_resource::<OrderCalls>()
             .add_systems(OnExit(crate::menu::GameState::Loading), load_barks)
             .add_systems(Update, (assign_voices, bark).chain().run_if(in_state(crate::menu::GameState::Playing)));
     }
@@ -114,6 +115,21 @@ fn assign_voices(table: Res<BarkTable>, time: Res<Time>, npcs: Query<(Entity, &N
     }
 }
 
+/// Orders scripts have someone of an army call out (`PlayContextDialog`:
+/// regroup, disperse): the army, the group to pick from (empty: any of the
+/// army), and the stimulus.
+#[derive(Resource, Default)]
+pub struct OrderCalls(pub Vec<(u8, Vec<u64>, &'static str)>);
+
+/// The one to call an order out: nearest the listener of the army (and of
+/// the group, when one is given), alive.
+fn caller<'a>(candidates: impl Iterator<Item = (Entity, u8, Option<u64>, Vec3, bool)> + 'a, army: u8, group: &[u64], ear: Vec3) -> Option<Entity> {
+    candidates
+        .filter(|(_, a, id, _, dead)| !dead && *a == army && (group.is_empty() || id.is_some_and(|i| group.contains(&i))))
+        .min_by(|a, b| a.3.distance(ear).total_cmp(&b.3.distance(ear)))
+        .map(|c| c.0)
+}
+
 /// Barks farther than this (m) from the listener aren't played.
 const EARSHOT: f32 = 45.0;
 /// At most this many barks at once.
@@ -130,11 +146,19 @@ fn bark(
     listener: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
     (mut sfx, library, mut faces): (MessageWriter<crate::sound::PlaySfx>, Option<ResMut<crate::faces::FaceLibrary>>, Query<&mut crate::faces::Face>),
     mut speaking: Local<Vec<f32>>,
+    (mut orders, actors): (ResMut<OrderCalls>, Query<&crate::story_actors::StoryActor>),
 ) {
     let now = time.elapsed_secs();
     speaking.retain(|end| *end > now);
     let ear = listener.single().map(|l| l.translation()).unwrap_or(Vec3::splat(f32::MAX));
     let mut want: Vec<(Entity, &'static str, bool)> = Vec::new();
+    // Orders scripts have called out (cutting in: they're the scene's).
+    for (army, group, stimulus) in std::mem::take(&mut orders.0) {
+        let candidates = npcs.iter().map(|(e, npc, t, h, ..)| (e, npc.army(), actors.get(e).ok().map(|a| a.id), t.translation, h.dead));
+        if let Some(e) = caller(candidates, army, &group, ear) {
+            want.push((e, stimulus, true));
+        }
+    }
     // Hurt (when not speaking already) and killed (cutting in).
     for h in hits.read() {
         want.push((h.target, "reflex_wounded_ono", false));
@@ -226,6 +250,25 @@ fn bark(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The nearest living soldier of the army calls an order (of the group,
+    /// when the script names one).
+    #[test]
+    fn the_nearest_of_the_army_calls_the_order() {
+        let e = |i: u32| Entity::from_raw_u32(i).unwrap();
+        let soldiers = || {
+            vec![
+                (e(1), 1, Some(10), Vec3::new(30.0, 0.0, 0.0), false),
+                (e(2), 1, Some(11), Vec3::new(5.0, 0.0, 0.0), true),
+                (e(3), 1, Some(12), Vec3::new(10.0, 0.0, 0.0), false),
+                (e(4), 2, Some(13), Vec3::new(1.0, 0.0, 0.0), false),
+            ]
+            .into_iter()
+        };
+        assert_eq!(caller(soldiers(), 1, &[], Vec3::ZERO), Some(e(3)));
+        assert_eq!(caller(soldiers(), 1, &[10], Vec3::ZERO), Some(e(1)));
+        assert_eq!(caller(soldiers(), 5, &[], Vec3::ZERO), None);
+    }
 
     #[test]
     fn picks_from_the_voices_lines() {

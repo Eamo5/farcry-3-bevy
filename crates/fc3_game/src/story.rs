@@ -80,12 +80,14 @@ fn apply_sides(
     host: Option<NonSendMut<StoryHost>>,
     mut npcs: Query<(&crate::story_actors::StoryActor, &mut crate::npc::Npc)>,
     mut thrown: ResMut<crate::controls::ThrowChoice>,
+    mut orders: ResMut<crate::barks::OrderCalls>,
 ) {
     use crate::npc::Faction;
     let Some(mut host) = host else { return };
     if let Some(choice) = host.throw_choice.take() {
         thrown.0 = Some(choice);
     }
+    orders.0.append(&mut host.order_calls);
     // Allies sent to a battlefield take up their posts round its point
     // (each its own, a few metres off).
     if !host.battlefield_posts.is_empty() {
@@ -820,6 +822,8 @@ pub struct StoryHost {
     pub vehicle_explosions: Vec<u64>,
     /// Characters told to look for cover afresh.
     pub recover: Vec<u64>,
+    /// Orders scripts have someone call out, for `barks`.
+    pub order_calls: Vec<(u8, Vec<u64>, &'static str)>,
     /// Placed particle systems scripts started (true) or stopped
     /// (`ParticleSystem`), for `story_fx`.
     pub fx_switched: HashMap<u64, bool>,
@@ -987,6 +991,7 @@ impl StoryHost {
             invincible: HashMap::new(),
             vehicle_explosions: Vec::new(),
             recover: Vec::new(),
+            order_calls: Vec::new(),
             fx_switched: HashMap::new(),
             lights_switched: HashMap::new(),
             alarm_sets: Vec::new(),
@@ -3408,6 +3413,14 @@ fn run_story(
                                 l => *entry = (l, true),
                             }
                         }
+                    }
+                    // An order called out by someone of an army (`army,
+                    // group, action`: 0 regroup, 1 disperse).
+                    "PlayAIContextDialog" => {
+                        let army = a(0).parse::<f32>().unwrap_or(1.0) as u8;
+                        let group = if a(1) == fc3_domino::INVALID_ID { Vec::new() } else { host.story.group_members(&a(1)) };
+                        let stimulus = if a(2).parse::<f32>().unwrap_or(0.0) as u8 == 1 { "inform_order_disperse" } else { "inform_order_regroup" };
+                        host.order_calls.push((army, group, stimulus));
                     }
                     // A group told to look for cover afresh
                     // (`SetReEvaluateCover`: `group, fact, true`).
