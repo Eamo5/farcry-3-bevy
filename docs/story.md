@@ -262,6 +262,14 @@ is the story's own:
 * **Health set.** `CAPI_Pawn.SetPawnHealth <pawn> <origin> <health>` (the
   `HealthModifier` box's Set) leaves the player or a story character with
   that much health (as much as he holds), or kills him at 0.
+* **The player's stance and sprint.** `CAPI_Pawn.SetPawnStance <player>
+  <0|1>` (the `StanceModifier` box, 12 graphs: BAM_020's ship, BNG_010,
+  the shooting galleries) stands the player up or crouches him, held so
+  until he crouches, jumps or sprints himself (`controls::ActionState::
+  script_stance`, on any device). `CAPI_Player.SetSprinting <player>
+  false` (`PlayerSpeedModifier`'s ForceWalk) breaks his sprint until the
+  key is let go. The box's speed factor was already played
+  (`SetMovementSensitivity`).
 * **The player's air.** `CAPI_Player.SetOxygenLevel <player> <breathes>
   <0..1>` (the `OxygenModifier` box: BAM_020's oxygen bottles in the
   sunken ship, the drowning pirate's struggle) puts his air at that share

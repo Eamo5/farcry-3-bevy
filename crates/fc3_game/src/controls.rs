@@ -148,6 +148,36 @@ pub fn apply_action_maps(maps: Res<ScriptActionMaps>, mut actions: ResMut<Action
 mod action_map_tests {
     use super::*;
 
+    /// A script's crouch holds until the player crouches, jumps or
+    /// sprints himself; a broken sprint lasts until the key is let go.
+    #[test]
+    fn scripts_hold_the_stance_and_break_the_sprint() {
+        let mut state = ActionState::default();
+        let mut step = |state: &mut ActionState, held: &[Action]| {
+            let previous = state.pressed.clone();
+            let mut pressed: HashSet<Action> = held.iter().copied().collect();
+            state.apply_script(&mut pressed, &previous);
+            state.pressed = pressed.clone();
+            pressed
+        };
+        state.script_stance(true);
+        assert!(step(&mut state, &[Action::Forward]).contains(&Action::Crouch));
+        assert!(step(&mut state, &[]).contains(&Action::Crouch));
+        // The player presses crouch himself: it's his again.
+        assert!(step(&mut state, &[Action::Crouch]).contains(&Action::Crouch));
+        assert!(!step(&mut state, &[]).contains(&Action::Crouch));
+        // A jump stands him up too.
+        state.script_stance(true);
+        step(&mut state, &[]);
+        assert!(!step(&mut state, &[Action::Jump]).contains(&Action::Crouch));
+        // Sprint broken while the key is held, back once it's let go.
+        state.break_sprint();
+        assert!(!step(&mut state, &[Action::Sprint]).contains(&Action::Sprint));
+        assert!(!step(&mut state, &[Action::Sprint]).contains(&Action::Sprint));
+        step(&mut state, &[]);
+        assert!(step(&mut state, &[Action::Sprint]).contains(&Action::Sprint));
+    }
+
     #[test]
     fn using_takes_the_games_hold_once_a_hold() {
         // Held at 60 frames a second: it uses once, 0.37 s in, then not
@@ -578,6 +608,14 @@ pub struct ActionState {
     pub gamepad_active: bool,
     sprint_latch: bool,
     crouch_latch: bool,
+    /// Crouched by a script (`CAPI_Pawn.SetPawnStance`) until the player
+    /// stands (crouch, jump or sprint pressed anew); and whether the
+    /// devices held crouch last frame.
+    script_crouch: bool,
+    crouch_down: bool,
+    /// A script stopped the sprint (`CAPI_Player.SetSprinting` false): none
+    /// until the sprint key is let go.
+    sprint_broken: bool,
     /// How long the gamepad's D-pad left has been held.
     pad_hold: f32,
     /// The game's hold to use on foot (s; its `ClickGenerator` `HoldTime`,
@@ -620,6 +658,42 @@ impl ActionState {
     /// Holds an action down this frame without a fresh press (scripted tests).
     pub fn hold(&mut self, a: Action) {
         self.pressed.insert(a);
+    }
+
+    /// A script puts the player in a stance: crouched (held so until he
+    /// stands himself) or standing.
+    pub fn script_stance(&mut self, crouch: bool) {
+        self.script_crouch = crouch;
+        if !crouch {
+            self.crouch_latch = false;
+        }
+    }
+
+    /// A script stops the player's sprint (until the sprint key is let go).
+    pub fn break_sprint(&mut self) {
+        self.sprint_broken = true;
+        self.sprint_latch = false;
+    }
+
+    /// The script-held stance and sprint over this frame's devices.
+    fn apply_script(&mut self, pressed: &mut HashSet<Action>, previous: &HashSet<Action>) {
+        let crouch_down = pressed.contains(&Action::Crouch);
+        if self.script_crouch {
+            let fresh = |a: Action| pressed.contains(&a) && !previous.contains(&a);
+            if (crouch_down && !self.crouch_down) || fresh(Action::Jump) || fresh(Action::Sprint) {
+                self.script_crouch = false;
+            } else {
+                pressed.insert(Action::Crouch);
+            }
+        }
+        self.crouch_down = crouch_down;
+        if self.sprint_broken {
+            if pressed.remove(&Action::Sprint) {
+                self.sprint_latch = false;
+            } else {
+                self.sprint_broken = false;
+            }
+        }
     }
 
     /// Marks a press as handled so later systems don't act on it too.
@@ -782,6 +856,7 @@ pub fn update_actions(
             pressed.insert(Action::Crouch);
         }
     }
+    state.apply_script(&mut pressed, &previous);
     state.movement = state.movement.clamp_length_max(1.0);
     if device_pad {
         state.gamepad_active = true;

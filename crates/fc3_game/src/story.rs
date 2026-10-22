@@ -62,7 +62,7 @@ impl Plugin for StoryPlugin {
                 matches!(state.get(), GameState::Playing | GameState::Paused | GameState::Map | GameState::Journal | GameState::Shop)
             }))
             .add_systems(Update, show_story_ui)
-            .add_systems(Update, (apply_sides, apply_tags).after(StorySet));
+            .add_systems(Update, (apply_sides, apply_tags, scripted_controls).after(StorySet));
         if std::env::var_os("FC3_STORY_RETRY_TEST").is_some() {
             app.add_systems(Update, retry_inventory_test.after(StorySet).run_if(in_state(GameState::Playing)));
         }
@@ -1003,6 +1003,12 @@ pub struct ScriptedPlayer {
     /// drowning pirate's struggle). Without air to use he can't drown.
     pub oxygen: Option<f32>,
     pub no_drowning: bool,
+    /// A stance a script put the player in (`CAPI_Pawn.SetPawnStance`:
+    /// crouched or standing), and a sprint it stopped
+    /// (`CAPI_Player.SetSprinting` false, the speed box's ForceWalk), for
+    /// the controls to take up.
+    pub stance: Option<bool>,
+    pub break_sprint: bool,
 }
 
 impl ScriptedPlayer {
@@ -1053,7 +1059,20 @@ impl Default for ScriptedPlayer {
             fov: (None, 0.0),
             oxygen: None,
             no_drowning: false,
+            stance: None,
+            break_sprint: false,
         }
+    }
+}
+
+/// The stance and sprint scripts set go to the controls (held there until
+/// the player changes them himself).
+fn scripted_controls(mut scripted: ResMut<ScriptedPlayer>, mut actions: ResMut<crate::controls::ActionState>) {
+    if let Some(crouch) = scripted.stance.take() {
+        actions.script_stance(crouch);
+    }
+    if std::mem::take(&mut scripted.break_sprint) {
+        actions.break_sprint();
     }
 }
 
@@ -2875,6 +2894,17 @@ fn run_story(
                     "CAPI_Pawn.Holster" | "CAPI_Pawn.ForceHolster" if a(0) == fc3_story::PLAYER.to_string() => scripted.camera_drawn = false,
                     // The player's field of view set, or given back (`player,
                     // degrees, seconds, on`).
+                    // The player's stance (`player, stance`: 0 standing, 1
+                    // crouched; the swimming and lying ones are the
+                    // engine's own) and his sprint stopped.
+                    "CAPI_Pawn.SetPawnStance" if a(0) == fc3_story::PLAYER.to_string() => match a(1).parse::<f32>().map(|s| s as u8) {
+                        Ok(0) => scripted.stance = Some(false),
+                        Ok(1) => scripted.stance = Some(true),
+                        _ => {}
+                    },
+                    "CAPI_Player.SetSprinting" if a(0) == fc3_story::PLAYER.to_string() && matches!(a(1).as_str(), "false" | "0") => {
+                        scripted.break_sprint = true;
+                    }
                     // The player's air (`player, use oxygen, level 0..1`).
                     "CAPI_Player.SetOxygenLevel" if a(0) == fc3_story::PLAYER.to_string() => {
                         scripted.no_drowning = a(1) == "false" || a(1) == "0";
