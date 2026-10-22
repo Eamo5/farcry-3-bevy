@@ -3528,6 +3528,12 @@ fn run_story(
                         scripted.plant_looting = a(1) != "false" && a(1) != "0";
                     }
                     "CAPI_Vehicle.VehicleUseTakeSeat" | "CAPI_Vehicle.VehicleUseExit" => seat_requests.native(&name, &args),
+                    // The player put out of a vehicle (`ForceExitVehicle`:
+                    // `vehicle, pawn`; SAM_015's road, JAS_220's runway), as a
+                    // script's exit.
+                    "CAPI_Vehicle.ForceLeaveVehicle" | "CAPI_Vehicle.TryLeaveVehicle" => {
+                        seat_requests.native("CAPI_Vehicle.VehicleUseExit", &[a(0), a(1)]);
+                    }
                     "CAPI_Player.ForceSetPlayerInVehicle" => seat_requests.force_player(&args),
                     "CAPI_Vehicle.StartVehicleFollowPath" | "CAPI_Vehicle.StopVehicleFollowPath" | "CAPI_Vehicle.SetVehicleSpeed" => {
                         vehicle_paths.native(&name, &args, &host.story.data());

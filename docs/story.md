@@ -5045,7 +5045,11 @@ while Hurk mends it under attack (B20, B30), and sees it to the beach
   the broken-down encounters, CIT_020's ambushed convoy, SAM_015's escape)
   stop it pulling, and `CVehicle_SetExplosion` (20 graphs: CIT_020's fuel
   truck, JAS_130's and WIL_050's vehicles, the burning wrecks) blows it up
-  at once.
+  at once. `CAPI_Vehicle.LockPosition <vehicle> <on>` (CIT_020's convoy,
+  SAM_015's briefing truck) holds a vehicle braked where it stands until
+  let go, and `CAPI_Vehicle.ForceLeaveVehicle` / `TryLeaveVehicle` (the
+  `ForceExitVehicle` box: SAM_015's road, JAS_220's runway) put the player
+  out as a script's exit does.
 * **Downriver.** B30 and B40 carry the barge in their sequences
   (`sam010_02`, `sam010_03`) with the player at the gun; B40 also sends a
   reinforcement boat along a path to the beach.

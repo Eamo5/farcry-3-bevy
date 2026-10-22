@@ -938,6 +938,16 @@ fn spare_indestructible(host: Option<NonSendMut<crate::story::StoryHost>>, mut v
             h.current = h.max * smoking;
         }
         v.engine_dead = rules.engine >= 3;
+        // (Held where it stands: braked, going nowhere; let go, the brake
+        // off again.)
+        if rules.position_locked {
+            v.throttle = 0.0;
+            v.brake = true;
+            v.parked = true;
+        } else if v.held {
+            v.brake = false;
+        }
+        v.held = rules.position_locked;
         if !w.wrecked && blow_up.contains(&v.spawn_id) {
             debug!("vehicle {}: blown up by a script", v.spawn_id);
             h.current = 0.0;
@@ -976,6 +986,8 @@ pub struct Vehicle {
     glide: Glide,
     /// Its engine broken or disabled by a script: it won't drive.
     engine_dead: bool,
+    /// Held where it stands by a script.
+    held: bool,
 }
 
 #[derive(Clone)]
@@ -1901,6 +1913,7 @@ fn build_vehicle_inner(commands: &mut Commands, def: usize, model: &Fc3Model, at
             revs: 0.0,
             glide: Glide::default(),
             engine_dead: false,
+            held: false,
         },
         Health::new(d.armour),
         Wear::default(),
@@ -2229,6 +2242,7 @@ mod story_vehicle_tests {
             revs: 0.0,
             glide: Glide::default(),
             engine_dead: false,
+            held: false,
             seats: vec![
                 SeatSlot { kind: 1, index: 0, slot: 0, pose: Transform::from_xyz(-0.6, 0.8, 0.0), pawn: None },
                 SeatSlot { kind: 3, index: 0, slot: 1, pose: Transform::from_xyz(0.6, 0.8, 0.0), pawn: None },

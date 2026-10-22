@@ -424,6 +424,11 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         }
         c.emit(Command::Teleport { entity, pose });
     })?;
+    r.f("CAPI_Vehicle.LockPosition", |c, (vehicle, locked): (Text, crate::values::Flag)| {
+        if let Some(v) = vehicle.id() {
+            c.vehicle_rules.entry(v).or_default().position_locked = locked.0;
+        }
+    })?;
     r.f("SendRegisteredEventToEntity", |c, (entity, event, _params): (Text, Text, Value)| {
         let Some(e) = entity.id() else { return };
         match event.0.as_str() {

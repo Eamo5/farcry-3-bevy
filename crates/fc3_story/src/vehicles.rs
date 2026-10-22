@@ -108,6 +108,10 @@ mod tests {
         assert_eq!(story.vehicle_rules(100).engine, 2);
         story.domino().lua().load(r#"SendRegisteredEventToEntity("100", "CVehicle_SetEngineDisabled", {})"#).exec().unwrap();
         assert_eq!(story.vehicle_rules(100).engine, 3);
+        story.domino().lua().load(r#"CAPI_Vehicle.LockPosition("100", true)"#).exec().unwrap();
+        assert!(story.vehicle_rules(100).position_locked);
+        story.domino().lua().load(r#"CAPI_Vehicle.LockPosition("100", false)"#).exec().unwrap();
+        assert!(!story.vehicle_rules(100).position_locked);
     }
 
     #[test]
@@ -223,6 +227,9 @@ pub struct Rules {
     /// minor and 2 major damage (it smokes), 3 broken or disabled (it won't
     /// run: a broken-down encounter's, a convoy's stopped).
     pub engine: u8,
+    /// Held where it stands (`CAPI_Vehicle.LockPosition`: CIT_020's convoy,
+    /// SAM_015's briefing truck).
+    pub position_locked: bool,
 }
 
 pub(crate) fn occupants(view: &View) -> HashMap<u64, Occupant> {
