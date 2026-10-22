@@ -262,6 +262,17 @@ is the story's own:
 * **Health set.** `CAPI_Pawn.SetPawnHealth <pawn> <origin> <health>` (the
   `HealthModifier` box's Set) leaves the player or a story character with
   that much health (as much as he holds), or kills him at 0.
+* **Invincible characters.** A story character's counters say whose harm
+  passes it by (`CFCXCountersComponentAI`: `bIsInvincibleToPlayer`, the
+  companions and the cinematic and quest characters, `...ToAI`,
+  `...ExceptToPlayer`; `fc3tool story-armies` counts them). The player
+  could shoot Sam or Dennis dead; the flags are now kept
+  (`combat::Invincible`): harm by the player, by another character or
+  animal, or by nobody (a fall, a fire) passes by as they say.
+  `PawnInvincibleState` (40 graphs: Liza through JAS_130, the VIPs, the
+  player through scenes) sends `CFCXCountersComponent_SetInvincible` and
+  `..._UnsetInvincible`, now holding the character, or the player, spared
+  everything until let go; a reload lets them all go.
 * **Damage from other characters.** `NPC_SetDamage <group> <level>` (the
   `NPCDamageModifier` box, 16 graphs: CIT_020's convoy ambush, HUR_040's
   barge, WIL_040's VIP, WIL_050's target, the encounters' victims) sets

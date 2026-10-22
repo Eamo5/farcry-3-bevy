@@ -693,6 +693,10 @@ fn spawn_actors(
         if let Some((c, _)) = counters {
             commands.entity(root).insert(c);
         }
+        // (Whose harm passes it by: the companions are spared the player's.)
+        if let Some(spared) = e.component("CFCXCountersComponentAI").and_then(|c| crate::combat::Invincible::from_counters(c)) {
+            commands.entity(root).insert(spared);
+        }
         // Fighters carry their faction's gun for the role.
         let weapon = fighter.and_then(|f| chars.looks_for(f.faction, f.role).first().and_then(|&l| models.get(&chars.looks[l].weapon)));
         let dressed =
@@ -1368,6 +1372,9 @@ mod tests {
         for id in [2074868928208701670, 2075783308892975953, 2077288330747197802] {
             assert!(fighter(id).is_none(), "{id} fights");
         }
+        // Sam is spared the player's shots (not others').
+        let sam = data.entities[&2074868928208701670].component("CFCXCountersComponentAI").and_then(|c| crate::combat::Invincible::from_counters(c)).unwrap();
+        assert!(sam.spares(true, false) && !sam.spares(false, true));
     }
 
     /// An event point puts its army's soldiers within reach on to the

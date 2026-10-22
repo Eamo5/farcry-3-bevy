@@ -344,6 +344,35 @@ fn add_player_health(mut commands: Commands, player: Query<(Entity, &Transform),
     }
 }
 
+/// Spared harm: by the player, by other characters and animals, or by the
+/// rest (falls, fire with no one behind it), as a character's counters have
+/// it (`CFCXCountersComponentAI`'s `bIsInvincibleToPlayer` for the
+/// companions, `...ToAI`, `...ExceptToPlayer`), or by everything while a
+/// script holds it so (`PawnInvincibleState`: a mission's key characters
+/// while it needs them).
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Invincible {
+    pub to_player: bool,
+    pub to_ai: bool,
+    pub to_world: bool,
+    pub scripted: bool,
+}
+
+impl Invincible {
+    pub fn from_counters(c: &fc3_formats::fcb::Object) -> Option<Invincible> {
+        let flag = |n: &str| c.bool(n).unwrap_or(false);
+        let except_player = flag("bIsInvincibleExceptToPlayer");
+        let i = Invincible { to_player: flag("bIsInvincibleToPlayer"), to_ai: except_player || flag("bIsInvincibleToAI"), to_world: except_player, scripted: false };
+        (i != Invincible::default()).then_some(i)
+    }
+
+    /// Whether harm by the player (else by another character or animal,
+    /// else by nobody) passes it by.
+    pub fn spares(&self, by_player: bool, by_someone: bool) -> bool {
+        self.scripted || if by_player { self.to_player } else if by_someone { self.to_ai } else { self.to_world }
+    }
+}
+
 /// The share of other characters' gunfire one takes (`NPC_SetDamage`: a
 /// convoy's allies, an escorted VIP, a captive kept alive a while; 0 none).
 /// Blasts, fire, blows and the player's shots are whole.
@@ -379,7 +408,7 @@ fn apply_damage(
     driving: Option<Res<crate::vehicles::Driving>>,
     mut progress: ResMut<crate::progression::Progress>,
     mut harm: ResMut<LastHarm>,
-    rates: Query<&NpcDamageRate>,
+    (rates, invincible): (Query<&NpcDamageRate>, Query<&Invincible>),
 ) {
     for ev in events.read() {
         // (Kept a while: those gone are let go now and then.)
@@ -390,6 +419,14 @@ fn apply_damage(
         let Ok((mut h, gt, ps, armour, scale, counters)) = targets.get_mut(ev.target) else { continue };
         if h.dead {
             continue;
+        }
+        // (Nor what it is spared.)
+        if let Ok(i) = invincible.get(ev.target) {
+            let by_player = ev.instigator.is_some_and(|by| players.contains(by));
+            let by_someone = ev.instigator.is_some_and(|by| by != ev.target && instigators.get(by).is_ok_and(|(a, n, s, _)| a.is_some() || n.is_some() || s.is_some()));
+            if i.spares(by_player, by_someone) {
+                continue;
+            }
         }
         // The one-hit syringe: whatever the player lands kills.
         if ps.is_none() && boosts.active(crate::syringes::Syringe::OneHitKill) && ev.instigator.is_some_and(|i| players.contains(i)) {
@@ -718,6 +755,19 @@ mod tests {
         }
         app.update();
         assert_eq!(health(&app, kept), 20.0);
+        // A companion spared the player's shots, not others'; one a script
+        // holds invincible, spared everything.
+        let companion = app.world_mut().spawn((Health::new(100.0), Invincible { to_player: true, ..default() })).id();
+        let held = app.world_mut().spawn((Health::new(100.0), Invincible { scripted: true, ..default() })).id();
+        for ev in [hit(companion, player, DamageKind::Bullet), hit(held, player, DamageKind::Bullet), hit(held, shooter, DamageKind::Explosion)] {
+            app.world_mut().write_message(ev);
+        }
+        app.world_mut().entity_mut(player).insert(crate::player::test_player());
+        app.update();
+        assert_eq!((health(&app, companion), health(&app, held)), (100.0, 100.0));
+        app.world_mut().write_message(hit(companion, shooter, DamageKind::Bullet));
+        app.update();
+        assert_eq!(health(&app, companion), 60.0);
     }
 
     #[test]

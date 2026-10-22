@@ -2810,7 +2810,15 @@ fn main() -> Result<()> {
                         .collect::<Vec<_>>()
                         .join(",")
                 };
-                let (hostile, allied) = (mask("ArmyHostileMask"), mask("ArmyAllianceMask"));
+                let (mut hostile, allied) = (mask("ArmyHostileMask"), mask("ArmyAllianceMask"));
+                // (And whose harm passes it by.)
+                if let Some(c) = e.component("CFCXCountersComponentAI") {
+                    for (flag, tag) in [("bIsInvincibleToPlayer", "spared:player"), ("bIsInvincibleToAI", "spared:ai"), ("bIsInvincibleExceptToPlayer", "spared:all-but-player")] {
+                        if c.bool(flag) == Some(true) {
+                            hostile.push_str(&format!(" {tag}"));
+                        }
+                    }
+                }
                 if hostile.contains("Red") && !hostile.contains("Grey") {
                     let primary = agent.child("ShootingPrefsSingle").and_then(|w| w.str("tmplPrimaryWeapon")).unwrap_or_default();
                     allies.push(format!("{} {} [{}] {primary}", e.id, e.name, e.class));

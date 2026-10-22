@@ -754,6 +754,9 @@ pub struct StoryHost {
     /// How much of other characters' gunfire characters take
     /// (`NPC_SetDamage`): the level last set, and whether it is in force.
     pub npc_damage: HashMap<u64, (u8, bool)>,
+    /// Characters scripts made invincible (`PawnInvincibleState`), or let
+    /// go again, by id (the player's own).
+    pub invincible: HashMap<u64, bool>,
     /// Allied fighters sent to a battlefield's point (`SetBattlefields`).
     pub battlefield_posts: HashMap<u64, u64>,
     /// Alarm boxes scripts switched (`SetAlarmState`), for `story_alarms`.
@@ -911,6 +914,7 @@ impl StoryHost {
             relations: HashMap::new(),
             battlefield_posts: HashMap::new(),
             npc_damage: HashMap::new(),
+            invincible: HashMap::new(),
             alarm_sets: Vec::new(),
             health_sets: Vec::new(),
             spawned_props: Vec::new(),
@@ -1114,13 +1118,27 @@ impl Default for ScriptedPlayer {
     }
 }
 
-/// The share of other characters' gunfire scripts let characters take.
+/// The share of other characters' gunfire scripts let characters take, and
+/// who they make invincible.
+#[allow(clippy::type_complexity)]
 fn apply_damage_rates(
     host: Option<NonSend<StoryHost>>,
     actors: Query<(Entity, &crate::story_actors::StoryActor, Option<&crate::combat::NpcDamageRate>)>,
+    mut spared: Query<(Entity, Option<&crate::story_actors::StoryActor>, Has<Player>, Option<&mut crate::combat::Invincible>), Or<(With<crate::story_actors::StoryActor>, With<Player>)>>,
     mut commands: Commands,
 ) {
     let Some(host) = host else { return };
+    for (e, actor, is_player, inv) in &mut spared {
+        let id = if is_player { fc3_story::PLAYER } else { actor.map_or(u64::MAX, |a| a.id) };
+        let held = host.invincible.get(&id).copied().unwrap_or(false);
+        match inv {
+            Some(mut i) if i.scripted != held => i.scripted = held,
+            None if held => {
+                commands.entity(e).insert(crate::combat::Invincible { scripted: true, ..default() });
+            }
+            _ => {}
+        }
+    }
     for (e, actor, rate) in &actors {
         if host.npc_damage.is_empty() && rate.is_none() {
             continue;
@@ -1754,6 +1772,7 @@ fn run_story(
             host.relations.clear();
             host.battlefield_posts.clear();
             host.npc_damage.clear();
+            host.invincible.clear();
             env_overrides.active.clear();
             env_overrides.seconds = 0.0;
             env_overrides.storm = None;
@@ -2548,6 +2567,11 @@ fn run_story(
             }
             Command::EntityEvent { entity, event } if event == "CCompoundPhysComponent_ChangeState" => {
                 breaks.break_now(entity);
+            }
+            // A character (or the player) made invincible and back
+            // (`PawnInvincibleState`).
+            Command::EntityEvent { entity, event } if event == "CFCXCountersComponent_SetInvincible" || event == "CFCXCountersComponent_UnsetInvincible" => {
+                host.invincible.insert(entity, event.ends_with("_SetInvincible"));
             }
             // Removed by a script: gone from the world (the story
             // remembers it in its saves).
