@@ -306,6 +306,10 @@ is the story's own:
   player through scenes) sends `CFCXCountersComponent_SetInvincible` and
   `..._UnsetInvincible`, now holding the character, or the player, spared
   everything until let go; a reload lets them all go.
+  `CAPI_Entity.SetImmuneToCollisions <pawn> <on>`
+  (`PawnInvincibleToCollisionsState`: SAM_015's allies on the road,
+  SAM_020's in the helicopter) keeps the player's vehicle from hurting a
+  character it rams (`vehicles::ImmuneToCollisions`).
 * **Damage from other characters.** `NPC_SetDamage <group> <level>` (the
   `NPCDamageModifier` box, 16 graphs: CIT_020's convoy ambush, HUR_040's
   barge, WIL_040's VIP, WIL_050's target, the encounters' victims) sets

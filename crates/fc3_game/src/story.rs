@@ -824,6 +824,8 @@ pub struct StoryHost {
     pub recover: Vec<u64>,
     /// Orders scripts have someone call out, for `barks`.
     pub order_calls: Vec<(u8, Vec<u64>, &'static str)>,
+    /// Characters vehicles can't hurt by ramming them, by id.
+    pub collision_immune: std::collections::HashSet<u64>,
     /// Placed particle systems scripts started (true) or stopped
     /// (`ParticleSystem`), for `story_fx`.
     pub fx_switched: HashMap<u64, bool>,
@@ -992,6 +994,7 @@ impl StoryHost {
             vehicle_explosions: Vec::new(),
             recover: Vec::new(),
             order_calls: Vec::new(),
+            collision_immune: std::collections::HashSet::new(),
             fx_switched: HashMap::new(),
             lights_switched: HashMap::new(),
             alarm_sets: Vec::new(),
@@ -1204,9 +1207,18 @@ fn apply_damage_rates(
     host: Option<NonSend<StoryHost>>,
     actors: Query<(Entity, &crate::story_actors::StoryActor, Option<&crate::combat::NpcDamageRate>)>,
     mut spared: Query<(Entity, Option<&crate::story_actors::StoryActor>, Has<Player>, Option<&mut crate::combat::Invincible>), Or<(With<crate::story_actors::StoryActor>, With<Player>)>>,
+    immune: Query<(Entity, &crate::story_actors::StoryActor, Has<crate::vehicles::ImmuneToCollisions>)>,
     mut commands: Commands,
 ) {
     let Some(host) = host else { return };
+    for (e, actor, rammed) in &immune {
+        let want = host.collision_immune.contains(&actor.id);
+        if want && !rammed {
+            commands.entity(e).insert(crate::vehicles::ImmuneToCollisions);
+        } else if !want && rammed {
+            commands.entity(e).remove::<crate::vehicles::ImmuneToCollisions>();
+        }
+    }
     for (e, actor, is_player, inv) in &mut spared {
         let id = if is_player { fc3_story::PLAYER } else { actor.map_or(u64::MAX, |a| a.id) };
         let held = host.invincible.get(&id).copied().unwrap_or(false);
@@ -1865,6 +1877,7 @@ fn run_story(
             host.battlefield_posts.clear();
             host.npc_damage.clear();
             host.invincible.clear();
+            host.collision_immune.clear();
             host.fx_switched.clear();
             host.lights_switched.clear();
             env_overrides.active.clear();
@@ -3411,6 +3424,16 @@ fn run_story(
                                 5 => entry.1 = true,
                                 6 => entry.1 = false,
                                 l => *entry = (l, true),
+                            }
+                        }
+                    }
+                    // A character vehicles can't hurt by ramming (`pawn, on`).
+                    "CAPI_Entity.SetImmuneToCollisions" => {
+                        if let Ok(id) = a(0).parse::<u64>() {
+                            if matches!(a(1).as_str(), "true" | "1") {
+                                host.collision_immune.insert(id);
+                            } else {
+                                host.collision_immune.remove(&id);
                             }
                         }
                     }

@@ -3323,10 +3323,15 @@ fn drive(
 }
 
 /// Fast-moving cars hurt whatever they hit.
+/// Not hurt by vehicles ramming it (`PawnInvincibleToCollisionsState`:
+/// SAM_015's allies on the road, SAM_020's in the helicopter).
+#[derive(Component)]
+pub struct ImmuneToCollisions;
+
 fn run_over(
     driving: Res<Driving>,
     vehicles: Query<(&Transform, &Vehicle, &LinearVelocity)>,
-    targets: Query<(Entity, &GlobalTransform, &Health), Or<(With<crate::npc::Npc>, With<crate::wildlife::WildAnimal>)>>,
+    targets: Query<(Entity, &GlobalTransform, &Health), (Or<(With<crate::npc::Npc>, With<crate::wildlife::WildAnimal>)>, Without<ImmuneToCollisions>)>,
     players: Query<Entity, With<Player>>,
     mut damage: MessageWriter<DamageEvent>,
     mut cooldown: Local<std::collections::HashMap<Entity, f32>>,
