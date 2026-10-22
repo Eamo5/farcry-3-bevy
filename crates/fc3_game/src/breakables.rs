@@ -36,9 +36,25 @@ pub struct Breaks {
     pub news: Vec<u64>,
     /// Objects with no placed id broken now (an encounter's cage door).
     objects: Vec<Entity>,
+    /// Placed entities scripts keep whole (`MetaBreakableModifier`): blasts
+    /// pass them by. (A script can still break one outright.)
+    immune: HashSet<u64>,
 }
 
 impl Breaks {
+    pub fn is_immune(&self, id: u64) -> bool {
+        self.immune.contains(&id)
+    }
+
+    /// Keeps a placed entity whole against harm, or lets it break again.
+    pub fn set_immune(&mut self, id: u64, immune: bool) {
+        if immune {
+            self.immune.insert(id);
+        } else {
+            self.immune.remove(&id);
+        }
+    }
+
     /// Breaks a placed entity now.
     pub fn break_now(&mut self, id: u64) {
         if self.broken.insert(id) {
@@ -58,6 +74,7 @@ impl Breaks {
         self.fresh.clear();
         self.news.clear();
         self.objects.clear();
+        self.immune.clear();
     }
 }
 
@@ -76,6 +93,9 @@ fn blasts(
 ) {
     for x in explosions.read().filter(|x| x.damage > 0.0) {
         for (e, id, obj, at) in &objects {
+            if id.is_some_and(|id| breaks.immune.contains(&id.0)) {
+                continue;
+            }
             let Some(model) = models.get(&obj.model).filter(|m| has_broken_state(m)) else { continue };
             let middle = at.transform_point(model.center());
             if middle.distance(x.at) < x.radius * 0.5 + model.radius() * 0.5 {
@@ -223,6 +243,44 @@ mod tests {
 
     fn part(meshes: &mut Assets<Mesh>, whole_only: bool) -> ModelPart {
         ModelPart { mesh: meshes.add(Mesh::from(Cuboid::default())), material: Handle::default(), slot: 0, flags: 0, pivot: None, whole_only }
+    }
+
+    /// A blast breaks what's near it, but not what a script keeps whole
+    /// (`MetaBreakableModifier`), until it's let go.
+    #[test]
+    fn a_blast_spares_what_scripts_keep_whole() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<Fc3Model>>()
+            .init_resource::<Breaks>()
+            .add_message::<crate::weapons::Explosion>()
+            .add_systems(Update, blasts);
+        let mut meshes = app.world_mut().resource_mut::<Assets<Mesh>>();
+        let piece = part(&mut meshes, false);
+        let model = Fc3Model {
+            lods: vec![ModelLod { distance: 0.0, parts: vec![piece.clone()], broken: vec![BrokenPart { part: piece, state: 2, piece: false, points: Vec::new() }] }],
+            aabb_min: Vec3::ZERO,
+            aabb_max: Vec3::ONE,
+            collision: None,
+            broken_collision: None,
+            bones: Vec::new(),
+            is_vegetation: false,
+            inverse_bindposes: None,
+        };
+        let handle = app.world_mut().resource_mut::<Assets<Fc3Model>>().add(model);
+        for id in [1, 2] {
+            app.world_mut().spawn((PlacedId(id), WorldObject { model: handle.clone(), entity_index: 0 }, Transform::IDENTITY, GlobalTransform::IDENTITY));
+        }
+        app.world_mut().resource_mut::<Breaks>().set_immune(1, true);
+        let blast = crate::weapons::Explosion { at: Vec3::splat(0.5), radius: 6.0, damage: 100.0, instigator: None, effect: None };
+        app.world_mut().write_message(blast.clone());
+        app.update();
+        assert_eq!(app.world().resource::<Breaks>().broken, HashSet::from([2]));
+        app.world_mut().resource_mut::<Breaks>().set_immune(1, false);
+        app.world_mut().write_message(blast);
+        app.update();
+        assert_eq!(app.world().resource::<Breaks>().broken, HashSet::from([1, 2]));
     }
 
     /// Broken: the whole-only part goes, the remains come and a piece falls;

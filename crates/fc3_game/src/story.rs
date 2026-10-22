@@ -3165,9 +3165,21 @@ fn run_story(
                             host.throw_choice
                         };
                     }
-                    "CAPI_Entity.DestroyCompoundObject" => {
+                    // A static breakable broken outright (the
+                    // `StaticBreakableBreaker` box: BAM_040's temple
+                    // collapsing, DEN_040's caches).
+                    "CAPI_Entity.DestroyCompoundObject" | "BreakMetaBreakable" => {
                         if let Ok(id) = a(0).parse::<u64>() {
                             breaks.break_now(id);
+                        }
+                    }
+                    // Breakables kept whole (`MetaBreakableModifier`: a group
+                    // switched off or made undamageable, and back).
+                    "SetMetaBreakableEnabled" | "SetMetaBreakableImmuneToDamage" => {
+                        let on = matches!(a(1).as_str(), "true" | "1");
+                        let immune = if name == "SetMetaBreakableEnabled" { !on } else { on };
+                        for id in host.story.group_members(&a(0)) {
+                            breaks.set_immune(id, immune);
                         }
                     }
                     // A placed RealTree sized, grown or stopped.
@@ -3601,7 +3613,7 @@ fn story_blasts(
     let watched = host.story.watched_destructibles();
     for x in explosions.p1().read() {
         for (id, at) in &watched {
-            if to_bevy(*at).distance(x.at) < x.radius * 0.5 + 2.0 {
+            if !breaks.is_immune(*id) && to_bevy(*at).distance(x.at) < x.radius * 0.5 + 2.0 {
                 breaks.break_now(*id);
             }
         }

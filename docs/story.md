@@ -262,6 +262,14 @@ is the story's own:
 * **Health set.** `CAPI_Pawn.SetPawnHealth <pawn> <origin> <health>` (the
   `HealthModifier` box's Set) leaves the player or a story character with
   that much health (as much as he holds), or kills him at 0.
+* **Static breakables.** `BreakMetaBreakable <entity>` (the
+  `StaticBreakableBreaker` box: BAM_040's temple collapsing, BAM_055's
+  ending, DEN_040's weapon caches) breaks a placed object outright, as
+  `DestroyCompoundObject` does. `SetMetaBreakableEnabled <group> <on>` and
+  `SetMetaBreakableImmuneToDamage <group> <on>` (`MetaBreakableModifier`,
+  12 graphs: JAS_130's door kept whole until its moment, DEN_040's caches)
+  keep a group whole against blasts until let go; a script can still
+  break one, and a reload lets them all go.
 * **The player's stance and sprint.** `CAPI_Pawn.SetPawnStance <player>
   <0|1>` (the `StanceModifier` box, 12 graphs: BAM_020's ship, BNG_010,
   the shooting galleries) stands the player up or crouches him, held so
