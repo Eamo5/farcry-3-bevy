@@ -72,6 +72,9 @@ pub struct Media {
     /// (`StartOverrideAmbiance`: a boss fight's, a cave's collapse), by its
     /// index in the world's ambience table.
     pub ambience: Option<u32>,
+    /// The sea's level as a script moves it: now, where it's going, and how
+    /// fast (m/s).
+    pub ocean: Option<(f64, f64, f64)>,
 }
 
 /// An objective timer on the HUD: seconds left, what it's for (a string
@@ -119,6 +122,11 @@ impl Core {
             if let Some(cb) = self.media.fills.remove(&id).and_then(|f| f.callback) {
                 self.call(cb, vec![]);
             }
+        }
+        // (And the sea, as a script moves it.)
+        if let Some((now, to, speed)) = &mut self.media.ocean {
+            let step = *speed * dt;
+            *now = if *now < *to { (*now + step).min(*to) } else { (*now - step).max(*to) };
         }
     }
 }
@@ -550,5 +558,17 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.f("CDominoWaterLevelManager:SetWaterLevel", |c, (_world, sector, level): (Text, Num, Num)| {
         c.media.water.insert(sector.or(0.0) as u32, level.or(0.0));
     })?;
+    // The sea itself, moved to a level over so many seconds (the
+    // `OceanLevelModifier` box: DEN_060's vision drains it 20 m).
+    r.f("SetWorldOceanLevel", |c, (level, time): (Num, Num)| {
+        let from = c.media.ocean.map_or(WORLD_OCEAN, |o| o.0);
+        let to = level.or(WORLD_OCEAN);
+        let time = time.or(0.0).max(0.0);
+        let speed = if time > 0.0 { (to - from).abs() / time } else { f64::INFINITY };
+        c.media.ocean = Some((from, to, speed));
+    })?;
     Ok(())
 }
+
+/// The world's sea level (m), as the world places it.
+pub const WORLD_OCEAN: f64 = 100.0;

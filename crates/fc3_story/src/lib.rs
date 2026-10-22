@@ -983,6 +983,12 @@ impl Story {
         Some(self.core.borrow().media.loading_screen.clone()).filter(|m| !m.is_empty())
     }
 
+    /// The sea's level as a script has moved it (`SetWorldOceanLevel`), if
+    /// one has.
+    pub fn ocean_level(&self) -> Option<f32> {
+        self.core.borrow().media.ocean.map(|o| o.0 as f32)
+    }
+
     /// The sound region whose ambience a script plays in place of the one
     /// the player is in (`StartOverrideAmbiance`), by its index.
     pub fn ambience_override(&self) -> Option<u32> {
@@ -2102,6 +2108,22 @@ mod tests {
             })
             .collect();
         assert_eq!(told, [vec![PLAYER.to_string(), "10".into(), "0".into(), "-45".into()]]);
+    }
+
+    /// DEN_060 drains the sea 20 m over 16 s, and puts it back at once.
+    #[test]
+    fn a_script_moves_the_sea() {
+        let mut story = empty_story();
+        let lua = story.domino().lua().clone();
+        assert_eq!(story.ocean_level(), None);
+        lua.load("SetWorldOceanLevel(80, 16)").exec().unwrap();
+        story.update(8.0, View::default());
+        assert!((story.ocean_level().unwrap() - 90.0).abs() < 1e-3);
+        story.update(9.0, View::default());
+        assert_eq!(story.ocean_level(), Some(80.0));
+        lua.load("SetWorldOceanLevel(100, 0)").exec().unwrap();
+        story.update(0.1, View::default());
+        assert_eq!(story.ocean_level(), Some(100.0));
     }
 
     /// An entity resized reads its size back (the scale box blends from it)

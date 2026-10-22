@@ -1227,9 +1227,15 @@ fn apply_damage_rates(
     }
 }
 
-/// The ambience a script plays in place of the place's (a boss fight's).
+/// The ambience a script plays in place of the place's (a boss fight's),
+/// and the sea where a script has moved it.
 fn scripted_ambience(host: Option<NonSend<StoryHost>>, regions: Option<ResMut<crate::sound::SoundRegions>>) {
-    let (Some(host), Some(mut regions)) = (host, regions) else { return };
+    let Some(host) = host else { return };
+    let sea = host.story.ocean_level().unwrap_or(crate::sky::SEA_LEVEL);
+    if crate::water::ocean_level() != sea {
+        crate::water::set_ocean_level(sea);
+    }
+    let Some(mut regions) = regions else { return };
     let forced = host.story.ambience_override().and_then(|i| u8::try_from(i).ok());
     if regions.forced != forced {
         debug!("story: ambience of sound region {forced:?}");

@@ -69,6 +69,18 @@ static PLANES: OnceLock<HashMap<u32, f32>> = OnceLock::new();
 /// tunnel, BAM_055's sub), over the world's own.
 static SCRIPTED: LazyLock<RwLock<HashMap<u32, f32>>> = LazyLock::new(|| RwLock::new(HashMap::new()));
 
+/// The sea's level, as a script has moved it (`SetWorldOceanLevel`: DEN_060
+/// drains it 20 m through its vision of the island), else the world's.
+static OCEAN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(SEA_LEVEL.to_bits());
+
+pub fn ocean_level() -> f32 {
+    f32::from_bits(OCEAN.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+pub fn set_ocean_level(level: f32) {
+    OCEAN.store(level.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Puts the scripts' water levels over the world's (all of them: one not
 /// given is the world's again).
 pub fn set_scripted(levels: &[(u32, f32)]) {
@@ -90,7 +102,7 @@ fn sector_level(id: u32) -> Option<f32> {
 /// The water plane over `p`'s sector: a river's or lake's level (or as a
 /// script has it), or the sea's.
 pub fn plane_level(p: Vec3) -> f32 {
-    sector_level(sector_of(p)).unwrap_or(SEA_LEVEL)
+    sector_level(sector_of(p)).unwrap_or_else(ocean_level)
 }
 
 fn sector_of(p: Vec3) -> u32 {
@@ -104,14 +116,15 @@ fn sector_of(p: Vec3) -> u32 {
 /// no ground either (the missions' rooms placed out past the islands).
 pub fn surface(p: Vec3, ground: Option<f32>) -> f32 {
     let id = sector_of(p);
+    let sea = ocean_level();
     let (level, script) = match scripted(id) {
         Some(l) => (l, true),
-        None => (PLANES.get().and_then(|m| m.get(&id)).copied().unwrap_or(SEA_LEVEL), false),
+        None => (PLANES.get().and_then(|m| m.get(&id)).copied().unwrap_or(sea), false),
     };
-    if level > SEA_LEVEL && ground.map_or(script, |g| g < level) {
+    if level > sea && ground.map_or(script, |g| g < level) {
         level
     } else {
-        SEA_LEVEL
+        sea
     }
 }
 
@@ -210,6 +223,8 @@ struct Water {
     /// World XZ of the floor texture's corner.
     corner: Vec2,
     built_sectors: usize,
+    /// The sea's level its depths were taken at.
+    built_level: f32,
     /// The floor texture being built in the background (corner, texels).
     task: Option<Task<(Vec2, Vec<u8>)>>,
 }
@@ -403,7 +418,7 @@ fn setup_water(
         bevy::camera::visibility::NoFrustumCulling,
         Name::new("ocean"),
     ));
-    commands.insert_resource(Water { material, floor, corner: Vec2::splat(f32::MAX), built_sectors: 0, task: None });
+    commands.insert_resource(Water { material, floor, corner: Vec2::splat(f32::MAX), built_sectors: 0, built_level: SEA_LEVEL, task: None });
 }
 
 /// The ocean grid's rings and segments at a water quality (High: 150 by
@@ -442,6 +457,11 @@ fn follow_camera(cameras: Query<&GlobalTransform, With<PlayerCamera>>, mut ocean
     // Snap so the grid doesn't slide over the swell.
     o.translation.x = (p.x / 2.0).round() * 2.0;
     o.translation.z = (p.z / 2.0).round() * 2.0;
+    // (`FC3_OCEAN_TEST=<level>`, tests without the story: the sea there.)
+    if let Some(level) = std::env::var("FC3_OCEAN_TEST").ok().and_then(|l| l.parse::<f32>().ok()) {
+        set_ocean_level(level);
+    }
+    o.translation.y = ocean_level();
 }
 
 /// Puts a finished depth texture in place: its texels, and its corner on the
@@ -458,7 +478,7 @@ fn put_floor(
         image.data = Some(data);
     }
     if let Some(mut m) = materials.get_mut(material) {
-        m.extension.params.floor = Vec4::new(corner.x, corner.y, FLOOR_SIZE, SEA_LEVEL);
+        m.extension.params.floor = Vec4::new(corner.x, corner.y, FLOOR_SIZE, ocean_level());
     }
 }
 
@@ -490,9 +510,13 @@ fn update_floor(
     let corner = Vec2::new(((p.x - FLOOR_SIZE / 2.0) / 64.0).round() * 64.0, ((p.z - FLOOR_SIZE / 2.0) / 64.0).round() * 64.0);
     let moved = corner.distance(water.corner) > 256.0;
     let more = heights.sectors.len() != water.built_sectors;
-    if !moved && !more {
+    // (Again as a script moves the sea: its depths with it.)
+    let sea = ocean_level();
+    let risen = (sea - water.built_level).abs() > 0.5;
+    if !moved && !more && !risen {
         return;
     }
+    water.built_level = sea;
     if moved {
         water.corner = corner;
     } else {
@@ -510,7 +534,7 @@ fn update_floor(
             for x in 0..n {
                 let at = Vec3::new(corner.x + (x as f32 + 0.5) * step, 0.0, corner.y + (y as f32 + 0.5) * step);
                 data.extend_from_slice(&match heights.height_at(at) {
-                    Some(h) => texel((SEA_LEVEL - h).clamp(0.0, 64.0), h),
+                    Some(h) => texel((sea - h).clamp(0.0, 64.0), h),
                     None => texel(64.0, NO_GROUND),
                 });
             }
@@ -757,7 +781,7 @@ fn update_fog(
     let eye = gt.translation();
     let water = surface_at(eye, &heights);
     let wanted = if submerged(eye, &heights, 0.05) {
-        if water > SEA_LEVEL {
+        if water > ocean_level() {
             Some((Color::srgb(0.05, 0.12, 0.08), FogFalloff::Exponential { density: 0.16 }))
         } else {
             Some((Color::srgb(0.03, 0.17, 0.2), FogFalloff::Exponential { density: 0.09 }))

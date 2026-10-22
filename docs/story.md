@@ -262,6 +262,14 @@ is the story's own:
 * **Health set.** `CAPI_Pawn.SetPawnHealth <pawn> <origin> <health>` (the
   `HealthModifier` box's Set) leaves the player or a story character with
   that much health (as much as he holds), or kills him at 0.
+* **The sea moved.** `SetWorldOceanLevel <level> <seconds>` (the
+  `OceanLevelModifier` box: DEN_060's vision drains the sea 20 m over
+  16 s, B30's restart puts it there at once and B40 back to 100 m) now
+  moves the sea (`water::ocean_level`): the ocean's surface, its depths
+  (the shore's foam and the bed's colour), swimming, buoyancy and the
+  underwater fog follow it. A reload starts the story again and with it the
+  sea. `FC3_OCEAN_TEST=<level>` (tests, without the story) puts the sea
+  there.
 * **Resized entities.** `CAPI_Entity.SetScale <entity> <scale>` (the
   `ScaleModifier` box: DEN_060's vignettes of Buck, Hoyt and Vaas,
   JAS_240's apparitions) resizes a character or a prop, blended a tick at a
