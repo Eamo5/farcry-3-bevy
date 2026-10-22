@@ -62,7 +62,7 @@ impl Plugin for StoryPlugin {
                 matches!(state.get(), GameState::Playing | GameState::Paused | GameState::Map | GameState::Journal | GameState::Shop)
             }))
             .add_systems(Update, show_story_ui)
-            .add_systems(Update, (apply_sides, apply_tags, scripted_controls, scripted_ambience).after(StorySet));
+            .add_systems(Update, (apply_sides, apply_tags, scripted_controls, scripted_ambience, apply_damage_rates).after(StorySet));
         if std::env::var_os("FC3_STORY_RETRY_TEST").is_some() {
             app.add_systems(Update, retry_inventory_test.after(StorySet).run_if(in_state(GameState::Playing)));
         }
@@ -751,6 +751,9 @@ pub struct StoryHost {
     /// Whom scripts set characters against or beside
     /// (`PawnRelationshipModifier`), by id.
     pub relations: HashMap<u64, crate::npc::Relations>,
+    /// How much of other characters' gunfire characters take
+    /// (`NPC_SetDamage`): the level last set, and whether it is in force.
+    pub npc_damage: HashMap<u64, (u8, bool)>,
     /// Allied fighters sent to a battlefield's point (`SetBattlefields`).
     pub battlefield_posts: HashMap<u64, u64>,
     /// Alarm boxes scripts switched (`SetAlarmState`), for `story_alarms`.
@@ -907,6 +910,7 @@ impl StoryHost {
             impaired: HashMap::new(),
             relations: HashMap::new(),
             battlefield_posts: HashMap::new(),
+            npc_damage: HashMap::new(),
             alarm_sets: Vec::new(),
             health_sets: Vec::new(),
             spawned_props: Vec::new(),
@@ -1106,6 +1110,27 @@ impl Default for ScriptedPlayer {
             no_drowning: false,
             stance: None,
             break_sprint: false,
+        }
+    }
+}
+
+/// The share of other characters' gunfire scripts let characters take.
+fn apply_damage_rates(
+    host: Option<NonSend<StoryHost>>,
+    actors: Query<(Entity, &crate::story_actors::StoryActor, Option<&crate::combat::NpcDamageRate>)>,
+    mut commands: Commands,
+) {
+    let Some(host) = host else { return };
+    for (e, actor, rate) in &actors {
+        if host.npc_damage.is_empty() && rate.is_none() {
+            continue;
+        }
+        let want = host.npc_damage.get(&actor.id).filter(|(_, on)| *on).map(|(l, _)| crate::combat::NpcDamageRate::of_level(*l));
+        if want.as_ref() != rate {
+            match want {
+                Some(r) => commands.entity(e).insert(r),
+                None => commands.entity(e).remove::<crate::combat::NpcDamageRate>(),
+            };
         }
     }
 }
@@ -1728,6 +1753,7 @@ fn run_story(
             host.impaired.clear();
             host.relations.clear();
             host.battlefield_posts.clear();
+            host.npc_damage.clear();
             env_overrides.active.clear();
             env_overrides.seconds = 0.0;
             env_overrides.storm = None;
@@ -3202,6 +3228,20 @@ fn run_story(
                             let hostile = name.contains("Hostile");
                             let set = name.starts_with("CAPI_NPC.Set");
                             host.relations.entry(id).or_default().change(hostile, set, mask as u8);
+                        }
+                    }
+                    // How much of other characters' gunfire a group takes
+                    // (`group, level`: 0 none to 4 at once; 5 the level
+                    // again, 6 all of it).
+                    "NPC_SetDamage" => {
+                        let level = a(1).parse::<f32>().unwrap_or(3.0) as u8;
+                        for id in host.story.group_members(&a(0)) {
+                            let entry = host.npc_damage.entry(id).or_insert((3, true));
+                            match level {
+                                5 => entry.1 = true,
+                                6 => entry.1 = false,
+                                l => *entry = (l, true),
+                            }
                         }
                     }
                     // An alarm box a script switched (`id, state`).

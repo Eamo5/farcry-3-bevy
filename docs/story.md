@@ -262,6 +262,16 @@ is the story's own:
 * **Health set.** `CAPI_Pawn.SetPawnHealth <pawn> <origin> <health>` (the
   `HealthModifier` box's Set) leaves the player or a story character with
   that much health (as much as he holds), or kills him at 0.
+* **Damage from other characters.** `NPC_SetDamage <group> <level>` (the
+  `NPCDamageModifier` box, 16 graphs: CIT_020's convoy ambush, HUR_040's
+  barge, WIL_040's VIP, WIL_050's target, the encounters' victims) sets
+  how much of other characters' gunfire a group takes: none, slow,
+  medium, fast or at once (0 to 4; we take a quarter, half, all and four
+  times), 5 the level again and 6 all of it. Blasts, fire, blows and the
+  player's shots are whole, as the box's notes say
+  (`combat::NpcDamageRate`). A reload lets them go. (Companions don't
+  fight here, so `CAPI_Companion.CompanionSetDamage` has nothing to
+  soften.)
 * **The view turned for the player.** `PlayerLookAtModifier` (20 graphs)
   turns the player's view to what a mission shows him: at once
   (`SetPlayerLookAngles`, already played), or blended over its time, a

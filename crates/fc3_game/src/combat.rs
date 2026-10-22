@@ -344,6 +344,25 @@ fn add_player_health(mut commands: Commands, player: Query<(Entity, &Transform),
     }
 }
 
+/// The share of other characters' gunfire one takes (`NPC_SetDamage`: a
+/// convoy's allies, an escorted VIP, a captive kept alive a while; 0 none).
+/// Blasts, fire, blows and the player's shots are whole.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct NpcDamageRate(pub f32);
+
+impl NpcDamageRate {
+    /// The box's levels: none, slow, medium, fast, immediate.
+    pub fn of_level(level: u8) -> NpcDamageRate {
+        NpcDamageRate(match level {
+            0 => 0.0,
+            1 => 0.25,
+            2 => 0.5,
+            3 => 1.0,
+            _ => 4.0,
+        })
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply_damage(
     table: Res<DamageTable>,
@@ -360,6 +379,7 @@ fn apply_damage(
     driving: Option<Res<crate::vehicles::Driving>>,
     mut progress: ResMut<crate::progression::Progress>,
     mut harm: ResMut<LastHarm>,
+    rates: Query<&NpcDamageRate>,
 ) {
     for ev in events.read() {
         // (Kept a while: those gone are let go now and then.)
@@ -392,6 +412,11 @@ fn apply_damage(
         }
         if let Some(a) = armour.filter(|_| ev.kind == DamageKind::Bullet && !ev.headshot && counters.is_none()) {
             amount *= a.0;
+        }
+        if let Ok(rate) = rates.get(ev.target) {
+            if ev.kind == DamageKind::Bullet && ev.instigator.is_some_and(|i| instigators.get(i).is_ok_and(|(_, npc, ..)| npc.is_some())) {
+                amount *= rate.0;
+            }
         }
         // The game's counters: each kind of harm and body part's armour, and
         // a part that has taken all it can kills.
@@ -658,6 +683,41 @@ mod tests {
         let tiger = Vulnerability { name: "Tiger".into(), animal: true, health: Some(800.0), head: 2.3, ..Default::default() };
         let pirate = Vulnerability { name: "Pirate_Assaulter".into(), ..Default::default() };
         DamageTable(Some(Damage { archetypes: vec![heavy, tiger, pirate], ..Default::default() }))
+    }
+
+    /// A character kept alive by a script takes none of another's gunfire
+    /// (or a share of it), but all of the player's and of blasts.
+    #[test]
+    fn a_damage_rate_softens_other_characters_gunfire() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(DamageTable(None))
+            .init_resource::<crate::progression::Perks>()
+            .init_resource::<crate::settings::Settings>()
+            .init_resource::<crate::syringes::Boosts>()
+            .init_resource::<crate::story::ScriptedPlayer>()
+            .init_resource::<crate::progression::Progress>()
+            .init_resource::<LastHarm>()
+            .add_message::<DamageEvent>()
+            .add_message::<Died>()
+            .add_systems(Update, apply_damage);
+        let mut rng = crate::weapons::Rng::seeded(1);
+        let shooter = app.world_mut().spawn(crate::npc::new_npc(crate::npc::Faction::Pirate, crate::npc::Role::Assault, Vec3::ZERO, 0.0, 0, &mut rng)).id();
+        let player = app.world_mut().spawn_empty().id();
+        let kept = app.world_mut().spawn((Health::new(100.0), NpcDamageRate::of_level(0))).id();
+        let slowed = app.world_mut().spawn((Health::new(100.0), NpcDamageRate::of_level(1))).id();
+        let hit = |target, by, kind| DamageEvent { target, amount: 40.0, kind, source: None, instigator: Some(by), headshot: false, hit: Hit::Whole };
+        for ev in [hit(kept, shooter, DamageKind::Bullet), hit(slowed, shooter, DamageKind::Bullet)] {
+            app.world_mut().write_message(ev);
+        }
+        app.update();
+        let health = |app: &App, e| app.world().get::<Health>(e).unwrap().current;
+        assert_eq!((health(&app, kept), health(&app, slowed)), (100.0, 90.0));
+        for ev in [hit(kept, player, DamageKind::Bullet), hit(kept, shooter, DamageKind::Explosion)] {
+            app.world_mut().write_message(ev);
+        }
+        app.update();
+        assert_eq!(health(&app, kept), 20.0);
     }
 
     #[test]
