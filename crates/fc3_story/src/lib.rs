@@ -2104,6 +2104,27 @@ mod tests {
         assert_eq!(told, [vec![PLAYER.to_string(), "10".into(), "0".into(), "-45".into()]]);
     }
 
+    /// An entity resized reads its size back (the scale box blends from it)
+    /// and the host is told.
+    #[test]
+    fn a_script_resizes_an_entity() {
+        let mut story = empty_story();
+        let lua = story.domino().lua().clone();
+        assert_eq!(lua.load(r#"return CAPI_Entity.GetScale("55")"#).eval::<f64>().unwrap(), 1.0);
+        story.take_commands();
+        lua.load(r#"CAPI_Entity.SetScale("55", 0.25)"#).exec().unwrap();
+        assert_eq!(lua.load(r#"return CAPI_Entity.GetScale("55")"#).eval::<f64>().unwrap(), 0.25);
+        let told: Vec<Vec<String>> = story
+            .take_commands()
+            .into_iter()
+            .filter_map(|c| match c {
+                Command::Native { name, args } if name == "CAPI_Entity.SetScale" => Some(args),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(told, [vec!["55".to_string(), "0.25".to_string()]]);
+    }
+
     /// A boss fight's ambience on until its box stops it; stopping another
     /// leaves it on.
     #[test]

@@ -129,6 +129,8 @@ pub struct Core {
     /// `CAPI_Entity.GetAlarmState` gives it (0 idle, 1 active, 2 disabled,
     /// 3 destroyed).
     pub alarms: HashMap<u64, (u8, u64)>,
+    /// Entities scripts resized (`CAPI_Entity.SetScale`), by id.
+    pub scales: HashMap<u64, f64>,
     pub ticks: BTreeMap<u64, Callback>,
     pub missions: Missions,
     pub layers: HashMap<u64, LayerState>,
@@ -252,6 +254,7 @@ impl Core {
             listeners: BTreeMap::new(),
             delays: BTreeMap::new(),
             alarms: HashMap::new(),
+            scales: HashMap::new(),
             ticks: BTreeMap::new(),
             missions: Missions::default(),
             layers: HashMap::new(),

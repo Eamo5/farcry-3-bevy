@@ -41,6 +41,7 @@ impl Plugin for StoryPlugin {
             .add_systems(Update, stream_world_scripts.after(StorySet).run_if(in_state(GameState::Playing)))
             .add_systems(Update, apply_entity_poses.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, apply_entity_physics.after(StorySet).in_set(EntityPosesSet))
+            .add_systems(Update, apply_entity_scales.after(apply_entity_poses).in_set(EntityPosesSet))
             .add_systems(Update, draw_markers.after(StorySet))
             .add_systems(Update, (weapon_events, shot_events).after(StorySet).run_if(in_state(GameState::Playing)))
             .add_systems(Update, (player_landings, autopilot_drop).after(StorySet).run_if(in_state(GameState::Playing)))
@@ -313,6 +314,7 @@ pub struct EntityPlacements {
     poses: HashMap<u64, (u64, Transform)>,
     revision: u64,
     physics: HashMap<u64, (u64, bool)>,
+    scales: HashMap<u64, f32>,
 }
 
 impl EntityPlacements {
@@ -353,11 +355,56 @@ impl EntityPlacements {
         for id in ids {
             self.set_physics(id, true);
         }
+        // (Back to their own sizes.)
+        for scale in self.scales.values_mut() {
+            *scale = 1.0;
+        }
     }
 
     fn set_physics(&mut self, id: u64, enabled: bool) {
         self.revision += 1;
         self.physics.insert(id, (self.revision, enabled));
+    }
+
+    /// An entity a script resized (`CAPI_Entity.SetScale`): its size times
+    /// this, from now on.
+    fn set_scale(&mut self, id: u64, scale: f32) {
+        self.scales.insert(id, scale);
+    }
+}
+
+/// An entity's size before a script resized it.
+#[derive(Component)]
+struct BaseScale(Vec3);
+
+/// Resizes what scripts resized (visuals only, as the engine's box says:
+/// a body keeps its size).
+#[allow(clippy::type_complexity)]
+fn apply_entity_scales(
+    placements: Res<EntityPlacements>,
+    mut roots: Query<
+        (Entity, Option<&crate::objects::PlacedId>, Option<&crate::story_actors::StoryActor>, &mut Transform, Option<&BaseScale>),
+        Or<(With<crate::objects::PlacedId>, With<crate::story_actors::StoryActor>)>,
+    >,
+    mut commands: Commands,
+) {
+    if placements.scales.is_empty() {
+        return;
+    }
+    for (e, prop, actor, mut t, base) in &mut roots {
+        let Some(id) = prop.map(|p| p.0).or_else(|| actor.map(|a| a.id)) else { continue };
+        let Some(&scale) = placements.scales.get(&id) else { continue };
+        let base = match base {
+            Some(b) => b.0,
+            None => {
+                commands.entity(e).insert(BaseScale(t.scale));
+                t.scale
+            }
+        };
+        let want = base * scale.max(1e-3);
+        if t.scale != want {
+            t.scale = want;
+        }
     }
 }
 
@@ -1345,6 +1392,13 @@ pub(crate) fn weapon_def(inv: &crate::weapons::Inventory, archetype: &str, data:
     // folder: the Ink Monster fight's `BOW.citraBossFightBow`).
     let family = short.split('.').next().filter(|f| !f.is_empty())?;
     if let Some(def) = in_folder(family) {
+        return Some(def);
+    }
+    // (Or its model's own name, letters and digits alike: JAS_130's
+    // `GM-94`, ours the `GL-94` drawn by `gm94grenadelauncher\gm94.xbg`.)
+    let plain = |s: &str| s.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_lowercase();
+    let want = plain(family);
+    if let Some(def) = inv.defs.iter().position(|d| d.model.rsplit('\\').next().and_then(|f| f.split('.').next()).is_some_and(|stem| plain(stem) == want)) {
         return Some(def);
     }
     data.entities.values().filter(|e| e.has("CFCXWeapon") && e.name.to_ascii_lowercase().contains(family)).find_map(|e| {
@@ -3258,6 +3312,12 @@ fn run_story(
                     "CAPI_Entity.SetPhysicsEnabled" => {
                         if let Ok(id) = a(0).parse::<u64>() {
                             placements.set_physics(id, a(1) != "false" && a(1) != "0");
+                        }
+                    }
+                    // An entity resized (`entity, scale`).
+                    "CAPI_Entity.SetScale" => {
+                        if let (Ok(id), Ok(scale)) = (a(0).parse::<u64>(), a(1).parse::<f32>()) {
+                            placements.set_scale(id, scale);
                         }
                     }
                     // The player's controls narrowed to an input action map.

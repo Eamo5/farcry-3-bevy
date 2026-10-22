@@ -262,6 +262,17 @@ is the story's own:
 * **Health set.** `CAPI_Pawn.SetPawnHealth <pawn> <origin> <health>` (the
   `HealthModifier` box's Set) leaves the player or a story character with
   that much health (as much as he holds), or kills him at 0.
+* **Resized entities.** `CAPI_Entity.SetScale <entity> <scale>` (the
+  `ScaleModifier` box: DEN_060's vignettes of Buck, Hoyt and Vaas,
+  JAS_240's apparitions) resizes a character or a prop, blended a tick at a
+  time from its size as `CAPI_Entity.GetScale` reads it back (always 1
+  before). Visuals only, as the box's notes say; a reload puts them back.
+* **Weapons by their models' names.** Scripts name weapons by library
+  archetype; JAS_130 takes back its `weapons:FC3/GM-94`, which our
+  `GL-94` (`gm94grenadelauncher\gm94.xbg`) didn't answer to, so the empty
+  launcher stayed in a holster and the flamethrower WIL_020's briefing
+  offers had no room. A weapon is now also found by its model's own name,
+  letters and digits alike.
 * **Invincible characters.** A story character's counters say whose harm
   passes it by (`CFCXCountersComponentAI`: `bIsInvincibleToPlayer`, the
   companions and the cinematic and quest characters, `...ToAI`,

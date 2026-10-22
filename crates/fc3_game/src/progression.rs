@@ -3918,6 +3918,18 @@ mod shop_tests {
         }
     }
 
+    /// Scripts name weapons by their library archetypes: JAS_130 takes back
+    /// its `GM-94`, ours the `GL-94` drawn by `gm94.xbg`.
+    #[test]
+    fn scripts_name_weapons_by_their_archetypes() {
+        let inv = inventory();
+        let data = fc3_story::data::StoryData::default();
+        let gl = inv.defs.iter().position(|d| d.name == "GL-94").unwrap();
+        assert_eq!(crate::story::weapon_def(&inv, "weapons:FC3/GM-94", &data), Some(gl));
+        let pistol = inv.defs.iter().position(|d| d.name == "1911").unwrap();
+        assert_eq!(crate::story::weapon_def(&inv, "weapons:FC3/1911", &data), Some(pistol));
+    }
+
     fn catalog(inv: &Inventory) -> (ShopCatalog, usize) {
         let def = inv.defs.iter().position(|d| d.name == "1911").unwrap();
         (

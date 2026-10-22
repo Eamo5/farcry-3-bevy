@@ -167,7 +167,16 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     })?;
     r.f("GetMissionAckTriggerState", |c, trigger: Text| trigger.id().is_some_and(|t| c.contacts(t).contains(&PLAYER)))?;
     r.f("CAPI_Entity.IsEntityTagged", |c, id: Text| id.id().is_some_and(|i| c.view.tagged.contains(&i)))?;
-    r.constant("CAPI_Entity.GetScale", 1.0)?;
+    // An entity resized (the `ScaleModifier` box: DEN_060's vignettes of
+    // Buck, Hoyt and Vaas, JAS_240's apparitions), blended a tick at a time
+    // from its size as read back.
+    r.f("CAPI_Entity.GetScale", |c, id: Text| id.id().and_then(|i| c.scales.get(&i).copied()).unwrap_or(1.0))?;
+    r.f("CAPI_Entity.SetScale", |c, (id, scale): (Text, Num)| {
+        let Some(i) = id.id() else { return };
+        let scale = scale.or(1.0).max(0.0);
+        c.scales.insert(i, scale);
+        c.emit(Command::Native { name: "CAPI_Entity.SetScale".into(), args: vec![i.to_string(), scale.to_string()] });
+    })?;
     r.f("CAPI_Entity.GetAlarmState", |c, alarm: Text| alarm.id().and_then(|a| c.alarms.get(&a)).map_or(0.0, |s| s.0 as f64))?;
     r.f("CAPI_Entity.GetAlarmUserId", |c, alarm: Text| {
         alarm.id().and_then(|a| c.alarms.get(&a)).map_or(fc3_domino::INVALID_ID.to_string(), |s| s.1.to_string())
