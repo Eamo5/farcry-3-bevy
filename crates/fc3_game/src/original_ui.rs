@@ -4348,7 +4348,10 @@ fn drive_credits(
 /// it has been up `LOADING_LEAST`. The movie plays itself (its words, the
 /// game's tips, the spinner it loads, `Loading.feu`); it asks only
 /// `IsBootTitle` ("1" is the boot title's guns instead). The HUD hides
-/// under it. `FC3_LOADING_SHOT=<file>` (tests) captures it two seconds in.
+/// under it. A mission may put its own in place of it
+/// (`SetFlashLoadingScreen`: `Singleplayer_white.feu` through the dream
+/// missions, BAM_020 to BAM_060). `FC3_LOADING_SHOT=<file>` (tests)
+/// captures it two seconds in.
 const LOADING_MOVIE: &str = r"UI\Singleplayer\Menu\Loading\GameModes\Singleplayer.feu";
 /// A trial's own, as its run begins (the player taken to its start): its
 /// challenge page in loading mode (`CChallengePausePage` 1), the trial's
@@ -4397,6 +4400,7 @@ fn drive_loading(
     mut commands: Commands,
     mut up: ResMut<LoadingUp>,
     trials: Option<Res<crate::trials::Trials>>,
+    story: Option<NonSend<crate::story::StoryHost>>,
 ) {
     let Interface::Running(host) = &*state else { return };
     up.0 = shown.since.is_some();
@@ -4416,7 +4420,11 @@ fn drive_loading(
         if shown.waiting > LOADING_AFTER {
             host.answer("IsBootTitle", "0");
             shown.trial = trials.as_ref().is_some_and(|t| t.running());
-            host.load(if shown.trial { TRIAL_LOADING_MOVIE } else { LOADING_MOVIE }, LOADING_LEVEL);
+            // (A mission's own in place of the usual: the dream missions'
+            // white one.)
+            let mission = story.as_ref().and_then(|s| s.story.loading_screen());
+            let movie = if shown.trial { TRIAL_LOADING_MOVIE } else { mission.as_deref().unwrap_or(LOADING_MOVIE) };
+            host.load(movie, LOADING_LEVEL);
             host.level_visible(HUD_LEVEL, false);
             shown.since = Some(now);
             shown.shot = false;

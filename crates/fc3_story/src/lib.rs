@@ -977,6 +977,12 @@ impl Story {
         self.core.borrow().safehouses_unlocked.contains(&id)
     }
 
+    /// The loading screen's movie a mission asks for instead of the usual
+    /// one (`SetFlashLoadingScreen`), if any.
+    pub fn loading_screen(&self) -> Option<String> {
+        Some(self.core.borrow().media.loading_screen.clone()).filter(|m| !m.is_empty())
+    }
+
     /// The water levels scripts have set or are moving, by sector id, as
     /// they stand. (Single-player has the one world, whatever name a box
     /// gives it: `SetWaterLevel`'s default is `world2`, the modifier's
@@ -2057,6 +2063,18 @@ mod tests {
 
     fn empty_story() -> Story {
         Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), StoryData::default()).unwrap()
+    }
+
+    #[test]
+    fn a_mission_puts_its_own_loading_screen_up() {
+        let story = empty_story();
+        let lua = story.domino().lua().clone();
+        assert_eq!(story.loading_screen(), None);
+        lua.load(r#"SetFlashLoadingScreen("UI\\Singleplayer\\Menu\\Loading\\Gamemodes\\Singleplayer_white.feu")"#).exec().unwrap();
+        assert_eq!(story.loading_screen().as_deref(), Some(r"UI\Singleplayer\Menu\Loading\Gamemodes\Singleplayer_white.feu"));
+        assert_eq!(lua.load("return string.lower(GetFlashOverrideLoadingScreen())").eval::<String>().unwrap(), r"ui\singleplayer\menu\loading\gamemodes\singleplayer_white.feu");
+        lua.load(r#"SetFlashLoadingScreen("")"#).exec().unwrap();
+        assert_eq!(story.loading_screen(), None);
     }
 
     #[test]

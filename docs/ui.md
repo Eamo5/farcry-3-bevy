@@ -446,7 +446,14 @@ only what changed (and everything again until the movies have loaded):
   down; it still picks, and slows the world.
 * **Mission timer**: `ObjectiveTimer` shows the first of the story's
   timers in `ObjectiveTimerText` (as the game's own HUD writes it), hidden
-  without one.
+  without one: a mission's objective timer or gauge
+  (`ShowObjectiveTimer`, `ShowObjectiveGageTimer`) ahead of its named
+  ones.
+* **A mission's loading screen**: the dream missions (BAM_020 to BAM_060)
+  put the white one up (`SetFlashLoadingScreen`,
+  `Loading\GameModes\Singleplayer_white.feu`: its words and tips on
+  white) in place of the usual for every load while they run, and take it
+  down again as they end; `GetFlashOverrideLoadingScreen` reads it back.
 * **Subtitles**: `ShowSubTitle(text)` / `HideSubTitle()`.
 * **Using** on foot is a hold, as the game's gameplay map has it (`use` on
   `kb:e` held, after the `ClickGenerator` `HoldTime`, 0.37 s, which the

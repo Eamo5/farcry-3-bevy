@@ -64,6 +64,10 @@ pub struct Media {
     /// outpost held against its attack), counting down while shown.
     pub objective_timer: Option<ObjectiveTimer>,
     pub gage_timer: Option<ObjectiveTimer>,
+    /// The loading screen's movie a mission puts in place of the usual one
+    /// (`SetFlashLoadingScreen`: the white one through the dream missions);
+    /// empty for the usual.
+    pub loading_screen: String,
 }
 
 /// An objective timer on the HUD: seconds left, what it's for (a string
@@ -386,7 +390,8 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         c.raise(&Listen::Entity(crate::PLAYER, format!("{}_Loaded", name.0)), vec![Arg::id(crate::PLAYER)]);
         id as f64
     })?;
-    r.constant("GetFlashOverrideLoadingScreen", "")?;
+    r.f("GetFlashOverrideLoadingScreen", |c, ()| c.media.loading_screen.clone())?;
+    r.f("SetFlashLoadingScreen", |c, movie: Text| c.media.loading_screen = movie.0)?;
 
     // ---- on-screen timers
     r.f("RegisterNamedTimerLocalized", |c, (name, initial, increasing, show, section, item, append): (Text, Num, Flag, Flag, Text, Text, Flag)| {
