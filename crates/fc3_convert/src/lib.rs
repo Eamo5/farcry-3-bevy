@@ -2121,6 +2121,20 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
             }
         }
     }
+    // The story's placed ones (the particle systems on mission layers, and
+    // those scripts start: `story_fx`).
+    if let Ok(entities) = std::fs::read(job.root().join(fc3_formats::story::ENTITIES_REL))
+        .map_err(anyhow::Error::from)
+        .and_then(|b| fc3_formats::story::from_bytes(&b))
+    {
+        for n in entities.iter().filter_map(|e| fc3_formats::story::particle_effect(&e.components)) {
+            let n = n.to_ascii_lowercase();
+            if !names.contains(&n) {
+                names.push(n.clone());
+                optional.push(n);
+            }
+        }
+    }
     // The Ink Monster's fight's (its GSF entry's `m_particle...`).
     if let Ok(s) =
         std::fs::read(job.root().join(fc3_formats::gsf::CACHE_REL)).map_err(anyhow::Error::from).and_then(|b| fc3_formats::gsf::BossFightSettings::parse(&b))
@@ -2235,7 +2249,9 @@ fn convert_authored_effects(job: &Job) -> Result<()> {
             write_atomic(job.root(), &rel, xml.as_bytes(), job.ctx)
         })();
         if let Err(e) = result {
-            let missing = ["not found", "no emitters"].iter().any(|m| format!("{e}").contains(m));
+            // (Its own or a texture it draws with: the archive lacks a
+            // few of the side quests' cinematic ones.)
+            let missing = ["not found", "no emitters"].iter().any(|m| format!("{e:#}").contains(m));
             if !(optional.contains(name) && missing) {
                 job.error(format!("authored effect {name}: {e:#}"));
             }

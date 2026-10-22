@@ -240,6 +240,18 @@ pub const STORY_COMPONENTS: [&str; 9] = [
     "CSafeHouseComponent",
 ];
 
+/// The particle effect a placed particle system plays (its
+/// `CNewParticlesComponent`'s library name), and whether it starts by
+/// itself (`bAutoStart`).
+pub fn particle_effect(components: &Object) -> Option<String> {
+    let c = components.children.iter().find(|c| c.is("CNewParticlesComponent"))?;
+    c.str_h(0x1943_B130).filter(|n| !n.is_empty())
+}
+
+pub fn particle_autostarts(components: &Object) -> bool {
+    components.children.iter().find(|c| c.is("CNewParticlesComponent")).and_then(|c| c.bool("bAutoStart")).unwrap_or(true)
+}
+
 /// Whether an entity's components include one of [`STORY_COMPONENTS`].
 pub fn has_story_component(components: &Object) -> bool {
     components.children.iter().any(|c| STORY_COMPONENTS.iter().any(|n| c.is(n)))

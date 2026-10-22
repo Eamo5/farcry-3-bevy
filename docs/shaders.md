@@ -327,6 +327,19 @@ them, written to `world/effects.txt`:
   round the doctor's cliff house and in the caves, dust floating and falling.
   These play only as authored (nothing stands in where one isn't cached).
 
+The story's own placed particle systems (4,852 story entities with a
+`CNewParticlesComponent`: the fires, smoke, dust and debris a mission's layers
+put up for its set pieces, DEN_040's chimney collapse, and those on the
+world's layer that scripts start) play from `story_fx`, as authored, while
+their entity is in the world as the story sees it and within 160 m. Those
+that start by themselves (`bAutoStart`, mission layers only: `world_fx` has
+the world's own) do; the rest wait for a script's `ParticleSystem` box
+(`CNewParticlesComponent_PlayParticles`; `_StopParticles`, `_PauseParticles`
+and `_CleanParticles` take them away; 123 graphs). The lamps' glows and beams
+are left to the lamps. The converter caches each one the story names (one
+the archive lacks, or one with a texture it lacks, is left out).
+`FC3_FX_DEBUG` logs those playing.
+
 The list keeps each one's rotation and effect name too (`kind x y z qx qy qz qw
 name`, after the `# fc3-world-fx 3` header; an older list is written again). The
 converter caches each named effect (109 of them; one the library lacks is

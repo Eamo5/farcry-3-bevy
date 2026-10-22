@@ -759,6 +759,9 @@ pub struct StoryHost {
     pub invincible: HashMap<u64, bool>,
     /// Vehicles scripts blow up, for `vehicles`.
     pub vehicle_explosions: Vec<u64>,
+    /// Placed particle systems scripts started (true) or stopped
+    /// (`ParticleSystem`), for `story_fx`.
+    pub fx_switched: HashMap<u64, bool>,
     /// Allied fighters sent to a battlefield's point (`SetBattlefields`).
     pub battlefield_posts: HashMap<u64, u64>,
     /// Alarm boxes scripts switched (`SetAlarmState`), for `story_alarms`.
@@ -918,6 +921,7 @@ impl StoryHost {
             npc_damage: HashMap::new(),
             invincible: HashMap::new(),
             vehicle_explosions: Vec::new(),
+            fx_switched: HashMap::new(),
             alarm_sets: Vec::new(),
             health_sets: Vec::new(),
             spawned_props: Vec::new(),
@@ -1776,6 +1780,7 @@ fn run_story(
             host.battlefield_posts.clear();
             host.npc_damage.clear();
             host.invincible.clear();
+            host.fx_switched.clear();
             env_overrides.active.clear();
             env_overrides.seconds = 0.0;
             env_overrides.storm = None;
@@ -2570,6 +2575,12 @@ fn run_story(
             }
             Command::EntityEvent { entity, event } if event == "CCompoundPhysComponent_ChangeState" => {
                 breaks.break_now(entity);
+            }
+            // A placed particle system a script starts, or stops, pauses or
+            // cleans away (`ParticleSystem`).
+            Command::EntityEvent { entity, event } if event.starts_with("CNewParticlesComponent_") => {
+                debug!("story: effect {entity} {event}");
+                host.fx_switched.insert(entity, event.ends_with("_PlayParticles"));
             }
             // A vehicle a script blows up (`VehicleModifier`'s SetExplosion).
             Command::EntityEvent { entity, event } if event == "CVehicle_SetExplosion" => {

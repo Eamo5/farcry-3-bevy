@@ -106,6 +106,7 @@ mod stealth;
 mod sticky_fire;
 mod story;
 mod story_actors;
+mod story_fx;
 mod story_alarms;
 mod story_props;
 mod drinking;
@@ -514,6 +515,7 @@ fn main() {
         ))
         .add_plugins(vine_puff::VinePuffPlugin)
         .add_plugins(authored_fx::AuthoredFxPlugin)
+        .add_plugins(story_fx::StoryFxPlugin)
         .add_plugins(burning::BurningPlugin)
         .add_plugins(burnables::BurnablesPlugin)
         .add_plugins(sticky_fire::StickyFirePlugin)
