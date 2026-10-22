@@ -354,7 +354,9 @@ an approximation.
   (see above).
 * **Wind and animation.** The per-node weights (node 0x18/0x1C/0x24/0x28/0x48),
   the physics constants and the big-leaf skin weights are decoded only as raw
-  values. Swaying is not reproduced.
+  values. Trees sway with the foliage wind instead (`vegetation`'s
+  `TREE_WIND`: bending with height, leaves fluttering, as strong as the
+  weather's wind), not branch by branch.
 * **LOD switching.** The root has three sets of increasing distances that
   probably drive LOD and leaf thinning. `defaultrealtreeconfig.xml` has
   `TreeLODAgressivity`, `LeavesRatio` and `ShadowLeavesRatio`. Not

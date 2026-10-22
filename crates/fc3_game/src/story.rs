@@ -2380,8 +2380,11 @@ fn run_story(
             // (Again a while later, gone out of its radius since: HOY_010's
             // Sam, defusing a bomb with the player kept near him.)
             .find(|w| {
-                !host.used.contains(&(w.0, format!("near {}", w.1)))
-                    || (to_bevy(w.2).distance(t.translation) > w.1 + 2.0 && now - host.near_at.get(&w.0).copied().unwrap_or(f32::MIN) > NEAR_AGAIN)
+                // (Not one that failed the mission: DEN_040's camp is a
+                // failing zone round HUR_020's briefing spot.)
+                !host.fatal.contains(&(w.0, format!("near {}", w.1)))
+                    && (!host.used.contains(&(w.0, format!("near {}", w.1)))
+                        || (to_bevy(w.2).distance(t.translation) > w.1 + 2.0 && now - host.near_at.get(&w.0).copied().unwrap_or(f32::MIN) > NEAR_AGAIN))
             })
             .filter(|_| tails.is_empty())
             .filter(|_| {
@@ -2403,6 +2406,7 @@ fn run_story(
             // still at the end).
             info!("story autopilot: near {} ({radius} m)", data.name_of(id).unwrap_or("?"));
             host.used.insert((id, format!("near {radius}")));
+            host.last_step = Some((id, format!("near {radius}"), now));
             host.near_at.insert(id, now);
             let at = to_bevy(point);
             let side = (t.translation - at).with_y(0.0).normalize_or(Vec3::Z);
