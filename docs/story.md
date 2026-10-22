@@ -3611,7 +3611,12 @@ its trigger, with DEN_020; DEN_040's briefing starts.
   (they were constants). A box's group is the one its `CAlarmPoint` names
   (`AlarmGroup`); its own group component is empty. The autopilot goes for
   a working box once a script waits for `Alarm_Disabled`, before any
-  takedown. B10 completes as it's switched off.
+  takedown. B10 completes as it's switched off. Scripts switch boxes too
+  (`SetAlarmState <group> <0|1|2|3>`, the `AlarmModifier` box: JAS_220's
+  compound set off, DEN_040's camp quiet at its start, SAM_015's
+  reinforcements, a reload's `RestoreAlarmState`): each box of the group
+  that changes takes the state, its groups hear it as when a guard or the
+  player switches it, and it sounds, falls quiet or goes dead with it.
 * **The bomb (B20)** is the `MissionBomb` box: it spawns a "ghost" charge
   from an archetype at the spot, waits for the player to use it, plays the
   planting move (with markups that place the charge), shuts the player's

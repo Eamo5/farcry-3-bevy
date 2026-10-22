@@ -4,8 +4,9 @@
 //! one runs for it and sets it off, as outpost guards do theirs. The story
 //! hears either on the alarm's groups (`Alarm_Disabled`, `Alarm_Activated`,
 //! and `Alarm_Deactivated` once the siren has run its course) and reads the
-//! box's state back (`CAPI_Entity.GetAlarmState`). Outposts' own boxes stay
-//! with `outposts`.
+//! box's state back (`CAPI_Entity.GetAlarmState`). Scripts switch them too
+//! (`SetAlarmState`: JAS_220's compound set off, DEN_040's camp quiet, a
+//! reload's alarms restored). Outposts' own boxes stay with `outposts`.
 
 use std::collections::HashMap;
 
@@ -24,7 +25,14 @@ impl Plugin for StoryAlarmsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<StoryAlarms>().add_systems(
             Update,
-            (find_alarms, run_for_alarms, sound_alarms, autopilot_alarms, disable_alarms.before(crate::hud::HudSet).after(crate::turrets::man_turrets))
+            (
+                find_alarms,
+                script_alarms,
+                run_for_alarms,
+                sound_alarms,
+                autopilot_alarms,
+                disable_alarms.before(crate::hud::HudSet).after(crate::turrets::man_turrets),
+            )
                 .chain()
                 .run_if(in_state(crate::menu::GameState::Playing)),
         );
@@ -76,6 +84,23 @@ fn find_alarms(host: Option<NonSend<StoryHost>>, mut alarms: ResMut<StoryAlarms>
         .collect();
     info!("story alarms: {}", known.len());
     alarms.known = Some(known);
+}
+
+/// Boxes a script switched (`SetAlarmState`, the story having told its
+/// listeners): set off they sound, switched off or destroyed they're dead,
+/// off they're quiet and may be set off again.
+fn script_alarms(host: Option<NonSendMut<StoryHost>>, time: Res<Time>, mut alarms: ResMut<StoryAlarms>) {
+    let Some(mut host) = host else { return };
+    for (id, state) in std::mem::take(&mut host.alarm_sets) {
+        let state = match state {
+            0 => State::Idle,
+            1 => State::Active(time.elapsed_secs() as u32),
+            _ => State::Disabled,
+        };
+        debug!("story alarm {id}: {state:?} by a script");
+        alarms.state.insert(id, state);
+        alarms.runner.remove(&id);
+    }
 }
 
 /// The boxes in the world now (their mission layer present).

@@ -627,38 +627,15 @@ impl Story {
     /// `..Destroyed` with the user and the alarm, and
     /// `CAPI_Entity.GetAlarmState` tells it from now on.
     pub fn alarm_event(&mut self, alarm: u64, state: u8, user: u64) {
-        let event = match state {
-            0 => "Alarm_Deactivated",
-            1 => "Alarm_Activated",
-            2 => "Alarm_Disabled",
-            _ => "Alarm_Destroyed",
-        };
-        self.core.borrow_mut().alarms.insert(alarm, (state, user));
-        self.group_event(alarm, event, vec![Arg::id(user), Arg::id(alarm)]);
+        self.core.borrow_mut().alarm_event(alarm, state, user);
+        self.pump();
     }
 
     /// An event about an entity for the scripts listening on the groups it
     /// belongs to (`Die`, `CCounterEvent`, `CA_End`, `Alarm_Activated`,
     /// ...): callbacks get the event name, then `args`.
     pub fn group_event(&mut self, entity: u64, event: &str, args: Vec<Arg>) {
-        {
-            let mut c = self.core.borrow_mut();
-            let groups: std::collections::BTreeSet<String> = c
-                .listeners
-                .values()
-                .filter_map(|l| match &l.on {
-                    Listen::Group(g, e) if e == event || e.is_empty() => Some(g.clone()),
-                    _ => None,
-                })
-                .collect();
-            let mut all = vec![Arg::Str(event.to_string())];
-            all.extend(args);
-            for g in groups {
-                if c.groups(&values::Text(g.clone())).contains(&entity) {
-                    c.raise_where(|l| matches!(l, Listen::Group(lg, e) if *lg == g && (e == event || e.is_empty())), all.clone());
-                }
-            }
-        }
+        self.core.borrow_mut().group_event(entity, event, args);
         self.pump();
     }
 
@@ -2400,6 +2377,41 @@ mod tests {
         assert_eq!(heard, ["Alarm_Disabled 1 77"]);
         let state: f64 = story.domino().lua().load("return CAPI_Entity.GetAlarmState('77')").eval().unwrap();
         assert_eq!(state, 2.0);
+    }
+
+    /// A script switching alarms (`AlarmModifier`): each box of the group
+    /// that changes takes the state, its listeners hear it once, and the
+    /// host is told to sound or silence it.
+    #[test]
+    fn a_script_sets_off_its_alarms() {
+        let mut data = StoryData::default();
+        data.groups.insert(0xB196_55C7, vec![77, 78]);
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        let lua = story.domino().lua().clone();
+        lua.load(r##"
+            heard = {}
+            local box = { _type = { Got = function(self, event, user, alarm) heard[#heard + 1] = event .. " " .. tostring(alarm) end } }
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("#B19655C7", "", box, "Got")
+        "##).exec().unwrap();
+        story.update(0.0, View::default());
+        story.take_commands();
+        lua.load(r##"SetAlarmState("#B19655C7", 1); SetAlarmState("#B19655C7", 1)"##).exec().unwrap();
+        let commands = story.take_commands();
+        story.update(0.0, View::default());
+        let mut heard: Vec<String> = lua.load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
+        heard.sort();
+        assert_eq!(heard, ["Alarm_Activated 77", "Alarm_Activated 78"]);
+        let told: Vec<Vec<String>> = commands
+            .into_iter()
+            .filter_map(|c| match c {
+                Command::Native { name, args } if name == "SetAlarmState" => Some(args),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(told, [vec!["77".to_string(), "1".to_string()], vec!["78".to_string(), "1".to_string()]]);
+        let state: f64 = lua.load("return CAPI_Entity.GetAlarmState('78')").eval().unwrap();
+        assert_eq!(state, 1.0);
+        assert_eq!(story.errors(), 0);
     }
 
     /// A move a script plays on the player runs a while (not cut short

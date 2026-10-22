@@ -419,6 +419,41 @@ impl Core {
         n
     }
 
+    /// Queues an event about an entity for the scripts listening on the
+    /// groups it belongs to: callbacks get the event name, then `args`.
+    pub fn group_event(&mut self, entity: u64, event: &str, args: Vec<Arg>) {
+        let groups: std::collections::BTreeSet<String> = self
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Group(g, e) if e == event || e.is_empty() => Some(g.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut all = vec![Arg::Str(event.to_string())];
+        all.extend(args);
+        for g in groups {
+            if self.groups(&crate::values::Text(g.clone())).contains(&entity) {
+                self.raise_where(|l| matches!(l, Listen::Group(lg, e) if *lg == g && (e == event || e.is_empty())), all.clone());
+            }
+        }
+    }
+
+    /// An alarm box's state changed (1 set off, 0 quiet again, 2 switched
+    /// off, 3 destroyed) by `user`: its groups hear `Alarm_Activated` /
+    /// `..Deactivated` / `..Disabled` / `..Destroyed` with the user and the
+    /// alarm, and `CAPI_Entity.GetAlarmState` tells it from now on.
+    pub fn alarm_event(&mut self, alarm: u64, state: u8, user: u64) {
+        let event = match state {
+            0 => "Alarm_Deactivated",
+            1 => "Alarm_Activated",
+            2 => "Alarm_Disabled",
+            _ => "Alarm_Destroyed",
+        };
+        self.alarms.insert(alarm, (state, user));
+        self.group_event(alarm, event, vec![Arg::id(user), Arg::id(alarm)]);
+    }
+
     pub fn call(&mut self, callback: Callback, args: Vec<Arg>) {
         self.actions.push_back(Action::Call(callback, args));
     }

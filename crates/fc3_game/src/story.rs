@@ -710,6 +710,8 @@ pub struct StoryHost {
     pub damages: Vec<(u64, f32)>,
     /// Characters' senses as scripts hold them (`SetImpairedState`), by id.
     pub impaired: HashMap<u64, u8>,
+    /// Alarm boxes scripts switched (`SetAlarmState`), for `story_alarms`.
+    pub alarm_sets: Vec<(u64, u8)>,
     /// Health scripts set (`SetPawnHealth`), by pawn.
     pub health_sets: Vec<(u64, f32)>,
     /// Props scripts spawned, not yet drawn.
@@ -860,6 +862,7 @@ impl StoryHost {
             end_of_game: false,
             damages: Vec::new(),
             impaired: HashMap::new(),
+            alarm_sets: Vec::new(),
             health_sets: Vec::new(),
             spawned_props: Vec::new(),
             unplayed: HashMap::new(),
@@ -3090,6 +3093,12 @@ fn run_story(
                     // A group's senses held (`PawnSetImpairedState`: 0 not,
                     // 1 fully, a captive tied up; 2 minimally, one held at
                     // gunpoint).
+                    // An alarm box a script switched (`id, state`).
+                    "SetAlarmState" => {
+                        if let (Ok(id), Ok(state)) = (a(0).parse::<u64>(), a(1).parse::<u8>()) {
+                            host.alarm_sets.push((id, state));
+                        }
+                    }
                     "SetImpairedState" => {
                         let state = a(1).parse::<f32>().unwrap_or(0.0) as u8;
                         for id in host.story.group_members(&a(0)) {

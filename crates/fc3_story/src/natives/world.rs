@@ -172,6 +172,20 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.f("CAPI_Entity.GetAlarmUserId", |c, alarm: Text| {
         alarm.id().and_then(|a| c.alarms.get(&a)).map_or(fc3_domino::INVALID_ID.to_string(), |s| s.1.to_string())
     })?;
+    // Alarms a script switches (the `AlarmModifier` box: 0 off, 1 set off,
+    // 2 disabled, 3 destroyed; a reload's `RestoreAlarmState`): each box in
+    // the group that changes takes the state, its groups hear of it as when
+    // a guard or the player switches it, and the host sounds or silences it.
+    r.f("SetAlarmState", |c, (group, state): (Text, Num)| {
+        let state = state.or(0.0).clamp(0.0, 3.0) as u8;
+        for id in c.groups(&group) {
+            if c.alarms.get(&id).map_or(0, |s| s.0) == state {
+                continue;
+            }
+            c.alarm_event(id, state, u64::MAX);
+            c.emit(Command::Native { name: "SetAlarmState".into(), args: vec![id.to_string(), state.to_string()] });
+        }
+    })?;
     r.f("CAPI_Entity.GetLookAtTriggerState", |c, trigger: Text| trigger.id().is_some_and(|t| c.looked_at.contains(&t)))?;
     r.constant("CAPI_Entity.IsEntityBurnedOut", false)?;
     r.constant("CAPI_Entity.IsEntityBurning", false)?;
