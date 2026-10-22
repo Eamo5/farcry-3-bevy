@@ -905,6 +905,15 @@ dimmed to match the game's falloff at the eye's distance, never brightened
 (`lamps::inner_clamp`): what is near the eye (the hands, a wall beside it)
 is lit as in the game. The threshold `t` isn't read yet.
 
+The converted world's lights are its own layer's. The story's lights join
+them (`lamps::story_lamps`): 441 on mission layers (DEN_040's logging camp's
+floodlights and fluorescents, a ship's lamps, a compound's spots), lit while
+their entity is in the world as the story sees it, and 503 of the world's
+own that scripts name. The `DynamicLightModifier` box (54 graphs) switches
+them (`CDynamicLightComponent_ActivateLight`, `..._DeactivateLight`); one
+placed switched off (`bEnabled` 0) waits for a script; a reload lets the
+switches go.
+
 Parts that leave the standard and original materials for one of another
 kind (the tattooed arm, these effects) are swapped over two frames
 (`original_shaders::swap_next_frame`): the old material comes off in one

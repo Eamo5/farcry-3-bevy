@@ -8,8 +8,14 @@
 //! flicker as the game sets them to. Camp fires light their logs with their
 //! flame effect's own light (and some have a broader light placed beside
 //! them as well).
+//!
+//! The story's lights join them: those on mission layers burn while their
+//! layer is in the world (a camp's floodlights, a ship's lamps), and scripts
+//! switch the story's lights on and off (the `DynamicLightModifier` box:
+//! `CDynamicLightComponent_ActivateLight`, `..._DeactivateLight`); one placed
+//! switched off (`bEnabled` 0) waits for a script.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 use fc3_formats::lights::{FlickerWave, LightKind, WorldLight};
@@ -25,7 +31,7 @@ pub struct LampsPlugin;
 impl Plugin for LampsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Lamps>()
-            .add_systems(Update, (load_lamps.run_if(resource_exists::<CacheInfo>), place_fire_lights, assign_lamps, drive_lights, drive_glows).chain());
+            .add_systems(Update, (load_lamps.run_if(resource_exists::<CacheInfo>), place_fire_lights, story_lamps, assign_lamps, drive_lights, drive_glows).chain());
     }
 }
 
@@ -91,6 +97,12 @@ struct Lamps {
     spots: Vec<Slot>,
     glows: Vec<Slot>,
     next_assign: f32,
+    /// The story's lights: each one's index, entity and whether it was
+    /// placed switched on; and those out now (their layer gone, switched
+    /// off).
+    owners: Vec<(u32, u64, bool)>,
+    dark: HashSet<u32>,
+    story_added: bool,
 }
 
 /// A pooled light (or glow, with no entity) and the light it currently shows
@@ -210,6 +222,81 @@ fn load_lamps(info: Res<CacheInfo>, mut lamps: ResMut<Lamps>, mut commands: Comm
     lamps.glows = (0..GLOW_SLOTS).map(|_| Slot { entity: Entity::PLACEHOLDER, current: None }).collect();
 }
 
+/// Whether a story light burns: as a script last switched it, else as it
+/// was placed, and only while its entity is in the world.
+fn story_light_on(switched: Option<bool>, placed_on: bool, loaded: bool) -> bool {
+    switched.unwrap_or(placed_on) && loaded
+}
+
+/// Adds the story's lights (once), and puts out those whose entity isn't in
+/// the world or that scripts switched off.
+fn story_lamps(time: Res<Time>, host: Option<NonSend<crate::story::StoryHost>>, mut lamps: ResMut<Lamps>, mut next: Local<f32>) {
+    let Some(host) = host else { return };
+    if !lamps.loaded {
+        return;
+    }
+    let lamps = &mut *lamps;
+    if !lamps.story_added {
+        lamps.story_added = true;
+        let data = host.story.data();
+        let (mut added, mut matched) = (0, 0);
+        for e in data.entities.values() {
+            let Some(params) = fc3_formats::lights::parse_light(&e.components) else { continue };
+            let position = fc3_formats::world::pos_to_bevy(e.pos);
+            let q = fc3_formats::world::angles_to_bevy_quat(e.angles);
+            let [x, y, z, w] = q;
+            let direction = [-2.0 * (x * z + w * y), -2.0 * (y * z - w * x), -(1.0 - 2.0 * (x * x + y * y))];
+            let kind = if e.name.to_ascii_lowercase().contains("spot") { LightKind::Spot } else { LightKind::Omni };
+            let placed_on = e.components.children.iter().find(|c| c.is("CDynamicLightComponent")).and_then(|c| c.bool("bEnabled")).unwrap_or(true);
+            let at = Vec3::from(position);
+            let cell = cell_of(at);
+            // (The world's own are in the list already, from its sectors.)
+            let known = (e.layer == fc3_formats::world::DEFAULT_MISSION_LAYER)
+                .then(|| lamps.cells.get(&cell).and_then(|ids| ids.iter().copied().find(|&i| Vec3::from(lamps.list[i as usize].position).distance(at) < 0.1)))
+                .flatten();
+            let i = match known {
+                Some(i) => {
+                    matched += 1;
+                    i
+                }
+                None => {
+                    let i = lamps.list.len() as u32;
+                    lamps.list.push(WorldLight { kind, position, direction, params });
+                    lamps.cells.entry(cell).or_default().push(i);
+                    added += 1;
+                    i
+                }
+            };
+            lamps.owners.push((i, e.id, placed_on));
+        }
+        info!("story lights: {added} placed, {matched} of the world's switched by scripts");
+    }
+    if time.elapsed_secs() < *next {
+        return;
+    }
+    *next = time.elapsed_secs() + 0.25;
+    lamps.dark = lamps
+        .owners
+        .iter()
+        .filter(|(_, id, placed_on)| !story_light_on(host.lights_switched.get(id).copied(), *placed_on, host.story.is_loaded(*id)))
+        .map(|(i, _, _)| *i)
+        .collect();
+}
+
+#[cfg(test)]
+mod story_light_tests {
+    use super::story_light_on;
+
+    /// Placed on, a light burns until a script puts it out; placed off, it
+    /// waits for one; neither while its layer is gone.
+    #[test]
+    fn story_lights_burn_as_placed_and_switched() {
+        assert!(story_light_on(None, true, true) && !story_light_on(Some(false), true, true));
+        assert!(!story_light_on(None, false, true) && story_light_on(Some(true), false, true));
+        assert!(!story_light_on(Some(true), true, false));
+    }
+}
+
 /// The lights of fires set down with something (an encounter's camp
 /// fire), once per spot.
 fn place_fire_lights(mut fires: MessageReader<crate::world_fx::PlaceFire>, mut lamps: ResMut<Lamps>) {
@@ -264,7 +351,7 @@ fn assign_lamps(time: Res<Time>, daylight: Res<Daylight>, cameras: Query<&Global
             let Some(ids) = lamps.cells.get(&(cx + dx, cz + dz)) else { continue };
             for &i in ids {
                 let l = &lamps.list[i as usize];
-                if switched_on(l, daylight.0) <= 0.0 {
+                if switched_on(l, daylight.0) <= 0.0 || lamps.dark.contains(&i) {
                     continue;
                 }
                 let d = c.distance(Vec3::from(l.position));
