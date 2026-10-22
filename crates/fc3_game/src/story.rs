@@ -662,6 +662,9 @@ pub struct StoryHost {
     /// The last block that completed, and whether it was a cinematic one
     /// (its end spawn is where the cinematic left the player).
     last_completed: Option<String>,
+    /// The autopilot's: the missions running and the last block completed,
+    /// and since when they've been so.
+    focus_since: Option<((Vec<String>, Option<String>), f32)>,
     /// Whether a scene held the view during the running block, and during
     /// the last one completed (its scene, played, left the player there).
     scene_in_block: bool,
@@ -882,6 +885,7 @@ impl StoryHost {
             story,
             due: Vec::new(),
             last_completed: None,
+            focus_since: None,
             scene_in_block: false,
             scene_in_last: false,
             quiet: 0.0,
@@ -2151,9 +2155,24 @@ fn run_story(
         // started across the island failed for CIT_020's triggers drawing
         // the player out of its zone).
         let focus = host.story.missions_running();
-        let watched =
-            if focus.is_empty() { host.story.watched_triggers_in_graph(graph.as_deref()) } else { host.story.watched_triggers_unowned(graph.as_deref()) };
         let focused = if focus.is_empty() { Vec::new() } else { host.story.watched_triggers_of(graph.as_deref(), &focus) };
+        // (Unless those missions have long gone nowhere, nothing of theirs
+        // left it can do: a supply run it can't drive held CIT_010 and
+        // BNG_010 back for good.)
+        let marker = (focus.clone(), host.last_completed.clone());
+        if host.focus_since.as_ref().is_none_or(|(m, _)| *m != marker) {
+            host.focus_since = Some((marker, now));
+        }
+        let stuck = host.focus_since.as_ref().is_some_and(|(_, since)| now - since > FOCUS_GIVE_UP);
+        let given_up = stuck && !focused.iter().any(|w| w.3 && !host.fatal.contains(&(w.0, w.1.clone())) && !host.used.contains(&(w.0, w.1.clone())));
+        if given_up && minute {
+            info!("story autopilot: {focus:?} gone nowhere a while; the others' triggers too");
+        }
+        let watched = if focus.is_empty() || given_up {
+            host.story.watched_triggers_in_graph(graph.as_deref())
+        } else {
+            host.story.watched_triggers_unowned(graph.as_deref())
+        };
         let awaiting_rock = host.story.watched_signals().iter().any(|s| s == "throw_rock");
         // Stuck: triggers stepped into before they were armed go again.
         if host.quiet > 25.0 {
@@ -3735,6 +3754,10 @@ fn learn_fatal(fatal: &mut std::collections::HashSet<(u64, String)>, id: u64, ev
 }
 /// How long before the autopilot goes near a place again, gone out of reach.
 const NEAR_AGAIN: f32 = 20.0;
+/// How long the running missions may go nowhere (no block completing)
+/// before the autopilot, with nothing of theirs left to do, takes the
+/// others' triggers too.
+const FOCUS_GIVE_UP: f32 = 240.0;
 /// Harm a script deals that kills whoever takes it.
 const KILLING_BLOW: f32 = 1000.0;
 
