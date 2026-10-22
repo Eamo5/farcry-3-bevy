@@ -121,6 +121,15 @@ fn apply_sides(
             }
         }
     }
+    // Cover looked for afresh.
+    if !host.recover.is_empty() {
+        let recover = std::mem::take(&mut host.recover);
+        for (actor, mut npc) in &mut npcs {
+            if recover.contains(&actor.id) {
+                npc.reevaluate_cover();
+            }
+        }
+    }
     // Senses a script holds: a captive tied up forgets the fight.
     if !host.impaired.is_empty() {
         for (actor, mut npc) in &mut npcs {
@@ -809,6 +818,8 @@ pub struct StoryHost {
     pub invincible: HashMap<u64, bool>,
     /// Vehicles scripts blow up, for `vehicles`.
     pub vehicle_explosions: Vec<u64>,
+    /// Characters told to look for cover afresh.
+    pub recover: Vec<u64>,
     /// Placed particle systems scripts started (true) or stopped
     /// (`ParticleSystem`), for `story_fx`.
     pub fx_switched: HashMap<u64, bool>,
@@ -975,6 +986,7 @@ impl StoryHost {
             npc_damage: HashMap::new(),
             invincible: HashMap::new(),
             vehicle_explosions: Vec::new(),
+            recover: Vec::new(),
             fx_switched: HashMap::new(),
             lights_switched: HashMap::new(),
             alarm_sets: Vec::new(),
@@ -3300,7 +3312,10 @@ fn run_story(
                             }
                         }
                     }
-                    "CAPI_Pawn.RemoveWeapon" if a(0) == fc3_story::PLAYER.to_string() => {
+                    // A weapon the player lets go of (the `DropWeapon` box:
+                    // WIL_020's briefing makes room for the flamethrower so;
+                    // by the id scripts know it by), as one taken back.
+                    "CAPI_Pawn.RemoveWeapon" | "CAPI_Pawn.DropWeapon" if a(0) == fc3_story::PLAYER.to_string() => {
                         if let Ok(mut inv) = inventory.single_mut() {
                             if let Some(def) = weapon_def(&inv, &host.story.item_name(&a(1)), &data) {
                                 inv.slots.retain(|w| w.def != def);
@@ -3387,6 +3402,12 @@ fn run_story(
                                 l => *entry = (l, true),
                             }
                         }
+                    }
+                    // A group told to look for cover afresh
+                    // (`SetReEvaluateCover`: `group, fact, true`).
+                    "SetAIFactBool" if a(1) == "ReEvaluateCover" => {
+                        let members = host.story.group_members(&a(0));
+                        host.recover.extend(members);
                     }
                     // An alarm box a script switched (`id, state`).
                     "SetAlarmState" => {

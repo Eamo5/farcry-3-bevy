@@ -267,6 +267,15 @@ is the story's own:
   JAS_240's apparitions) resizes a character or a prop, blended a tick at a
   time from its size as `CAPI_Entity.GetScale` reads it back (always 1
   before). Visuals only, as the box's notes say; a reload puts them back.
+* **Weapons dropped.** `CAPI_Pawn.DropWeapon <player> <weapon id>` (the
+  `DropWeapon` box: WIL_020's briefing makes room for the flamethrower
+  with it) takes the weapon from the player, as `RemoveWeapon` does (it
+  isn't left lying as a pickup).
+* **Cover looked for afresh.** `SetAIFactBool <group> ReEvaluateCover`
+  (the `SetReEvaluateCover` box, 47 graphs: a fight moved on) has a group
+  give up the cover it holds and look again (`npc::Npc::reevaluate_cover`).
+  The progression modes (`perProgressionMode`: running straight, shooting
+  on the way) aren't played.
 * **Weapons by their models' names.** Scripts name weapons by library
   archetype; JAS_130 takes back its `weapons:FC3/GM-94`, which our
   `GL-94` (`gm94grenadelauncher\gm94.xbg`) didn't answer to, so the empty

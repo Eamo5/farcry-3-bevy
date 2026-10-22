@@ -906,6 +906,13 @@ impl Npc {
     pub fn hiding(&self) -> bool {
         self.cover.is_some_and(|c| c.settled && !c.up)
     }
+
+    /// Looks for cover afresh (`SetReEvaluateCover`: the fight has moved,
+    /// a script says, and the cover it holds may not do).
+    pub fn reevaluate_cover(&mut self) {
+        self.cover = None;
+        self.cover_search = 0.0;
+    }
 }
 
 /// Where an enemy's head is (from its rig), for headshots.
