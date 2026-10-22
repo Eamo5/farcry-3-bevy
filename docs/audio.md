@@ -837,6 +837,17 @@ calls play. The rain (`clouds::rain`) is the region's, its parameter
 loop sent with no parameter (as before) wasn't heard. `FC3_REGION_DEBUG`
 logs the region, whether it was painted, and the bands' intensities.
 
+A script can put a region's ambience in place of the place's
+(`StartOverrideAmbiance <index>` / `StopOverrideAmbiance <index>`, the
+`SoundAmbianceOverride` box "played during battle with Boss"). The id is the
+region's index in the table: CIT_030's boss fight asks for 3,
+`CIT_Bossfight_Vortex`; JAS_240's escape room 41, `STR_Cit_Hallu_Fire`;
+BAM_055's trap room 47, `SHA_STR_Cavern_Collapse`; JAS_150 B20 0, `GYM
+Ocean`. While it is on, that region's bed, wind and calls play at full
+wherever the listener is, over the painted region and any room's, and its
+reverb is the outside's (`SoundRegions::forced`). Stopping another region
+leaves it on; a reload, the story begun again, ends it.
+
 The template's `Inibition` (`fDuration` 12, `fRange` 200; its sound type, 24,
 is the calls' own) is how long and how far round a disturbance silences the
 calls (the table's `inhibit` line): gunfire or a blast within 200 m of the

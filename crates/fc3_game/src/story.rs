@@ -62,7 +62,7 @@ impl Plugin for StoryPlugin {
                 matches!(state.get(), GameState::Playing | GameState::Paused | GameState::Map | GameState::Journal | GameState::Shop)
             }))
             .add_systems(Update, show_story_ui)
-            .add_systems(Update, (apply_sides, apply_tags, scripted_controls).after(StorySet));
+            .add_systems(Update, (apply_sides, apply_tags, scripted_controls, scripted_ambience).after(StorySet));
         if std::env::var_os("FC3_STORY_RETRY_TEST").is_some() {
             app.add_systems(Update, retry_inventory_test.after(StorySet).run_if(in_state(GameState::Playing)));
         }
@@ -1065,6 +1065,16 @@ impl Default for ScriptedPlayer {
     }
 }
 
+/// The ambience a script plays in place of the place's (a boss fight's).
+fn scripted_ambience(host: Option<NonSend<StoryHost>>, regions: Option<ResMut<crate::sound::SoundRegions>>) {
+    let (Some(host), Some(mut regions)) = (host, regions) else { return };
+    let forced = host.story.ambience_override().and_then(|i| u8::try_from(i).ok());
+    if regions.forced != forced {
+        debug!("story: ambience of sound region {forced:?}");
+        regions.forced = forced;
+    }
+}
+
 /// The stance and sprint scripts set go to the controls (held there until
 /// the player changes them himself).
 fn scripted_controls(mut scripted: ResMut<ScriptedPlayer>, mut actions: ResMut<crate::controls::ActionState>) {
@@ -1717,6 +1727,7 @@ fn run_story(
             races.reset();
             trials.reset();
             postfx.reset();
+            breaks.release_all();
             ui.subtitle = None;
             // Rebuild mission actors and discard transient wildlife together.
             // Leaving an ambient predator at its post-death position makes

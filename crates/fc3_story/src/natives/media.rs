@@ -68,6 +68,10 @@ pub struct Media {
     /// (`SetFlashLoadingScreen`: the white one through the dream missions);
     /// empty for the usual.
     pub loading_screen: String,
+    /// A sound region whose ambience a script plays wherever the player is
+    /// (`StartOverrideAmbiance`: a boss fight's, a cave's collapse), by its
+    /// index in the world's ambience table.
+    pub ambience: Option<u32>,
 }
 
 /// An objective timer on the HUD: seconds left, what it's for (a string
@@ -392,6 +396,14 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     })?;
     r.f("GetFlashOverrideLoadingScreen", |c, ()| c.media.loading_screen.clone())?;
     r.f("SetFlashLoadingScreen", |c, movie: Text| c.media.loading_screen = movie.0)?;
+    // (Stopping one that isn't on leaves the one that is: a box shutting
+    // down stops its own.)
+    r.f("StartOverrideAmbiance", |c, region: Num| c.media.ambience = region.0.filter(|r| *r >= 0.0).map(|r| r as u32))?;
+    r.f("StopOverrideAmbiance", |c, region: Num| {
+        if region.0.is_none_or(|r| c.media.ambience == Some(r as u32)) {
+            c.media.ambience = None;
+        }
+    })?;
 
     // ---- on-screen timers
     r.f("RegisterNamedTimerLocalized", |c, (name, initial, increasing, show, section, item, append): (Text, Num, Flag, Flag, Text, Text, Flag)| {

@@ -1023,6 +1023,10 @@ pub struct SoundRegions {
     map: Option<fc3_formats::sound_regions::RegionMap>,
     table: fc3_formats::sound_regions::Ambiences,
     here: Option<u8>,
+    /// The region a script plays wherever the listener is
+    /// (`StartOverrideAmbiance`: a boss fight's vortex, a cave collapsing),
+    /// over the painted one and any room's.
+    pub forced: Option<u8>,
 }
 
 impl SoundRegions {
@@ -1046,7 +1050,7 @@ fn load_regions(mut commands: Commands, info: Res<CacheInfo>) {
         Some(m) => info!("sound regions: {} ({} sectors painted, {} with several)", table.regions.len(), m.counts().0, m.counts().1),
         None => info!("sound regions: {}, no map (picked from the ground)", table.regions.len()),
     }
-    commands.insert_resource(SoundRegions { map, table, here: None });
+    commands.insert_resource(SoundRegions { map, table, here: None, forced: None });
 }
 
 /// Where the cache has no region map, a region picked from the ground: the
@@ -1191,10 +1195,13 @@ fn ambience(
     *out += (target - *out) * (time.delta_secs() * 2.0).min(1.0);
     let picked = || Region::at(ground, probe.terrain_layer(p.translation), driving.vehicle.is_some() || p.translation.y < SEA_LEVEL + 3.0);
     let painted = regions.map.as_ref().and_then(|m| m.region_at(p.translation.x, -p.translation.z));
-    let index = painted.unwrap_or_else(|| picked().index());
+    // (A script's region, at full, over the place's and a room's.)
+    let forced = regions.forced.filter(|i| regions.table.region(*i).is_some());
+    let index = forced.or(painted).unwrap_or_else(|| picked().index());
     regions.here = Some(index);
     let regions = &*regions;
     let region = regions.table.region(index);
+    let rooms = rooms.filter(|_| forced.is_none());
     let room = rooms.as_deref().and_then(|r| r.region());
     let inside = room.and_then(|i| u8::try_from(i).ok()).and_then(|i| regions.table.region(i));
     let room_bed = rooms.as_deref().and_then(|r| r.bed());
@@ -1206,7 +1213,7 @@ fn ambience(
         (None, Some(b)) => (b, 1.0),
         (None, None) => (picked().sounds().0, 1.0),
     };
-    let out = if room_bed.is_some() { 1.0 } else { *out };
+    let out = if room_bed.is_some() || forced.is_some() { 1.0 } else { *out };
     let light = tod.daylight();
     for (event, level) in beds.step(bed, gain, dt) {
         let tracks = regions.table.regions.iter().find(|r| r.bed == event).map(|r| (r.day_tracks, r.night_tracks, light));

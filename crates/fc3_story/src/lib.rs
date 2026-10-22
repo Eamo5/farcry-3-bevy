@@ -983,6 +983,12 @@ impl Story {
         Some(self.core.borrow().media.loading_screen.clone()).filter(|m| !m.is_empty())
     }
 
+    /// The sound region whose ambience a script plays in place of the one
+    /// the player is in (`StartOverrideAmbiance`), by its index.
+    pub fn ambience_override(&self) -> Option<u32> {
+        self.core.borrow().media.ambience
+    }
+
     /// The water levels scripts have set or are moving, by sector id, as
     /// they stand. (Single-player has the one world, whatever name a box
     /// gives it: `SetWaterLevel`'s default is `world2`, the modifier's
@@ -2075,6 +2081,21 @@ mod tests {
         assert_eq!(lua.load("return string.lower(GetFlashOverrideLoadingScreen())").eval::<String>().unwrap(), r"ui\singleplayer\menu\loading\gamemodes\singleplayer_white.feu");
         lua.load(r#"SetFlashLoadingScreen("")"#).exec().unwrap();
         assert_eq!(story.loading_screen(), None);
+    }
+
+    /// A boss fight's ambience on until its box stops it; stopping another
+    /// leaves it on.
+    #[test]
+    fn a_script_overrides_the_ambience_until_it_stops() {
+        let story = empty_story();
+        let lua = story.domino().lua().clone();
+        assert_eq!(story.ambience_override(), None);
+        lua.load("StartOverrideAmbiance(3)").exec().unwrap();
+        assert_eq!(story.ambience_override(), Some(3));
+        lua.load("StopOverrideAmbiance(47)").exec().unwrap();
+        assert_eq!(story.ambience_override(), Some(3));
+        lua.load("StopOverrideAmbiance(3)").exec().unwrap();
+        assert_eq!(story.ambience_override(), None);
     }
 
     #[test]

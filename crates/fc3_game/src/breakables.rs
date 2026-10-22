@@ -42,6 +42,12 @@ pub struct Breaks {
 }
 
 impl Breaks {
+    /// Lets go everything scripts kept whole (a reload: its scripts keep
+    /// them again as they need).
+    pub fn release_all(&mut self) {
+        self.immune.clear();
+    }
+
     pub fn is_immune(&self, id: u64) -> bool {
         self.immune.contains(&id)
     }

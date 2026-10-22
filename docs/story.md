@@ -262,6 +262,11 @@ is the story's own:
 * **Health set.** `CAPI_Pawn.SetPawnHealth <pawn> <origin> <health>` (the
   `HealthModifier` box's Set) leaves the player or a story character with
   that much health (as much as he holds), or kills him at 0.
+* **Ambience overrides.** `StartOverrideAmbiance <region>` and
+  `StopOverrideAmbiance <region>` (the `SoundAmbianceOverride` box, 7
+  graphs: CIT_030's boss fight, BAM_055's trap room, JAS_240's escape
+  room) play a sound region's ambience wherever the player is until the
+  box stops it (see `audio.md`, Ambience).
 * **Static breakables.** `BreakMetaBreakable <entity>` (the
   `StaticBreakableBreaker` box: BAM_040's temple collapsing, BAM_055's
   ending, DEN_040's weapon caches) breaks a placed object outright, as
