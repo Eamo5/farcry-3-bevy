@@ -270,13 +270,10 @@ impl AiEvent {
         })
     }
 
-    /// Whether a soldier of `faction` belongs to its army: 1 is Red, the
-    /// pirates' and privateers' (the player's foes).
-    fn takes(&self, faction: crate::npc::Faction) -> bool {
-        match self.army {
-            1 => faction.hostile_to_player(),
-            _ => false,
-        }
+    /// Whether a soldier of an army (`Npc::army`) belongs to its army (1 is
+    /// red, the pirates' and privateers').
+    fn takes(&self, army: u8) -> bool {
+        self.army == u32::from(army)
     }
 
     /// What a soldier at `pos` makes of it: the state to take and where to
@@ -322,7 +319,7 @@ fn ai_events(
             None => player.translation,
         };
         for (at, mut npc) in &mut npcs {
-            if !event.takes(npc.faction) || matches!(npc.state, crate::npc::NpcState::Combat) {
+            if !event.takes(npc.army()) || matches!(npc.state, crate::npc::NpcState::Combat) {
                 continue;
             }
             if let Some((state, look)) = event.order(at.translation, threat) {
@@ -514,27 +511,43 @@ fn load_story_kits(info: Res<CacheInfo>, mut kits: ResMut<StoryKits>) {
     kits.defs = kits::from_text(&text).into_iter().filter(|k| k.id != 0).map(|k| (k.id, k)).collect();
 }
 
-/// How a story character fights, when it is armed and hostile to the player.
+/// How a story character fights, when it is armed and takes a side.
 #[derive(Clone, Copy, Debug)]
 struct Fighter {
     faction: crate::npc::Faction,
     role: crate::npc::Role,
+    /// Its army and whom its AI fights and spares.
+    armies: crate::npc::Armies,
     /// Its AI starts in the scripts' hands.
     scripted: bool,
 }
 
-/// From the pawn's AI: its army's hostility to the player's (grey) army, its
-/// primary weapon (none for a beheader's machete), and whether scripts hold
-/// it from the start.
 /// A placed story character that isn't a fighter (a captive, a guide):
 /// sent to a battlefield it is given, as its AI would take it there.
 pub(crate) fn walks_to_battlefields(data: &fc3_story::data::StoryData, id: u64) -> bool {
     data.entities.get(&id).is_some_and(|e| e.component("CFCXAIComponent").is_some() && fighter_of(e).is_none())
 }
 
+/// A placed story character fighting on the player's side (CIT_020's
+/// rebels): it takes up the battlefields it is given.
+pub(crate) fn fights_beside_player(data: &fc3_story::data::StoryData, id: u64) -> bool {
+    data.entities.get(&id).and_then(fighter_of).is_some_and(|f| f.faction == crate::npc::Faction::Rebel)
+}
+
+/// From the pawn's AI: its army and whom it is hostile to (the player's foes,
+/// and the rebels' own soldiers fighting the pirates), its primary weapon
+/// (none for a beheader's machete), and whether scripts hold it from the
+/// start.
 fn fighter_of(e: &fc3_story::data::Entry) -> Option<Fighter> {
+    use crate::npc::{army, Armies, Faction, Relations};
     let agent = e.component("CFCXAIComponent")?.child("AIObject")?.child("CPawnAgent")?;
-    if !agent.child("ArmyHostileMask").and_then(|m| m.bool("bGrey")).unwrap_or(false) {
+    let armies = Armies::from_agent(agent);
+    let primary = agent.child("ShootingPrefsSingle").and_then(|w| w.str("tmplPrimaryWeapon")).unwrap_or_default();
+    // The player's foes, and the rebels' soldiers on his side (their own
+    // shooting preferences: the outsiders and companions the player meets
+    // carry the plain ones and don't fight).
+    let foe = Relations::default().hostile_to(armies, army::GREY);
+    if !foe && !(Relations::default().hostile_to(armies, army::RED) && primary.contains("Rebel_")) {
         return None;
     }
     let mut personality = String::new();
@@ -544,14 +557,19 @@ fn fighter_of(e: &fc3_story::data::Entry) -> Option<Fighter> {
         }
     });
     let beheader = personality.contains("personality.beheader");
-    let primary = agent.child("ShootingPrefsSingle").and_then(|w| w.str("tmplPrimaryWeapon")).unwrap_or_default();
     // (A sniper's own weapon preference is "Unused": his personality says
     // what he is. HOY_010's last pirate, a sniper, was nobody's foe.)
     let by_personality = || (!personality.is_empty() && !beheader).then(|| crate::npc::role_from_weapon(&personality)).flatten();
     let role = crate::npc::role_from_weapon(&primary).or_else(by_personality).or(beheader.then_some(crate::npc::Role::Charger))?;
     let name = e.name.to_ascii_lowercase();
-    let faction = if name.contains("privateer") || name.contains("mercenar") { crate::npc::Faction::Privateer } else { crate::npc::Faction::Pirate };
-    Some(Fighter { faction, role, scripted: agent.bool("bStartOnScriptControl").unwrap_or(false) })
+    let faction = if !foe {
+        Faction::Rebel
+    } else if name.contains("privateer") || name.contains("mercenar") {
+        Faction::Privateer
+    } else {
+        Faction::Pirate
+    };
+    Some(Fighter { faction, role, armies, scripted: agent.bool("bStartOnScriptControl").unwrap_or(false) })
 }
 
 /// The skeleton a pawn's animation component names (`fileSkeleton`'s
@@ -709,6 +727,7 @@ fn spawn_actors(
         }
         if let Some(f) = fighter {
             let mut npc = crate::npc::story_npc(f.faction, f.role, at, yaw, e.id, rig, &mut rng);
+            npc.0.armies = f.armies;
             // Called in: they come looking.
             if let Some(Some(field)) = field {
                 npc.0.state = crate::npc::NpcState::Search;
@@ -1327,6 +1346,30 @@ mod tests {
         assert!(!crate::pickups::OwnLoot(vec![(1021, 0.0)]).gives(&groups, name_of, &[104540]));
     }
 
+    /// The story's pawns take their own armies' sides: SAM_020's privateers
+    /// the player's foes, CIT_020's rebels and SQC_010's (green, until a
+    /// script turns them) fighting the pirates beside him; his companions,
+    /// quest givers and the cheering rebels' outsiders don't fight.
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
+    fn installed_story_pawns_fight_for_their_own_armies() {
+        use crate::npc::{army, Faction};
+        let root = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let data = fc3_story::data::StoryData::load(&root).unwrap();
+        let fighter = |id: u64| fighter_of(&data.entities[&id]);
+        let privateer = fighter(2076168481815962286).unwrap();
+        assert_eq!((privateer.faction, privateer.armies.army), (Faction::Privateer, army::RED));
+        let rebel = fighter(2074548620614449691).unwrap();
+        assert_eq!((rebel.faction, rebel.role), (Faction::Rebel, crate::npc::Role::Assault));
+        assert!(fights_beside_player(&data, 2074548620614449691));
+        let green = fighter(2078463697444947257).unwrap();
+        assert_eq!((green.faction, green.armies.army), (Faction::Rebel, army::GREEN));
+        // Sam, a quest giver, Dennis.
+        for id in [2074868928208701670, 2075783308892975953, 2077288330747197802] {
+            assert!(fighter(id).is_none(), "{id} fights");
+        }
+    }
+
     /// An event point puts its army's soldiers within reach on to the
     /// player (combat), or sends them to the point (suspicious); others it
     /// leaves be.
@@ -1335,7 +1378,8 @@ mod tests {
         use crate::npc::{Faction, NpcState};
         let combat = AiEvent { at: Vec3::ZERO, army: 1, state: 3, reach: 150.0, left: 25.0, threat: None };
         let player = Vec3::new(10.0, 0.0, 0.0);
-        assert!(combat.takes(Faction::Pirate) && combat.takes(Faction::Privateer) && !combat.takes(Faction::Rebel));
+        let army = |f| crate::npc::Armies::of(f).army;
+        assert!(combat.takes(army(Faction::Pirate)) && combat.takes(army(Faction::Privateer)) && !combat.takes(army(Faction::Rebel)));
         assert_eq!(combat.order(Vec3::new(100.0, 0.0, 0.0), player), Some((NpcState::Search, player)));
         assert_eq!(combat.order(Vec3::new(200.0, 0.0, 0.0), player), None);
         let suspicious = AiEvent { state: 1, ..combat.clone() };

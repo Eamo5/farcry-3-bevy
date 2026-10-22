@@ -2791,6 +2791,70 @@ fn main() -> Result<()> {
                 }
             }
         }
+        "story-armies" => {
+            // The story's pawns by the armies their AI is hostile to and
+            // allied with, and those hostile to red but not grey (the
+            // player's allies) with their primary weapon: story-armies
+            let data = fc3_story::data::StoryData::load(&fc3_formats::cache::default_cache_root())?;
+            let mut by: BTreeMap<(String, String), usize> = BTreeMap::new();
+            let mut allies = Vec::new();
+            for e in data.entities.values() {
+                let Some(agent) = e.component("CFCXAIComponent").and_then(|c| c.child("AIObject")).and_then(|a| a.child("CPawnAgent")) else { continue };
+                let mask = |name: &str| {
+                    let m = agent.child(name);
+                    ["bBlue", "bRed", "bGrey", "bNeutral", "bGreen", "bYellow"]
+                        .iter()
+                        .filter(|c| m.and_then(|m| m.bool(c)).unwrap_or(false))
+                        .map(|c| &c[1..])
+                        .collect::<Vec<_>>()
+                        .join(",")
+                };
+                let (hostile, allied) = (mask("ArmyHostileMask"), mask("ArmyAllianceMask"));
+                if hostile.contains("Red") && !hostile.contains("Grey") {
+                    let primary = agent.child("ShootingPrefsSingle").and_then(|w| w.str("tmplPrimaryWeapon")).unwrap_or_default();
+                    allies.push(format!("{} {} [{}] {primary}", e.id, e.name, e.class));
+                }
+                *by.entry((hostile, allied)).or_default() += 1;
+            }
+            for ((h, a), n) in &by {
+                println!("{n:5} hostile [{h}] allied [{a}]");
+            }
+            allies.sort();
+            println!("{} hostile to red, not grey:", allies.len());
+            for a in &allies {
+                println!("  {a}");
+            }
+        }
+        "story-group" => {
+            // A group's members (`#hash` or hex), with each pawn's armies as
+            // its AI has them: story-group <hash>
+            let hash = u32::from_str_radix(args.get(1).context("usage: story-group <hash>")?.trim_start_matches('#').trim_start_matches("0x"), 16)?;
+            let data = fc3_story::data::StoryData::load(&fc3_formats::cache::default_cache_root())?;
+            for id in data.groups.get(&hash).into_iter().flatten() {
+                let Some(e) = data.entities.get(id) else {
+                    println!("{id} (not in the story's entities)");
+                    continue;
+                };
+                let agent = e.component("CFCXAIComponent").and_then(|c| c.child("AIObject")).and_then(|a| a.child("CPawnAgent"));
+                let mask = |name: &str| {
+                    let m = agent.and_then(|a| a.child(name));
+                    ["bBlue", "bRed", "bGrey", "bNeutral", "bGreen", "bYellow"]
+                        .iter()
+                        .filter(|c| m.and_then(|m| m.bool(c)).unwrap_or(false))
+                        .map(|c| &c[1..])
+                        .collect::<Vec<_>>()
+                        .join(",")
+                };
+                println!(
+                    "{id} layer {:#x} {} [{}] hostile [{}] allied [{}]",
+                    e.layer,
+                    e.name,
+                    e.class,
+                    mask("ArmyHostileMask"),
+                    mask("ArmyAllianceMask")
+                );
+            }
+        }
         "proto" => {
             // The cached entity library's prototype with a library item id
             // (hex, as shop items' arkArchetype name it): proto <id>

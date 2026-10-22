@@ -85,6 +85,41 @@ fn apply_sides(
     if let Some(choice) = host.throw_choice.take() {
         thrown.0 = Some(choice);
     }
+    // Allies sent to a battlefield take up their posts round its point
+    // (each its own, a few metres off).
+    if !host.battlefield_posts.is_empty() {
+        let data = host.story.data();
+        for (actor, mut npc) in &mut npcs {
+            let Some(at) = host.battlefield_posts.get(&actor.id).and_then(|s| data.entities.get(s)).map(|s| to_bevy(s.pos)) else { continue };
+            let turn = (actor.id % 360) as f32 * std::f32::consts::TAU / 360.0;
+            let post = at + Vec3::new(turn.cos(), 0.0, turn.sin()) * (2.0 + (actor.id % 5) as f32);
+            if npc.post.distance(post) > 0.5 {
+                debug!("story: {} posted at its battlefield {post}", actor.id);
+                npc.post = post;
+                npc.post_yaw = turn;
+                npc.at_spot = false;
+            }
+        }
+    }
+    // Whom scripts set them against or beside (SQC_010's rebels turned on
+    // the player, CIT_020's held back from the pirates a while).
+    if !host.relations.is_empty() {
+        for (actor, mut npc) in &mut npcs {
+            let Some(&relations) = host.relations.get(&actor.id) else { continue };
+            if npc.relations != relations {
+                let was = npc.hostile();
+                npc.relations = relations;
+                debug!("story: {} relations {relations:?}", actor.id);
+                // (Its fight looked at afresh: a foe it now spares is let be.)
+                npc.foe = None;
+                npc.foe_seen = false;
+                if was && !npc.hostile() {
+                    npc.awareness = 0.0;
+                    npc.state = crate::npc::NpcState::Idle;
+                }
+            }
+        }
+    }
     // Senses a script holds: a captive tied up forgets the fight.
     if !host.impaired.is_empty() {
         for (actor, mut npc) in &mut npcs {
@@ -120,6 +155,9 @@ fn apply_sides(
                     "the player's foe"
                 }
             );
+            if npc.faction != faction {
+                npc.armies = crate::npc::Armies::of(faction);
+            }
             npc.faction = faction;
             npc.neutral = neutral;
             // (Out of the fight: what it was after is forgotten.)
@@ -710,6 +748,11 @@ pub struct StoryHost {
     pub damages: Vec<(u64, f32)>,
     /// Characters' senses as scripts hold them (`SetImpairedState`), by id.
     pub impaired: HashMap<u64, u8>,
+    /// Whom scripts set characters against or beside
+    /// (`PawnRelationshipModifier`), by id.
+    pub relations: HashMap<u64, crate::npc::Relations>,
+    /// Allied fighters sent to a battlefield's point (`SetBattlefields`).
+    pub battlefield_posts: HashMap<u64, u64>,
     /// Alarm boxes scripts switched (`SetAlarmState`), for `story_alarms`.
     pub alarm_sets: Vec<(u64, u8)>,
     /// Health scripts set (`SetPawnHealth`), by pawn.
@@ -862,6 +905,8 @@ impl StoryHost {
             end_of_game: false,
             damages: Vec::new(),
             impaired: HashMap::new(),
+            relations: HashMap::new(),
+            battlefield_posts: HashMap::new(),
             alarm_sets: Vec::new(),
             health_sets: Vec::new(),
             spawned_props: Vec::new(),
@@ -1681,6 +1726,8 @@ fn run_story(
             host.used.clear();
             host.near_at.clear();
             host.impaired.clear();
+            host.relations.clear();
+            host.battlefield_posts.clear();
             env_overrides.active.clear();
             env_overrides.seconds = 0.0;
             env_overrides.storm = None;
@@ -2554,6 +2601,10 @@ fn run_story(
                                     if crate::story_actors::walks_to_battlefields(&data, pawn) && host.story.current_action(pawn).is_none() {
                                         debug!("story: {pawn} to battlefield {field} ({spot})");
                                         orders.0.insert(pawn, Some(spot));
+                                    } else if crate::story_actors::fights_beside_player(&data, pawn) {
+                                        // (An ally's post moves there: the
+                                        // player's foes are its AI's own.)
+                                        host.battlefield_posts.insert(pawn, spot);
                                     }
                                 }
                             }
@@ -3134,6 +3185,19 @@ fn run_story(
                     // A group's senses held (`PawnSetImpairedState`: 0 not,
                     // 1 fully, a captive tied up; 2 minimally, one held at
                     // gunpoint).
+                    // A pawn's hostility or alliance with armies set or
+                    // cleared (`pawn, mask`: blue 1, red 2, grey 4, neutral
+                    // 8, green 16, yellow 32).
+                    "CAPI_NPC.SetHostileWithArmyMask"
+                    | "CAPI_NPC.ClearHostileWithArmyMask"
+                    | "CAPI_NPC.SetAlliedWithArmyMask"
+                    | "CAPI_NPC.ClearAlliedWithArmyMask" => {
+                        if let (Ok(id), Ok(mask)) = (a(0).parse::<u64>(), a(1).parse::<f32>()) {
+                            let hostile = name.contains("Hostile");
+                            let set = name.starts_with("CAPI_NPC.Set");
+                            host.relations.entry(id).or_default().change(hostile, set, mask as u8);
+                        }
+                    }
                     // An alarm box a script switched (`id, state`).
                     "SetAlarmState" => {
                         if let (Ok(id), Ok(state)) = (a(0).parse::<u64>(), a(1).parse::<u8>()) {

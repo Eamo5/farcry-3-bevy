@@ -262,6 +262,28 @@ is the story's own:
 * **Health set.** `CAPI_Pawn.SetPawnHealth <pawn> <origin> <health>` (the
   `HealthModifier` box's Set) leaves the player or a story character with
   that much health (as much as he holds), or kills him at 0.
+* **Armies and relationships.** Each pawn's AI names its army
+  (`CPawnAgent`'s `selArmy`: 0 blue, 1 red, 2 grey, 3 neutral, 4 green, 5
+  yellow; the player is grey) and the armies it is hostile to and allied
+  with (`ArmyHostileMask`, `ArmyAllianceMask`). Story characters now fight
+  as theirs say (`npc::Armies`): those hostile to grey are the player's
+  foes as before, and the rebels' own soldiers (hostile to red, not grey,
+  with the rebels' shooting preferences: CIT_020's churchtown rebels,
+  SQC_010's green ones, the supply runs') fight the pirates beside him;
+  companions, quest givers and outsiders, whose preferences are the plain
+  ones, don't fight. An ally sent to a battlefield (`SetBattlefields`)
+  takes up a post round its point. The world's soldiers keep their
+  factions' (pirates and privateers red against blue, grey and green;
+  rebels grey against blue and red). `CAPI_NPC.Set/ClearHostileWithArmyMask`
+  and `Set/ClearAlliedWithArmyMask` (the `PawnRelationshipModifier` box, 34
+  graphs) put armies into or take them out of a pawn's masks: SQC_010's
+  rebels turn on the player, CIT_020's are held back from the pirates a
+  while, SAM_020's and JAS_200's privateers lose their alliance with him.
+  An ally is never fought. A reload lets them go. `fc3tool story-armies`
+  counts the story's pawns by their masks and lists the player's allies;
+  `story-group <hash>` lists a group with its members' masks. (The
+  random encounters' own calls are played by `encounters`. A character
+  that isn't a fighter, SQC_060's Roel, can't yet be turned into one.)
 * **Ambience overrides.** `StartOverrideAmbiance <region>` and
   `StopOverrideAmbiance <region>` (the `SoundAmbianceOverride` box, 7
   graphs: CIT_030's boss fight, BAM_055's trap room, JAS_240's escape

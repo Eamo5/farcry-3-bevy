@@ -84,6 +84,93 @@ impl Faction {
     }
 }
 
+/// The game's armies (a pawn's `selArmy`; `CAPI_NPC.SwitchArmy`'s number).
+/// The player's is grey; pirates and privateers are red.
+pub mod army {
+    pub const BLUE: u8 = 0;
+    pub const RED: u8 = 1;
+    pub const GREY: u8 = 2;
+    pub const NEUTRAL: u8 = 3;
+    pub const GREEN: u8 = 4;
+    pub const YELLOW: u8 = 5;
+
+    /// An army's bit in a mask (`PawnRelationshipModifier`'s: blue 1, red 2,
+    /// grey 4, neutral 8, green 16, yellow 32).
+    pub const fn bit(army: u8) -> u8 {
+        1 << army
+    }
+}
+
+/// A pawn's army and the armies its AI is hostile to and allied with (its
+/// `CPawnAgent`'s `selArmy`, `ArmyHostileMask`, `ArmyAllianceMask`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Armies {
+    pub army: u8,
+    pub hostile: u8,
+    pub allied: u8,
+}
+
+impl Armies {
+    /// A faction's, as the world's soldiers are placed: pirates and
+    /// privateers red, against blue, grey and green; rebels grey, against
+    /// blue and red.
+    pub fn of(faction: Faction) -> Armies {
+        use army::*;
+        match faction {
+            Faction::Rebel => Armies { army: GREY, hostile: bit(BLUE) | bit(RED), allied: bit(GREY) },
+            _ => Armies { army: RED, hostile: bit(BLUE) | bit(GREY) | bit(GREEN), allied: bit(RED) },
+        }
+    }
+
+    /// As a pawn's AI has them, if it has an agent.
+    pub fn from_agent(agent: &fc3_formats::fcb::Object) -> Armies {
+        let mask = |name: &str| {
+            let m = agent.child(name);
+            ["bBlue", "bRed", "bGrey", "bNeutral", "bGreen", "bYellow"]
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| m.and_then(|m| m.bool(c)).unwrap_or(false))
+                .fold(0, |acc, (i, _)| acc | army::bit(i as u8))
+        };
+        Armies { army: agent.u32("selArmy").map_or(army::RED, |a| a.min(5) as u8), hostile: mask("ArmyHostileMask"), allied: mask("ArmyAllianceMask") }
+    }
+}
+
+/// What scripts changed of a pawn's relationships (`PawnRelationshipModifier`:
+/// `CAPI_NPC.Set/ClearHostileWithArmyMask`, `Set/ClearAlliedWithArmyMask`):
+/// armies put into and taken out of its hostile and allied masks.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Relations {
+    pub hostile_on: u8,
+    pub hostile_off: u8,
+    pub allied_on: u8,
+    pub allied_off: u8,
+}
+
+impl Relations {
+    /// A script's change: hostility (else alliance) with the mask's armies
+    /// set (else cleared).
+    pub fn change(&mut self, hostile: bool, set: bool, mask: u8) {
+        let (on, off) = if hostile { (&mut self.hostile_on, &mut self.hostile_off) } else { (&mut self.allied_on, &mut self.allied_off) };
+        if set {
+            *on |= mask;
+            *off &= !mask;
+        } else {
+            *off |= mask;
+            *on &= !mask;
+        }
+    }
+
+    /// Whether a pawn of these armies is, as changed, hostile to an army
+    /// (an ally's never).
+    pub fn hostile_to(&self, base: Armies, other: u8) -> bool {
+        let b = army::bit(other);
+        let hostile = (base.hostile | self.hostile_on) & !self.hostile_off;
+        let allied = (base.allied | self.allied_on) & !self.allied_off;
+        hostile & b != 0 && allied & b == 0
+    }
+}
+
 /// What an enemy fights with, which sets its kit, toughness and tactics.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Role {
@@ -504,6 +591,10 @@ pub struct Npc {
     /// off, as if held by the script) or minimally (held at gunpoint: the
     /// player seen and interesting sounds go unnoticed).
     pub impaired: Impaired,
+    /// Its army and whom it fights and spares (its faction's, or a story
+    /// pawn's own), and what scripts changed of that.
+    pub armies: Armies,
+    pub relations: Relations,
     pub role: Role,
     pub state: NpcState,
     pub post: Vec3,
@@ -792,9 +883,23 @@ struct Cover {
 }
 
 impl Npc {
-    /// The player's foe: of a hostile side, and not made neutral.
+    /// The player's foe: hostile to his (grey) army, and not made neutral.
     pub fn hostile(&self) -> bool {
-        !self.neutral && self.faction.hostile_to_player()
+        self.hostile_to(army::GREY)
+    }
+
+    /// Whether it fights a pawn of an army (none while out of the fight).
+    pub fn hostile_to(&self, other: u8) -> bool {
+        !self.neutral && self.relations.hostile_to(self.armies, other)
+    }
+
+    /// Its army (neutral while out of the fight).
+    pub fn army(&self) -> u8 {
+        if self.neutral {
+            army::NEUTRAL
+        } else {
+            self.armies.army
+        }
     }
 
     /// Down behind cover (out of sight below the top of it).
@@ -1564,6 +1669,8 @@ pub(crate) fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker
         faction,
         neutral: false,
         impaired: Impaired::Not,
+        armies: Armies::of(faction),
+        relations: Relations::default(),
         role,
         state: NpcState::Idle,
         post: feet,
@@ -1771,8 +1878,8 @@ fn perceive(
         .collect();
     let chest = pt.translation + Vec3::Y * 0.4;
     // Everyone alive, for picking fights between factions.
-    let roster: Vec<(Entity, Vec3, Faction)> =
-        npcs.iter().filter(|(_, _, n, h)| !h.dead && !n.neutral).map(|(e, t, n, _)| (e, t.translation, n.faction)).collect();
+    let roster: Vec<(Entity, Vec3, u8)> =
+        npcs.iter().filter(|(_, _, n, h)| !h.dead && !n.neutral).map(|(e, t, n, _)| (e, t.translation, n.army())).collect();
     // Live animals: predators are shot when they come close, any animal once it bites.
     // (Not the dogs they keep.)
     let animals: Vec<(Entity, Vec3, bool)> =
@@ -1851,7 +1958,7 @@ fn perceive(
             let fought = npc.foe;
             let mut candidates: Vec<(f32, Entity, Vec3)> = roster
                 .iter()
-                .filter(|(o, _, f)| *o != e && !npc.neutral && npc.faction.hostile_to(*f))
+                .filter(|(o, _, a)| *o != e && npc.hostile_to(*a))
                 .map(|(o, p, _)| (p.distance(t.translation), *o, *p))
                 .chain(
                     animals
@@ -3760,6 +3867,37 @@ pub fn player_noise(writer: &mut MessageWriter<Noise>, at: Vec3, radius: f32, ki
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Armies as the world places them, and as scripts change a pawn's
+    /// hostility and alliances (`PawnRelationshipModifier`'s masks).
+    #[test]
+    fn relations_follow_armies_and_scripts() {
+        use army::*;
+        let pirate = Armies::of(Faction::Pirate);
+        let rebel = Armies::of(Faction::Rebel);
+        let none = Relations::default();
+        assert!(none.hostile_to(pirate, GREY) && none.hostile_to(pirate, rebel.army) && !none.hostile_to(pirate, RED));
+        assert!(none.hostile_to(rebel, pirate.army) && !none.hostile_to(rebel, GREY));
+        // SQC_010's rebels (green, against blue and red) turned on the
+        // player: alliance with grey cleared, hostility set.
+        let green = Armies { army: GREEN, hostile: bit(BLUE) | bit(RED), allied: bit(NEUTRAL) | bit(GREEN) };
+        let mut turned = Relations::default();
+        assert!(!turned.hostile_to(green, GREY));
+        turned.change(false, false, bit(GREY));
+        turned.change(true, true, bit(GREY));
+        assert!(turned.hostile_to(green, GREY) && turned.hostile_to(green, RED));
+        // CIT_020's rebels allied with red a while, then not.
+        let mut truce = Relations::default();
+        truce.change(false, true, bit(RED));
+        assert!(!truce.hostile_to(rebel, RED));
+        truce.change(false, false, bit(RED));
+        assert!(truce.hostile_to(rebel, RED));
+        // A victim no longer the player's foe (hostility cleared, though his
+        // own had it).
+        let mut freed = Relations::default();
+        freed.change(true, false, bit(GREY));
+        assert!(!freed.hostile_to(pirate, GREY));
+    }
 
     #[test]
     fn impaired_npcs_sense_as_their_box_says() {
