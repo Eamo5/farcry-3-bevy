@@ -281,7 +281,10 @@ No game data is included in this repository, and none is written into it.
   pause menus, the weapon wheel (hold next weapon: the world slows while you pick), an options screen (difficulty: Casual, Adventurer, Warrior or Infamous: how much a health bar holds, as the game's own table scales it, the regeneration's delay, and how fast enemies spot you; sensitivity, FOV, volume, view distance, shadows, window mode,
   rebindable keys), gamepad support, and a first-launch conversion screen.
 - **Saving**: autosaves every minute, on pause and on quit (position, health, weapons and ammo,
-  collected pickups, time of day). CONTINUE in the main menu resumes it.
+  collected pickups, time of day). CONTINUE in the main menu resumes it. On a mission, as in the
+  game, only its checkpoints save (the pause menu's Save is off); the pause menu offers its last
+  checkpoint and, where the mission allows, Abandon Mission, which asks first and puts the mission
+  back to be taken on again. Fast travel asks first too, and on a mission says it will abandon it.
 - **Original shaders**: the game's own D3D9 shaders are translated to WGSL during conversion. The
   converter pairs each material with a vertex/pixel shader pair, checks the pair by running it on the
   CPU, and bakes the result into the cache (3,747 of 3,762 materials pair; the textures a material

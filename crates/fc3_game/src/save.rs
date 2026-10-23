@@ -401,12 +401,25 @@ fn write_save(slot: &mut SaveSlot, sources: &SaveSources) -> bool {
     }
 }
 
-fn save_now(mut slot: ResMut<SaveSlot>, sources: SaveSources) {
-    write_save(&mut slot, &sources);
+/// Whether the player is on a mission: then, as in the game, only its
+/// checkpoints save ("The Save option is unavailable during missions.
+/// Progress will be checkpointed automatically."), and leaving loses what
+/// came after the last. Saving the place and the kit as they stood, with
+/// the story's progress at its checkpoint, went on from the save with the
+/// mission begun again around a player who wasn't at its start.
+pub fn on_mission(host: Option<&crate::story::StoryHost>) -> bool {
+    host.is_some_and(|h| h.story.mission_in_progress().is_some())
+}
+
+fn save_now(mut slot: ResMut<SaveSlot>, sources: SaveSources, host: Option<NonSend<crate::story::StoryHost>>) {
+    if !on_mission(host.as_deref()) {
+        write_save(&mut slot, &sources);
+    }
 }
 
 /// Saves now and then in play, at each story checkpoint (the game as it
-/// stands with the story's) and when asked; each told (`GameSaved`).
+/// stands with the story's) and when asked; each told (`GameSaved`). On a
+/// mission, only at its checkpoints (`on_mission`).
 #[allow(clippy::too_many_arguments)]
 fn autosave(
     time: Res<Time<Real>>,
@@ -416,16 +429,18 @@ fn autosave(
     mut story: ResMut<crate::story::StoryUi>,
     mut requests: MessageReader<SaveRequest>,
     mut saved: MessageWriter<GameSaved>,
+    host: Option<NonSend<crate::story::StoryHost>>,
 ) {
     let asked = requests.read().count() > 0;
     let checkpoint = std::mem::take(&mut story.checkpoint_reached);
-    if asked || checkpoint {
+    let mission = on_mission(host.as_deref());
+    if checkpoint || (asked && !mission) {
         if write_save(&mut slot, &sources) {
             saved.write(GameSaved { checkpoint });
         }
         return;
     }
-    if *state.get() != GameState::Playing {
+    if *state.get() != GameState::Playing || mission {
         return;
     }
     slot.since_save += time.delta_secs();
@@ -434,11 +449,21 @@ fn autosave(
     }
 }
 
-fn save_on_exit(mut exits: MessageReader<AppExit>, mut slot: ResMut<SaveSlot>, sources: SaveSources, back: Res<BackToMenu>, args: Res<Args>) {
+fn save_on_exit(
+    mut exits: MessageReader<AppExit>,
+    mut slot: ResMut<SaveSlot>,
+    sources: SaveSources,
+    back: Res<BackToMenu>,
+    args: Res<Args>,
+    host: Option<NonSend<crate::story::StoryHost>>,
+) {
     if exits.read().count() == 0 {
         return;
     }
-    write_save(&mut slot, &sources);
+    // (On a mission its last checkpoint stands.)
+    if !on_mission(host.as_deref()) {
+        write_save(&mut slot, &sources);
+    }
     // (An automated run only says so: it would start itself again and again.)
     if back.0 && args.automated() {
         info!("back to the main menu (an automated run ends here)");
@@ -782,6 +807,32 @@ mod tests {
         };
         assert_eq!(SaveGame::from_text(&s.to_text()), Some(s));
         assert_eq!(SaveGame::from_text("not a save"), None);
+    }
+
+    /// On a mission (one taken on, running) only its checkpoints save; off
+    /// one, and once it is given up, the game saves as ever.
+    #[test]
+    fn a_mission_in_progress_saves_only_at_its_checkpoints() {
+        let pack = || fc3_formats::scripts::ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap();
+        let host = crate::story::StoryHost::new(fc3_story::Story::new(pack(), fc3_story::data::StoryData::default()).unwrap(), None);
+        assert!(!on_mission(Some(&host)));
+        // (Taken on in a save, registered as the master graph goes.)
+        let mut s = host.story.save();
+        s.missions.push(("WIL_050_MAIN".into(), "Running".into(), true));
+        s.current = Some("WIL_050_MAIN".into());
+        let mut story = fc3_story::Story::new(pack(), fc3_story::data::StoryData::default()).unwrap();
+        story.boot_saved(&s);
+        let mut host = crate::story::StoryHost::new(story, None);
+        host.story
+            .domino()
+            .lua()
+            .load("CMissionManager.GetInstance():RegisterMission('wil_050_main.lua', '', 0, '', false, true, true, true, '')")
+            .exec()
+            .unwrap();
+        assert!(on_mission(Some(&host)));
+        assert!(host.story.abandon_mission());
+        assert!(!on_mission(Some(&host)));
+        assert!(!on_mission(None));
     }
 
     #[test]

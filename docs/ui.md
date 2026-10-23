@@ -554,8 +554,9 @@ phone calls (they are its voices and subtitles): ours stands down. `FC3_PLAYER_D
 `M_PauseMenu.feu` at level 10 over the HUD (which `SetVisible 0` hides,
 and our own pause menu stands down: `menu::OriginalPause`), and the game
 answers it as the engine did (above): `SetPageToLoad -1` for the pause
-page; on `SinglePlayerMenuLoaded`, `SetUnlockedMenus` (crafting, skills
-and save on; the last checkpoint while a mission runs; abandon while the
+page; on `SinglePlayerMenuLoaded`, `SetUnlockedMenus` (crafting and skills
+on; save off while on a mission, whose checkpoints save, `save::on_mission`;
+the last checkpoint while a mission runs; abandon while the
 mission the player took on lets him, with its text, 119083 "Abandon
 mission"; no restart or debug), `SetObjective` (the mission's title and objective, the money and
 its most, the rucksack's loot and its size) and `NewItems`. What is chosen

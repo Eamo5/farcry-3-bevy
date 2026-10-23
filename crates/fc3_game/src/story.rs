@@ -2766,6 +2766,7 @@ fn run_story(
                     host.checkpoint_progress = Some(progress.clone());
                     host.reload_at = Some(now + 0.5);
                     host.reload_in_place = true;
+                    ui.checkpoint_reached = true;
                 }
             }
             Command::Checkpoint => {

@@ -452,11 +452,16 @@ fn drive_pause(
             "SinglePlayerMenuLoaded" => {
                 map_page.open = false;
                 let mission = story.as_ref().is_some_and(|s| s.story.missions().iter().any(|m| m.1 == "Running"));
-                // (Abandoning: while a mission he took on lets him.)
+                // (Abandoning: while a mission he took on lets him. Saving:
+                // not on one, its checkpoints save, `save::on_mission`.)
                 let abandon = story.as_ref().is_some_and(|s| s.story.abandonable().is_some());
+                let save = !crate::save::on_mission(story.as_deref());
                 // crafting, skills, save, checkpoint, restart, abandon, debug,
                 // and the restart's and abandon's text ids
-                host.event("SetUnlockedMenus", &["1", "1", "1", if mission { "1" } else { "0" }, "0", if abandon { "1" } else { "0" }, "0", "", ABANDON_TEXT]);
+                host.event(
+                    "SetUnlockedMenus",
+                    &["1", "1", if save { "1" } else { "0" }, if mission { "1" } else { "0" }, "0", if abandon { "1" } else { "0" }, "0", "", ABANDON_TEXT],
+                );
                 let money = format!("{}/{}", progress.money, progress.money_cap());
                 let capacity = crafting.as_ref().map_or(16, |c| c.loot_capacity(&progress));
                 let rucksack = format!("{}/{}", crate::crafting::loot_count(&progress), capacity);
