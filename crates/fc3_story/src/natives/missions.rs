@@ -83,7 +83,15 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
             }
         }
     })?;
-    r.f(&m("EnableMissionAbort"), |c, (_owner, on): (Text, Flag)| c.missions.abort_enabled = on.0)?;
+    r.f(&m("EnableMissionAbort"), |c, (owner, on): (Text, Flag)| {
+        if let Some(o) = owner.id() {
+            if on.0 {
+                c.missions.abort_disabled.remove(&o);
+            } else {
+                c.missions.abort_disabled.insert(o);
+            }
+        }
+    })?;
     r.f(&m("LockMission"), |c, script: Text| {
         let id = fc3_domino::path_id(&script.0);
         if c.missions.by_id.contains_key(&id) {
@@ -126,7 +134,9 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.f("HasExclusiveMissionRunning", |c, ()| c.missions.running().any(|m| m.exclusive))?;
     r.f("GetMissionXpReward", |c, name: Text| c.data.rewards.get(&name.0.to_ascii_lowercase()).map(|r| r.xp).unwrap_or(0))?;
     r.f("GetMissionMoneyReward", |c, name: Text| c.data.rewards.get(&name.0.to_ascii_lowercase()).map(|r| r.money).unwrap_or(0))?;
-    r.f("AbandonMission", |c, ()| c.emit(Command::Native { name: "AbandonMission".into(), args: vec![] }))?;
+    r.f("AbandonMission", |c, ()| {
+        c.abandon_mission();
+    })?;
 
     // ---- safehouses and radio towers (unlocked state kept here; the host
     // shows it and sends the unlock events)

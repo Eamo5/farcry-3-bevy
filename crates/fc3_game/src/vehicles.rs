@@ -1493,7 +1493,7 @@ fn autopilot_wreck(
             .filter(|(_, _, v, _, _)| watched.contains(&v.story_id()))
             .map(|(_, _, v, h, _)| (v.story_id(), h.dead, hostile_crew(v), v.npc_occupants().map(|(p, _)| p).collect()))
             .collect();
-        info!("story autopilot: vehicles watched {watched:?}; in the world (id, wrecked, hostile crew, crew) {seen:?}");
+        debug!("story autopilot: vehicles watched {watched:?}; in the world (id, wrecked, hostile crew, crew) {seen:?}");
     }
     // (Well before the trigger step's own wait is up: else it always went
     // first, off into the next trigger, and the boat got away.)

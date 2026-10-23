@@ -555,11 +555,15 @@ phone calls (they are its voices and subtitles): ours stands down. `FC3_PLAYER_D
 and our own pause menu stands down: `menu::OriginalPause`), and the game
 answers it as the engine did (above): `SetPageToLoad -1` for the pause
 page; on `SinglePlayerMenuLoaded`, `SetUnlockedMenus` (crafting, skills
-and save on; the last checkpoint while a mission runs; no restart, abandon
-or debug), `SetObjective` (the mission's title and objective, the money and
+and save on; the last checkpoint while a mission runs; abandon while the
+mission the player took on lets him, with its text, 119083 "Abandon
+mission"; no restart or debug), `SetObjective` (the mission's title and objective, the money and
 its most, the rucksack's loot and its size) and `NewItems`. What is chosen
 comes back as `Resume`/`QuitMenu` (play on), `Quit` (to the main menu),
-`QuitToDesktop` (exit), `MissionOptionSelected` 0 (back to the last checkpoint), 4 (save:
+`QuitToDesktop` (exit), `MissionOptionSelected` 0 (back to the last checkpoint), 2
+(abandon: the game's question, 119085 "Abandon the mission? All unsaved
+progress will be lost.", asked over play, `story::ask_abandon`; see
+`story.md`), 4 (save:
 `save::SaveRequest`), 6 and 7 and
 `RequestPageChange` 3 and 8 (our journal, until the skills and crafting
 pages are the original's). The keyboard and mouse go to Ruffle while it is

@@ -285,6 +285,8 @@ fn run_interface(
 /// The pause menu's movie (a page manager) and its level, over the HUD's.
 const PAUSE_MOVIE: &str = r"UI\Singleplayer\Menu\Pause\M_PauseMenu.feu";
 const PAUSE_LEVEL: u32 = 10;
+/// The pause list's "Abandon mission" (its text id).
+const ABANDON_TEXT: &str = "119083";
 /// The HUD's level (`MainHud.feu`, and the pieces it loads).
 const HUD_LEVEL: u32 = 1;
 
@@ -301,8 +303,8 @@ fn drive_pause(
     mut next: ResMut<NextState<crate::menu::GameState>>,
     mut original: ResMut<crate::menu::OriginalPause>,
     mut calls: ResMut<UiCalls>,
-    (ui, mut progress, crafting, time, mut settings): (
-        Res<crate::story::StoryUi>,
+    (mut ui, mut progress, crafting, time, mut settings): (
+        ResMut<crate::story::StoryUi>,
         ResMut<crate::progression::Progress>,
         Option<Res<crate::crafting::CraftCatalog>>,
         Res<Time>,
@@ -382,6 +384,7 @@ fn drive_pause(
         if call.command != "Send" {
             continue;
         }
+        debug!("pause menu: {:?}", call.args);
         let arg = |i: usize| call.args.get(i).map(String::as_str).unwrap_or("");
         match arg(0) {
             // (A trial's board, result or pause page when a trial asked.)
@@ -449,8 +452,11 @@ fn drive_pause(
             "SinglePlayerMenuLoaded" => {
                 map_page.open = false;
                 let mission = story.as_ref().is_some_and(|s| s.story.missions().iter().any(|m| m.1 == "Running"));
-                // crafting, skills, save, checkpoint, restart, abandon, debug
-                host.event("SetUnlockedMenus", &["1", "1", "1", if mission { "1" } else { "0" }, "0", "0", "0", "", ""]);
+                // (Abandoning: while a mission he took on lets him.)
+                let abandon = story.as_ref().is_some_and(|s| s.story.abandonable().is_some());
+                // crafting, skills, save, checkpoint, restart, abandon, debug,
+                // and the restart's and abandon's text ids
+                host.event("SetUnlockedMenus", &["1", "1", "1", if mission { "1" } else { "0" }, "0", if abandon { "1" } else { "0" }, "0", "", ABANDON_TEXT]);
                 let money = format!("{}/{}", progress.money, progress.money_cap());
                 let capacity = crafting.as_ref().map_or(16, |c| c.loot_capacity(&progress));
                 let rucksack = format!("{}/{}", crate::crafting::loot_count(&progress), capacity);
@@ -621,6 +627,14 @@ fn drive_pause(
                 "0" => {
                     if let Some(mut story) = story {
                         story.reload_checkpoint(time.elapsed_secs());
+                    }
+                    next.set(GameState::Playing);
+                    return;
+                }
+                // Abandon mission: asked as the game asked, over play.
+                "2" => {
+                    if let Some(story) = story.as_ref() {
+                        crate::story::ask_abandon(&mut ui, &story.story);
                     }
                     next.set(GameState::Playing);
                     return;

@@ -92,6 +92,23 @@ as the class table itself. Every call from the engine goes through the class
 * Completion and failure come back to the boxes listening on the mission.
 * Mission layers have four states (disabled, enabled, active, deactivated);
   the host shows the present ones.
+* **Abandoning.** The mission the player took on last (acknowledged anew,
+  not again as a reload replays it; kept in the save as `current`) may be
+  given up, unless one of its running graphs keeps him to it
+  (`EnableMissionAbort(owner, false)`, per graph: a block's
+  `MissionMiscInfos`, 34 of them). The pause menu offers it (the original's
+  list item 2, or our own button) and asks first, in the game's words
+  ("Abandon the mission? All unsaved progress will be lost."); a supply
+  run's "Do you want to retry?" declined calls `AbandonMission()` itself.
+  It ends failed, its running blocks with it, and its listeners hear so
+  (WIL_040's chapter plays its briefing through again); then the story
+  goes on from a save with it back at its start, untaken: its main graph
+  running, its blocks as if never started (their states, their layers' and
+  the blocks' own) and those killed in their layers standing again. That
+  save is the checkpoint, and the story reloads from it where the player
+  stands (`Command::MissionAbandoned`). From WIL_040's escort (B35E),
+  abandoned, WIL_040 is back at B10, "Go to the rice fields.", the mission
+  marker at its start.
 
 ## Natives
 
@@ -1332,7 +1349,10 @@ is the story's own:
 * In the game: `FC3_STORY_AUTOPILOT=1` plays without a player: it steps
   into the triggers scripts wait on, looks at look-at triggers, gives the
   inputs they listen for, makes a noise by a guard whose action a script
-  waits to see broken off, accepts boxes, buys the tutorial shop's selected
+  waits to see broken off, accepts boxes (but declines a choice it has
+  accepted twice already: a supply run's "Do you want to retry?", which
+  only ever reloaded it), searches the bodies of those it fought for rounds
+  once its guns are dry (within 40 m), buys the tutorial shop's selected
   weapon using the actual priced inventory transaction, hunts with finite
   ammunition through ordinary shooting/damage, skins real carcasses and gathers
   real plant pickups for active ingredient listeners, answers QTEs (after

@@ -92,6 +92,9 @@ enum MenuButton {
     Play,
     /// The journal (skills, crafting, syringes), from the pause menu.
     Journal,
+    /// Giving up the mission the player is on (asked first), from the pause
+    /// menu while he may.
+    Abandon,
     Options,
     Controls,
     Quit,
@@ -135,6 +138,7 @@ fn setup_menu(mut commands: Commands) {
         (MenuButton::Continue, "CONTINUE"),
         (MenuButton::Play, "PLAY"),
         (MenuButton::Journal, "JOURNAL"),
+        (MenuButton::Abandon, "ABANDON MISSION"),
         (MenuButton::Options, "OPTIONS"),
         (MenuButton::Controls, "CONTROLS"),
         (MenuButton::Quit, "QUIT"),
@@ -321,6 +325,8 @@ fn menu_buttons(
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     mut continue_game: MessageWriter<crate::save::ContinueGame>,
     journal: Res<crate::progression::PauseMenu>,
+    story: Option<NonSend<crate::story::StoryHost>>,
+    mut story_ui: Option<ResMut<crate::story::StoryUi>>,
 ) {
     for (interaction, kind, mut bg) in &mut buttons {
         if *interaction == Interaction::Pressed {
@@ -344,6 +350,15 @@ fn menu_buttons(
                         next.set(GameState::Journal);
                     }
                 }
+                // Asked over play, as the original's pause menu asks.
+                MenuButton::Abandon => {
+                    if let (Some(host), Some(ui)) = (story.as_ref(), story_ui.as_mut()) {
+                        if *state.get() == GameState::Paused && host.story.abandonable().is_some() {
+                            crate::story::ask_abandon(ui, &host.story);
+                            next.set(GameState::Playing);
+                        }
+                    }
+                }
                 MenuButton::Options => options.0 = true,
                 MenuButton::Controls => hud.show_help = !hud.show_help,
                 MenuButton::Quit => {
@@ -365,12 +380,14 @@ fn update_menu(
     mut buttons: Query<(&MenuButton, &mut Visibility, &mut Node), Without<MenuRoot>>,
     mut play: Query<&mut Text, (With<PlayLabel>, Without<MenuTitle>)>,
     mut title: Query<&mut Text, (With<MenuTitle>, Without<PlayLabel>)>,
+    story: Option<NonSend<crate::story::StoryHost>>,
 ) {
     if !state.is_changed() && !slot.is_changed() && !options.is_changed() && !original.is_changed() {
         return;
     }
     let s = *state.get();
     let can_continue = s == GameState::MainMenu && slot.existing.is_some();
+    let can_abandon = s == GameState::Paused && story.is_some_and(|h| h.story.abandonable().is_some());
     if let Ok(mut v) = root.single_mut() {
         // Hidden in play and under the options screen (so it can't take clicks).
         // (The original UI's pause menu and frontend are up in its place.)
@@ -387,6 +404,7 @@ fn update_menu(
         let shown = match kind {
             MenuButton::Continue => can_continue,
             MenuButton::Journal => s == GameState::Paused,
+            MenuButton::Abandon => can_abandon,
             _ => continue,
         };
         *v = if shown { Visibility::Inherited } else { Visibility::Hidden };

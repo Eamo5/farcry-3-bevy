@@ -836,6 +836,11 @@ pub struct StoryHost {
     /// step going after a vehicle (the other steps wait).
     pub autopilot_burning: bool,
     pub autopilot_wrecking: bool,
+    /// When the player last gave up a mission (its scripts' failure, heard
+    /// just after, isn't shown), and whether the reload it's due goes on
+    /// where he stands.
+    abandoned_at: Option<f32>,
+    reload_in_place: bool,
     /// Placed particle systems scripts started (true) or stopped
     /// (`ParticleSystem`), for `story_fx`.
     pub fx_switched: HashMap<u64, bool>,
@@ -1024,6 +1029,8 @@ impl StoryHost {
             unusable: HashMap::new(),
             autopilot_burning: false,
             autopilot_wrecking: false,
+            abandoned_at: None,
+            reload_in_place: false,
             fx_switched: HashMap::new(),
             lights_switched: HashMap::new(),
             alarm_sets: Vec::new(),
@@ -1976,8 +1983,10 @@ fn run_story(
                 commands_out.entity(e).despawn();
             }
             info!("story checkpoint: reset {reset_count} mission/wildlife actors");
+            // (Not after giving up a mission: he goes on where he is.)
+            let in_place = std::mem::take(&mut host.reload_in_place);
             let data = host.story.data();
-            if let Some(sp) = host.story.respawn_point().and_then(|r| data.spawn_points.get(&r)) {
+            if let Some(sp) = host.story.respawn_point().and_then(|r| data.spawn_points.get(&r)).filter(|_| !in_place) {
                 teleport(&mut t, &mut p, sp.pos, sp.angles[2]);
             }
         }
@@ -2689,6 +2698,10 @@ fn run_story(
             }
             Command::MissionFailed { text, reload } => {
                 info!("story: mission failed ({:?}), reload {reload}", text.as_deref().map(plain));
+                // (The mission's own scripts failing it as it's given up.)
+                if !reload && host.abandoned_at.is_some_and(|at| now - at < 2.0) {
+                    continue;
+                }
                 if let Some((id, event, _)) = host.last_step.take().filter(|s| now - s.2 < FATAL_WITHIN) {
                     info!("story autopilot: {event} {} failed the mission; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
                     learn_fatal(&mut host.fatal, id, event);
@@ -2698,6 +2711,32 @@ fn run_story(
                 ui.cards.push(MissionCard::Failed { text });
                 if reload && host.reload_at.is_none() {
                     host.reload_at = Some(now + 4.0);
+                }
+            }
+            // Given up (a supply run's retry declined, the pause menu's
+            // Abandon mission): no reload, its objective gone.
+            // (Then the story goes on from it back at its start, offered
+            // again: kept as the checkpoint, the game's side with it, and
+            // reloaded where the player stands.)
+            Command::MissionAbandoned { name, save } => {
+                info!("story: {name} abandoned");
+                host.abandoned_at = Some(now);
+                ui.banner = Some(("Mission abandoned".to_string(), 4.0));
+                ui.objective = None;
+                ui.timers.clear();
+                host.reload_at = None;
+                if let Some(save) = save {
+                    if let Some(path) = slot.story_path() {
+                        let tmp = path.with_extension("tmp");
+                        if let Err(e) = std::fs::write(&tmp, save.to_text()).and_then(|_| std::fs::rename(&tmp, &path)) {
+                            warn!("could not save the story to {}: {e}", path.display());
+                        }
+                    }
+                    host.checkpoint = Some(*save);
+                    host.checkpoint_game_pending = true;
+                    host.checkpoint_progress = Some(progress.clone());
+                    host.reload_at = Some(now + 0.5);
+                    host.reload_in_place = true;
                 }
             }
             Command::Checkpoint => {
@@ -4084,6 +4123,7 @@ fn story_boxes(
     mut paused: Local<bool>,
     panels: Query<(Entity, &BoxPanel)>,
     mut commands: Commands,
+    mut accepted: Local<HashMap<String, u32>>,
 ) {
     let shown = ui.boxes.front().map(|b| b.id);
     for (e, panel) in &panels {
@@ -4118,7 +4158,22 @@ fn story_boxes(
         || std::env::var("FC3_STORY_RETRY_TEST").is_ok()
         || std::env::var("FC3_TRIAL_TEST").is_ok()
         || std::env::var("FC3_OUTPOST_FIRE_TEST").is_ok();
-    let cancel = b.choice && (keys.any_just_pressed([KeyCode::Backspace, KeyCode::KeyQ]) || pad_pressed(GamepadButton::East));
+    let mut cancel = b.choice && (keys.any_just_pressed([KeyCode::Backspace, KeyCode::KeyQ]) || pad_pressed(GamepadButton::East));
+    // (The autopilot, asked the same thing twice already, declines it the
+    // third time: a supply run's `Do you want to retry?` after it can't
+    // make the drop in time, which only ever reloaded it.)
+    let mut accept = accept;
+    if accept && b.choice && std::env::var("FC3_STORY_AUTOPILOT").is_ok() {
+        let asked = accepted.entry(b.body.clone()).or_insert(0);
+        if *asked >= 2 {
+            info!("story autopilot: declines {:?} ({} times accepted)", b.title, asked);
+            *asked = 0;
+            accept = false;
+            cancel = true;
+        } else if !panels.iter().any(|(_, p)| p.0 == b.id) {
+            *asked += 1;
+        }
+    }
     actions.clear();
     if !panels.iter().any(|(_, p)| p.0 == b.id) {
         let fallback = match (b.choice, pad) {
@@ -4173,8 +4228,33 @@ fn story_boxes(
     let id = b.id;
     ui.boxes.pop_front();
     if let Some(mut host) = host {
-        host.story.box_answered(id, accept);
+        // (The pause menu's own question: the mission given up, if he's
+        // sure.)
+        if id == ABANDON_BOX {
+            if accept {
+                host.story.abandon_mission();
+            }
+        } else {
+            host.story.box_answered(id, accept);
+        }
     }
+}
+
+/// The box asking whether to give up the mission (the pause menu's Abandon
+/// mission): no story box's id.
+pub const ABANDON_BOX: u64 = u64::MAX - 0xAB;
+
+/// Asks whether to give up the mission the player is on, in the game's own
+/// words ("Abandon the mission? All unsaved progress will be lost.").
+pub fn ask_abandon(ui: &mut StoryUi, story: &fc3_story::Story) {
+    let text = |id: u32, or: &str| story.data().strings.get(id).map_or_else(|| or.to_string(), str::to_string);
+    ui.boxes.push_back(StoryBox {
+        id: ABANDON_BOX,
+        title: text(119083, "Abandon mission"),
+        body: text(119085, "Abandon the mission? All unsaved progress will be lost."),
+        choice: true,
+        prompt: None,
+    });
 }
 
 /// Puts the player at a place (Dunia space) facing a heading (degrees).
@@ -4429,6 +4509,9 @@ const TAKEDOWN_PATIENCE: f32 = 6.0;
 /// Tests: how far from a foe the autopilot shoots him from, when it has to
 /// come nearer (m).
 const SHOOT_FROM: f32 = 15.0;
+/// Tests: how far (m) the autopilot goes to search a body for rounds once
+/// its guns are dry.
+const AMMO_SEARCH: f32 = 40.0;
 
 /// Tests: beyond how far (m) the autopilot shoots through the sights.
 const LONG_SHOT: f32 = 30.0;
@@ -5223,6 +5306,41 @@ fn autopilot_loot(
             });
         }
         return;
+    }
+    // Out of rounds (every gun under a magazine): the bodies of those it has
+    // fought searched for theirs, the nearest first, as a player would
+    // between fights (WIL_020's rifle ran dry for good, and the drug boat had
+    // to be burnt).
+    let out_of_rounds = inventory
+        .slots
+        .iter()
+        .filter(|s| matches!(inventory.defs[s.def].class, c if c != crate::weapons::WeaponClass::Melee && c != crate::weapons::WeaponClass::Flamethrower))
+        .all(|s| s.mag + s.reserve < inventory.defs[s.def].magazine.max(1));
+    if out_of_rounds && host.quiet > 4.0 && !on_call {
+        let body = npcs
+            .iter()
+            .filter(|(t, h, body, ..)| h.dead && body.is_some_and(|b| !b.skin) && near(t) < AMMO_SEARCH)
+            .min_by(|a, b| near(a.0).total_cmp(&near(b.0)));
+        if let Some((nt, _, _, _, actor, _, _)) = body {
+            if *last != Some((actor.id, "search for rounds")) {
+                info!("story autopilot: search {} for rounds", actor.id);
+                *last = Some((actor.id, "search for rounds"));
+            }
+            let delta = nt.translation - at.translation;
+            if Vec2::new(delta.x, delta.z).length() > 1.6 || delta.y.abs() > 1.5 {
+                let mut feet = nt.translation + (at.translation - nt.translation).with_y(0.0).normalize_or(Vec3::Z) * 0.9;
+                feet.y = heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT).max(nt.translation.y - crate::player::HALF_HEIGHT - 0.5);
+                teleport(&mut at, &mut player, to_dunia(feet), 0.0);
+                host.quiet = 0.0;
+                return;
+            }
+            player.yaw = (-delta.x).atan2(-delta.z);
+            if now >= *next_press {
+                *next_press = now + 0.6;
+                actions.press(crate::controls::Action::Interact);
+            }
+            return;
+        }
     }
     // A pickup a script waits on (a mission's diamonds): gone to and taken
     // (from wherever a high trigger held him up).

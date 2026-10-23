@@ -221,6 +221,15 @@ pub enum Command {
         text: Option<String>,
         reload: bool,
     },
+    /// The mission the player was on, given up (`AbandonMission`, the
+    /// pause menu's Abandon mission), and the story to go on from: as it is
+    /// but with that mission back at its start, untaken (its blocks, their
+    /// layers and those killed in them as before it), to be reloaded where
+    /// the player stands.
+    MissionAbandoned {
+        name: String,
+        save: Option<Box<save::StorySave>>,
+    },
     /// Save progress here.
     Checkpoint,
     /// Where the player respawns from now on (a spawn point).
@@ -374,6 +383,7 @@ impl Story {
         {
             let mut c = self.core.borrow_mut();
             c.missions.saved.missions = s.missions.iter().map(|(k, st, ack)| (k.clone(), (missions::State::parse(st), *ack))).collect();
+            c.missions.saved.current = s.current.clone();
             for &(l, st) in &s.layers {
                 if let Some(state) = LayerState::from_code(st as i64) {
                     c.set_layer(l, state);
@@ -445,6 +455,7 @@ impl Story {
             dead: sorted(&c.dead),
             chapter: c.missions.chapter,
             respawn: c.respawn,
+            current: c.missions.current.as_ref().and_then(|id| c.missions.by_id.get(id)).map(|m| m.name.clone()).or_else(|| c.missions.saved.current.clone()),
             persistent,
         }
     }
@@ -601,7 +612,49 @@ impl Story {
     }
 
     pub fn take_commands(&mut self) -> Vec<Command> {
-        std::mem::take(&mut self.core.borrow_mut().out)
+        let mut out = std::mem::take(&mut self.core.borrow_mut().out);
+        // (A mission given up: the story to go on from is as the scripts
+        // left it, it back at its start; it stands for any checkpoint they
+        // took meanwhile, WIL_040's briefing playing through again on the
+        // mission's failure, and comes last.)
+        let abandoned = out.iter().position(|c| matches!(c, Command::MissionAbandoned { save: None, .. }));
+        if let Some(i) = abandoned {
+            let mut command = out.remove(i);
+            if let Command::MissionAbandoned { name, save } = &mut command {
+                let mut s = self.save();
+                self.reset_mission(&mut s, name);
+                *save = Some(Box::new(s));
+            }
+            out.retain(|c| !matches!(c, Command::Checkpoint));
+            out.push(command);
+        }
+        out
+    }
+
+    /// A save with a mission back at its start, as before the player took
+    /// it on: its main graph running untaken, its blocks as if never
+    /// started (their states, their layers' and the blocks' own), and those
+    /// in those layers killed or removed since standing again.
+    fn reset_mission(&self, s: &mut save::StorySave, name: &str) {
+        let c = self.core.borrow();
+        let Some(main) = c.missions.by_id.values().find(|m| m.block.is_none() && m.name == name) else { return };
+        let blocks: HashSet<u64> = c
+            .missions
+            .by_id
+            .values()
+            .filter_map(|b| b.block.as_ref().filter(|x| x.parent.as_deref() == Some(main.id.as_str())).map(|x| x.block))
+            .collect();
+        let layers: HashSet<u64> = c.data.layers.values().filter(|l| blocks.contains(&l.block)).map(|l| l.id).collect();
+        let in_layers = |id: &u64| c.data.layer_of(*id).is_some_and(|l| layers.contains(&l));
+        s.missions.retain(|(k, ..)| !k.parse::<u64>().is_ok_and(|b| blocks.contains(&b)));
+        for m in s.missions.iter_mut().filter(|m| m.0 == name) {
+            (m.1, m.2) = (missions::State::Running.name().to_string(), false);
+        }
+        s.blocks.retain(|(b, _)| !blocks.contains(b));
+        s.layers.retain(|(l, _)| !layers.contains(l));
+        s.dead.retain(|id| !in_layers(id));
+        s.removed.retain(|id| !in_layers(id));
+        s.current = None;
     }
 
     /// Log lines from the runtime and the scripts since the last call.
@@ -1114,6 +1167,20 @@ impl Story {
             self.core.borrow_mut().call(cb, vec![Arg::Str(if accept { "ACCEPT" } else { "CANCEL" }.into())]);
             self.pump();
         }
+    }
+
+    /// The mission the player could abandon now (the pause menu's Abandon
+    /// mission), by its main graph's name.
+    pub fn abandonable(&self) -> Option<String> {
+        self.core.borrow().abandonable().map(|m| m.name.clone())
+    }
+
+    /// Gives up the mission the player is on (the pause menu's Abandon
+    /// mission); false if there's none he may give up now.
+    pub fn abandon_mission(&mut self) -> bool {
+        let done = self.core.borrow_mut().abandon_mission();
+        self.pump();
+        done
     }
 
     /// Runs a debug console command scripts registered (cheats like

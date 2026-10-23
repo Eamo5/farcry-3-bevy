@@ -169,6 +169,54 @@ mod tests {
         assert_eq!(story.domino().lua().globals().get::<mlua::Table>("travel").unwrap().get::<u32>("count").unwrap(), 1);
     }
 
+    /// The mission taken on last is given up, its block with it and its
+    /// listeners told; not while a running block holds the player to it.
+    #[test]
+    fn the_mission_taken_on_is_abandoned_unless_a_block_holds_it() {
+        let mut story = fixture();
+        let (main, block, block_owner) = {
+            let mut c = story.core.borrow_mut();
+            let main = c.register_mission("sqs.lua", false, None, None, false, false, false, "");
+            let owner = c.missions.by_id[&main].owner;
+            let block = c.register_block(owner, 100, "sqs_b10.lua", None, None);
+            for id in [&main, &block] {
+                c.missions.by_id.get_mut(id).unwrap().state = crate::missions::State::Running;
+            }
+            let block_owner = c.missions.by_id[&block].owner;
+            c.acknowledge(block_owner, false);
+            // (Another, taken on before, acknowledged again as a reload
+            // replays it: not the one abandoned.)
+            let lab = c.register_mission("ulc.lua", false, None, None, false, false, false, "");
+            let lab_owner = c.missions.by_id[&lab].owner;
+            let m = c.missions.by_id.get_mut(&lab).unwrap();
+            (m.state, m.acknowledged) = (crate::missions::State::Running, true);
+            c.acknowledge(lab_owner, false);
+            (main, block, block_owner)
+        };
+        assert_eq!(story.abandonable().as_deref(), Some("SQS"));
+        // (Kept in the save.)
+        assert_eq!(story.save().current.as_deref(), Some("SQS"));
+        story.domino().lua().load(format!("CMissionManager.GetInstance():EnableMissionAbort('{block_owner}', false)")).exec().unwrap();
+        assert_eq!(story.abandonable(), None);
+        story.domino().lua().load(format!("CMissionManager.GetInstance():EnableMissionAbort('{block_owner}', true)")).exec().unwrap();
+        story.domino().lua().load("AbandonMission()").exec().unwrap();
+        {
+            let c = story.core.borrow();
+            assert_eq!((c.missions.state(&main), c.missions.state(&block)), (crate::missions::State::Failed, crate::missions::State::Failed));
+            assert!(c.abandonable().is_none());
+        }
+        // The story goes on with it back at its start, untaken: running, its
+        // block as if never started.
+        let save = story.take_commands().into_iter().find_map(|c| match c {
+            crate::Command::MissionAbandoned { name, save } if name == "SQS" => save,
+            _ => None,
+        });
+        let save = save.expect("the story to go on from");
+        assert!(save.missions.contains(&("SQS".into(), "Running".into(), false)));
+        assert!(!save.missions.iter().any(|m| m.0 == "100"));
+        assert_eq!(save.current, None);
+    }
+
     #[test]
     fn active_block_permission_overrides_its_main_graph_default() {
         let story = fixture();

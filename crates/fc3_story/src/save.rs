@@ -25,6 +25,9 @@ pub struct StorySave {
     pub chapter: i32,
     /// The spawn point the player comes back at.
     pub respawn: Option<u64>,
+    /// The mission the player took on last (its main graph's name: the one
+    /// the pause menu abandons).
+    pub current: Option<String>,
     /// `PersistentGlobals`, as `path\ttype\tvalue` lines (see [`dump_table`]).
     pub persistent: Vec<String>,
 }
@@ -84,6 +87,9 @@ impl StorySave {
         if let Some(r) = self.respawn {
             out += &format!("respawn\t{r}\n");
         }
+        if let Some(m) = &self.current {
+            out += &format!("current\t{}\n", esc(m));
+        }
         for line in &self.persistent {
             out += &format!("global\t{line}\n");
         }
@@ -111,6 +117,7 @@ impl StorySave {
                 "dead" => s.dead.extend(id(0).filter(|&i| !crate::spawned_id(i))),
                 "chapter" => s.chapter = rest.parse().unwrap_or(0),
                 "respawn" => s.respawn = id(0),
+                "current" => s.current = Some(unesc(rest)),
                 "global" => s.persistent.push(rest.to_string()),
                 _ => {}
             }
@@ -219,6 +226,7 @@ mod tests {
             layers: vec![(0x207d, 2)],
             chapter: 1,
             respawn: Some(42),
+            current: Some("SQS_C4_MAIN".into()),
             persistent: vec!["DOC\u{1f}done\tb\t1".into()],
             ..Default::default()
         };

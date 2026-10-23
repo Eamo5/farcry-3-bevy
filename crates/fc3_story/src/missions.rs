@@ -91,6 +91,8 @@ pub struct Mission {
 #[derive(Debug, Clone, Default)]
 pub struct Saved {
     pub missions: HashMap<String, (State, bool)>,
+    /// The mission the player had taken on last, by name.
+    pub current: Option<String>,
 }
 
 #[derive(Default)]
@@ -103,7 +105,13 @@ pub struct Missions {
     pub givers: HashMap<String, String>,
     pub saved: Saved,
     pub fast_travel_disabled: bool,
-    pub abort_enabled: bool,
+    /// The graphs (block or main) that have the mission they run kept from
+    /// being abandoned (`EnableMissionAbort(owner, false)`: a block's
+    /// `MissionMiscInfos`, 34 graphs); abandoning is allowed otherwise.
+    pub abort_disabled: std::collections::HashSet<u64>,
+    /// The mission the player took on last (its main mission's id): the one
+    /// abandoning gives up.
+    pub current: Option<String>,
 }
 
 /// Synthetic entity ids for the graphs that run on no world entity (mission
@@ -408,6 +416,11 @@ impl Core {
     pub fn acknowledge(&mut self, owner: u64, save: bool) {
         let Some(m) = self.missions.by_owner(owner).cloned() else { return };
         let main = m.block.as_ref().and_then(|b| b.parent.clone()).unwrap_or(m.id.clone());
+        // (Taken on now, not acknowledged again as a reload replays it: a
+        // lost expedition's lab did so after WIL_040's checkpoint loaded.)
+        if self.missions.by_id.get(&main).is_some_and(|x| !x.giver && !x.acknowledged) {
+            self.missions.current = Some(main.clone());
+        }
         for id in [m.id.clone(), main] {
             if let Some(x) = self.missions.by_id.get_mut(&id) {
                 x.acknowledged = true;
@@ -416,6 +429,61 @@ impl Core {
         if save {
             self.emit(Command::Checkpoint);
         }
+    }
+
+    /// The mission the player could abandon now: the one he took on last,
+    /// still running, none of whose running graphs keeps him from it
+    /// (`EnableMissionAbort`).
+    pub fn abandonable(&self) -> Option<&Mission> {
+        let running = |m: &&Mission| !m.giver && m.block.is_none() && m.state == State::Running && m.acknowledged;
+        // (Kept in the save by name.)
+        let m = match &self.missions.current {
+            Some(id) => self.missions.by_id.get(id).filter(running)?,
+            None => {
+                let name = self.missions.saved.current.as_ref()?;
+                self.missions.by_id.values().filter(running).find(|m| &m.name == name)?
+            }
+        };
+        let id = &m.id;
+        let held = |owner: u64| self.missions.abort_disabled.contains(&owner);
+        let blocks_held = self
+            .missions
+            .by_id
+            .values()
+            .any(|b| b.state == State::Running && b.block.as_ref().and_then(|b| b.parent.as_deref()) == Some(id) && held(b.owner));
+        (!held(m.owner) && !blocks_held).then_some(m)
+    }
+
+    /// `AbandonMission()` (a supply run's "Do you want to retry?" declined),
+    /// or the pause menu's Abandon mission: the mission the player is on
+    /// ends failed, its running blocks with it, and its listeners hear so;
+    /// the story then goes on from a save with it back at its start, offered
+    /// again (`Command::MissionAbandoned`).
+    pub fn abandon_mission(&mut self) -> bool {
+        let Some(m) = self.abandonable().cloned() else {
+            self.warn("AbandonMission with no mission to abandon".to_string());
+            return false;
+        };
+        let blocks: Vec<String> = self
+            .missions
+            .by_id
+            .values()
+            .filter(|b| b.state == State::Running && b.block.as_ref().and_then(|b| b.parent.as_deref()) == Some(&m.id))
+            .map(|b| b.id.clone())
+            .collect();
+        for b in blocks {
+            self.finish_mission(&b, State::Failed);
+        }
+        self.finish_mission(&m.id, State::Failed);
+        if let Some(x) = self.missions.by_id.get_mut(&m.id) {
+            x.acknowledged = false;
+        }
+        self.missions.current = None;
+        self.missions.saved.current = None;
+        // (The story to go on from is made once its scripts have heard:
+        // `Story::take_commands`.)
+        self.emit(Command::MissionAbandoned { name: m.name.clone(), save: None });
+        true
     }
 
     pub fn is_acknowledged(&self, owner: u64) -> bool {
