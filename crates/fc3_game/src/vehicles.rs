@@ -1452,6 +1452,7 @@ fn autopilot_board(
     let Some(host) = host else { return };
     let Ok((mut pt, mut p)) = players.single_mut() else { return };
     if p.driving
+        || host.autopilot_burning
         || p.mounted.is_some()
         || p.spawning
         || cinema.cutscene()

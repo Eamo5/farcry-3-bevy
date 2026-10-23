@@ -470,6 +470,9 @@ fn burn_regions(
 
 /// Tests: how long before the autopilot tries again a region that didn't catch.
 const BURN_AGAIN: f32 = 120.0;
+/// Tests: how far (m) from a field's middle the autopilot goes back to once
+/// it has set it alight, out of the fire's way.
+const BURN_RETREAT: f32 = 30.0;
 
 /// Tests (`FC3_STORY_AUTOPILOT`): a burnable region a script waits to catch
 /// (a drug field), once the story has gone quiet: the player set down a few
@@ -485,7 +488,7 @@ fn autopilot_burn(
     heights: Res<crate::terrain::Heightfield>,
     mut actions: ResMut<crate::controls::ActionState>,
     mut players: Query<(&mut Transform, &mut crate::player::Player, &crate::weapons::Inventory)>,
-    mut burning: Local<Option<(u64, f32)>>,
+    mut burning: Local<Option<(u64, f32, Vec3)>>,
     mut tried: Local<std::collections::HashMap<u64, f32>>,
 ) {
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() {
@@ -494,12 +497,19 @@ fn autopilot_burn(
     let Some(mut host) = host else { return };
     let Ok((mut t, mut p, inventory)) = players.single_mut() else { return };
     let now = time.elapsed_secs();
-    if let Some((id, left)) = burning.as_mut() {
+    host.autopilot_burning = burning.is_some();
+    if let Some((id, left, from)) = burning.as_mut() {
         if regions.unlit(*id).is_none() || *left <= 0.0 {
             if regions.unlit(*id).is_some() {
                 tried.insert(*id, now);
             }
+            // (Back out of the crops before the fire spreads to him: it
+            // burned the autopilot to death in WIL_020's fields.)
+            info!("story autopilot: back from burning {id}");
+            let yaw = -p.yaw.to_degrees();
+            crate::story::teleport(&mut t, &mut p, crate::data::to_dunia(*from), yaw);
             *burning = None;
+            host.autopilot_burning = false;
             return;
         }
         if p.spawning {
@@ -532,12 +542,22 @@ fn autopilot_burn(
     let mut feet = centre + side * 3.0;
     feet.y = heights.height_at(feet).unwrap_or(centre.y);
     info!("story autopilot: burn region {id}");
+    // (Where to go back to after: where he came from if that was near,
+    // else well off on his side of it.)
+    let came = t.translation - Vec3::Y * crate::player::HALF_HEIGHT;
+    let from = if came.distance(centre) < BURN_RETREAT * 2.0 {
+        came
+    } else {
+        let off = centre + side * BURN_RETREAT;
+        off.with_y(heights.height_at(off).unwrap_or(centre.y))
+    };
     crate::story::teleport(&mut t, &mut p, crate::data::to_dunia(feet), 0.0);
     let ground = centre.with_y(heights.height_at(centre).unwrap_or(centre.y));
     let aim = ground - (feet + Vec3::Y * crate::player::EYE_HEIGHT);
     p.yaw = (-aim.x).atan2(-aim.z);
     p.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
-    *burning = Some((id, 6.0));
+    *burning = Some((id, 6.0, from));
+    host.autopilot_burning = true;
     host.reset_quiet();
 }
 

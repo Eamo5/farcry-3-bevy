@@ -832,6 +832,9 @@ pub struct StoryHost {
     pub collision_immune: std::collections::HashSet<u64>,
     /// Usable things scripts made unusable, and where they are.
     pub unusable: HashMap<u64, Vec3>,
+    /// The autopilot's burn step is setting a field alight (the other
+    /// steps wait).
+    pub autopilot_burning: bool,
     /// Placed particle systems scripts started (true) or stopped
     /// (`ParticleSystem`), for `story_fx`.
     pub fx_switched: HashMap<u64, bool>,
@@ -1012,6 +1015,7 @@ impl StoryHost {
             order_calls: Vec::new(),
             collision_immune: std::collections::HashSet::new(),
             unusable: HashMap::new(),
+            autopilot_burning: false,
             fx_switched: HashMap::new(),
             lights_switched: HashMap::new(),
             alarm_sets: Vec::new(),
@@ -2264,6 +2268,7 @@ fn run_story(
         && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
         && !landing_awaited(&host, &p)
         && host.quiet > autopilot_delay
+        && !host.autopilot_burning
         && crafting.still_wanted(host.story.watched_loot_filters(), &progress.loot).is_empty()
     {
         let graph = std::env::var("FC3_STORY_AUTOPILOT_GRAPH").ok();
@@ -4727,8 +4732,10 @@ fn autopilot_loot(
             );
         }
     }
-    // (The Ink Monster's fight plays itself: `boss_fight`.)
-    if host.story.gameplays().iter().any(|g| g.1 == BOSS_FIGHT) {
+    // (The Ink Monster's fight plays itself: `boss_fight`. Nor while the
+    // burn step sets a field alight: going after a pirate mid-burn took
+    // the flamethrower off WIL_020's crops.)
+    if host.story.gameplays().iter().any(|g| g.1 == BOSS_FIGHT) || host.autopilot_burning {
         return;
     }
     // (Nor while a scene plays the player through without its own view: a

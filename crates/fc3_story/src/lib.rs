@@ -1216,7 +1216,10 @@ impl Story {
             // (Not a mission's area, entered again to stop its leaving
             // being warned of: JAS_220's spans the north-west, and going to
             // its middle left the fight at Hoyt's compound behind.)
-            if in_graph(&l.callback.target, "exitzonewarning") {
+            // (Nor a graphics script's: the waterfalls' screen droplets,
+            // stepped through again and again, kept the story from ever
+            // counting as quiet.)
+            if in_graph(&l.callback.target, "exitzonewarning|fc3_gfx/") {
                 continue;
             }
             // A spot a script spawned to be used (a bomb's): where it stands.

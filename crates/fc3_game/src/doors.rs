@@ -211,6 +211,10 @@ fn autopilot_doors(
         return;
     }
     let Some(mut host) = host else { return };
+    // (Not while the burn step sets a field alight.)
+    if host.autopilot_burning {
+        return;
+    }
     let Ok((mut pt, mut p)) = players.single_mut() else { return };
     if let Some(left) = walking.as_mut() {
         if !p.spawning {
