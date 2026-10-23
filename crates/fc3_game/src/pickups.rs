@@ -26,10 +26,160 @@ impl Plugin for PickupsPlugin {
                 attach_pickup_models,
                 spin_weapon_pickups,
                 glint,
-                (mark_takedown_loot, interact, loot_bodies).chain().before(crate::hud::HudSet).after(crate::turrets::man_turrets),
+                (mark_takedown_loot, take_dropped_rounds, interact, loot_bodies).chain().before(crate::hud::HudSet).after(crate::turrets::man_turrets),
                 detonate_explosives,
+                drop_test,
+                settle_drops,
             ),
         );
+    }
+}
+
+/// `FC3_DROP_TEST=<weapon>` (tests): that gun dropped 2.5 m in front of the
+/// player once he is set down.
+fn drop_test(time: Res<Time>, mut done: Local<bool>, players: Query<(&Transform, &Player)>, mut commands: Commands) {
+    if *done {
+        return;
+    }
+    let Some(name) = std::env::var("FC3_DROP_TEST").ok() else {
+        *done = true;
+        return;
+    };
+    let Ok((t, p)) = players.single() else { return };
+    // (Once the place round him has its colliders.)
+    if p.spawning || time.elapsed_secs() - p.spawned_at < 8.0 {
+        return;
+    }
+    *done = true;
+    let Some(def) = crate::weapons::weapon_defs().into_iter().find(|d| d.name == name) else {
+        warn!("FC3_DROP_TEST: no weapon {name:?}");
+        return;
+    };
+    let ahead = Vec3::new(-p.yaw.sin(), 0.0, -p.yaw.cos()) * 2.5;
+    let at = t.translation - Vec3::Y * crate::player::HALF_HEIGHT + ahead;
+    info!("FC3_DROP_TEST: {} dropped at {at:?}", def.name);
+    drop_weapon(&mut commands, def.name, at, 0.6);
+}
+
+/// A gun a fallen enemy dropped: it lies by him (not turning as placed
+/// pickups do); walked over with a gun of its kind, its rounds are taken
+/// (`take_dropped_rounds`), else it is picked up as any weapon is. Gone
+/// after `DROP_LIFE` (s).
+#[derive(Component)]
+pub struct Dropped {
+    pub left: f32,
+    /// Put down on what is under it yet (a ray down, once its ground is in).
+    pub settled: bool,
+}
+
+/// Puts dropped guns down on what is under them: the ground, a floor, a
+/// jetty (where they fall from isn't the ground: a body's middle, a man
+/// shot on a slab above the terrain).
+fn settle_drops(
+    spatial: avian3d::prelude::SpatialQuery,
+    heights: Res<crate::terrain::Heightfield>,
+    players: Query<Entity, With<Player>>,
+    mut dropped: Query<(&mut Transform, &mut Dropped)>,
+) {
+    let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(players.iter());
+    for (mut t, mut d) in dropped.iter_mut().filter(|(_, d)| !d.settled) {
+        let from = t.translation + Vec3::Y * 1.5;
+        let ground = spatial.cast_ray(from, Dir3::NEG_Y, 6.0, true, &filter).map(|h| from.y - h.distance).or_else(|| heights.height_at(t.translation));
+        if let Some(y) = ground {
+            t.translation.y = y;
+            d.settled = true;
+        }
+    }
+}
+
+const DROP_LIFE: f32 = 120.0;
+
+/// How far (m) above what it lies on a dropped gun's lowest point is put:
+/// the ground is drawn a few centimetres above its collision, and a gun
+/// lying right on the collision sank into it.
+const DROP_LIFT: f32 = 0.08;
+
+/// Dropped guns' pickup ids: none of the editor's, nor the story's spawned
+/// ones (`fc3_story::SPAWNED_IDS`) or graph owners above them.
+const DROP_IDS: u64 = 0x7FFD_0000_0000_0000;
+
+/// Whether a pickup is a dropped gun (the story never hears of those).
+pub fn is_dropped(id: u64) -> bool {
+    id & 0xFFFF_0000_0000_0000 == DROP_IDS
+}
+
+/// How much of a magazine walking over a dropped gun gives.
+const DROPPED_ROUNDS: f32 = 0.5;
+
+/// The gun an enemy of this faction and role carries, as ours (its model's
+/// weapon: the pirates' AK-74M, the privateers' P416), if he carries one
+/// (not a machete).
+pub fn carried_weapon(faction: crate::npc::Faction, role: crate::npc::Role) -> Option<&'static str> {
+    static CARRIED: std::sync::LazyLock<Vec<(crate::npc::Faction, crate::npc::Role, &'static str)>> = std::sync::LazyLock::new(|| {
+        let defs = crate::weapons::weapon_defs();
+        crate::characters::LOOKS
+            .iter()
+            .filter_map(|l| {
+                let model = l.weapon.rsplit_once(r"\weapons\")?.1.replace("_tp.xbg", ".xbg");
+                let def = defs.iter().find(|d| d.model.eq_ignore_ascii_case(&model) && !matches!(d.class, WeaponClass::Melee | WeaponClass::Mounted))?;
+                Some((l.faction, l.role, def.name))
+            })
+            .collect()
+    });
+    CARRIED.iter().find(|(f, r, _)| *f == faction && *r == role).map(|(_, _, n)| *n)
+}
+
+/// A fallen enemy's gun, put down at `at` (his feet) turned to `yaw`.
+pub fn drop_weapon(commands: &mut Commands, weapon: &'static str, at: Vec3, yaw: f32) {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let id = DROP_IDS | NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    commands.spawn((
+        Transform::from_translation(at).with_rotation(Quat::from_rotation_y(yaw)),
+        Visibility::Visible,
+        Pickup { kind: PickupKind::Weapon(weapon), id, visual: None },
+        Dropped { left: DROP_LIFE, settled: false },
+    ));
+}
+
+/// Walking over a dropped gun of a kind the player carries takes its rounds,
+/// as the game's dropped weapons give theirs; and dropped guns go in time.
+fn take_dropped_rounds(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut dropped: Query<(Entity, &Pickup, &GlobalTransform, &mut Dropped)>,
+    mut players: Query<(&Transform, &Player, &mut Inventory, &Health)>,
+    mut hud: ResMut<HudState>,
+    mut sfx: MessageWriter<crate::sound::PlaySfx>,
+) {
+    let dt = time.delta_secs();
+    let mut player = players.single_mut().ok();
+    for (e, p, gt, mut d) in &mut dropped {
+        d.left -= dt;
+        if d.left <= 0.0 {
+            commands.entity(e).despawn();
+            continue;
+        }
+        let Some((pt, pl, inv, health)) = player.as_mut() else { continue };
+        if health.dead || pl.driving || pl.noclip {
+            continue;
+        }
+        let to = gt.translation() - (pt.translation - Vec3::Y * crate::player::HALF_HEIGHT);
+        if Vec2::new(to.x, to.z).length() > 1.3 || to.y.abs() > 1.5 {
+            continue;
+        }
+        let PickupKind::Weapon(name) = p.kind else { continue };
+        let Some(def) = inv.defs.iter().find(|d| d.name == name) else { continue };
+        let (class, magazine) = (def.class, def.magazine);
+        if !inv.slots.iter().any(|s| inv.defs[s.def].class == class) {
+            continue;
+        }
+        let n = inv.add_ammo(class, (magazine as f32 * DROPPED_ROUNDS).ceil() as u32);
+        if n == 0 {
+            continue;
+        }
+        hud.notify(format!("+{n} rounds"));
+        sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 0.6 });
+        commands.entity(e).despawn();
     }
 }
 
@@ -484,14 +634,14 @@ fn attach_pickup_models(
     server: Res<AssetServer>,
     models: Res<Assets<Fc3Model>>,
     added: Query<(Entity, &Pickup), Added<Pickup>>,
-    pending: Query<(Entity, &PickupModel)>,
+    pending: Query<(Entity, &PickupModel, Has<Dropped>)>,
     defs: Local<Vec<crate::weapons::WeaponDef>>,
 ) {
     let defs: &Vec<_> = &defs;
     let defs = if defs.is_empty() { crate::weapons::weapon_defs() } else { defs.clone() };
     for (e, p) in &added {
         let path = match p.kind {
-            PickupKind::Weapon(name) => defs.iter().find(|d| d.name == name).map(|d| format!(r"graphics\__fc3_graphics\_common\weapons\{}", d.model)),
+            PickupKind::Weapon(name) => defs.iter().find(|d| d.name == name).map(|d| lying_model(&d.model_path())),
             PickupKind::Grenade => Some(crate::weapons::GRENADE_MODEL.to_string()),
             _ => None,
         };
@@ -499,21 +649,49 @@ fn attach_pickup_models(
             commands.entity(e).insert(PickupModel(model_handle(&server, &path)));
         }
     }
-    for (e, pm) in &pending {
+    for (e, pm, dropped) in &pending {
         let Some(m) = models.get(&pm.0) else { continue };
+        // (A dropped gun lies on its side on the ground, its lowest point
+        // on it: a held gun's model is placed about the hand, not its
+        // middle.)
+        let at = if dropped {
+            let turn = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+            let (lo, hi) = (m.aabb_min, m.aabb_max);
+            let lowest = (0..8)
+                .map(|i| turn * Vec3::new(if i & 1 == 0 { lo.x } else { hi.x }, if i & 2 == 0 { lo.y } else { hi.y }, if i & 4 == 0 { lo.z } else { hi.z }))
+                .map(|c| c.y)
+                .fold(f32::INFINITY, f32::min);
+            Transform::from_xyz(0.0, DROP_LIFT - lowest.min(0.0).max(-1.0), 0.0).with_rotation(turn)
+        } else {
+            Transform::from_xyz(0.0, 0.25, 0.0)
+        };
         if let Some(lod) = m.lods.first() {
             for part in lod.parts.iter().filter(|p| p.shown(false)) {
                 commands.spawn((
                     Mesh3d(part.mesh.clone()),
                     MeshMaterial3d(part.material.clone()),
                     NotShadowCaster,
-                    Transform::from_xyz(0.0, 0.25, 0.0),
+                    crate::original_shaders::PropPart,
+                    at,
                     ChildOf(e),
                 ));
             }
         }
-        commands.entity(e).remove::<PickupModel>().insert(SpinningPickup);
+        commands.entity(e).remove::<PickupModel>();
+        if !dropped {
+            commands.entity(e).insert(SpinningPickup);
+        }
     }
+}
+
+/// The model a weapon lying about is drawn with: its third-person one (the
+/// one characters hold), which is a plain mesh, where it's cached; the
+/// first-person one is skinned (its bolt and magazine move) and drew
+/// nothing unrigged.
+fn lying_model(first_person: &str) -> String {
+    let third = first_person.replace(".xbg", "_tp.xbg");
+    let cached = |p: &str| fc3_formats::cache::default_cache_root().join(fc3_formats::cache::model_rel(p)).exists();
+    if cached(&third) { third } else { first_person.to_string() }
 }
 
 #[derive(Component)]
@@ -643,8 +821,10 @@ fn interact(
         xp.write(crate::progression::XpGain { amount, reason });
     }
     sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 0.6 });
-    world.removed.insert(p.id);
-    picked.write(PickedUp(p.id));
+    if !is_dropped(p.id) {
+        world.removed.insert(p.id);
+        picked.write(PickedUp(p.id));
+    }
     if let Some(v) = p.visual {
         commands.entity(v).despawn();
     }
@@ -802,6 +982,49 @@ mod tests {
         assert_eq!(arrows("Pickups/Ammo/Arrow_Bundle_Pickup_1"), Some(10));
         assert_eq!(arrows("Pickups/Ammo/ArrowPickup_1"), Some(1));
         assert_eq!(arrows("Pickups/Ammo/AmmoBox_01"), None);
+    }
+
+    /// Enemies drop the guns they carry (ours, by their models): the
+    /// pirates' AK-74M, the privateers' P416 and MKG; a machete is no gun.
+    #[test]
+    fn enemies_drop_the_guns_they_carry() {
+        use crate::npc::{Faction, Role};
+        assert_eq!(carried_weapon(Faction::Pirate, Role::Assault), Some("AK-74M Rifle"));
+        assert_eq!(carried_weapon(Faction::Privateer, Role::Assault), Some("P416"));
+        assert_eq!(carried_weapon(Faction::Privateer, Role::Heavy), Some("MKG"));
+        assert_eq!(carried_weapon(Faction::Pirate, Role::Charger), None);
+    }
+
+    /// Walking over a dropped rifle with a rifle takes half a magazine;
+    /// one of a kind the player doesn't carry stays to be picked up.
+    #[test]
+    fn walking_over_a_dropped_gun_takes_its_rounds() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<HudState>().add_message::<crate::sound::PlaySfx>().add_systems(Update, take_dropped_rounds);
+        let defs = crate::weapons::weapon_defs();
+        let rifle = defs.iter().position(|d| d.name == "AK-74M Rifle").unwrap();
+        let inv = Inventory {
+            defs, models: Vec::new(), slots: vec![crate::weapons::WeaponSlot { def: rifle, mag: 0, reserve: 0 }], current: 0,
+            grenades: 0, molotovs: 0, c4: 0, mines: 0,
+            cooldown: 0.0, reloading: 0.0, switching: 0.0, aiming: false,
+            aim_blend: 0.0, recoil_kick: 0.0, spread_bloom: 0.0, shots_fired: 0,
+            recoil_offset: 0.0, since_shot: 0.0, reserve_scale: 1.0,
+            attachments: Vec::new(), attachment_models: Vec::new(), mounted_from: None,
+            auto_tail: 0, arrow_kind: 0, special_arrows: [0; 2], paints: Vec::new(), paint_options: Vec::new(),
+        };
+        app.world_mut().spawn((crate::player::test_player(), Transform::from_xyz(0.0, crate::player::HALF_HEIGHT, 0.0), inv, Health::new(100.0)));
+        let drop = |app: &mut App, gun: &'static str, x: f32| {
+            app.world_mut()
+                .spawn((Transform::from_xyz(x, 0.0, 0.0), GlobalTransform::from_xyz(x, 0.0, 0.0), Pickup { kind: PickupKind::Weapon(gun), id: DROP_IDS, visual: None }, Dropped { left: DROP_LIFE, settled: true }))
+                .id()
+        };
+        let ak = drop(&mut app, "AK-74M Rifle", 0.5);
+        let rpg = drop(&mut app, "RPG-7", -0.5);
+        app.update();
+        let inv = app.world_mut().query::<&Inventory>().single(app.world()).unwrap();
+        assert_eq!(inv.slots[0].mag + inv.slots[0].reserve, 15);
+        assert!(app.world().get_entity(ak).is_err());
+        assert!(app.world().get_entity(rpg).is_ok());
     }
 
     #[test]

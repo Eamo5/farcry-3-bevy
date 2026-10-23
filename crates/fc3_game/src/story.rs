@@ -565,6 +565,7 @@ fn autopilot_drop(
     mut dropped: Local<bool>,
     mut held: Local<f32>,
 ) {
+    let _slow = crate::story::Slow::new("autopilot_drop");
     if std::env::var_os("FC3_STORY_AUTOPILOT").is_none() {
         return;
     }
@@ -1850,6 +1851,7 @@ fn run_story(
         ),
     ),
 ) {
+    let _slow = crate::story::Slow::new("run_story");
     // (Not a run condition: those may run off the main thread.)
     let Some(mut host) = host else { return };
     let now = time.elapsed_secs();
@@ -2329,11 +2331,23 @@ fn run_story(
         if given_up && minute {
             info!("story autopilot: {focus:?} gone nowhere a while; the others' triggers too");
         }
-        let watched = if focus.is_empty() || given_up {
+        let mut watched = if focus.is_empty() || given_up {
             host.story.watched_triggers_in_graph(graph.as_deref())
         } else {
             host.story.watched_triggers_unowned(graph.as_deref())
         };
+        // (Not the Lost Expeditions' (`FC3_STORY_AUTOPILOT_DLC` lets it):
+        // their labs are entered as places apart, and the autopilot, gone
+        // off to the story's missions mid-lab, left a lab's block running
+        // that put the player back in it on every reload.)
+        if std::env::var_os("FC3_STORY_AUTOPILOT_DLC").is_none() {
+            let dlc: Vec<String> = host.story.missions().into_iter().map(|m| m.0).filter(|m| dlc_mission(m)).map(|m| m.trim_end_matches("_MAIN").to_string()).collect();
+            if !dlc.is_empty() {
+                let skip: std::collections::HashSet<u64> = host.story.watched_triggers_of(graph.as_deref(), &dlc).into_iter().map(|w| w.0).collect();
+                focused.retain(|w| !skip.contains(&w.0));
+                watched.retain(|w| !skip.contains(&w.0));
+            }
+        }
         let awaiting_rock = host.story.watched_signals().iter().any(|s| s == "throw_rock");
         // Stuck: triggers stepped into before they were armed go again.
         if host.quiet > 25.0 {
@@ -2349,7 +2363,16 @@ fn run_story(
         // (A leader in the world: one whose mission is over and who is gone,
         // its lead never ended, leads no one. JAS_100's Dennis held the
         // autopilot back through DOC_020.)
-        let leading = companions.iter().any(|c| matches!(c.1, fc3_story::Companion::Lead { .. }) && actors.iter().any(|(a, _, _)| a.id == c.0 && !a.dead));
+        let leaders: Vec<Vec3> = actors
+            .iter()
+            .filter(|(a, _, _)| !a.dead && companions.iter().any(|c| c.0 == a.id && matches!(c.1, fc3_story::Companion::Lead { .. })))
+            .map(|(_, t, _)| t.translation)
+            .collect();
+        let leading = !leaders.is_empty();
+        // (Led, only a trigger by the leader: WIL_040's escort, long past
+        // giving up on its mission, went to WIL_010's start across the
+        // fields and Rongo was left behind.)
+        let by_leader = |p: [f32; 3]| leaders.iter().any(|c| c.distance(to_bevy(p)) < LED_STEP_NEAR);
         let kept: Vec<Vec3> = actors
             .iter()
             .filter(|(a, _, _)| !a.dead && companions.iter().any(|c| c.0 == a.id && matches!(c.1, fc3_story::Companion::Follow)))
@@ -2403,7 +2426,7 @@ fn run_story(
                 // has brought the player where the script wants him: JAS_100's
                 // Dennis, stopped by the outpost's building the player is to
                 // go into.)
-                && (!leading || host.quiet > LED_STEP_AFTER)
+                && (!leading || (host.quiet > LED_STEP_AFTER && by_leader(w.2)))
                 && near_companion(w.2)
                 // (Something to use by the door is used where it is:
                 // WIL_020's flamethrower on the table inside Willis's hut.)
@@ -3973,6 +3996,8 @@ fn exit_point(shape: &fc3_story::triggers::Shape, from: [f32; 3], ground: impl F
 /// How long (s) the story stays quiet, a companion leading, before the
 /// autopilot steps into the triggers ahead itself.
 const LED_STEP_AFTER: f32 = 15.0;
+/// How near (m) the leader a trigger the autopilot then steps into is.
+const LED_STEP_NEAR: f32 = 40.0;
 /// How far an objective marker may be for the autopilot at the wheel to
 /// drive to it, nothing else to drive into: not one beside it (on a
 /// passenger), nor one across the island (a quest giver's).
@@ -4013,7 +4038,12 @@ const SPAWN_WAIT: f32 = 30.0;
 /// side quest), as the autopilot ranks the running missions.
 fn side_mission(block: &str) -> bool {
     let b = block.to_ascii_uppercase();
-    b.starts_with("ULC_") || b.starts_with("SQ")
+    dlc_mission(&b) || b.starts_with("SQ")
+}
+
+/// The Lost Expeditions' missions (the DLC's labs).
+fn dlc_mission(name: &str) -> bool {
+    name.to_ascii_uppercase().starts_with("ULC_")
 }
 /// How long the running missions may go nowhere (no block completing)
 /// before the autopilot, with nothing of theirs left to do, takes the
@@ -4125,6 +4155,7 @@ fn story_boxes(
     mut commands: Commands,
     mut accepted: Local<HashMap<String, u32>>,
 ) {
+    let _slow = crate::story::Slow::new("story_boxes");
     let shown = ui.boxes.front().map(|b| b.id);
     for (e, panel) in &panels {
         if Some(panel.0) != shown {
@@ -4273,6 +4304,26 @@ fn tower_taken(story: &mut Story, at: Vec3) {
         .map(|(id, _)| id);
     if let Some(panel) = panel {
         story.take_radio_tower(panel);
+    }
+}
+
+/// `FC3_SLOW_SYSTEMS` (tests): logs a system that took longer than 20 ms
+/// (held for its run: `let _slow = Slow::new("name")`).
+pub(crate) struct Slow(&'static str, std::time::Instant);
+
+impl Slow {
+    pub(crate) fn new(name: &'static str) -> Option<Slow> {
+        static ON: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("FC3_SLOW_SYSTEMS").is_some());
+        ON.then(|| Slow(name, std::time::Instant::now()))
+    }
+}
+
+impl Drop for Slow {
+    fn drop(&mut self) {
+        let ms = self.1.elapsed().as_secs_f32() * 1000.0;
+        if ms > 20.0 {
+            info!("slow system: {} took {ms:.0} ms", self.0);
+        }
     }
 }
 
@@ -4575,6 +4626,8 @@ const BESIDE: f32 = 2.0;
 /// fight (m), coming back to `KEEP_CLEAR` and a little more behind it: the
 /// scripts want the player close (HOY_010's Sam).
 const ESCORT_IN_FIGHT: f32 = 20.0;
+/// Tests: how near (m) a companion is for the fight's moves to keep by it.
+const TETHER_FROM: f32 = 45.0;
 
 /// CIT_030's fight with the Ink Monster: played (`boss_fight`), not ended.
 const BOSS_FIGHT: &str = "CCitraBossFight";
@@ -4828,6 +4881,7 @@ fn autopilot_loot(
         Local<Option<(u64, f32)>>,
     ),
 ) {
+    let _slow = crate::story::Slow::new("autopilot_loot");
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() { return }
     let Some(mut host) = host else { return };
     // (Once the story has stalled a while: what holds this step back, if
@@ -5036,7 +5090,15 @@ fn autopilot_loot(
                     // throw, any other the rock drew. Only those who fight.)
                     && (npc.state == crate::npc::NpcState::Combat
                         || (!host.used.contains(&(actor.id, "distract".to_string())) && now - host.distracted_at > LURE_GRACE))
-                    && (to_kill.contains(&actor.id) || wanted.contains(&actor.id) || npc.state != crate::npc::NpcState::Idle || sniping)
+                    // (Nor one idle, unless counted or a reinforcement the
+                    // story brought in: WIL_040's, back at his scripted
+                    // guard post between alerts, held Rongo's escort for
+                    // good.)
+                    && (to_kill.contains(&actor.id)
+                        || wanted.contains(&actor.id)
+                        || npc.state != crate::npc::NpcState::Idle
+                        || sniping
+                        || (fc3_story::spawned_id(actor.id) && (npc.awareness > 0.3 || npc.last_known.is_some())))
                     && (near(t) < FIGHT_REACH || wanted.contains(&actor.id) || (to_kill.contains(&actor.id) && host.quiet > FAR_FOE_AFTER))
             })
             .min_by(|a, b| {
@@ -5044,6 +5106,28 @@ fn autopilot_loot(
                 (!counted.contains(&a.4.id)).cmp(&!counted.contains(&b.4.id)).then((near(a.0) - held(a.4.id)).total_cmp(&(near(b.0) - held(b.4.id))))
             })
     });
+    // (In the stall report: the hostile ones about, and what holds each.)
+    if report {
+        let foes: Vec<String> = npcs
+            .iter()
+            .filter(|q| !q.1.dead && near(q.0) < FIGHT_REACH * 1.5)
+            .map(|q| {
+                format!(
+                    "{} {:.0} m hostile {} {:?} aware {:.2} known {} skipped {} counted {} seated {}",
+                    q.4.id,
+                    near(q.0),
+                    q.5.hostile(),
+                    q.5.state,
+                    q.5.awareness,
+                    q.5.last_known.is_some(),
+                    skipped.contains_key(&q.4.id),
+                    to_kill.contains(&q.4.id),
+                    q.4.seated
+                )
+            })
+            .collect();
+        info!("story autopilot: foes about {foes:?}");
+    }
     // (In a sniping challenge, every two seconds: whom it might shoot.)
     if sniping && (now * 0.5) as u32 != ((now - time.delta_secs()) * 0.5) as u32 {
         let foes: Vec<(u64, f32, bool, bool)> =
@@ -5054,12 +5138,25 @@ fn autopilot_loot(
     // before him that needs its characters.)
     let quest = quest.filter(|_| !scripted.camera_drawn);
     let on_call = host.story.is_speaking(fc3_story::PLAYER);
+    // (With a companion near, the fight's moves keep within
+    // `ESCORT_IN_FIGHT` of it, else that foe is shot from there or left a
+    // while: going off after one left WIL_040's Rongo 40 m behind, and the
+    // mission failed.)
+    let companions = host.story.companions();
+    let tether = story_actors
+        .iter()
+        .filter(|(t, a, _)| !a.dead && companions.iter().any(|c| c.0 == a.id) && t.translation.distance(at.translation) < TETHER_FROM)
+        .map(|(t, _, _)| t.translation)
+        .min_by(|a, b| a.distance(at.translation).total_cmp(&b.distance(at.translation)));
+    let leashed = |feet: Vec3| tether.is_some_and(|c| c.with_y(0.0).distance(feet.with_y(0.0)) > ESCORT_IN_FIGHT);
     // A take-down that hasn't hurt him in a while (`shooting` keeps when it
-    // began and his health then): he is shot instead.
+    // began and his health then), or one too far from a companion: he is
+    // shot instead.
     let stubborn = quest.is_some_and(|q| {
         !q.1.dead
             && !wanted.contains(&q.4.id)
             && (*last == Some((q.4.id, "shoot"))
+                || leashed(q.0.translation)
                 || player.swimming
                 // (One on his guard can't be taken down: shot at once.)
                 || q.5.state != crate::npc::NpcState::Idle
@@ -5068,6 +5165,63 @@ fn autopilot_loot(
     // Riding as a passenger: the foe nearest is shot from the seat, gun in
     // hand (the knife put away); in a sniping challenge, from where he
     // stands.
+    // Out of rounds (every gun under a magazine): the bodies of those it has
+    // fought searched for theirs, the nearest first, as a player would
+    // between fights (WIL_020's rifle ran dry for good, and the drug boat had
+    // to be burnt); in a fight too once they are empty (WIL_040's escort
+    // fired an empty rifle at Rongo's foes for minutes).
+    let guns = || {
+        inventory.slots.iter().filter(|s| matches!(inventory.defs[s.def].class, c if c != crate::weapons::WeaponClass::Melee && c != crate::weapons::WeaponClass::Flamethrower))
+    };
+    let out_of_rounds = guns().all(|s| s.mag + s.reserve < inventory.defs[s.def].magazine.max(1));
+    let dry = guns().all(|s| s.mag + s.reserve == 0);
+    if out_of_rounds && (host.quiet > 4.0 || dry) && !on_call && !fixed {
+        // (A gun dropped of a kind it carries first: walked over, its
+        // rounds are taken.)
+        let carried = |name: &str| {
+            inventory.defs.iter().find(|d| d.name == name).is_some_and(|d| d.class != crate::weapons::WeaponClass::Melee && inventory.slots.iter().any(|s| inventory.defs[s.def].class == d.class))
+        };
+        let off = |t: &GlobalTransform| t.translation().distance(at.translation);
+        let gun = plants
+            .iter()
+            .filter(|(p, t)| {
+                crate::pickups::is_dropped(p.id) && matches!(p.kind, crate::pickups::PickupKind::Weapon(n) if carried(n)) && off(t) < AMMO_SEARCH && !leashed(t.translation())
+            })
+            .min_by(|a, b| off(a.1).total_cmp(&off(b.1)));
+        if let Some((p, gt)) = gun {
+            if *last != Some((p.id, "rounds")) {
+                info!("story autopilot: out of rounds; to a dropped gun");
+                *last = Some((p.id, "rounds"));
+            }
+            teleport(&mut at, &mut player, to_dunia(gt.translation()), 0.0);
+            host.quiet = 0.0;
+            return;
+        }
+        let body = npcs
+            .iter()
+            .filter(|(t, h, body, ..)| h.dead && body.is_some_and(|b| !b.skin) && near(t) < AMMO_SEARCH && !leashed(t.translation))
+            .min_by(|a, b| near(a.0).total_cmp(&near(b.0)));
+        if let Some((nt, _, _, _, actor, _, _)) = body {
+            if *last != Some((actor.id, "search for rounds")) {
+                info!("story autopilot: search {} for rounds", actor.id);
+                *last = Some((actor.id, "search for rounds"));
+            }
+            let delta = nt.translation - at.translation;
+            if Vec2::new(delta.x, delta.z).length() > 1.6 || delta.y.abs() > 1.5 {
+                let mut feet = nt.translation + (at.translation - nt.translation).with_y(0.0).normalize_or(Vec3::Z) * 0.9;
+                feet.y = heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT).max(nt.translation.y - crate::player::HALF_HEIGHT - 0.5);
+                teleport(&mut at, &mut player, to_dunia(feet), 0.0);
+                host.quiet = 0.0;
+                return;
+            }
+            player.yaw = (-delta.x).atan2(-delta.z);
+            if now >= *next_press {
+                *next_press = now + 0.6;
+                actions.press(crate::controls::Action::Interact);
+            }
+            return;
+        }
+    }
     if fixed || stubborn || sniping {
         let Some((nt, nh, _, _, actor, _, head)) = quest.filter(|q| (stubborn || sniping || host.quiet > 3.0) && !q.1.dead) else { return };
         if *last != Some((actor.id, "shoot")) {
@@ -5083,12 +5237,11 @@ fn autopilot_loot(
                 } else if now - since > 8.0 {
                     // On foot, the first time: right up to him (a cliff or
                     // the water's edge between), on the ground beside him.
-                    if !fixed && came_near.insert(actor.id) {
+                    let flat = (at.translation - nt.translation).with_y(0.0).normalize_or(Vec3::Z);
+                    let mut feet = nt.translation + flat * 3.0;
+                    feet.y = heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT).max(nt.translation.y - crate::player::HALF_HEIGHT);
+                    if !fixed && !leashed(feet) && came_near.insert(actor.id) {
                         info!("story autopilot: {} out of reach; going up to him", actor.id);
-                        let flat = (at.translation - nt.translation).with_y(0.0).normalize_or(Vec3::Z);
-                        let mut feet = nt.translation + flat * 3.0;
-                        feet.y =
-                            heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT).max(nt.translation.y - crate::player::HALF_HEIGHT);
                         teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
                         host.quiet = 0.0;
                         *shooting = None;
@@ -5146,6 +5299,12 @@ fn autopilot_loot(
         if !fixed && flat.length() > (reach * 0.6).max(SHOOT_FROM * 1.5) {
             let mut feet = nt.translation - flat.normalize_or(Vec3::Z) * SHOOT_FROM;
             feet.y = heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT);
+            if leashed(feet) {
+                info!("story autopilot: {} too far from the companion; another for a while", actor.id);
+                skipped.insert(actor.id, now + 20.0);
+                *shooting = None;
+                return;
+            }
             teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
             host.quiet = 0.0;
             *shooting = None;
@@ -5171,9 +5330,13 @@ fn autopilot_loot(
         // Not beside someone to keep safe (`KEEP_CLEAR`; people, not the
         // story's animals): away from them first (now and then: a companion
         // keeps coming).
+        // (Not a companion leading at close range: kept up with, it is near
+        // by design, and stepping away from it then back to it went on for
+        // all of WIL_040's escort.)
+        let close_lead = |id: u64| companions.iter().any(|c| c.0 == id && matches!(c.1, fc3_story::Companion::Lead { distance, .. } if distance < KEEP_CLEAR * 2.0));
         let beside = story_actors
             .iter()
-            .filter(|(_, a, creature)| !a.dead && !creature && a.id != actor.id && !hostile.contains(&a.id))
+            .filter(|(_, a, creature)| !a.dead && !creature && a.id != actor.id && !hostile.contains(&a.id) && !close_lead(a.id))
             .map(|(t, a, _)| (t.translation, a.id))
             .find(|(p, _)| p.with_y(0.0).distance(at.translation.with_y(0.0)) < KEEP_CLEAR);
         if let Some((by, who)) = beside.filter(|_| !fixed && now - *kept_clear > 15.0) {
@@ -5190,24 +5353,52 @@ fn autopilot_loot(
         // No shot past someone not to be shot (a captive among his
         // guards): held, and after a while taken from the foe's other side.
         let target = aim + eye;
-        let in_line = story_actors.iter().filter(|(_, a, _)| !a.dead && a.id != actor.id && !hostile.contains(&a.id)).find_map(|(t, _, _)| {
-            let p = t.translation + Vec3::Y * 0.3;
-            let along = (p - eye).dot(aim.normalize_or_zero()).clamp(0.0, aim.length());
-            // (Wider with range: the gun's spread. Right beside him, only
-            // straight ahead: JAS_130's Liza at the wheel as he shoots from
-            // the seat next to her.)
-            let width = if along < BESIDE { 0.35 } else { 1.2 + along * 0.025 };
-            ((eye + aim.normalize_or_zero() * along).distance(p) < width && along < aim.length() + 1.0).then_some(p)
-        });
+        let line_from = |eye: Vec3| {
+            let aim = target - eye;
+            story_actors.iter().filter(|(_, a, _)| !a.dead && a.id != actor.id && !hostile.contains(&a.id)).find_map(|(t, _, _)| {
+                let p = t.translation + Vec3::Y * 0.3;
+                let along = (p - eye).dot(aim.normalize_or_zero()).clamp(0.0, aim.length());
+                // (Wider with range: the gun's spread. Right beside him, only
+                // straight ahead: JAS_130's Liza at the wheel as he shoots
+                // from the seat next to her.)
+                let width = if along < BESIDE { 0.35 } else { 1.2 + along * 0.025 };
+                ((eye + aim.normalize_or_zero() * along).distance(p) < width && along < aim.length() + 1.0).then_some(p)
+            })
+        };
+        let in_line = line_from(eye);
         if let Some(bystander) = in_line {
             let since = *blocked.get_or_insert(now);
             if now - since > 3.0 && !fixed {
                 let away = (target - bystander).with_y(0.0).normalize_or(Vec3::X);
                 let mut feet = nt.translation + away * 6.0;
                 feet.y = heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT);
-                info!("story autopilot: {} in the line of fire; round to {}'s other side", "someone", actor.id);
-                teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
-                host.quiet = 0.0;
+                // (Kept by a companion, as in an escort: a spot to its side
+                // with a clear shot, rather than round the foe. The player
+                // kept up behind Rongo, and Rongo was always in the way.)
+                let beside_companion = tether.filter(|_| leashed(feet)).and_then(|c| {
+                    (0..12)
+                        .flat_map(|i| [KEEP_CLEAR + 2.0, ESCORT_IN_FIGHT - 3.0].map(move |r| (i, r)))
+                        .filter_map(|(i, r)| {
+                            let a = i as f32 * std::f32::consts::TAU / 12.0;
+                            let mut spot = c + Vec3::new(a.cos(), 0.0, a.sin()) * r;
+                            spot.y = heights.height_at(spot)?;
+                            let spot_eye = spot + Vec3::Y * player.eye;
+                            line_from(spot_eye).is_none().then_some(spot)
+                        })
+                        .min_by(|a, b| a.distance(at.translation).total_cmp(&b.distance(at.translation)))
+                });
+                if let Some(spot) = beside_companion {
+                    info!("story autopilot: someone in the line of fire; to the companion's side for {}", actor.id);
+                    teleport(&mut at, &mut player, to_dunia(spot), 0.0);
+                    host.quiet = 0.0;
+                } else if leashed(feet) {
+                    info!("story autopilot: {} behind someone and too far from the companion; another for a while", actor.id);
+                    skipped.insert(actor.id, now + 20.0);
+                } else {
+                    info!("story autopilot: {} in the line of fire; round to {}'s other side", "someone", actor.id);
+                    teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
+                    host.quiet = 0.0;
+                }
                 *blocked = None;
             }
             return;
@@ -5306,41 +5497,6 @@ fn autopilot_loot(
             });
         }
         return;
-    }
-    // Out of rounds (every gun under a magazine): the bodies of those it has
-    // fought searched for theirs, the nearest first, as a player would
-    // between fights (WIL_020's rifle ran dry for good, and the drug boat had
-    // to be burnt).
-    let out_of_rounds = inventory
-        .slots
-        .iter()
-        .filter(|s| matches!(inventory.defs[s.def].class, c if c != crate::weapons::WeaponClass::Melee && c != crate::weapons::WeaponClass::Flamethrower))
-        .all(|s| s.mag + s.reserve < inventory.defs[s.def].magazine.max(1));
-    if out_of_rounds && host.quiet > 4.0 && !on_call {
-        let body = npcs
-            .iter()
-            .filter(|(t, h, body, ..)| h.dead && body.is_some_and(|b| !b.skin) && near(t) < AMMO_SEARCH)
-            .min_by(|a, b| near(a.0).total_cmp(&near(b.0)));
-        if let Some((nt, _, _, _, actor, _, _)) = body {
-            if *last != Some((actor.id, "search for rounds")) {
-                info!("story autopilot: search {} for rounds", actor.id);
-                *last = Some((actor.id, "search for rounds"));
-            }
-            let delta = nt.translation - at.translation;
-            if Vec2::new(delta.x, delta.z).length() > 1.6 || delta.y.abs() > 1.5 {
-                let mut feet = nt.translation + (at.translation - nt.translation).with_y(0.0).normalize_or(Vec3::Z) * 0.9;
-                feet.y = heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT).max(nt.translation.y - crate::player::HALF_HEIGHT - 0.5);
-                teleport(&mut at, &mut player, to_dunia(feet), 0.0);
-                host.quiet = 0.0;
-                return;
-            }
-            player.yaw = (-delta.x).atan2(-delta.z);
-            if now >= *next_press {
-                *next_press = now + 0.6;
-                actions.press(crate::controls::Action::Interact);
-            }
-            return;
-        }
     }
     // A pickup a script waits on (a mission's diamonds): gone to and taken
     // (from wherever a high trigger held him up).

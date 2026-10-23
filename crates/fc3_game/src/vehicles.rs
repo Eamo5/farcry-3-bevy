@@ -1473,6 +1473,7 @@ fn autopilot_wreck(
     mut given_up: Local<std::collections::HashMap<u64, f32>>,
     mut came_from: Local<Option<(u64, Vec3)>>,
 ) {
+    let _slow = crate::story::Slow::new("autopilot_wreck");
     if std::env::var_os("FC3_STORY_AUTOPILOT").is_none() {
         return;
     }
@@ -1632,6 +1633,7 @@ fn autopilot_board(
     mut actions: ResMut<ActionState>,
     mut last: Local<f32>,
 ) {
+    let _slow = crate::story::Slow::new("autopilot_board");
     if std::env::var_os("FC3_STORY_AUTOPILOT").is_none() || std::env::var_os("FC3_STORY_BOARD").is_some() {
         return;
     }
@@ -1708,6 +1710,7 @@ fn autopilot_drive(
     mut vehicles: Query<(Entity, &mut Transform, &mut LinearVelocity, &mut AngularVelocity, &Vehicle)>,
     mut held: Local<Option<(Vec3, Quat, f32)>>,
 ) {
+    let _slow = crate::story::Slow::new("autopilot_drive");
     let Some(Ok((root, mut t, mut linear, mut angular, v))) = driving.vehicle.map(|e| vehicles.get_mut(e)) else {
         if let Some((at, _)) = drive.0.take() {
             warn!("story autopilot: no vehicle to drive to {at:.1?}");
@@ -1810,6 +1813,7 @@ fn autopilot_exit(
     mut last: Local<f32>,
     time: Res<Time>,
 ) {
+    let _slow = crate::story::Slow::new("autopilot_exit");
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() || cinema.view.is_some() {
         return;
     }

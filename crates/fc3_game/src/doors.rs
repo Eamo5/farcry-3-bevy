@@ -207,6 +207,7 @@ fn autopilot_doors(
     mut walking: Local<Option<f32>>,
     mut far_tried: Local<HashSet<u64>>,
 ) {
+    let _slow = crate::story::Slow::new("autopilot_doors");
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() {
         return;
     }

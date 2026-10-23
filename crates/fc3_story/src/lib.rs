@@ -1169,6 +1169,12 @@ impl Story {
         }
     }
 
+    /// The mission the player is on (taken on last, still running), by its
+    /// main graph's name.
+    pub fn mission_in_progress(&self) -> Option<String> {
+        self.core.borrow().in_progress().map(|m| m.name.clone())
+    }
+
     /// The mission the player could abandon now (the pause menu's Abandon
     /// mission), by its main graph's name.
     pub fn abandonable(&self) -> Option<String> {
@@ -1312,6 +1318,11 @@ impl Story {
                 continue;
             }
             if !keep(&c, &l.callback.target) {
+                continue;
+            }
+            // (Nor another mission's acknowledge shape while the player is on
+            // one: it's closed.)
+            if c.ack_shape_closed(*t) {
                 continue;
             }
             // One whose box counts only other characters (a companion's
@@ -3707,6 +3718,57 @@ mod tests {
         assert_eq!(story.errors(), 0);
         story.domino().lua().load(r#"SendRegisteredEventToEntity("100", "CBaseTriggerComponent_SetDisabled", {})"#).exec().unwrap();
         assert!(story.watched_exit_regions().is_empty());
+    }
+
+    /// Another mission's acknowledge shape is closed while the player is on
+    /// a mission: standing in it takes nothing on until he has given his up,
+    /// then it reports him entering.
+    #[test]
+    fn another_missions_acknowledge_shape_waits_for_the_one_in_progress() {
+        use fc3_formats::{fcb::Object, hash::name_hash};
+        use std::sync::Arc;
+        let mut data = StoryData::default();
+        let prox = Arc::new(Object {
+            name_hash: name_hash("CProximityTriggerComponent"),
+            fields: vec![(name_hash("vectorSize"), [10.0f32; 3].into_iter().flat_map(f32::to_le_bytes).collect())],
+            children: vec![],
+        });
+        data.entities.insert(100, data::Entry {
+            id: 100, name: "WIL_010_AcknowledgementZone".into(), class: "CEntity".into(), pos: [0.0; 3], angles: [0.0; 3],
+            layer: fc3_formats::world::DEFAULT_MISSION_LAYER, origin: data::Origin::Global,
+            components: Arc::new(Object { children: vec![prox], ..Default::default() }), fields: Arc::new(Object::default()),
+        });
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        let other = {
+            let mut c = story.core.borrow_mut();
+            let escort = c.register_mission("wil_040.lua", false, None, None, false, false, false, "");
+            let other = c.register_mission("wil_010.lua", false, None, None, false, false, false, "");
+            for id in [&escort, &other] {
+                c.missions.by_id.get_mut(id).unwrap().state = missions::State::Running;
+            }
+            let owner = c.missions.by_id[&escort].owner;
+            c.acknowledge(owner, false);
+            c.missions.by_id[&other].owner
+        };
+        story
+            .domino()
+            .lua()
+            .load(format!(
+                "entered = 0
+                 CMissionManager.GetInstance():SetAcknowledgeShape('{other}', '100')
+                 local box = {{ _type = {{ Entered = function() entered = entered + 1 end }} }}
+                 CScriptCallbackSystem_GetInstance():RegisterEventCallback('100', box, 'Entered', 'Enter')"
+            ))
+            .exec()
+            .unwrap();
+        let view = View::default();
+        story.update(0.1, view.clone());
+        let entered = || story.domino().lua().globals().get::<u32>("entered").unwrap();
+        assert_eq!(entered(), 0);
+        assert!(story.watched_triggers().iter().all(|w| w.0 != 100));
+        assert!(story.abandon_mission());
+        story.update(0.1, view);
+        assert_eq!(story.domino().lua().globals().get::<u32>("entered").unwrap(), 1);
     }
 
     #[test]

@@ -112,6 +112,9 @@ pub struct Missions {
     /// The mission the player took on last (its main mission's id): the one
     /// abandoning gives up.
     pub current: Option<String>,
+    /// Missions' acknowledge shapes (`SetAcknowledgeShape`: the trigger
+    /// that takes the mission on), by trigger: its mission's id.
+    pub ack_shapes: HashMap<u64, String>,
 }
 
 /// Synthetic entity ids for the graphs that run on no world entity (mission
@@ -431,19 +434,32 @@ impl Core {
         }
     }
 
-    /// The mission the player could abandon now: the one he took on last,
-    /// still running, none of whose running graphs keeps him from it
-    /// (`EnableMissionAbort`).
-    pub fn abandonable(&self) -> Option<&Mission> {
+    /// The mission the player is on: the one he took on last, still
+    /// running.
+    pub fn in_progress(&self) -> Option<&Mission> {
         let running = |m: &&Mission| !m.giver && m.block.is_none() && m.state == State::Running && m.acknowledged;
         // (Kept in the save by name.)
-        let m = match &self.missions.current {
-            Some(id) => self.missions.by_id.get(id).filter(running)?,
+        match &self.missions.current {
+            Some(id) => self.missions.by_id.get(id).filter(running),
             None => {
                 let name = self.missions.saved.current.as_ref()?;
-                self.missions.by_id.values().filter(running).find(|m| &m.name == name)?
+                self.missions.by_id.values().filter(running).find(|m| &m.name == name)
             }
-        };
+        }
+    }
+
+    /// Whether a trigger is another mission's acknowledge shape, closed while
+    /// the player is on a mission (as the engine has it: one mission at a
+    /// time; WIL_040's escort starts in WIL_010's, which took WIL_010 on
+    /// and left Rongo behind).
+    pub fn ack_shape_closed(&self, trigger: u64) -> bool {
+        self.missions.ack_shapes.get(&trigger).is_some_and(|of| self.in_progress().is_some_and(|m| &m.id != of))
+    }
+
+    /// The mission the player could abandon now: the one he is on, none of
+    /// whose running graphs keeps him to it (`EnableMissionAbort`).
+    pub fn abandonable(&self) -> Option<&Mission> {
+        let m = self.in_progress()?;
         let id = &m.id;
         let held = |owner: u64| self.missions.abort_disabled.contains(&owner);
         let blocks_held = self

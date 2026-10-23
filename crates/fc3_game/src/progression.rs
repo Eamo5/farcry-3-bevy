@@ -45,6 +45,7 @@ impl Plugin for ProgressionPlugin {
             .init_resource::<PauseMenu>()
             .add_systems(OnExit(GameState::Loading), (load_shop_catalog, load_loot_catalog))
             .add_systems(Update, find_shops)
+            .add_systems(Update, autopilot_resupply.run_if(in_state(GameState::Playing)))
             .add_systems(Update, (remind_skill_points, test_xp).run_if(in_state(GameState::Playing)))
             .add_systems(Startup, (setup_journal, setup_shop, setup_popups))
             .add_systems(
@@ -2382,6 +2383,7 @@ fn test_skills(args: Res<crate::Args>, mut progress: ResMut<Progress>, mut done:
 /// while and counts on its being there), then the cheapest, in the tree's
 /// order.
 fn autopilot_skills(skills: Res<Skills>, mut progress: ResMut<Progress>) {
+    let _slow = crate::story::Slow::new("autopilot_skills");
     if progress.skill_points == 0 || std::env::var_os("FC3_STORY_AUTOPILOT").is_none() {
         return;
     }
@@ -2997,6 +2999,65 @@ fn find_shops(
             }
         }
     }
+}
+
+/// Tests: how long (s) before the autopilot goes shopping for rounds again.
+const RESUPPLY_AGAIN: f32 = 300.0;
+
+/// The autopilot, its guns low on rounds (each under a magazine) and no
+/// mission in progress, goes to the nearest shop (a liberated outpost's, a
+/// shopkeeper's) and refills its ammunition there, paying as a player
+/// does: it fought WIL_040's escort with an empty rifle, the campaign's
+/// rounds spent long before.
+#[allow(clippy::too_many_arguments)]
+fn autopilot_resupply(
+    host: Option<NonSendMut<crate::story::StoryHost>>,
+    time: Res<Time>,
+    outposts: Res<crate::outposts::Outposts>,
+    shops: Res<Shops>,
+    catalog: Res<ShopCatalog>,
+    crafting: Res<crate::crafting::CraftCatalog>,
+    perks: Res<Perks>,
+    mut progress: ResMut<Progress>,
+    mut hud: ResMut<HudState>,
+    mut bought: MessageWriter<ItemBought>,
+    mut players: Query<(&mut Transform, &mut Player, &mut Inventory, &mut PlayerStats, &Health)>,
+    mut last: Local<Option<f32>>,
+) {
+    if std::env::var_os("FC3_STORY_AUTOPILOT").is_none() {
+        return;
+    }
+    let _slow = crate::story::Slow::new("autopilot_resupply");
+    let Some(mut host) = host else { return };
+    let Ok((mut t, mut p, mut inv, mut stats, health)) = players.single_mut() else { return };
+    let now = time.elapsed_secs();
+    if health.dead || p.driving || p.spawning || host.quiet() < 8.0 || host.autopilot_held() || last.is_some_and(|at| now - at < RESUPPLY_AGAIN) {
+        return;
+    }
+    let guns: Vec<&crate::weapons::WeaponSlot> =
+        inv.slots.iter().filter(|s| !matches!(inv.defs[s.def].class, crate::weapons::WeaponClass::Melee | crate::weapons::WeaponClass::Flamethrower)).collect();
+    if guns.is_empty() || guns.iter().any(|s| s.mag + s.reserve >= inv.defs[s.def].magazine.max(1)) || host.story.mission_in_progress().is_some() {
+        return;
+    }
+    let item = ShopItem::AmmoRefill;
+    if progress.money < item.price(&inv, progress.towers.len(), &catalog) {
+        return;
+    }
+    let shop = outposts
+        .list
+        .iter()
+        .filter(|o| o.liberated)
+        .map(|o| o.centre)
+        .chain(shops.0.iter().copied())
+        .min_by(|a, b| a.distance(t.translation).total_cmp(&b.distance(t.translation)));
+    let Some(shop) = shop else { return };
+    *last = Some(now);
+    info!("story autopilot: out of rounds; to the shop at {:.0?}", crate::data::to_dunia(shop));
+    crate::story::teleport(&mut t, &mut p, crate::data::to_dunia(shop), 0.0);
+    if let Some(b) = trade(item, &mut inv, &mut stats, &mut progress, &perks, &catalog, &crafting, &mut hud) {
+        bought.write(b);
+    }
+    host.reset_quiet();
 }
 
 /// Liberated outposts have a shop at their centre; shopkeepers keep one

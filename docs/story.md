@@ -1365,6 +1365,11 @@ is the story's own:
   with exit listeners; legitimate mission-boundary failures are not bypassed.
   `FC3_STORY_SKIP_SCENES=1` skips cinematics; `FC3_STORY_LOOK=<id>` faces
   a character.
+* Run the autopilot from an executable named `farcry3.exe` (a copy in a
+  folder of its own): a copy named otherwise ran at 4 fps unfocused (frames
+  held to about 250 ms), which stretched every far teleport into minutes
+  and every timed part out of shape. `FC3_PERF=1` logs the frame times;
+  `FC3_SLOW_SYSTEMS=1` logs any autopilot system taking over 20 ms.
 * `FC3_STORY_CHECKPOINTS=<dir>` keeps every checkpoint as a file and a matching
   `.game.txt` live inventory/world snapshot (including multiple checkpoints in
   one frame). These explicit test snapshots do not overwrite ordinary saves.
@@ -4098,6 +4103,53 @@ Rongo through the fields to the village, needed companions:
   completing; without the event it never completed, and its pills scene
   (which takes the player 7 km away) replayed at every load, failing any
   escort loaded alongside it.
+
+Run again later in the campaign (`camp91`), the escort failed every time
+("DON'T FORGET TO PROTECT RONGO.": 30 m warns, 40 m fails):
+
+* **One mission at a time.** The escort starts inside WIL_010's
+  acknowledge shape, so standing there took WIL_010 on and the autopilot
+  went off after its barcodes. The engine keeps every other mission's
+  acknowledge shape (`SetAcknowledgeShape`, set by `MissionInit`) closed
+  while the player is on one; the story now does (`Core::ack_shape_closed`:
+  no `Enter` from it, and not among the triggers to step into), and it
+  reports him entering once it opens (the mission done or abandoned).
+* **Fights by the companion.** The fight's moves (going up to a foe out of
+  reach, round a bystander, nearer for the gun's reach) went 40 m from
+  Rongo. With a companion within 45 m, they now keep within 20 m of it
+  (`ESCORT_IN_FIGHT`), else that foe is shot from where the player is or
+  left a while; nor is one too far from it taken down. While one leads,
+  only triggers within 40 m of it are stepped into once the story has been
+  quiet a while.
+* **Out of rounds.** The rifle had been dry since WIL_020 and the autopilot
+  only fired empty. Enemies now drop their guns (see the README), and with
+  every gun under a magazine the autopilot walks over a dropped one of a
+  kind it carries, else searches a body, within 40 m (and within the
+  companion's 20 m).
+* **The Lost Expeditions.** Their labs' blocks had been left running from
+  an earlier stretch, and reloading put the player back in a lab. The
+  autopilot no longer steps into the DLC's triggers (`dlc_mission`;
+  `FC3_STORY_AUTOPILOT_DLC=1` lets it).
+* **Reinforcements that fight.** Each wave's reinforcements are sent to
+  guard posts in the village (`Cautious_Guard_*`). Alerted, one's AI took
+  over and the story heard his action broken off; it sent him to the next
+  post, which made him scripted again, idle and unaware, and the wave never
+  came. An order now finds an alerted fighter (aware, knowing where the
+  player was) busy fighting, as one in combat, and breaks off at once
+  (`story_actors::actor_tasks`). The autopilot also counts a reinforcement
+  the story spawned as a foe while idle, once he has been alerted.
+* **A clear shot beside him.** The autopilot kept up behind Rongo, the foes
+  ahead, so Rongo was always in its line of fire. It now steps to a spot at
+  his side (12 or 17 m from him) with a clear line to the foe, and no
+  longer steps away from a companion leading at close range only to be
+  brought back to it.
+* **Resupplied between missions.** The campaign's rounds were long spent
+  (the autopilot never bought any). With every gun under a magazine and no
+  mission in progress, it now goes to the nearest shop (a liberated
+  outpost's, a shopkeeper's) and buys "Refill all ammo"
+  (`progression::autopilot_resupply`, at most every 5 minutes).
+
+From a B35E checkpoint with a full rifle, B35E completes.
 
 B40, holding Rongo's house through three waves, waits for each wave's
 group to empty. The waves bring beheaders (`Pirate_Beheader`), whose

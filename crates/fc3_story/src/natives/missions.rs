@@ -114,7 +114,14 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         let b = c.data.block_named(&block.0).map(|b| b.id);
         c.data.layer_named(b, &layer.0).map(|l| c.layer_state(l.id) as i32 as f64).unwrap_or(0.0)
     })?;
-    r.f(&m("SetAcknowledgeShape"), |_, _: (Text, Text)| ())?;
+    // A mission's acknowledge shape (`MissionInit`): kept closed while
+    // another mission is in progress (`Core::ack_shape_closed`).
+    r.f(&m("SetAcknowledgeShape"), |c, (owner, trigger): (Text, Text)| {
+        let mission = owner.id().and_then(|o| c.missions.main_of(o).map(|m| m.id.clone()));
+        if let (Some(m), Some(t)) = (mission, trigger.id()) {
+            c.missions.ack_shapes.insert(t, m);
+        }
+    })?;
     r.f(&m("SetCurrentChapter"), |c, n: Num| c.missions.chapter = n.or(0.0) as i32)?;
     r.f(&m("UnlockItemsFromScript"), |c, group: Text| {
         c.unlocked_tags.insert(group.0.clone());

@@ -271,7 +271,10 @@ No game data is included in this repository, and none is written into it.
   markers (bays and the C4/C7 rivers and lakes) a Zodiac with a gunner circles the open water,
   slowing to fight from the boat when alerted. Cars driven into deep water flood and stall.
 - **Pickups**: ammo, health, weapons, loot and herbs at the world's pickup locations; pickups and
-  unsearched bodies nearby catch the light with a passing glint.
+  unsearched bodies nearby catch the light with a passing glint. A fallen enemy drops the gun he
+  carried by his feet (the pirates' AK-74M, the privateers' P416); walk over one of a kind you carry
+  to take half a magazine of its rounds, or pick it up as any weapon. Dropped guns go after two
+  minutes (`FC3_DROP_TEST=<weapon>` drops one in front of you, for tests).
 - **Interface**: HUD with minimap (turns with the player; enemies, tagged targets and outposts; the game's
   reach: 40 m on foot, widening to 100 m in a vehicle at speed and on the glider),
   a full-screen world map (M: zoom, pan, waypoints, fast travel; explored areas saved) with a GPS route to the waypoint along the island's roads, also on the minimap, main and

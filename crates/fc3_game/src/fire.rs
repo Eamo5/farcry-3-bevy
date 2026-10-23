@@ -491,6 +491,7 @@ fn autopilot_burn(
     mut burning: Local<Option<(u64, f32, Vec3)>>,
     mut tried: Local<std::collections::HashMap<u64, f32>>,
 ) {
+    let _slow = crate::story::Slow::new("autopilot_burn");
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() {
         return;
     }

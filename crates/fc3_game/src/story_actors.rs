@@ -866,7 +866,10 @@ fn actor_tasks(
             a.path.clear();
             restore_clips(&mut *a, &mut rigs);
             if let (Some(mut npc), Some(_)) = (npc, order) {
-                if npc.state == crate::npc::NpcState::Combat {
+                // (Or alerted, the AI just taken over: WIL_040's
+                // reinforcements, sent to their guard posts again each time,
+                // forgot the player there and never fought.)
+                if npc.state == crate::npc::NpcState::Combat || (!own && npc.awareness > 0.35 && npc.last_known.is_some()) {
                     // Busy fighting: the action is broken off at once.
                     if !own {
                         host.story.action_interrupted(id);

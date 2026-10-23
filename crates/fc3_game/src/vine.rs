@@ -275,6 +275,7 @@ fn autopilot_climb(
     mut players: Query<(&mut Transform, &mut Player)>,
     mut placed: Local<Option<(u64, f32)>>,
 ) {
+    let _slow = crate::story::Slow::new("autopilot_climb");
     if std::env::var_os("FC3_STORY_AUTOPILOT").is_none() {
         return;
     }

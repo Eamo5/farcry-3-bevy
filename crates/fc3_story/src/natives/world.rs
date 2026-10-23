@@ -537,7 +537,9 @@ pub fn update_triggers(c: &mut Core) {
         }
     }
     for t in watched {
-        let now: Vec<u64> = c.contacts(t);
+        // (Another mission's acknowledge shape is closed while the player is
+        // on one: it reports him entering once it opens.)
+        let now: Vec<u64> = if c.ack_shape_closed(t) { Vec::new() } else { c.contacts(t) };
         let before = c.trigger_contacts.get(&t).cloned().unwrap_or_default();
         for e in now.iter().filter(|e| !before.contains(e)) {
             c.raise(&Listen::Entity(t, "Enter".into()), vec![Arg::id(*e)]);

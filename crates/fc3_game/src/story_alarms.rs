@@ -234,6 +234,7 @@ fn autopilot_alarms(
     mut actions: ResMut<crate::controls::ActionState>,
     mut tries: Local<std::collections::HashMap<u64, u32>>,
 ) {
+    let _slow = crate::story::Slow::new("autopilot_alarms");
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() {
         return;
     }

@@ -3234,7 +3234,12 @@ fn react_to_death(
     mut rng: ResMut<Rng>,
     mut anims: Query<&mut AnimRequest>,
     mut explosions: MessageWriter<crate::weapons::Explosion>,
-    (mut hits, injury, mut rigs): (MessageReader<DamageEvent>, Res<InjuryClips>, Query<&mut CharacterRig>),
+    (mut hits, injury, mut rigs, mut held): (
+        MessageReader<DamageEvent>,
+        Res<InjuryClips>,
+        Query<&mut CharacterRig>,
+        Query<(&ChildOf, &mut Visibility), With<crate::characters::HeldWeapon>>,
+    ),
 ) {
     let player = players.single().ok();
     // The blow that killed each (its origin and whether it was to the head).
@@ -3271,6 +3276,15 @@ fn react_to_death(
         commands.entity(d.entity).remove::<(Collider, RigidBody)>().insert(Corpse { age: 0.0, fall_axis: side, skinned, found: false });
         if npc.hostile() {
             commands.entity(d.entity).insert(crate::pickups::LootableBody { role: npc.role, rig: npc.rig, skin: false });
+        }
+        // His gun falls from his hand, by his feet (a flamer's goes up with
+        // his tank).
+        if let Some(gun) = crate::pickups::carried_weapon(npc.faction, npc.role).filter(|_| npc.role != Role::Flamer) {
+            let feet = t.translation - Vec3::Y * crate::player::HALF_HEIGHT + side * 0.7;
+            crate::pickups::drop_weapon(&mut commands, gun, feet, rng.range(0.0, std::f32::consts::TAU));
+            if let Some(r) = npc.rig.and_then(|r| rigs.get(r).ok()) {
+                crate::guard_spots::hold_weapon(r, &mut held, false);
+            }
         }
         // A flamer's fuel tank goes up when he falls.
         if npc.role == Role::Flamer {
