@@ -246,6 +246,7 @@ fn run_interface(
     device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
     adapter: Res<RenderAdapter>,
+    (mut sfx, mut sounds): (MessageWriter<crate::sound::PlaySfx>, Local<Option<std::collections::HashMap<String, u32>>>),
 ) {
     let state = &mut *state;
     if let Interface::Waiting = state {
@@ -278,6 +279,19 @@ fn run_interface(
     for call in host.take_calls() {
         debug!("original UI: engine call {} {:?}", call.command, call.args);
         calls.0.push(call);
+    }
+    // The movies' sounds (a new objective's chime, a box ticked, the XP
+    // kicker), played as the engine played them: the event each name is.
+    let table = sounds.get_or_insert_with(|| {
+        std::fs::read_to_string(info.root.join(fc3_formats::feu::SOUNDS_REL)).map(|t| fc3_formats::feu::parse_sounds(&t)).unwrap_or_default()
+    });
+    for name in host.take_sounds() {
+        match table.get(&name) {
+            Some(&event) => {
+                sfx.write(crate::sound::PlaySfx { event, at: None, volume: 1.0 });
+            }
+            None => debug!("original UI: sound {name} not in the movies' table"),
+        }
     }
     host.render();
 }

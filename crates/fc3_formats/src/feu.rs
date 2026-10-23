@@ -3,8 +3,9 @@
 //! live outside the file, named by the game's own tags: an external image
 //! (246: id, the authored width and height, the texture's path as
 //! `UI\...\TX_name.png`, shipped as `.xbt`) and an external font (251: id,
-//! the `.ffd` font file, its face name, per-language variants). Tags 248 and
-//! 249 carry the movie's id and a version.
+//! the `.ffd` font file, its face name, per-language variants). Tag 248 is a
+//! sound (a character id the movie exports by name, and the sound event it
+//! is: [`sound_ids`]); 249 a version.
 //!
 //! [`to_swf`] makes a standard SWF of one: the signature put back, each
 //! external image embedded as a lossless bitmap, each external font as a
@@ -92,6 +93,15 @@ pub fn is_feu(data: &[u8]) -> bool {
 /// Marks the cache's movies as made by this version of [`to_swf`].
 pub const MOVIES_STAMP_REL: &str = "ui/stamp-movies-whole-imports.txt";
 
+/// The movies' sounds in the cache: a line per name, `name event` (the
+/// event in hex; [`sound_ids`]).
+pub const SOUNDS_REL: &str = "ui/sounds.txt";
+
+/// The movies' sounds as the cache keeps them, by name.
+pub fn parse_sounds(text: &str) -> std::collections::HashMap<String, u32> {
+    text.lines().filter_map(|l| l.split_once(' ')).filter_map(|(n, e)| Some((n.to_string(), u32::from_str_radix(e.trim(), 16).ok()?))).collect()
+}
+
 /// Where a movie lives in the cache as standard SWF (`ui/.../name.swf`), by
 /// its archive path or by the path another movie imports it by (which may be
 /// in any case, with either slash, doubled).
@@ -160,6 +170,32 @@ pub fn exports(feu: &[u8]) -> Result<Vec<String>> {
         .filter_map(|t| parse_exports(t.body))
         .flatten()
         .map(|(_, n)| String::from_utf8_lossy(n).into_owned())
+        .collect())
+}
+
+/// The sounds a movie plays, by the names it exports them under, with the
+/// sound event each is (its table of tags 248: a character id and the
+/// event's id as `0x%08x` text). Nothing in the movie stands behind those
+/// names: the engine played the event when a movie's `Sound` started one
+/// (`Play_SFX_HUD_New_SubObjective`, h_objective's 1, is `0x001c249f`).
+pub fn sound_ids(feu: &[u8]) -> Result<Vec<(String, u32)>> {
+    let tags = read_tags(feu, tags_start(feu)?, feu.len())?;
+    let table: std::collections::HashMap<u16, u32> = tags
+        .iter()
+        .filter(|t| t.code == MOVIE_ID && t.body.len() > 2)
+        .filter_map(|t| {
+            let id = u16::from_le_bytes(t.body[..2].try_into().ok()?);
+            let text = std::str::from_utf8(&t.body[2..]).ok()?.trim_end_matches('\0');
+            let event = u32::from_str_radix(text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))?, 16).ok()?;
+            Some((id, event))
+        })
+        .collect();
+    Ok(tags
+        .iter()
+        .filter(|t| t.code == EXPORT_ASSETS)
+        .filter_map(|t| parse_exports(t.body))
+        .flatten()
+        .filter_map(|(id, name)| table.get(&id).map(|&e| (String::from_utf8_lossy(name).into_owned(), e)))
         .collect())
 }
 
@@ -867,6 +903,27 @@ mod tests {
         assert_eq!(movie_rel(r"UI\Menus\Shared.feu"), "ui/menus/shared.swf");
         assert_eq!(movie_rel(r"UI\\Menus\\Shared.feu"), "ui/menus/shared.swf");
         assert_eq!(movie_rel("UI/Menus/Shared.feu"), "ui/menus/shared.swf");
+    }
+
+    /// A movie's sounds: the names it exports with the events its tags 248
+    /// give their ids (h_objective's two).
+    #[test]
+    fn a_movies_sounds_are_its_exports_with_their_events() {
+        let mut feu = b"UEF\x08\0\0\0\0".to_vec();
+        feu.extend_from_slice(&[0x00, 0x00, 0x18, 0x01, 0x00]);
+        feu.extend(tag(MOVIE_VERSION, &[2, 0, 0, 0]));
+        feu.extend(tag(MOVIE_ID, b"\x01\x000x001c249f\0"));
+        feu.extend(tag(MOVIE_ID, b"\x02\x000x000301ff\0"));
+        feu.extend(tag(EXPORT_ASSETS, b"\x01\0\x01\0Play_SFX_HUD_New_SubObjective\0"));
+        feu.extend(tag(EXPORT_ASSETS, b"\x01\0\x02\0Play_SFX_HUD_Mission_Check_Box\0"));
+        feu.extend(tag(EXPORT_ASSETS, b"\x01\0\x46\0__Packages.Utils.LayoutHelper\0"));
+        feu.extend(tag(END, &[]));
+        let len = feu.len() as u32;
+        feu[4..8].copy_from_slice(&len.to_le_bytes());
+        assert_eq!(
+            sound_ids(&feu).unwrap(),
+            vec![("Play_SFX_HUD_New_SubObjective".to_string(), 0x001c249f), ("Play_SFX_HUD_Mission_Check_Box".to_string(), 0x000301ff)]
+        );
     }
 
     /// A movie that imports has each sprite it exports written again under

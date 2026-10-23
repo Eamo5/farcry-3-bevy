@@ -72,6 +72,25 @@ _global.__fireEngineCall = function(command) {
     return result;
 };
 
+// The movies' sounds: each exports its sounds by name with nothing behind
+// them (`Play_SFX_HUD_New_SubObjective`); the engine played the sound event
+// of that name's id (the movie's own table, `fc3_formats::feu::sound_ids`).
+// `attachSound` keeps the name, and `start` hands it to the host
+// (`engineSound`) instead of playing nothing. (Both are read-only as the
+// player declares them: the flag cleared first.)
+ASSetPropFlags(Sound.prototype, ["attachSound", "start"], 0, 4);
+Sound.prototype.__fireAttach = Sound.prototype.attachSound;
+Sound.prototype.attachSound = function(name) {
+    this.__fireName = name;
+    this.__fireAttach(name);
+};
+Sound.prototype.__fireStart = Sound.prototype.start;
+Sound.prototype.start = function() {
+    if (this.__fireName != undefined) {
+        flash.external.ExternalInterface.call("engineSound", String(this.__fireName));
+    }
+};
+
 // The engine's string table: fire.utils.Localizer.getText(id) gives the
 // text of a string id (the movies have no Localizer of their own).
 if (_global.fire == undefined) {

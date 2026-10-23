@@ -22,9 +22,21 @@ named by the game's own tags (decoder: `fc3_formats::feu`):
 | Tag | Body |
 |-----|------|
 | 246 | external image: character id (u16), authored width and height (u16), the texture's path as `UI\...\TX_name.png` (NUL-terminated); the archive has it as `.xbt` (DXT5) |
-| 248 | the movie's id |
+| 248 | a sound: character id (u16) and its sound event's id as `0x%08x` text; the movie exports that character by the sound's name, with nothing behind it |
 | 249 | a version |
 | 251 | external font: character id (u16), the `.ffd` font file, its face name, then per-language variants (NUL-terminated strings) |
+
+**Sounds.** A movie plays its sounds as Flash does (`s = new Sound(this);
+s.attachSound("Play_SFX_HUD_New_SubObjective"); s.start()`), but no sound is
+defined: the name stands for a sound event, the one its tag 248 gives
+(`feu::sound_ids`: h_objective's new objective chime is `0x001c249f`, its
+ticked box `0x000301ff`). The converter writes every movie's to
+`ui/sounds.txt` (`name event`, 82 of them). The shim makes `attachSound`
+keep the name and `start` hand it to the host (`engineSound`; both are
+read-only as Ruffle declares them, so `ASSetPropFlags` clears that first),
+and the game plays the event (`original_ui::run_interface`): a new
+objective's chime, an objective ticked off, the XP kicker's tiers, the weapon
+wheel's toggle, the confirmation box. They played nothing before.
 
 Movies share libraries through ordinary `ImportAssets` tags whose URLs are
 archive paths (`UI\Common\lib.feu`, in any case, with either slash, sometimes

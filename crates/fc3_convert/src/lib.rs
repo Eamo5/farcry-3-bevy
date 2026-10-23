@@ -5,7 +5,7 @@
 //! incremental (existing outputs are kept unless `force` is set) and every
 //! file is written atomically, so an interrupted run can simply be resumed.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -3091,6 +3091,18 @@ fn convert_movies(job: &Job) -> Result<()> {
         }
         Some(())
     })?;
+    // The movies' sounds by name, with the events they are (a name is the
+    // same event in every movie that has it).
+    if refresh || job.should_write(feu::SOUNDS_REL) {
+        let mut sounds: BTreeMap<String, u32> = BTreeMap::new();
+        for path in &paths {
+            if let Some(found) = job.vfs.read(path).ok().and_then(|b| feu::sound_ids(&b).ok()) {
+                sounds.extend(found);
+            }
+        }
+        let text: String = sounds.iter().map(|(name, event)| format!("{name} {event:08x}\n")).collect();
+        write_atomic(job.root(), feu::SOUNDS_REL, text.as_bytes(), job.ctx)?;
+    }
     write_atomic(
         job.root(),
         feu::MOVIES_STAMP_REL,

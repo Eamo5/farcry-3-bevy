@@ -82,6 +82,7 @@ fn main() -> Result<()> {
                 for call in host.take_calls() {
                     println!("engine call: {} {:?}", call.command, call.args);
                 }
+                println!("sounds: {:?}", host.take_sounds());
                 println!("dps ids: {:?}", host.dps_ids());
             }
             // FC3UI_DATA="DataLootInventory=sName:Feather,iStateID:2;sName:Hide|Other=...":
@@ -164,6 +165,7 @@ fn main() -> Result<()> {
                     println!("{id}: {}", host.dps_info(&id));
                 }
             }
+            println!("sounds started: {:?}", host.take_sounds());
             fc3_ui::capture(host.player())?.save(out)?;
             println!("saved {out}");
         }

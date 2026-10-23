@@ -44,6 +44,9 @@ struct Bridge {
     answers: RefCell<HashMap<String, String>>,
     /// The game's strings, for `fire.utils.Localizer.getText(id)`.
     strings: fc3_formats::oasis::Strings,
+    /// The sounds the movies started, by name (`engineSound`, the shim's
+    /// `Sound.start`).
+    sounds: RefCell<Vec<String>>,
 }
 
 struct Provider(Rc<Bridge>);
@@ -74,6 +77,12 @@ impl ExternalInterfaceProvider for Provider {
         if name == "engineText" {
             let id = args.first().map(text).and_then(|t| t.trim().parse::<u32>().ok());
             return string(id.and_then(|id| self.0.strings.get(id)).unwrap_or_default());
+        }
+        if name == "engineSound" {
+            if let Some(n) = args.first().map(text).filter(|n| !n.is_empty()) {
+                self.0.sounds.borrow_mut().push(n);
+            }
+            return ExternalValue::Undefined;
         }
         if name != "engineCall" {
             return ExternalValue::Undefined;
@@ -384,6 +393,13 @@ impl Host {
     /// What the movies asked of the engine since the last time.
     pub fn take_calls(&self) -> Vec<EngineCall> {
         std::mem::take(&mut *self.bridge.calls.borrow_mut())
+    }
+
+    /// The sounds the movies started since the last time, by the names
+    /// they export them under (`fc3_formats::feu::sound_ids` gives each its
+    /// event).
+    pub fn take_sounds(&self) -> Vec<String> {
+        std::mem::take(&mut *self.bridge.sounds.borrow_mut())
     }
 
     /// Runs the movies on by `dt` seconds (their frames, scripts and loads).
