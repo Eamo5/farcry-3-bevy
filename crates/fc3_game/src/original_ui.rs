@@ -1098,7 +1098,7 @@ fn drive_map_page(
         Res<crate::pickups::WorldState>,
         Res<crate::story::ScriptedPlayer>,
     ),
-    mut story: Option<NonSendMut<crate::story::StoryHost>>,
+    (mut story, mut story_ui): (Option<NonSendMut<crate::story::StoryHost>>, Option<ResMut<crate::story::StoryUi>>),
     mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
     (mut cursor, buttons, windows): (MessageReader<CursorMoved>, Res<ButtonInput<bevy::input::mouse::MouseButton>>, Query<&Window, With<PrimaryWindow>>),
 ) {
@@ -1263,6 +1263,17 @@ fn drive_map_page(
             "onFastTravel" => {
                 let Some(&to) = arg(1).parse::<usize>().ok().and_then(|i| page.travel.get(i)) else { continue };
                 if !story.as_ref().is_none_or(|h| h.story.fast_travel_enabled()) {
+                    continue;
+                }
+                // (Asked first, over play, as the game asks; the map's own
+                // message box isn't driven yet.)
+                if let (Some(host), Some(ui)) = (story.as_mut(), story_ui.as_mut()) {
+                    let to = match to {
+                        Travel::Outpost(i) => crate::map::TravelTo::Outpost(i),
+                        Travel::Safehouse(marker) => crate::map::TravelTo::Safehouse(marker),
+                    };
+                    crate::story::ask_travel(ui, host, to);
+                    next.set(crate::menu::GameState::Playing);
                     continue;
                 }
                 let Ok((mut t, mut p)) = players.single_mut() else { continue };

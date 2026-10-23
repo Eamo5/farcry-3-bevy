@@ -117,8 +117,45 @@ impl Plugin for MapPlugin {
                     full_map_icons,
                 )
                     .chain(),
-            );
+            )
+            .add_systems(Update, travel_when_due.run_if(in_state(GameState::Playing)));
     }
+}
+
+/// A fast travel destination: a liberated outpost (its index), a safe
+/// house (its map marker).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TravelTo {
+    Outpost(usize),
+    Safehouse(u64),
+}
+
+/// Fast travel the player agreed to (`story::ask_travel`), carried out.
+pub fn travel_when_due(
+    host: Option<NonSendMut<crate::story::StoryHost>>,
+    outposts: Res<crate::outposts::Outposts>,
+    mut players: Query<(&mut Transform, &mut Player)>,
+) {
+    let Some(mut host) = host else { return };
+    let Some(to) = host.travel_due.take() else { return };
+    let Ok((mut t, mut p)) = players.single_mut() else { return };
+    let travelled = match to {
+        TravelTo::Outpost(i) => {
+            let done = crate::outposts::fast_travel(&outposts, i, &mut t, &mut p);
+            if done {
+                host.story.report_outpost_travel(fc3_story::Pose { position: crate::data::to_dunia(t.translation), angles: [0.0, 0.0, -p.yaw.to_degrees()] });
+            }
+            done
+        }
+        TravelTo::Safehouse(marker) => match host.story.fast_travel(marker) {
+            Some(pose) => {
+                crate::story::teleport(&mut t, &mut p, pose.position, pose.angles[2]);
+                true
+            }
+            None => false,
+        },
+    };
+    info!("map: fast travel to {to:?}: {travelled}");
 }
 
 /// Map UV (0..1, north up) of a Bevy-space position.
@@ -926,7 +963,7 @@ fn full_map_icons(
     mut commands: Commands,
     (map_pad, gamepads): (Res<MapPad>, Query<&Gamepad>),
     objectives: Res<crate::story::ObjectiveMarkers>,
-    (mut host, mut automation): (Option<NonSendMut<crate::story::StoryHost>>, ResMut<MapAutomation>),
+    (mut host, mut automation, mut story_ui): (Option<NonSendMut<crate::story::StoryHost>>, ResMut<MapAutomation>, Option<ResMut<crate::story::StoryUi>>),
 ) {
     for e in &icons {
         commands.entity(e).despawn();
@@ -1048,16 +1085,16 @@ fn full_map_icons(
             children![(Text::new(label), TextFont { font_size: bevy::text::FontSize::Px(16.0), ..default() }, TextColor(Color::srgb(0.95, 0.95, 0.9)))],
         ));
         if clicked && o.liberated && travel_enabled && automation.0.is_none() {
-            if let Ok((mut t, mut p)) = players.single_mut() {
-                if crate::outposts::fast_travel(&outposts, i, &mut t, &mut p) {
-                    if let Some(host) = host.as_mut() {
-                        host.story.report_outpost_travel(fc3_story::Pose {
-                            position: crate::data::to_dunia(t.translation), angles: [0.0, 0.0, -p.yaw.to_degrees()],
-                        });
+            // (Asked first, over play, as the game asks.)
+            match (host.as_mut(), story_ui.as_mut()) {
+                (Some(host), Some(ui)) => crate::story::ask_travel(ui, host, TravelTo::Outpost(i)),
+                _ => {
+                    if let Ok((mut t, mut p)) = players.single_mut() {
+                        crate::outposts::fast_travel(&outposts, i, &mut t, &mut p);
                     }
-                    next.set(GameState::Playing);
                 }
             }
+            next.set(GameState::Playing);
         }
     }
     for d in &destinations {
@@ -1082,7 +1119,16 @@ fn full_map_icons(
             children![(Text::new(format!("{}\n{action}", crate::story::plain(&d.name))), TextFont { font_size: bevy::text::FontSize::Px(16.0), ..default() },
                 TextColor(Color::srgb(0.95, 0.95, 0.9)))],
         ));
-        if clicked && automation.0.is_none_or(|target| target == d.marker) {
+        // (Asked first, over play, as the game asks; a test's travel goes
+        // at once.)
+        if clicked && automation.0.is_none() && d.unlocked && travel_enabled {
+            if let (Some(host), Some(ui)) = (host.as_mut(), story_ui.as_mut()) {
+                crate::story::ask_travel(ui, host, TravelTo::Safehouse(d.marker));
+                next.set(GameState::Playing);
+                break;
+            }
+        }
+        if clicked && automation.0.is_some_and(|target| target == d.marker) {
             if let (Some(host), Ok((mut t, mut p))) = (host.as_mut(), players.single_mut()) {
                 if let Some(pose) = host.story.fast_travel(d.marker) {
                     crate::story::teleport(&mut t, &mut p, pose.position, pose.angles[2]);
@@ -1125,7 +1171,8 @@ mod travel_tests {
             .init_resource::<crate::outposts::Outposts>().init_resource::<crate::traversal::Ways>()
             .init_resource::<crate::progression::Progress>().init_resource::<MapPad>().init_resource::<MapAutomation>()
             .init_resource::<crate::story::ObjectiveMarkers>().insert_non_send(crate::story::StoryHost::new(story, None))
-            .add_systems(Update, full_map_icons);
+            .init_resource::<crate::story::StoryUi>()
+            .add_systems(Update, (full_map_icons, travel_when_due).chain());
         let mut window = Window::default();
         window.set_cursor_position(Some(Vec2::new(400.0, 300.0)));
         app.world_mut().spawn((window, PrimaryWindow));
@@ -1170,22 +1217,35 @@ mod travel_tests {
         app.update();
     }
 
+    /// The question answered yes, as the box does (`story::story_boxes`).
+    fn agree(app: &mut App) {
+        let question = app.world_mut().resource_mut::<crate::story::StoryUi>().boxes.pop_front();
+        assert!(question.is_some_and(|b| b.id == crate::story::TRAVEL_BOX && b.choice));
+        let mut host = app.world_mut().non_send_mut::<crate::story::StoryHost>();
+        host.travel_due = host.travel_asked.take();
+        app.update();
+    }
+
     #[test]
     fn safehouse_click_uses_authored_pose_and_obeys_travel_locks() {
         let (mut app, player) = app();
         app.world().non_send::<crate::story::StoryHost>().story.domino().lua().load("SetFastTravelEnabled(false)").exec().unwrap();
         release(&mut app);
         assert_eq!(app.world().get::<Transform>(player).unwrap().translation, Vec3::ZERO);
+        assert!(app.world().resource::<crate::story::StoryUi>().boxes.is_empty());
         assert!(app.world().non_send::<crate::story::StoryHost>().story.respawn_point().is_none());
         app.world().non_send::<crate::story::StoryHost>().story.domino().lua().load("SetFastTravelEnabled(true)").exec().unwrap();
+        // (Asked first: nowhere yet.)
         release(&mut app);
+        assert_eq!(app.world().get::<Transform>(player).unwrap().translation, Vec3::ZERO);
+        assert!(matches!(app.world().resource::<NextState<GameState>>(), NextState::Pending(GameState::Playing)));
+        agree(&mut app);
         assert_eq!(app.world().get::<Transform>(player).unwrap().translation, Vec3::new(2.0, 5.0, -3.0));
         let p = app.world().get::<Player>(player).unwrap();
         assert_eq!(p.velocity, Vec3::ZERO);
         assert!((p.yaw + 54.0_f32.to_radians()).abs() < 0.0001);
         assert!(p.spawning && p.keep_height);
         assert_eq!(app.world().non_send::<crate::story::StoryHost>().story.respawn_point(), Some(30));
-        assert!(matches!(app.world().resource::<NextState<GameState>>(), NextState::Pending(GameState::Playing)));
     }
 
     #[test]

@@ -150,6 +150,14 @@ is the story's own:
   mission/block permissions gate the transaction. An active block overrides
   its main mission's default; unrelated missions keep their own locks. Amanaki's
   tutorial selection reports `jas_080_fast_travel` only after travel succeeds.
+  Choosing a destination asks first, as the game does ("Fast travel to this
+  location?"; on a mission "... (This will abandon the current mission.)",
+  on a side quest "... quest."), over play with the map closed
+  (`story::ask_travel`); agreed, the mission in progress is abandoned and the
+  player travels (`map::travel_when_due`). One that can't be abandoned now
+  says so ("Cannot abandon the mission at this time.") and goes nowhere. The
+  original interface's world map asks the same way (its own message box
+  isn't driven yet); a test's map automation travels at once.
 * **Trigger contacts**: authored player-only regions and the proximity
   trigger's non-player flag filter both host overlaps and live character
   positions. NPCs moving or streaming out cannot fail a player-only mission
@@ -4138,6 +4146,12 @@ Run again later in the campaign (`camp91`), the escort failed every time
   player was) busy fighting, as one in combat, and breaks off at once
   (`story_actors::actor_tasks`). The autopilot also counts a reinforcement
   the story spawned as a foe while idle, once he has been alerted.
+* **Companions don't rest.** Characters at rest by a relax point take it
+  up; Rongo, loaded beside the hostage's tied kneel of B30C, knelt there
+  and, his rest a task of his own, the companion step passed him over, so
+  he never led on (the stall was a coin toss on whether he loaded first).
+  Companions no longer take up relax points, and a companion's orders break
+  off any rest it is in.
 * **A clear shot beside him.** The autopilot kept up behind Rongo, the foes
   ahead, so Rongo was always in its line of fire. It now steps to a spot at
   his side (12 or 17 m from him) with a clear line to the foe, and no

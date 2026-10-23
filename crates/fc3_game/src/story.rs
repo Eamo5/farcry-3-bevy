@@ -842,6 +842,10 @@ pub struct StoryHost {
     /// where he stands.
     abandoned_at: Option<f32>,
     reload_in_place: bool,
+    /// Fast travel asked about, and agreed to (`ask_travel`; the map
+    /// carries it out: `map::travel_when_due`).
+    pub travel_asked: Option<crate::map::TravelTo>,
+    pub travel_due: Option<crate::map::TravelTo>,
     /// Placed particle systems scripts started (true) or stopped
     /// (`ParticleSystem`), for `story_fx`.
     pub fx_switched: HashMap<u64, bool>,
@@ -1032,6 +1036,8 @@ impl StoryHost {
             autopilot_wrecking: false,
             abandoned_at: None,
             reload_in_place: false,
+            travel_asked: None,
+            travel_due: None,
             fx_switched: HashMap::new(),
             lights_switched: HashMap::new(),
             alarm_sets: Vec::new(),
@@ -4265,6 +4271,16 @@ fn story_boxes(
             if accept {
                 host.story.abandon_mission();
             }
+        } else if id == TRAVEL_BOX {
+            // (Travelling gives up the mission he is on, as the question
+            // said.)
+            let to = host.travel_asked.take();
+            if accept {
+                if host.story.mission_in_progress().is_some() {
+                    host.story.abandon_mission();
+                }
+                host.travel_due = to;
+            }
         } else {
             host.story.box_answered(id, accept);
         }
@@ -4274,6 +4290,31 @@ fn story_boxes(
 /// The box asking whether to give up the mission (the pause menu's Abandon
 /// mission): no story box's id.
 pub const ABANDON_BOX: u64 = u64::MAX - 0xAB;
+
+/// The box asking whether to fast travel (the map's): no story box's id.
+pub const TRAVEL_BOX: u64 = u64::MAX - 0xAC;
+
+/// Asks whether to fast travel there, in the game's own words ("Fast travel
+/// to this location?", and on a mission "... (This will abandon the current
+/// mission.)", a quest's "... quest."); one he can't give up now he is told
+/// so, and goes nowhere.
+pub fn ask_travel(ui: &mut StoryUi, host: &mut StoryHost, to: crate::map::TravelTo) {
+    let text = |id: u32, or: &str| host.story.data().strings.get(id).map_or_else(|| or.to_string(), str::to_string);
+    let title = text(93093, "Fast Travel");
+    let on = host.story.mission_in_progress();
+    if on.is_some() && host.story.abandonable().is_none() {
+        ui.boxes.push_back(StoryBox { id: TRAVEL_BOX, title, body: text(155592, "Cannot abandon the mission at this time."), choice: false, prompt: None });
+        host.travel_asked = None;
+        return;
+    }
+    let body = match on {
+        Some(name) if side_mission(&name) => text(167577, "Fast travel to this location? (This will abandon the current quest.)"),
+        Some(_) => text(152874, "Fast travel to this location? (This will abandon the current mission.)"),
+        None => text(93272, "Fast travel to this location?"),
+    };
+    ui.boxes.push_back(StoryBox { id: TRAVEL_BOX, title, body, choice: true, prompt: None });
+    host.travel_asked = Some(to);
+}
 
 /// Asks whether to give up the mission the player is on, in the game's own
 /// words ("Abandon the mission? All unsaved progress will be lost.").

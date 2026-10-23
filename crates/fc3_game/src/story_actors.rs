@@ -485,8 +485,14 @@ fn actor_relax(
             .collect()
     });
     let taken: HashSet<u64> = actors.iter().filter_map(|(a, ..)| a.task.as_ref().map(|t| t.action)).chain(relax.orders.values().copied()).collect();
+    // (Not a companion: WIL_040's Rongo knelt at the hostage's tied kneel
+    // beside him and never led on.)
+    let companions = host.story.companions();
     for (a, t, npc) in &actors {
         if relax.tried.contains(&a.id) || a.dead || a.seated || a.in_scene || a.task.is_some() || orders.0.contains_key(&a.id) || a.rig.is_none() {
+            continue;
+        }
+        if companions.iter().any(|c| c.0 == a.id) {
             continue;
         }
         if npc.is_some_and(|n| n.state != crate::npc::NpcState::Idle || n.awareness > 0.0) {
@@ -1040,10 +1046,11 @@ fn companions(
     nav: Res<crate::nav::NavMesh>,
     heights: Res<crate::terrain::Heightfield>,
     players: Query<&Transform, (With<crate::player::Player>, Without<StoryActor>)>,
-    mut actors: Query<(Entity, &StoryActor, &mut Transform, Option<&mut crate::npc::Npc>, Has<crate::npc::Scripted>), Without<crate::player::Player>>,
+    mut actors: Query<(Entity, &mut StoryActor, &mut Transform, Option<&mut crate::npc::Npc>, Has<crate::npc::Scripted>), Without<crate::player::Player>>,
     mut anims: Query<&mut AnimRequest>,
     mut commands: Commands,
     mut legs: Local<HashMap<u64, (u64, usize)>>,
+    mut rigs: Query<&mut crate::characters::CharacterRig>,
 ) {
     let Some(mut host) = host else { return };
     let orders = host.story.companions();
@@ -1055,8 +1062,15 @@ fn companions(
     let data = host.story.data();
     let dt = time.delta_secs();
     let mut led = Vec::new();
-    for (entity, a, mut t, npc, scripted) in &mut actors {
+    for (entity, mut a, mut t, npc, scripted) in &mut actors {
         let Some(&(_, order)) = orders.iter().find(|o| o.0 == a.id) else { continue };
+        // (A rest of its own is broken off for the story's order.)
+        if a.task.as_ref().is_some_and(|t| t.own) {
+            debug!("story companion {}: leaves its rest", a.id);
+            a.task = None;
+            a.path.clear();
+            restore_clips(&mut a, &mut rigs);
+        }
         if a.dead || a.seated || a.in_scene || a.task.is_some() {
             continue;
         }
