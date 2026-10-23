@@ -4020,6 +4020,35 @@ starts.
 WIL_020 then completes (its fields each catching at the first try once the
 flamethrower is in hand), and WIL_010's and WIL_040's briefings start.
 
+Run again on from the autopilot's later campaign (`camp88`), the mission
+needed more of it:
+
+* **The flamethrower on the table.** The briefing offers it as it asks the
+  player to leave the hut; the autopilot walked out of the door first (things
+  to use by an awaited door counted as past it). Things to use now go before
+  places to go and hold the door back a while.
+* **Out of the fire's way.** The burn step stood in the crops it set alight
+  and the fire killed it, and its other steps (a pirate to go after, a door,
+  a vehicle to board) moved it off mid-burn. It now goes back 30 m (or to
+  where it came from) once a field catches, and the others wait meanwhile.
+* **The drug boat.** B30 sets up the pirates' boat with a
+  `VehicleDamageListener`, and B40 ("Destroy the boat") is done once it
+  burns (`bDrugBoatDestroyed`); it sails off along its path as B40 starts.
+  The autopilot now sets about a vehicle a script watches for damage whose
+  crew are the player's foes (`vehicles::autopilot_wreck`): from dry ground
+  or a jetty within its weapon's reach, the flamethrower first, chasing it
+  along the shore, and back out of the blast once it's alight. Fire now sets
+  vehicles alight (see `physics.md`). From the B30 checkpoint the boat burns
+  at its jetty during B30, and B30, B40 and WIL_020 complete.
+* **The story's missions first.** With a lost expedition's lab and a supply
+  run running too, the autopilot went through the lab's triggers across the
+  island while the boat got away; the story's own missions' triggers now go
+  before side activities' (`side_mission`), and the trigger step waits for
+  the player to be set down after a far step (up to 30 s, `SPAWN_WAIT`).
+* **No screen droplets.** The waterfalls' screen-effect triggers (the
+  `fc3_gfx` scripts) are no longer stepped into: going through them again
+  and again kept the story from ever counting as quiet.
+
 ## WIL_040: the rice fields and the escort
 
 WIL_040's briefing, B10 (to the observation point), B20C (the mine-field
@@ -4090,7 +4119,11 @@ about as non-fighters and the first wave never emptied.
   `CAPI_Vehicle.GetVehicleEngineState` as soon as it is enabled, and state
   0 is "destroyed". It was a constant 0, so the mission's listener on
   Oliver's boat failed the mission the moment it started, and again after
-  every reload. A vehicle now reads mint (5) until the host reports it
+  every reload. (Now its whole damage state: 4 minor damage under four
+  fifths of its health, 3 major under half, 2 broken by a script, 1 on fire
+  under a quarter, as the host burns them; `Core::vehicle_state`, raised
+  on each change: WIL_020's drug boat is done with once it burns.) A
+  vehicle read mint (5) until the host reported it
   wrecked, then destroyed (0), and the boxes listening for its
   `OnStateChange` hear the change.
 * **A camera the script draws.** At the vantage point the mission draws

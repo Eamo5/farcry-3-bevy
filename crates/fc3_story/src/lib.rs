@@ -537,10 +537,12 @@ impl Story {
                 }
             }
             c.group_state_events();
-            // A watched vehicle wrecked: its damage state changes to destroyed.
-            for (id, was_dead) in vehicles_before {
-                if !was_dead && c.is_dead(id) {
-                    c.raise(&Listen::Entity(id, "OnStateChange".into()), vec![Arg::Num(VEHICLE_DESTROYED)]);
+            // A watched vehicle's damage state changing (smoking, alight,
+            // wrecked: WIL_020's drug boat is done with once it burns).
+            for (id, was) in vehicles_before {
+                let now = c.vehicle_state(id);
+                if now != was {
+                    c.raise(&Listen::Entity(id, "OnStateChange".into()), vec![Arg::Num(now)]);
                 }
             }
             c.time += dt as f64;
@@ -981,6 +983,13 @@ impl Story {
     /// one (`SetFlashLoadingScreen`), if any.
     pub fn loading_screen(&self) -> Option<String> {
         Some(self.core.borrow().media.loading_screen.clone()).filter(|m| !m.is_empty())
+    }
+
+    /// Vehicles scripts watch for damage (`VehicleDamageListener`) that are
+    /// neither alight nor wrecked yet (the autopilot's: WIL_020's drug boat,
+    /// done with once it burns).
+    pub fn vehicles_watched_whole(&self) -> Vec<u64> {
+        self.core.borrow().watched_vehicles().into_iter().filter(|(_, s)| *s > 1.0).map(|(id, _)| id).collect()
     }
 
     /// The sea's level as a script has moved it (`SetWorldOceanLevel`), if
@@ -2407,11 +2416,17 @@ mod tests {
             .unwrap();
         let state: f64 = story.domino().lua().load("return CAPI_Vehicle.GetVehicleEngineState('40')").eval().unwrap();
         assert_eq!(state, 5.0);
+        // Shot up: smoking, then alight (WIL_020's drug boat is done with
+        // then), then wrecked.
+        for health in [600.0, 200.0] {
+            view.spawned.insert(40, Live { alive: true, health, max_health: 1000.0, ..Default::default() });
+            story.update(0.1, view.clone());
+        }
         view.spawned.insert(40, Live { alive: false, ..Default::default() });
         story.update(0.1, view.clone());
         story.update(0.1, view);
         let heard: Vec<f64> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
-        assert_eq!(heard, [0.0]);
+        assert_eq!(heard, [4.0, 1.0, 0.0]);
         let state: f64 = story.domino().lua().load("return CAPI_Vehicle.GetVehicleEngineState('40')").eval().unwrap();
         assert_eq!(state, 0.0);
     }

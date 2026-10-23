@@ -36,6 +36,13 @@ impl Plugin for VehiclesPlugin {
                     .after(crate::story::story_interactions)
                     .run_if(in_state(crate::menu::GameState::Playing)),
             )
+            .add_systems(
+                PreUpdate,
+                autopilot_wreck
+                    .after(crate::controls::update_actions)
+                    .before(crate::controls::apply_action_maps)
+                    .run_if(in_state(crate::menu::GameState::Playing)),
+            )
             .add_systems(OnExit(crate::menu::GameState::Loading), (load_vehicles, load_handling))
             .init_resource::<SpeedFov>()
             .add_systems(Update, speed_fov)
@@ -62,7 +69,7 @@ impl Plugin for VehiclesPlugin {
             .add_systems(Update, scene_unseats_player.after(crate::cinema::CinemaSet).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(
                 Update,
-                (turn_wheels, wreck_rocket, stray_hits, spare_indestructible, vehicle_damage, wreck_test)
+                (turn_wheels, wreck_rocket, stray_hits, catch_fire, spare_indestructible, vehicle_damage, wreck_test)
                     .chain()
                     .after(crate::cinema::CinemaSet)
                     .run_if(in_state(crate::menu::GameState::Playing)),
@@ -1436,6 +1443,185 @@ fn story_board_test(
 /// The story autopilot gets into the vehicle a script waits for the player
 /// to take (CIT_020's cargo truck, whose health it listens to), as a player
 /// would: beside it, the normal interaction.
+/// Tests: how near (m) the autopilot goes to a vehicle it sets about, as a
+/// share of its weapon's reach, and how long it keeps at one doing it no
+/// harm before trying from elsewhere (and, after a few tries, gives up a
+/// while).
+const WRECK_REACH: f32 = 0.85;
+const WRECK_PATIENCE: f32 = 10.0;
+const WRECK_AGAIN: f32 = 120.0;
+/// Tests: how far (m) from a vehicle it has set alight the autopilot goes back.
+const WRECK_RETREAT: f32 = 30.0;
+
+/// The autopilot sets about a vehicle a script waits to see damaged whose
+/// crew are the player's foes (WIL_020's drug boat, done with once it
+/// burns): from dry ground (or a jetty) within its weapon's reach, the
+/// flamethrower first, held on it until it is alight or wrecked. Not the
+/// player's own, nor an ally's (a convoy he guards).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn autopilot_wreck(
+    host: Option<NonSendMut<crate::story::StoryHost>>,
+    time: Res<Time>,
+    heights: Res<crate::terrain::Heightfield>,
+    spatial: SpatialQuery,
+    mut actions: ResMut<ActionState>,
+    mut players: Query<(Entity, &mut Transform, &mut Player, &crate::weapons::Inventory), Without<Vehicle>>,
+    vehicles: Query<(Entity, &Transform, &Vehicle, &Health, Option<&LinearVelocity>), Without<Player>>,
+    crews: Query<(&crate::story_actors::StoryActor, &crate::npc::Npc)>,
+    driving: Res<Driving>,
+    mut at: Local<Option<(u64, f32, f32, u32)>>,
+    mut given_up: Local<std::collections::HashMap<u64, f32>>,
+    mut came_from: Local<Option<(u64, Vec3)>>,
+) {
+    if std::env::var_os("FC3_STORY_AUTOPILOT").is_none() {
+        return;
+    }
+    let Some(mut host) = host else { return };
+    let Ok((me, mut t, mut p, inv)) = players.single_mut() else { return };
+    let now = time.elapsed_secs();
+    given_up.retain(|_, until| *until > now);
+    let watched = host.story.vehicles_watched_whole();
+    let hostile_crew = |v: &Vehicle| {
+        let mut crew = v.npc_occupants().map(|(pawn, _)| pawn).peekable();
+        crew.peek().is_some() && crew.all(|pawn| crews.iter().any(|(a, n)| a.id == pawn && n.hostile()))
+    };
+    // (In the stall report: the vehicles it might set about, and what holds
+    // each back.)
+    if !watched.is_empty() && (now / 15.0) as u32 != ((now - time.delta_secs()) / 15.0) as u32 {
+        let seen: Vec<(u64, bool, bool, Vec<u64>)> = vehicles
+            .iter()
+            .filter(|(_, _, v, _, _)| watched.contains(&v.story_id()))
+            .map(|(_, _, v, h, _)| (v.story_id(), h.dead, hostile_crew(v), v.npc_occupants().map(|(p, _)| p).collect()))
+            .collect();
+        info!("story autopilot: vehicles watched {watched:?}; in the world (id, wrecked, hostile crew, crew) {seen:?}");
+    }
+    // (Well before the trigger step's own wait is up: else it always went
+    // first, off into the next trigger, and the boat got away.)
+    if driving.vehicle.is_some() || host.autopilot_burning || (at.is_none() && host.quiet() < 1.0) {
+        host.autopilot_wrecking = false;
+        *at = None;
+        return;
+    }
+    let target = vehicles
+        .iter()
+        .filter(|(_, _, v, h, _)| !h.dead && watched.contains(&v.story_id()) && !given_up.contains_key(&v.story_id()) && hostile_crew(v))
+        .min_by(|a, b| a.1.translation.distance(t.translation).total_cmp(&b.1.translation.distance(t.translation)));
+    let Some((ve, vt, v, health, velocity)) = target else {
+        // (Done with, alight or wrecked: back out of the blast's way, to where
+        // he came from if that was near, else well off on his side of it. A
+        // burning boat blew up beside him in WIL_020's village.)
+        if let Some((done, from)) = came_from.take() {
+            if let Some((_, dt, ..)) = vehicles.iter().find(|q| q.2.story_id() == done) {
+                let side = (t.translation - dt.translation).with_y(0.0).normalize_or(Vec3::Z);
+                let back = if from.distance(dt.translation) < WRECK_RETREAT * 3.0 {
+                    from
+                } else {
+                    let off = dt.translation + side * WRECK_RETREAT;
+                    off.with_y(heights.height_at(off).unwrap_or(t.translation.y))
+                };
+                info!("story autopilot: back from {done}");
+                crate::story::teleport(&mut t, &mut p, crate::data::to_dunia(back), 0.0);
+            }
+        }
+        host.autopilot_wrecking = false;
+        *at = None;
+        return;
+    };
+    let id = v.story_id();
+    if came_from.is_none_or(|(was, _)| was != id) {
+        *came_from = Some((id, t.translation - Vec3::Y * HALF_HEIGHT));
+    }
+    // The weapon: the flamethrower with fuel, else a gun with rounds.
+    let loaded = |i: usize| inv.slots[i].mag + inv.slots[i].reserve > 0;
+    let pick = (0..inv.slots.len())
+        .find(|&i| inv.defs[inv.slots[i].def].class == crate::weapons::WeaponClass::Flamethrower && loaded(i))
+        .or_else(|| (0..inv.slots.len()).find(|&i| inv.defs[inv.slots[i].def].class != crate::weapons::WeaponClass::Melee && loaded(i)));
+    let Some(slot) = pick else {
+        host.autopilot_wrecking = false;
+        *at = None;
+        return;
+    };
+    let range = inv.defs[inv.slots[slot].def].range.clamp(6.0, 50.0);
+    let reach = range * WRECK_REACH;
+    if !host.autopilot_wrecking {
+        info!("story autopilot: wreck {} ({})", host.story.data().name_of(id).unwrap_or("?"), id);
+    }
+    host.autopilot_wrecking = true;
+    host.reset_quiet();
+    let centre = vt.translation + Vec3::Y * 0.8;
+    let state = at.get_or_insert((id, health.current, now, 0));
+    if state.0 != id {
+        *state = (id, health.current, now, 0);
+    }
+    if health.current < state.1 {
+        debug!("story autopilot: {id} down to {:.0} of {:.0}", health.current, health.max);
+        state.1 = health.current;
+        state.2 = now;
+    }
+    let far = t.translation.distance(centre) > range * 0.95 || p.swimming;
+    let stuck = now - state.2 > WRECK_PATIENCE;
+    if (far || stuck) && !p.spawning {
+        // (Chasing it is no failure; doing it no harm from where he stands
+        // is.)
+        if stuck {
+            state.3 += 1;
+            if state.3 > 4 {
+                info!("story autopilot: {id} not to be reached; left a while");
+                given_up.insert(id, now + WRECK_AGAIN);
+                host.autopilot_wrecking = false;
+                *at = None;
+                return;
+            }
+        }
+        state.2 = now;
+        // Somewhere to stand out of the water round where it is going (the
+        // shore, a jetty), the nearest to it first, another after each try
+        // that did no harm.
+        let ahead = centre + velocity.map_or(Vec3::ZERO, |v| v.0).with_y(0.0) * 1.5;
+        let filter = SpatialQueryFilter::from_excluded_entities([me, ve, v.body()]);
+        let mut spots: Vec<(f32, Vec3)> = (0..16)
+            .flat_map(|i| [0.35f32, 0.55, 0.75, 0.9].map(move |r| (i, r)))
+            .filter_map(|(i, r)| {
+                let a = i as f32 * std::f32::consts::TAU / 16.0;
+                let p = ahead.with_y(0.0) + Vec3::new(a.cos(), 0.0, a.sin()) * range * r;
+                let top = heights.height_at(p).unwrap_or(centre.y).max(centre.y) + 12.0;
+                let hit = spatial.cast_ray(p.with_y(top), Dir3::NEG_Y, 40.0, true, &filter)?;
+                let ground = top - hit.distance;
+                (ground > crate::water::surface(p.with_y(ground), heights.height_at(p)) + 0.3).then(|| (p.with_y(ground).distance(ahead), p.with_y(ground)))
+            })
+            .collect();
+        spots.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let Some(&(_, feet)) = spots.get(state.3 as usize % spots.len().max(1)) else {
+            info!("story autopilot: nowhere dry within {reach:.0} m of {id}; left a while");
+            given_up.insert(id, now + WRECK_AGAIN);
+            host.autopilot_wrecking = false;
+            *at = None;
+            return;
+        };
+        debug!(
+            "story autopilot: at {id} from {feet:.1?} (try {}, {:.1} m off, swimming {}, {} spots)",
+            state.3,
+            t.translation.distance(centre),
+            p.swimming,
+            spots.len()
+        );
+        crate::story::teleport(&mut t, &mut p, crate::data::to_dunia(feet), 0.0);
+        return;
+    }
+    if p.spawning {
+        return;
+    }
+    if inv.current != slot {
+        actions.cycle = 1;
+        return;
+    }
+    let eye = t.translation + Vec3::Y * (p.eye - crate::player::HALF_HEIGHT);
+    let aim = centre - eye;
+    p.yaw = (-aim.x).atan2(-aim.z);
+    p.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
+    actions.hold(crate::controls::Action::Fire);
+}
+
 fn autopilot_board(
     host: Option<NonSend<crate::story::StoryHost>>,
     cinema: Res<crate::cinema::Cinema>,
@@ -1452,7 +1638,7 @@ fn autopilot_board(
     let Some(host) = host else { return };
     let Ok((mut pt, mut p)) = players.single_mut() else { return };
     if p.driving
-        || host.autopilot_burning
+        || host.autopilot_held()
         || p.mounted.is_some()
         || p.spawning
         || cinema.cutscene()
@@ -2408,6 +2594,25 @@ mod story_vehicle_tests {
         assert_eq!(app.world().resource::<Driving>().vehicle, None);
         assert!(!app.world().get::<Player>(player).unwrap().driving);
         assert!(app.world().get::<ColliderDisabled>(player).is_none());
+    }
+
+    /// Flames set a vehicle alight once they've done it a tenth of its
+    /// health; bullets don't.
+    #[test]
+    fn fire_sets_a_vehicle_alight() {
+        let mut app = App::new();
+        app.add_message::<DamageEvent>().add_systems(Update, catch_fire);
+        let ve = app.world_mut().spawn((vehicle(), Health::new(600.0), Wear::default())).id();
+        let hit = |kind, amount| DamageEvent { target: ve, amount, kind, source: None, instigator: None, headshot: false, hit: crate::combat::Hit::Whole };
+        app.world_mut().write_message(hit(DamageKind::Bullet, 100.0));
+        for _ in 0..5 {
+            app.world_mut().write_message(hit(DamageKind::Fire, 10.0));
+        }
+        app.update();
+        assert_eq!(app.world().get::<Health>(ve).unwrap().current, 600.0);
+        app.world_mut().write_message(hit(DamageKind::Fire, 15.0));
+        app.update();
+        assert!(app.world().get::<Health>(ve).unwrap().current < 600.0 * BURNING);
     }
 
     #[test]
@@ -3895,6 +4100,31 @@ pub struct Wear {
     puff: f32,
     /// The game's engine fire it plays, and whether the burning stage's.
     fire: Option<(Entity, bool)>,
+    /// The fire damage it has taken (flames, a firebomb): enough sets it
+    /// alight.
+    scorched: f32,
+}
+
+/// The share of its health in fire damage that sets a vehicle alight, its
+/// fuse then burning down as any burning vehicle's does (a firebomb on a
+/// jeep, the flamethrower on WIL_020's drug boat).
+const CATCH_FIRE: f32 = 0.1;
+
+/// Vehicles fire sets alight: once the flames have done them a tenth of
+/// their health, they burn (down to the burning share, their fuse lit by
+/// `vehicle_damage`).
+fn catch_fire(mut hits: MessageReader<DamageEvent>, mut vehicles: Query<(&mut Health, &mut Wear), With<Vehicle>>) {
+    for hit in hits.read().filter(|h| h.kind == DamageKind::Fire) {
+        let Ok((mut h, mut w)) = vehicles.get_mut(hit.target) else { continue };
+        if w.wrecked || h.dead {
+            continue;
+        }
+        w.scorched += hit.amount;
+        if w.scorched > h.max * CATCH_FIRE && h.current > h.max * BURNING {
+            debug!("vehicle {:?}: alight", hit.target);
+            h.current = h.max * BURNING * 0.95;
+        }
+    }
 }
 
 /// A vehicle's engine fire (its archetype's `EngineFire`): the smoking

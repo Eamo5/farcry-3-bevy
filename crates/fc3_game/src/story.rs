@@ -832,9 +832,10 @@ pub struct StoryHost {
     pub collision_immune: std::collections::HashSet<u64>,
     /// Usable things scripts made unusable, and where they are.
     pub unusable: HashMap<u64, Vec3>,
-    /// The autopilot's burn step is setting a field alight (the other
-    /// steps wait).
+    /// The autopilot's burn step is setting a field alight, or its wreck
+    /// step going after a vehicle (the other steps wait).
     pub autopilot_burning: bool,
+    pub autopilot_wrecking: bool,
     /// Placed particle systems scripts started (true) or stopped
     /// (`ParticleSystem`), for `story_fx`.
     pub fx_switched: HashMap<u64, bool>,
@@ -866,6 +867,12 @@ impl StoryHost {
     /// How long the story has gone without anything happening (tests).
     pub fn quiet(&self) -> f32 {
         self.quiet
+    }
+
+    /// The autopilot's: one of its steps that holds the player a while
+    /// (burning a field, going after a vehicle) is under way.
+    pub fn autopilot_held(&self) -> bool {
+        self.autopilot_burning || self.autopilot_wrecking
     }
 
     /// The autopilot's: something a running mission offers to use that it
@@ -1016,6 +1023,7 @@ impl StoryHost {
             collision_immune: std::collections::HashSet::new(),
             unusable: HashMap::new(),
             autopilot_burning: false,
+            autopilot_wrecking: false,
             fx_switched: HashMap::new(),
             lights_switched: HashMap::new(),
             alarm_sets: Vec::new(),
@@ -2268,7 +2276,12 @@ fn run_story(
         && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
         && !landing_awaited(&host, &p)
         && host.quiet > autopilot_delay
-        && !host.autopilot_burning
+        // (Not while it's still being set down where the last step put it,
+        // unless that's taking far too long: a far step's ground streams in
+        // a while, and stepping on meanwhile left WIL_020's village for a
+        // lab across the island before the player ever got there.)
+        && (!p.spawning || host.quiet > autopilot_delay + SPAWN_WAIT)
+        && !host.autopilot_held()
         && crafting.still_wanted(host.story.watched_loot_filters(), &progress.loot).is_empty()
     {
         let graph = std::env::var("FC3_STORY_AUTOPILOT_GRAPH").ok();
@@ -2278,11 +2291,23 @@ fn run_story(
         // started across the island failed for CIT_020's triggers drawing
         // the player out of its zone).
         let focus = host.story.missions_running();
-        let mut focused = if focus.is_empty() { Vec::new() } else { host.story.watched_triggers_of(graph.as_deref(), &focus) };
-        // (Things to use before places to go: WIL_020's briefing offers the
-        // flamethrower on the table as it asks the player to leave the hut,
-        // and stepping out first took the offer away.)
-        focused.sort_by_key(|w| w.1 != "Use");
+        // (The story's own missions before side ones, a lost expedition's or
+        // a supply run's: WIL_020's boat got away while the autopilot went
+        // through a lab's triggers across the island.)
+        let (main, side): (Vec<String>, Vec<String>) = focus.iter().cloned().partition(|m| !side_mission(m));
+        let mut focused = Vec::new();
+        for group in [main, side] {
+            if !group.is_empty() {
+                let mut of = host.story.watched_triggers_of(graph.as_deref(), &group);
+                // (Things to use before places to go: WIL_020's briefing
+                // offers the flamethrower on the table as it asks the player
+                // to leave the hut, and stepping out first took the offer
+                // away.)
+                of.sort_by_key(|w| w.1 != "Use");
+                focused.append(&mut of);
+            }
+        }
+        focused.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
         // (Unless those missions have long gone nowhere, nothing of theirs
         // left it can do: a supply run it can't drive held CIT_010 and
         // BNG_010 back for good.)
@@ -3940,6 +3965,17 @@ fn learn_fatal(fatal: &mut std::collections::HashSet<(u64, String)>, id: u64, ev
 }
 /// How long before the autopilot goes near a place again, gone out of reach.
 const NEAR_AGAIN: f32 = 20.0;
+
+/// How long (s) the autopilot's trigger step waits on the player being set
+/// down after a step before going on regardless.
+const SPAWN_WAIT: f32 = 30.0;
+
+/// A side activity's block (a lost expedition, a supply run, a hunt, a
+/// side quest), as the autopilot ranks the running missions.
+fn side_mission(block: &str) -> bool {
+    let b = block.to_ascii_uppercase();
+    b.starts_with("ULC_") || b.starts_with("SQ")
+}
 /// How long the running missions may go nowhere (no block completing)
 /// before the autopilot, with nothing of theirs left to do, takes the
 /// others' triggers too.
@@ -4735,7 +4771,7 @@ fn autopilot_loot(
     // (The Ink Monster's fight plays itself: `boss_fight`. Nor while the
     // burn step sets a field alight: going after a pirate mid-burn took
     // the flamethrower off WIL_020's crops.)
-    if host.story.gameplays().iter().any(|g| g.1 == BOSS_FIGHT) || host.autopilot_burning {
+    if host.story.gameplays().iter().any(|g| g.1 == BOSS_FIGHT) || host.autopilot_held() {
         return;
     }
     // (Nor while a scene plays the player through without its own view: a

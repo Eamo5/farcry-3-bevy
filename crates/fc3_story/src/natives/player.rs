@@ -32,9 +32,9 @@ impl Core {
         id.to_string()
     }
 
-    /// Vehicles that boxes watch for damage (`OnStateChange`), and whether
-    /// each is wrecked now.
-    pub fn watched_vehicles(&self) -> Vec<(u64, bool)> {
+    /// Vehicles that boxes watch for damage (`OnStateChange`), and the
+    /// damage state each is in now.
+    pub fn watched_vehicles(&self) -> Vec<(u64, f64)> {
         let mut ids: Vec<u64> = self
             .listeners
             .values()
@@ -45,7 +45,30 @@ impl Core {
             .collect();
         ids.sort_unstable();
         ids.dedup();
-        ids.into_iter().map(|id| (id, self.is_dead(id))).collect()
+        ids.into_iter().map(|id| (id, self.vehicle_state(id))).collect()
+    }
+
+    /// A vehicle's damage state as `VehicleDamageListener` reads it: 0
+    /// destroyed, 1 on fire (its engine alight, under a quarter of its
+    /// health, as the host burns them), 2 broken (a script's), 3 major damage
+    /// (under half, smoking), 4 minor (under four fifths), 5 mint.
+    pub fn vehicle_state(&self, id: u64) -> f64 {
+        if self.is_dead(id) {
+            return crate::VEHICLE_DESTROYED;
+        }
+        let share = self.view.spawned.get(&id).filter(|l| l.max_health > 0.0).map_or(1.0, |l| l.health / l.max_health);
+        let engine = self.vehicle_rules.get(&id).map_or(0, |r| r.engine);
+        if share < 0.25 {
+            1.0
+        } else if engine >= 3 {
+            2.0
+        } else if share < 0.5 || engine == 2 {
+            3.0
+        } else if share < 0.8 || engine == 1 {
+            4.0
+        } else {
+            crate::VEHICLE_MINT
+        }
     }
 
     pub fn is_dead(&self, id: u64) -> bool {
@@ -255,12 +278,8 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
 
     // ---- vehicles
     // A vehicle's damage state as `VehicleDamageListener` reads it (0
-    // destroyed ... 5 mint): destroyed once the host has it wrecked, mint
-    // until then (a listener reads it the moment it is enabled).
-    r.f("CAPI_Vehicle.GetVehicleEngineState", |c, v: Text| match v.id() {
-        Some(i) if c.is_dead(i) => crate::VEHICLE_DESTROYED,
-        _ => crate::VEHICLE_MINT,
-    })?;
+    // destroyed ... 5 mint; a listener reads it the moment it is enabled).
+    r.f("CAPI_Vehicle.GetVehicleEngineState", |c, v: Text| v.id().map_or(crate::VEHICLE_MINT, |i| c.vehicle_state(i)))?;
     r.f("CAPI_Vehicle.IsVehicleDisabled", |c, v: Text| v.id().is_some_and(|i| c.is_dead(i)))?;
     r.constant("CAPI_Vehicle.IsVehicleFlipped", false)?;
     r.constant("CAPI_Vehicle.IsVehicleUnderwater", false)?;

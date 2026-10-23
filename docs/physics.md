@@ -266,6 +266,11 @@ sphere inertia: 3, 2).
   boat. Each plays from the vehicle's origin, since its emitters place the
   hood's and the cabin's fires themselves, and goes when it blows up. Our
   smoke and flames stand in when an effect isn't cached.
+* Fire sets a vehicle alight: once flames (the flamethrower's stream, a
+  firebomb, burning ground) have done it a tenth of its armour, it drops to
+  the burning share and blows up as any burning vehicle does
+  (`vehicles::catch_fire`). It burnt down at the flames' own rate before,
+  about 25 s of the flamethrower on WIL_020's drug boat.
 * `FC3_BREAK_TEST=<id>:<secs>` breaks a placed entity that long into a run.
 
 ## Survey

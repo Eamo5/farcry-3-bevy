@@ -529,7 +529,7 @@ fn autopilot_burn(
         return;
     }
     let can_burn = inventory.molotovs > 0 || inventory.slots.iter().any(|s| inventory.defs[s.def].class == crate::weapons::WeaponClass::Flamethrower);
-    if host.quiet() < 6.0 || !can_burn {
+    if host.quiet() < 6.0 || !can_burn || host.autopilot_wrecking {
         return;
     }
     let awaited = host.story.awaited_entity_events("FireStarted");

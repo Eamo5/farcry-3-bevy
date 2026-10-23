@@ -212,7 +212,7 @@ fn autopilot_doors(
     }
     let Some(mut host) = host else { return };
     // (Not while the burn step sets a field alight.)
-    if host.autopilot_burning {
+    if host.autopilot_held() {
         return;
     }
     let Ok((mut pt, mut p)) = players.single_mut() else { return };

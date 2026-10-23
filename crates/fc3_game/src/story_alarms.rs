@@ -239,7 +239,7 @@ fn autopilot_alarms(
     }
     let Some(mut host) = host else { return };
     // (Not while tailing a character: he'd see the player go.)
-    if host.quiet() < 6.0 || host.autopilot_burning || !host.story.awaits_group_event("Alarm_Disabled") || !host.story.tail_targets().is_empty() {
+    if host.quiet() < 6.0 || host.autopilot_held() || !host.story.awaits_group_event("Alarm_Disabled") || !host.story.tail_targets().is_empty() {
         return;
     }
     if cinema.view.is_some() || cinema.plays_player() {
