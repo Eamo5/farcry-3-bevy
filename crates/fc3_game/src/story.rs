@@ -5353,19 +5353,35 @@ fn autopilot_loot(
             return;
         }
         let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
-        let aim = head.map_or(nt.translation + Vec3::Y * 0.4, |h| h.0 - Vec3::Y * 0.1) - eye;
+        // (Where on him: the head, else what of him can be hit: WIL_050's
+        // guards stood behind barrels on the dock, chest high, and the
+        // sniping challenge's rifle hit only the barrels.)
+        let head_at = head.map_or(nt.translation + Vec3::Y * 0.6, |h| h.0 - Vec3::Y * 0.1);
+        let clear = |point: Vec3| {
+            let to = point - eye;
+            let Ok(dir) = Dir3::new(to) else { return true };
+            let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+            spatial.cast_ray(eye, dir, to.length() + 0.5, true, &filter).is_none_or(|h| h.distance > to.length() - 1.0)
+        };
+        let point = [head_at, nt.translation + Vec3::Y * 0.4, nt.translation - Vec3::Y * 0.3].into_iter().find(|p| clear(*p)).unwrap_or(head_at);
+        let aim = point - eye;
         player.yaw = (-aim.x).atan2(-aim.z);
         player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
         if std::env::var("FC3_STORY_WAIT_DEBUG").is_ok() && (now - time.delta_secs()) as u32 / 3 != now as u32 / 3 {
+            // (And what a shot along the aim meets first, how far short of
+            // him.)
+            let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+            let meets = Dir3::new(aim).ok().and_then(|d| spatial.cast_ray(eye, d, aim.length() + 2.0, true, &filter)).map(|h| (h.entity, aim.length() - h.distance));
             info!(
-                "story autopilot: shooting {}: him at {:?} ({:.0} health), the player at {:?} (swimming {}), {} with {} in the magazine",
+                "story autopilot: shooting {}: him at {:?} ({:.0} health), the player at {:?} (swimming {}), {} with {} in the magazine; the aim meets {:?}",
                 actor.id,
                 to_dunia(nt.translation),
                 nh.current,
                 to_dunia(at.translation),
                 player.swimming,
                 inventory.def().name,
-                inventory.slot().mag
+                inventory.slot().mag,
+                meets
             );
         }
         let hostile: std::collections::HashSet<u64> = npcs.iter().filter(|q| q.5.hostile()).map(|q| q.4.id).collect();

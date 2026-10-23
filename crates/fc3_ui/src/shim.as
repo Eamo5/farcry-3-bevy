@@ -105,6 +105,19 @@ _global.fire.utils.Localizer.getText = function(id) {
     return t == null ? "" : t;
 };
 
+// The engine's distance-field text (its fonts drawn from distance fields,
+// outlines and glows on them): the movies' fire.utils.DistanceFieldManager
+// wraps an engine object, `new fire.utils.DistanceFieldManagerPrivate()`,
+// which they don't define, and constructing nothing failed as the HUD
+// loaded. Our text is drawn from traced outlines, so it takes what it is
+// given and does nothing with it.
+_global.fire.utils.DistanceFieldManagerPrivate = function() {
+};
+_global.fire.utils.DistanceFieldManagerPrivate.prototype.setCallback = function() {
+};
+_global.fire.utils.DistanceFieldManagerPrivate.prototype.deleteCallback = function() {
+};
+
 // The engine's tweens, fire.utils.TweenEx (no movie defines it; the menus
 // fade and slide everything with it): new TweenEx(clip, seconds, {prop: to
 // or [from, to], ease: fire.utils.EaseType.*, delay, repeat (-1 for ever),

@@ -193,14 +193,23 @@ fn hold_controls(sniping: Res<Sniping>, mut actions: ResMut<ActionState>) {
     }
 }
 
-/// The player kept where they took the rifle.
-fn hold_place(sniping: Res<Sniping>, mut players: Query<(&mut Transform, &mut Player)>) {
+/// The player kept where they took the rifle, and the rifle's spare rounds
+/// kept full: the challenge's rifle never runs dry (the engine's weapon of
+/// the challenge), and a player who missed enough of WIL_050's guards was
+/// left with an empty one as the helicopter took Oliver.
+fn hold_place(sniping: Res<Sniping>, mut players: Query<(&mut Transform, &mut Player, &mut Inventory)>) {
     let Some(a) = &sniping.active else { return };
-    let Ok((mut t, mut p)) = players.single_mut() else { return };
+    let Ok((mut t, mut p, mut inv)) = players.single_mut() else { return };
     t.translation.x = a.at.x;
     t.translation.z = a.at.y;
     p.velocity.x = 0.0;
     p.velocity.z = 0.0;
+    if let Some(def) = a.lent {
+        let full = inv.defs[def].max_reserve;
+        if let Some(slot) = inv.slots.iter_mut().rev().find(|s| s.def == def) {
+            slot.reserve = full;
+        }
+    }
 }
 
 #[cfg(test)]
