@@ -326,6 +326,9 @@ pub struct EntityPlacements {
     revision: u64,
     physics: HashMap<u64, (u64, bool)>,
     scales: HashMap<u64, f32>,
+    /// Props scripts set loose (`CAPI_Entity.StartPhysOnEntity`), for
+    /// `loose_props`.
+    pub loose: std::collections::HashSet<u64>,
 }
 
 impl EntityPlacements {
@@ -370,6 +373,7 @@ impl EntityPlacements {
         for scale in self.scales.values_mut() {
             *scale = 1.0;
         }
+        self.loose.clear();
     }
 
     fn set_physics(&mut self, id: u64, enabled: bool) {
@@ -3381,6 +3385,13 @@ fn run_story(
                     "CAPI_Entity.SetPhysicsEnabled" => {
                         if let Ok(id) = a(0).parse::<u64>() {
                             placements.set_physics(id, a(1) != "false" && a(1) != "0");
+                        }
+                    }
+                    // A prop set loose (`entity`: the `PhysicsModifier`
+                    // box's StartPhysics, to each of its group).
+                    "CAPI_Entity.StartPhysOnEntity" => {
+                        if let Ok(id) = a(0).parse::<u64>() {
+                            placements.loose.insert(id);
                         }
                     }
                     // An entity resized (`entity, scale`).

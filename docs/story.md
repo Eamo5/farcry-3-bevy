@@ -262,6 +262,14 @@ is the story's own:
 * **Health set.** `CAPI_Pawn.SetPawnHealth <pawn> <origin> <health>` (the
   `HealthModifier` box's Set) leaves the player or a story character with
   that much health (as much as he holds), or kills him at 0.
+* **Props set loose.** `CAPI_Entity.StartPhysOnEntity <entity>` (the
+  `PhysicsModifier` box's StartPhysics, 19 graphs: BAM_040's falling rocks,
+  the buoys and crates on BAM_020's sinking ship, JAS_190's, the
+  encounters' wrecks) wakes a placed prop: it falls and tumbles as a body of
+  its own (its collision's convex hull, else a box of its bounds) and bobs
+  up where it lands in water (`loose_props`). A vehicle is a body already.
+  A reload lets them go (a prop streamed in again stands where it was
+  placed).
 * **The sea moved.** `SetWorldOceanLevel <level> <seconds>` (the
   `OceanLevelModifier` box: DEN_060's vision drains the sea 20 m over
   16 s, B30's restart puts it there at once and B40 back to 100 m) now

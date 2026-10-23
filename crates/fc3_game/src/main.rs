@@ -31,6 +31,7 @@ mod lens_drops;
 mod lens_flare;
 mod light_shafts;
 mod light_switch;
+mod loose_props;
 mod vehicle_lights;
 mod map;
 mod menu;
@@ -516,6 +517,7 @@ fn main() {
         .add_plugins(vine_puff::VinePuffPlugin)
         .add_plugins(authored_fx::AuthoredFxPlugin)
         .add_plugins(story_fx::StoryFxPlugin)
+        .add_plugins(loose_props::LoosePropsPlugin)
         .add_plugins(burning::BurningPlugin)
         .add_plugins(burnables::BurnablesPlugin)
         .add_plugins(sticky_fire::StickyFirePlugin)
