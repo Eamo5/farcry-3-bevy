@@ -279,6 +279,11 @@ is the story's own:
   `DropWeapon` box: WIL_020's briefing makes room for the flamethrower
   with it) takes the weapon from the player, as `RemoveWeapon` does (it
   isn't left lying as a pickup).
+* **Usable things held.** `CAPI_Entity.SetUsableEntityUsability <entity>
+  <on>` (the `UsableComponentModifier` box: JAS_060's radio tower zip line,
+  held until the tower is taken; JAS_100's, BAM_060's) makes a usable thing
+  unusable and back. A zip line with an end within 8 m of one held isn't
+  offered (`traversal::Unusable`); a reload lets them go.
 * **Orders called out.** `PlayAIContextDialog <army> <group> <0|1>` (the
   `PlayContextDialog` box: HOY_020's VIPs' guards, SAM_020, JAS_150,
   BAM_055) has the nearest living soldier of the army (of the group, when

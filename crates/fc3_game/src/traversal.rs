@@ -27,7 +27,7 @@ pub struct TraversalPlugin;
 
 impl Plugin for TraversalPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Ways>().init_resource::<Mount>().add_message::<TowerTaken>().add_systems(
+        app.init_resource::<Ways>().init_resource::<Mount>().init_resource::<Unusable>().add_message::<TowerTaken>().add_systems(
             Update,
             (
                 load_ways.run_if(resource_exists::<CacheInfo>),
@@ -310,7 +310,17 @@ fn load_ways(
     }
 }
 
+/// Where scripts have made a usable thing unusable
+/// (`CAPI_Entity.SetUsableEntityUsability`: JAS_060's radio tower zip line
+/// until the tower is done): a zip line with an end there isn't offered.
+#[derive(Resource, Default)]
+pub struct Unusable(pub std::collections::HashMap<u64, Vec3>);
+
+/// How near (m) an unusable thing is to the zip line end it holds.
+const UNUSABLE_REACH: f32 = 8.0;
+
 /// Offers the zip lines whose high end is in reach.
+#[allow(clippy::too_many_arguments)]
 fn zip_prompt(
     text: Option<Res<crate::hud::GameText>>,
     mut actions: ResMut<ActionState>,
@@ -320,13 +330,15 @@ fn zip_prompt(
     mut hud: ResMut<HudState>,
     mut players: Query<(Entity, &Transform, &mut Player, &Health)>,
     mut commands: Commands,
+    unusable: Option<Res<Unusable>>,
 ) {
     let Ok((e, t, mut p, h)) = players.single_mut() else { return };
     if *mount != Mount::None || hud.prompt.is_some() || h.dead || p.driving || p.noclip || p.swimming {
         return;
     }
     let feet = t.translation.y - HALF_HEIGHT;
-    let near = ways.data.cables.iter().enumerate().filter(|(_, c)| c.zipline).find(|(_, c)| {
+    let held = |c: &Cable| unusable.as_ref().is_some_and(|u| u.0.values().any(|at| at.distance(Vec3::from(c.a)) < UNUSABLE_REACH || at.distance(Vec3::from(c.b)) < UNUSABLE_REACH));
+    let near = ways.data.cables.iter().enumerate().filter(|(_, c)| c.zipline && !held(c)).find(|(_, c)| {
         let (start, _) = zip_ends(c);
         let d = Vec2::new(start.x - t.translation.x, start.z - t.translation.z).length();
         d < 2.5 && (0.3..4.5).contains(&(start.y - feet))

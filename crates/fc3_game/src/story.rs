@@ -826,6 +826,8 @@ pub struct StoryHost {
     pub order_calls: Vec<(u8, Vec<u64>, &'static str)>,
     /// Characters vehicles can't hurt by ramming them, by id.
     pub collision_immune: std::collections::HashSet<u64>,
+    /// Usable things scripts made unusable, and where they are.
+    pub unusable: HashMap<u64, Vec3>,
     /// Placed particle systems scripts started (true) or stopped
     /// (`ParticleSystem`), for `story_fx`.
     pub fx_switched: HashMap<u64, bool>,
@@ -995,6 +997,7 @@ impl StoryHost {
             recover: Vec::new(),
             order_calls: Vec::new(),
             collision_immune: std::collections::HashSet::new(),
+            unusable: HashMap::new(),
             fx_switched: HashMap::new(),
             lights_switched: HashMap::new(),
             alarm_sets: Vec::new(),
@@ -1246,11 +1249,21 @@ fn apply_damage_rates(
 
 /// The ambience a script plays in place of the place's (a boss fight's),
 /// and the sea where a script has moved it.
-fn scripted_ambience(host: Option<NonSend<StoryHost>>, regions: Option<ResMut<crate::sound::SoundRegions>>) {
+fn scripted_ambience(
+    host: Option<NonSend<StoryHost>>,
+    regions: Option<ResMut<crate::sound::SoundRegions>>,
+    unusable: Option<ResMut<crate::traversal::Unusable>>,
+) {
     let Some(host) = host else { return };
     let sea = host.story.ocean_level().unwrap_or(crate::sky::SEA_LEVEL);
     if crate::water::ocean_level() != sea {
         crate::water::set_ocean_level(sea);
+    }
+    // (And the usable things scripts made unusable, for the zip lines.)
+    if let Some(mut unusable) = unusable {
+        if unusable.0 != host.unusable {
+            unusable.0 = host.unusable.clone();
+        }
     }
     let Some(mut regions) = regions else { return };
     let forced = host.story.ambience_override().and_then(|i| u8::try_from(i).ok());
@@ -1878,6 +1891,7 @@ fn run_story(
             host.npc_damage.clear();
             host.invincible.clear();
             host.collision_immune.clear();
+            host.unusable.clear();
             host.fx_switched.clear();
             host.lights_switched.clear();
             env_overrides.active.clear();
@@ -3424,6 +3438,17 @@ fn run_story(
                                 5 => entry.1 = true,
                                 6 => entry.1 = false,
                                 l => *entry = (l, true),
+                            }
+                        }
+                    }
+                    // A usable thing a script makes unusable, or usable again
+                    // (`entity, on`: JAS_060's radio tower zip line).
+                    "CAPI_Entity.SetUsableEntityUsability" => {
+                        if let Ok(id) = a(0).parse::<u64>() {
+                            if matches!(a(1).as_str(), "true" | "1") {
+                                host.unusable.remove(&id);
+                            } else if let Some(at) = host.story.data().entities.get(&id).map(|e| to_bevy(e.pos)) {
+                                host.unusable.insert(id, at);
                             }
                         }
                     }
