@@ -861,6 +861,16 @@ impl StoryHost {
         self.quiet
     }
 
+    /// The autopilot's: something a running mission offers to use that it
+    /// hasn't (WIL_020's flamethrower on the table): before any door.
+    pub fn pending_use(&self) -> bool {
+        let focus = self.story.missions_running();
+        !focus.is_empty()
+            && self.story.watched_triggers_of(None, &focus).iter().any(|w| {
+                w.1 == "Use" && w.3 && !self.used.contains(&(w.0, w.1.clone())) && !self.fatal.contains(&(w.0, w.1.clone()))
+            })
+    }
+
     /// Something happened (a test's step).
     pub fn reset_quiet(&mut self) {
         self.quiet = 0.0;
@@ -2259,7 +2269,11 @@ fn run_story(
         // started across the island failed for CIT_020's triggers drawing
         // the player out of its zone).
         let focus = host.story.missions_running();
-        let focused = if focus.is_empty() { Vec::new() } else { host.story.watched_triggers_of(graph.as_deref(), &focus) };
+        let mut focused = if focus.is_empty() { Vec::new() } else { host.story.watched_triggers_of(graph.as_deref(), &focus) };
+        // (Things to use before places to go: WIL_020's briefing offers the
+        // flamethrower on the table as it asks the player to leave the hut,
+        // and stepping out first took the offer away.)
+        focused.sort_by_key(|w| w.1 != "Use");
         // (Unless those missions have long gone nowhere, nothing of theirs
         // left it can do: a supply run it can't drive held CIT_010 and
         // BNG_010 back for good.)
@@ -2348,7 +2362,9 @@ fn run_story(
                 // go into.)
                 && (!leading || host.quiet > LED_STEP_AFTER)
                 && near_companion(w.2)
-                && !past_door(w.2)
+                // (Something to use by the door is used where it is:
+                // WIL_020's flamethrower on the table inside Willis's hut.)
+                && (w.1 == "Use" || !past_door(w.2))
                 && w.3
                 && !host.used.contains(&(w.0, w.1.clone()))
                 && !host.fatal.contains(&(w.0, w.1.clone()))

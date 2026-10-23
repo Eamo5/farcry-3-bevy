@@ -223,7 +223,8 @@ fn autopilot_doors(
         }
         return;
     }
-    if host.quiet() < 6.0 {
+    // (Not while there's something to use first, unless long stuck.)
+    if host.quiet() < 6.0 || (host.pending_use() && host.quiet() < 40.0) {
         return;
     }
     let awaited = host.story.awaited_doors();
