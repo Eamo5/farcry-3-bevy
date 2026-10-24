@@ -115,6 +115,8 @@ pub struct Missions {
     /// Missions' acknowledge shapes (`SetAcknowledgeShape`: the trigger
     /// that takes the mission on), by trigger: its mission's id.
     pub ack_shapes: HashMap<u64, String>,
+    /// The missions (main ids) that set an objective, the latest last.
+    pub objective_order: Vec<String>,
 }
 
 /// Synthetic entity ids for the graphs that run on no world entity (mission
@@ -512,6 +514,10 @@ impl Core {
         if let Some(id) = &main {
             if let Some(m) = self.missions.by_id.get_mut(id) {
                 m.current_objective = text;
+            }
+            self.missions.objective_order.retain(|x| x != id);
+            if text.is_some() {
+                self.missions.objective_order.push(id.clone());
             }
         }
         let s = text.and_then(|t| self.data.strings.get(t)).map(str::to_string);

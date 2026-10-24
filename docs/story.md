@@ -4460,6 +4460,30 @@ about as non-fighters and the first wave never emptied.
   touches, `held up against` / `in contact with`; `fc3tool terrain-height`
   gives the converted ground under Dunia points.)
 
+## DOC_040 to Buck: the activities on the way
+
+From WIL_050's B20 the autopilot ran WIL_050 out, then DOC_040's
+briefing ("Exit the cave."), and on "Go talk to Buck." it stalled:
+
+* **The waterfalls again.** It stepped into `WaterFall_TriggerPlayerScreenFx`
+  and `..._ScreenDroppletFX` once more: their graph's path is
+  `domino\user\fc3_gfx\...`, and the filter looked for `fc3_gfx/`.
+  Graph paths are matched with either slash now (`in_graph`).
+* **A race's keeper.** Then it used the `ChallengeKeeper` by the road,
+  which started a waypoint race (`CRacingMiniGame_C4_WaypointRace`) that
+  nothing drives, and the race held the trigger step for good. The
+  activities' own triggers (`fc3_activities/` races, shooting gallery,
+  knife throwing, poker) aren't stepped into outside a mission now
+  (`FC3_STORY_ACTIVITIES=1` lets them; each activity has its own test
+  knob, `FC3_RACE_TEST` and the like).
+* **Buck's door.** "Go talk to Buck." is JAS_145's brief's objective, a
+  mission running but not taken on, so not among those the trigger step
+  goes after first; a supply run taken on long before was, and with it in
+  focus only triggers of no mission's were stepped into (two caves'
+  teleports, back and forth). With none of the story's own missions taken
+  on, the latest whose objective is up (`Story::objective_missions`) is in
+  focus too.
+
 ## BAM_020 and BNG_010: the story going quiet
 
 The autopilot acts only once the story has been quiet for a while (no

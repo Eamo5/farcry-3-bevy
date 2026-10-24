@@ -2307,7 +2307,16 @@ fn run_story(
         // others', and no other mission is started meanwhile (HUR_040
         // started across the island failed for CIT_020's triggers drawing
         // the player out of its zone).
-        let focus = host.story.missions_running();
+        let mut focus = host.story.missions_running();
+        // (With none of the story's own taken on, the one whose objective
+        // is up too, the latest: JAS_145's brief, "Go talk to Buck.", while
+        // a supply run long taken on held the focus and Buck's door was
+        // never gone to.)
+        if focus.iter().all(|m| side_mission(m)) {
+            if let Some(next) = host.story.objective_missions().into_iter().find(|m| !side_mission(m)) {
+                focus.push(next);
+            }
+        }
         // (On a mission, the places of the missions running only.)
         let mission_on = host.story.mission_in_progress().is_some();
         let in_focus: std::collections::HashSet<u64> = if mission_on { host.story.watched_proximity_of_missions(&focus).into_iter().collect() } else { Default::default() };

@@ -1253,6 +1253,21 @@ impl Story {
         out
     }
 
+    /// The missions running, untaken, whose objective is up, by their
+    /// names' stem, the latest set first: what the player is to do next
+    /// before he takes anything on (JAS_145's brief, "Go talk to Buck.").
+    pub fn objective_missions(&self) -> Vec<String> {
+        let c = self.core.borrow();
+        c.missions
+            .objective_order
+            .iter()
+            .rev()
+            .filter_map(|id| c.missions.by_id.get(id))
+            .filter(|m| m.block.is_none() && !m.acknowledged && m.state == missions::State::Running && m.current_objective.is_some())
+            .map(|m| m.name.trim_end_matches("_MAIN").to_string())
+            .collect()
+    }
+
     pub fn missions_running(&self) -> Vec<String> {
         let c = self.core.borrow();
         let mut out: Vec<String> = c
@@ -1302,6 +1317,14 @@ impl Story {
             // stepped through again and again, kept the story from ever
             // counting as quiet.)
             if in_graph(&l.callback.target, "exitzonewarning|fc3_gfx/") {
+                continue;
+            }
+            // (Nor an activity's own outside a mission (a race's keeper, a
+            // shooting gallery's, the knife throwing's, a poker table's):
+            // using a race's keeper on the way to Buck started a race nothing
+            // drives, which held the story for good. `FC3_STORY_ACTIVITIES`
+            // lets them.)
+            if in_graph(&l.callback.target, ACTIVITIES) && std::env::var_os("FC3_STORY_ACTIVITIES").is_none() && mission_of(&c, &l.callback.target).is_none() {
                 continue;
             }
             // A spot a script spawned to be used (a bomb's): where it stands.
@@ -2156,17 +2179,22 @@ fn mission_of(c: &Core, target: &Table) -> Option<(String, missions::State)> {
     None
 }
 
+/// The activities' graphs (`in_graph`): the races', the shooting gallery's,
+/// the knife throwing's, poker's.
+const ACTIVITIES: &str = "fc3_activities/racechallenge/|fc3_activities/shootingchallenge/|fc3_activities/knifethrow/|fc3_activities/poker/";
+
 /// Whether a box belongs to a graph whose script path contains `needle`
 /// (lower case; any of several split by `|`): the box's own, or one it is
 /// nested in.
 fn in_graph(target: &Table, needle: &str) -> bool {
     let mut table = target.clone();
     for _ in 0..16 {
-        if table
-            .get::<Table>("_type")
-            .and_then(|ty| ty.get::<String>("_path"))
-            .is_ok_and(|path| needle.split('|').any(|n| !n.is_empty() && path.to_ascii_lowercase().contains(n)))
-        {
+        // (Paths come with either slash: the waterfalls' screen effects are
+        // `domino\user\fc3_gfx\...`.)
+        if table.get::<Table>("_type").and_then(|ty| ty.get::<String>("_path")).is_ok_and(|path| {
+            let path = path.to_ascii_lowercase().replace('\\', "/");
+            needle.split('|').any(|n| !n.is_empty() && path.contains(&n.replace('\\', "/")))
+        }) {
             return true;
         }
         let Ok(parent) = table.get::<Table>("_graph") else { break };
@@ -3737,6 +3765,31 @@ mod tests {
         assert_eq!(story.errors(), 0);
         story.domino().lua().load(r#"SendRegisteredEventToEntity("100", "CBaseTriggerComponent_SetDisabled", {})"#).exec().unwrap();
         assert!(story.watched_exit_regions().is_empty());
+    }
+
+    /// The missions untaken whose objectives are up, the latest set first;
+    /// not one taken on, nor one whose objective is cleared.
+    #[test]
+    fn missions_with_their_objective_up_latest_first() {
+        let story = empty_story();
+        let owners = {
+            let mut c = story.core.borrow_mut();
+            let mut owners = Vec::new();
+            for script in ["jas_145_brief.lua", "sqs_c4_main.lua", "wil_010_main.lua"] {
+                let id = c.register_mission(script, false, None, None, false, false, false, "");
+                c.missions.by_id.get_mut(&id).unwrap().state = missions::State::Running;
+                owners.push(c.missions.by_id[&id].owner);
+            }
+            c.set_objective(owners[0], Some(1), false);
+            c.set_objective(owners[1], Some(2), false);
+            c.set_objective(owners[2], Some(3), false);
+            c.set_objective(owners[2], None, false);
+            c.set_objective(owners[0], Some(4), false);
+            owners
+        };
+        assert_eq!(story.objective_missions(), ["JAS_145_BRIEF", "SQS_C4"]);
+        story.core.borrow_mut().acknowledge(owners[0], false);
+        assert_eq!(story.objective_missions(), ["SQS_C4"]);
     }
 
     /// Another mission's acknowledge shape is closed while the player is on
