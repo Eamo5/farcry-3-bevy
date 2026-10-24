@@ -4483,6 +4483,16 @@ briefing ("Exit the cave."), and on "Go talk to Buck." it stalled:
   teleports, back and forth). With none of the story's own missions taken
   on, the latest whose objective is up (`Story::objective_missions`) is in
   focus too.
+* **The mission before.** WIL_010 was taken on, then DOC_040's optional
+  scene (a trigger of its block's, which takes it on), and once the scene
+  ended no mission was in progress: BAM_020's start opened beside WIL_010's
+  and both ran. The missions taken on are kept in order now
+  (`Missions::taken`), and the one in progress is the latest still running,
+  so one taken on and done with meanwhile hands back to the one before.
+* **Wildlife.** A crocodile by one of WIL_010's packages took the player at
+  the water's edge again and again. An animal hunting or attacking him
+  within 20 m (`WildAnimal::after`) is shot first now, unless it goes 8 s
+  unhurt (out of the shots' reach in the water), then it is left a minute.
 
 ## BAM_020 and BNG_010: the story going quiet
 

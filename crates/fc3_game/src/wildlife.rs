@@ -1353,6 +1353,12 @@ impl WildAnimal {
     pub fn dangerous(&self) -> bool {
         SPECIES[self.species].behaviour == Behaviour::Predator
     }
+
+    /// Hunting or attacking someone standing at `at` (its goal is its
+    /// quarry's place then).
+    pub fn after(&self, at: Vec3) -> bool {
+        matches!(self.mood, Mood::Hunt | Mood::Attack) && self.goal.with_y(0.0).distance(at.with_y(0.0)) < 3.0
+    }
 }
 
 /// An animal an encounter brings, by its archetype's name; `handled`: it

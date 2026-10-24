@@ -4689,6 +4689,9 @@ const ESCORT_IN_FIGHT: f32 = 20.0;
 const SNIPE_EVERY: f32 = 2.5;
 /// Tests: how near (m) a companion is for the fight's moves to keep by it.
 const TETHER_FROM: f32 = 45.0;
+/// Tests: how near (m) an animal after the player is shot before anything
+/// else.
+const DEFEND_WITHIN: f32 = 20.0;
 
 /// CIT_030's fight with the Ink Monster: played (`boss_fight`), not ended.
 const BOSS_FIGHT: &str = "CCitraBossFight";
@@ -5000,6 +5003,58 @@ fn autopilot_loot(
         return;
     }
     if host.reload_at.is_some() {
+        return;
+    }
+    // An animal after the player, near: shot first, as a player would (a
+    // crocodile by one of WIL_010's packages took him at the water's edge
+    // again and again while he photographed them).
+    // (Not one it hasn't hurt in a while: a crocodile hunting him from the
+    // water, out of the shots' reach, held it for good.)
+    let animal_id = |e: Entity, actor: Option<&crate::story_actors::StoryActor>| actor.map_or(e.to_bits(), |a| a.id);
+    let now_t = time.elapsed_secs();
+    skipped.retain(|_, until| *until > now_t);
+    let threat = animals
+        .iter()
+        .filter(|(e, t, a, h, _, actor)| {
+            !h.dead && a.after(at.translation) && t.translation.distance(at.translation) < DEFEND_WITHIN && !skipped.contains_key(&animal_id(*e, *actor))
+        })
+        .min_by(|a, b| a.1.translation.distance(at.translation).total_cmp(&b.1.translation.distance(at.translation)));
+    if let Some((e, t, _, h, _, actor)) = threat.filter(|_| !scripted.camera_drawn && !fixed) {
+        let id = animal_id(e, actor);
+        if *last != Some((id, "defend")) {
+            info!("story autopilot: an animal after the player; shoot it ({id})");
+            *last = Some((id, "defend"));
+            *shooting = None;
+        }
+        match *shooting {
+            Some((was, hp, since)) if was == id => {
+                if h.current < hp {
+                    *shooting = Some((id, h.current, now_t));
+                } else if now_t - since > 8.0 {
+                    info!("story autopilot: {id} not hurt; another thing for a while");
+                    skipped.insert(id, now_t + 60.0);
+                    *shooting = None;
+                    *last = None;
+                    return;
+                }
+            }
+            _ => *shooting = Some((id, h.current, now_t)),
+        }
+        let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
+        let aim = t.translation + Vec3::Y * 0.2 - eye;
+        player.yaw = (-aim.x).atan2(-aim.z);
+        player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
+        use crate::controls::Action;
+        let now = time.elapsed_secs();
+        if now >= *next_press {
+            *next_press = now + 0.2;
+            if inventory.slot().mag == 0 && inventory.slot().reserve > 0 {
+                actions.press(Action::Reload);
+            } else {
+                actions.press(Action::Fire);
+            }
+        }
+        host.quiet = 0.0;
         return;
     }
     // A camera a script drew and no longer holds the player in (no action

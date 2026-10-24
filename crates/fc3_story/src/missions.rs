@@ -109,9 +109,10 @@ pub struct Missions {
     /// being abandoned (`EnableMissionAbort(owner, false)`: a block's
     /// `MissionMiscInfos`, 34 graphs); abandoning is allowed otherwise.
     pub abort_disabled: std::collections::HashSet<u64>,
-    /// The mission the player took on last (its main mission's id): the one
-    /// abandoning gives up.
-    pub current: Option<String>,
+    /// The missions the player took on (their main missions' ids), the
+    /// latest last: the latest still running is the one he is on
+    /// (`Core::in_progress`), the one abandoning gives up.
+    pub taken: Vec<String>,
     /// Missions' acknowledge shapes (`SetAcknowledgeShape`: the trigger
     /// that takes the mission on), by trigger: its mission's id.
     pub ack_shapes: HashMap<u64, String>,
@@ -424,7 +425,8 @@ impl Core {
         // (Taken on now, not acknowledged again as a reload replays it: a
         // lost expedition's lab did so after WIL_040's checkpoint loaded.)
         if self.missions.by_id.get(&main).is_some_and(|x| !x.giver && !x.acknowledged) {
-            self.missions.current = Some(main.clone());
+            self.missions.taken.retain(|x| x != &main);
+            self.missions.taken.push(main.clone());
         }
         for id in [m.id.clone(), main] {
             if let Some(x) = self.missions.by_id.get_mut(&id) {
@@ -436,18 +438,17 @@ impl Core {
         }
     }
 
-    /// The mission the player is on: the one he took on last, still
-    /// running.
+    /// The mission the player is on: the one he took on last that still
+    /// runs. (One taken on meanwhile and soon done with hands back to the
+    /// one before: DOC_040's optional scene, taken on as WIL_010 ran, left
+    /// no mission in progress once it ended, and BAM_020 was taken on beside
+    /// WIL_010. Before any, the save's, by name.)
     pub fn in_progress(&self) -> Option<&Mission> {
         let running = |m: &&Mission| !m.giver && m.block.is_none() && m.state == State::Running && m.acknowledged;
-        // (Kept in the save by name.)
-        match &self.missions.current {
-            Some(id) => self.missions.by_id.get(id).filter(running),
-            None => {
-                let name = self.missions.saved.current.as_ref()?;
-                self.missions.by_id.values().filter(running).find(|m| &m.name == name)
-            }
-        }
+        self.missions.taken.iter().rev().filter_map(|id| self.missions.by_id.get(id)).find(running).or_else(|| {
+            let name = self.missions.saved.current.as_ref()?;
+            self.missions.by_id.values().filter(running).find(|m| &m.name == name)
+        })
     }
 
     /// Whether a trigger is another mission's acknowledge shape, closed while
@@ -496,8 +497,10 @@ impl Core {
         if let Some(x) = self.missions.by_id.get_mut(&m.id) {
             x.acknowledged = false;
         }
-        self.missions.current = None;
-        self.missions.saved.current = None;
+        self.missions.taken.retain(|x| x != &m.id);
+        if self.missions.saved.current.as_ref() == Some(&m.name) {
+            self.missions.saved.current = None;
+        }
         // (The story to go on from is made once its scripts have heard:
         // `Story::take_commands`.)
         self.emit(Command::MissionAbandoned { name: m.name.clone(), save: None });

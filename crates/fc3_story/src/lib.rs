@@ -455,7 +455,7 @@ impl Story {
             dead: sorted(&c.dead),
             chapter: c.missions.chapter,
             respawn: c.respawn,
-            current: c.missions.current.as_ref().and_then(|id| c.missions.by_id.get(id)).map(|m| m.name.clone()).or_else(|| c.missions.saved.current.clone()),
+            current: c.in_progress().map(|m| m.name.clone()),
             persistent,
         }
     }
@@ -3765,6 +3765,32 @@ mod tests {
         assert_eq!(story.errors(), 0);
         story.domino().lua().load(r#"SendRegisteredEventToEntity("100", "CBaseTriggerComponent_SetDisabled", {})"#).exec().unwrap();
         assert!(story.watched_exit_regions().is_empty());
+    }
+
+    /// A mission taken on while another is in progress, and done with,
+    /// hands back to the one before (DOC_040's optional scene, as WIL_010
+    /// ran), which the save keeps.
+    #[test]
+    fn a_mission_taken_on_meanwhile_hands_back_to_the_one_before() {
+        let story = empty_story();
+        let (wil, scene) = {
+            let mut c = story.core.borrow_mut();
+            let mut ids = Vec::new();
+            for script in ["wil_010_main.lua", "doc_040_opt30_main.lua"] {
+                let id = c.register_mission(script, false, None, None, false, false, false, "");
+                c.missions.by_id.get_mut(&id).unwrap().state = missions::State::Running;
+                ids.push(id);
+            }
+            for id in &ids {
+                let owner = c.missions.by_id[id].owner;
+                c.acknowledge(owner, false);
+            }
+            (ids[0].clone(), ids[1].clone())
+        };
+        assert_eq!(story.core.borrow().in_progress().map(|m| m.id.clone()), Some(scene.clone()));
+        story.core.borrow_mut().finish_mission(&scene, missions::State::Completed);
+        assert_eq!(story.core.borrow().in_progress().map(|m| m.id.clone()), Some(wil));
+        assert_eq!(story.save().current.as_deref(), Some("WIL_010_MAIN"));
     }
 
     /// The missions untaken whose objectives are up, the latest set first;
