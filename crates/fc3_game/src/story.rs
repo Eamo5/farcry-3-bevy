@@ -2308,6 +2308,9 @@ fn run_story(
         // started across the island failed for CIT_020's triggers drawing
         // the player out of its zone).
         let focus = host.story.missions_running();
+        // (On a mission, the places of the missions running only.)
+        let mission_on = host.story.mission_in_progress().is_some();
+        let in_focus: std::collections::HashSet<u64> = if mission_on { host.story.watched_proximity_of_missions(&focus).into_iter().collect() } else { Default::default() };
         // (The story's own missions before side ones, a lost expedition's or
         // a supply run's: WIL_020's boat got away while the autopilot went
         // through a lab's triggers across the island.)
@@ -2588,6 +2591,10 @@ fn run_story(
             .story
             .watched_proximity_in_graph(graph.as_deref())
             .into_iter()
+            // (Not another's while a mission is in progress, as with its
+            // triggers: HUR_020's briefing spot, gone to just as WIL_050 put
+            // the player at its sniper rifle, left him held 1.5 km from it.)
+            .filter(|w| !mission_on || in_focus.contains(&w.0))
             // (Again a while later, gone out of its radius since: HOY_010's
             // Sam, defusing a bomb with the player kept near him.)
             .find(|w| {
@@ -4668,6 +4675,9 @@ const BESIDE: f32 = 2.0;
 /// fight (m), coming back to `KEEP_CLEAR` and a little more behind it: the
 /// scripts want the player close (HOY_010's Sam).
 const ESCORT_IN_FIGHT: f32 = 20.0;
+/// Tests: how long (s) between the autopilot's long shots with a sniper
+/// rifle.
+const SNIPE_EVERY: f32 = 2.5;
 /// Tests: how near (m) a companion is for the fight's moves to keep by it.
 const TETHER_FROM: f32 = 45.0;
 
@@ -5357,13 +5367,21 @@ fn autopilot_loot(
         // guards stood behind barrels on the dock, chest high, and the
         // sniping challenge's rifle hit only the barrels.)
         let head_at = head.map_or(nt.translation + Vec3::Y * 0.6, |h| h.0 - Vec3::Y * 0.1);
+        // (Clear: what the shot meets first is him, or nothing short of
+        // him. His capsule is half a metre round.)
         let clear = |point: Vec3| {
             let to = point - eye;
             let Ok(dir) = Dir3::new(to) else { return true };
             let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
-            spatial.cast_ray(eye, dir, to.length() + 0.5, true, &filter).is_none_or(|h| h.distance > to.length() - 1.0)
+            spatial.cast_ray(eye, dir, to.length() + 0.5, true, &filter).is_none_or(|h| {
+                let hit = eye + dir * h.distance;
+                h.distance > to.length() - 0.45 || (hit - nt.translation).with_y(0.0).length() < 0.6
+            })
         };
-        let point = [head_at, nt.translation + Vec3::Y * 0.4, nt.translation - Vec3::Y * 0.3].into_iter().find(|p| clear(*p)).unwrap_or(head_at);
+        let point = [head_at, head_at + Vec3::Y * 0.12, nt.translation + Vec3::Y * 0.4, nt.translation - Vec3::Y * 0.3]
+            .into_iter()
+            .find(|p| clear(*p))
+            .unwrap_or(head_at);
         let aim = point - eye;
         player.yaw = (-aim.x).atan2(-aim.z);
         player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
@@ -5371,7 +5389,10 @@ fn autopilot_loot(
             // (And what a shot along the aim meets first, how far short of
             // him.)
             let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
-            let meets = Dir3::new(aim).ok().and_then(|d| spatial.cast_ray(eye, d, aim.length() + 2.0, true, &filter)).map(|h| (h.entity, aim.length() - h.distance));
+            let meets = Dir3::new(aim).ok().and_then(|d| spatial.cast_ray(eye, d, aim.length() + 2.0, true, &filter)).map(|h| {
+                let name = placed.get(h.entity).ok().and_then(|(id, _)| host.story.data().name_of(id.0).map(str::to_string));
+                (h.entity, name, aim.length() - h.distance)
+            });
             info!(
                 "story autopilot: shooting {}: him at {:?} ({:.0} health), the player at {:?} (swimming {}), {} with {} in the magazine; the aim meets {:?}",
                 actor.id,
@@ -5476,7 +5497,12 @@ fn autopilot_loot(
         // (Not straight after being moved: the aim was taken from where the
         // player stood.)
         if now >= *next_press && !player.spawning && now - player.spawned_at >= 0.5 && (!long || inventory.aim_blend > 0.95) {
-            *next_press = now + 0.25;
+            // (A long shot with a sniper rifle, a breath between: a player
+            // works the bolt and finds the next. Four of WIL_050's guards
+            // fell in as many seconds, before any saw another fall and went
+            // into combat, so the waves the group's combat brings never
+            // came.)
+            *next_press = now + if long && class == crate::weapons::WeaponClass::Sniper { SNIPE_EVERY } else { 0.25 };
             // The gun that harms him most from here, of those that reach him
             // (a heavy stood a pistol for minutes beside the rifle carried),
             // else the one that reaches furthest: the next weapon round, as

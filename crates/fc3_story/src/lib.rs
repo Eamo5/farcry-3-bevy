@@ -1388,6 +1388,25 @@ impl Story {
         self.watched_proximity_of(PLAYER, graph)
     }
 
+    /// The places these missions' graphs (by their names' stem) wait for
+    /// the player to come near.
+    pub fn watched_proximity_of_missions(&self, missions: &[String]) -> Vec<u64> {
+        let c = self.core.borrow();
+        let mut out: Vec<u64> = c
+            .delays
+            .values()
+            .filter(|d| d.running && d.callback.method == "CheckDistance" && of_missions(&c, &d.callback.target, missions))
+            .flat_map(|d| {
+                let t = &d.callback.target;
+                [t.get::<values::Text>("Entities").ok().and_then(|x| x.id()), t.get::<values::Text>("id2").ok().and_then(|x| x.id())]
+            })
+            .flatten()
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// The same for the vehicle the player is in: places a script waits for
     /// it to come near (a supply run's flares and drop point).
     pub fn watched_vehicle_proximity(&self, graph: Option<&str>) -> Vec<(u64, f32, [f32; 3])> {

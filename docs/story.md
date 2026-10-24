@@ -4311,6 +4311,19 @@ about as non-fighters and the first wave never emptied.
   without Oliver, the waves after him fall to it too, and B20 completes in
   about two minutes (eight on foot before); the rifle goes back, B25C's
   scene plays and B30 starts.
+* **Run again later (`camp97`).** Three things held B20:
+  * The autopilot went "near" HUR_020's briefing spot just as the script
+    put the player at the rifle, and the challenge held him 1.5 km from it.
+    On a mission, it now goes near only the running missions' places
+    (`Story::watched_proximity_of_missions`), as with their triggers.
+  * The rifle came with its usual rounds and ran dry; the challenge's never
+    does (`sniping::hold_place` keeps its spare rounds full).
+  * Four guards fell in as many seconds, before any saw another fall, so
+    the group never went into combat and the waves never came. The
+    autopilot's long shots with a sniper rifle now come 2.5 s apart
+    (`SNIPE_EVERY`), as a player works the bolt; the comrades see the fall
+    and fight. It also aims at what of a foe it can hit (head, chest, hips)
+    past cover in front of him.
 * **Groups going into combat.** The engine tells the groups scripts watch
   (`CGroupCombatEvent`) when their members' AI states change:
   `<State>Start` as the first member enters idle, investigate, alert or
