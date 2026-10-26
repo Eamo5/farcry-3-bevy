@@ -866,12 +866,30 @@ fn place_on_ground(
         info!("player placed underground at {:?}", t.translation);
         return;
     }
-    let Some(ground) = heights.height_at(t.translation) else { return };
-    // Wait until this sector's terrain collision exists so we can't fall through
-    // (other sectors may already have colliders after a teleport).
+    // (FC3_PLAYER_TRACE: why a spawn still waits, every few seconds.)
+    static TRACE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("FC3_PLAYER_TRACE").is_some());
+    let now = time.elapsed_secs();
+    let tell = |why: &str| {
+        if *TRACE && (now / 3.0) as u32 != ((now - time.delta_secs()) / 3.0) as u32 {
+            info!("player spawn at {:.1?} waits: {why}", crate::data::to_dunia(t.translation));
+        }
+    };
     let d = crate::data::to_dunia(t.translation);
     let here = fc3_formats::terrain::SectorCoord::containing(d[0], d[1]);
-    if !chunks.iter().any(|(c, kids)| c.coord == here && kids.iter().any(|k| colliders.contains(k))) {
+    // (Over a hole in a loaded sector, where it opens into a cave or a
+    // wreck below, there is no terrain height: what is under the point
+    // decides. BAM_020's flooded hold is over one, and the spawn waited on
+    // the terrain there for good behind a loading screen.)
+    let hole = heights.height_at(t.translation).is_none() && heights.sectors.contains_key(&here);
+    let Some(ground) = heights.height_at(t.translation).or(hole.then_some(f32::MIN)) else {
+        tell("no terrain heights here");
+        return;
+    };
+    // Wait until this sector's terrain collision exists so we can't fall through
+    // (other sectors may already have colliders after a teleport).
+    // (None comes for a sector cut away entirely.)
+    if !heights.cut_away(here) && !chunks.iter().any(|(c, kids)| c.coord == here && kids.iter().any(|k| colliders.contains(k))) {
+        tell("the terrain's collision");
         return;
     }
     // Kept to its height: the surface just below the point given.
@@ -887,6 +905,8 @@ fn place_on_ground(
                 ready || (object_roots.get(parent.parent()).map_or(true, |root| root.coord != here) && rocks != Ok(Some(parent.parent())))
             });
         if !ready {
+            let pending = objects.iter().filter(|(_, parent, ready)| !ready && object_roots.get(parent.parent()).is_ok_and(|root| root.coord == here)).count();
+            tell(&format!("streaming centred here {}, rocks {:?}, {pending} objects without colliders", streamer.centre() == Some((here, true)), rocks.is_ok()));
             *collision_ready = false;
             return;
         }
@@ -921,9 +941,15 @@ fn place_on_ground(
         }
     }
     // Land on the highest surface below a point well above the terrain (roofs, rocks...).
-    let top = Vec3::new(t.translation.x, ground.max(SEA_LEVEL) + 60.0, t.translation.z);
+    // (Over a hole, below the point asked for: there is no terrain to
+    // measure from.)
+    let top = if hole { t.translation + Vec3::Y } else { Vec3::new(t.translation.x, ground.max(SEA_LEVEL) + 60.0, t.translation.z) };
     // Exclude the player's own capsule from the probe.
     let hit = spatial.cast_ray(top, Dir3::NEG_Y, 200.0, true, &SpatialQueryFilter::from_excluded_entities([entity]));
+    if hole && hit.is_none() {
+        tell("nothing under it over a hole");
+        return;
+    }
     if let Some(h) = &hit {
         let what = objects.get(h.entity).ok().and_then(|(o, _, _)| server.get_path(&o.model)).map(|p| p.to_string()).unwrap_or_else(|| "terrain".into());
         info!("spawn ray hit {what} at y={:.2} (terrain {ground:.2})", top.y - h.distance);

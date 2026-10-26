@@ -116,7 +116,7 @@ fn terrain_colliders(
             (true, None) => {
                 let Some(sector) = heights.sectors.get(&chunk.coord) else { continue };
                 // (A sector cut away entirely has no ground at all.)
-                if !sector.holes.is_empty() && sector.holes.iter().all(|h| *h) {
+                if heights.cut_away(chunk.coord) {
                     continue;
                 }
                 commands.spawn((

@@ -63,6 +63,12 @@ impl Heightfield {
         }
         Some(s.sample(d[0] - o[0], d[1] - o[1]))
     }
+
+    /// Whether a loaded sector is cut away entirely (no ground at all, so no
+    /// terrain collider: what lies under it, a wreck, a cave, is the floor).
+    pub fn cut_away(&self, c: SectorCoord) -> bool {
+        self.sectors.get(&c).is_some_and(|s| !s.holes.is_empty() && s.holes.iter().all(|h| *h))
+    }
 }
 
 struct Slot {

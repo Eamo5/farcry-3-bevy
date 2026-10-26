@@ -1378,6 +1378,9 @@ is the story's own:
   held to about 250 ms), which stretched every far teleport into minutes
   and every timed part out of shape. `FC3_PERF=1` logs the frame times;
   `FC3_SLOW_SYSTEMS=1` logs any autopilot system taking over 20 ms.
+  `FC3_PLAYER_TRACE=1` logs the player's place and state twice a second
+  (and why a spawn waits); `RUST_LOG=story_unplayed=debug` names each native
+  the scripts call that nothing plays, once a run.
 * `FC3_STORY_CHECKPOINTS=<dir>` keeps every checkpoint as a file and a matching
   `.game.txt` live inventory/world snapshot (including multiple checkpoints in
   one frame). These explicit test snapshots do not overwrite ordinary saves.
@@ -4524,6 +4527,16 @@ pirates, `#6D7F413B`, are dead, and its hacking plays a Bink).
   A foe down renews the four minutes before it gives up on a mission.
 
 From B20's checkpoint the laptop is hacked and B20 completes.
+
+B40's flooded door then teleported the player into the sunken part of the
+ship (its own place, under a sector of the interiors' ground cut away
+entirely for the wreck below it), and the game sat behind a loading screen
+for good: the spawn waited for that sector's terrain heights and its
+terrain collider, and a sector cut away entirely has neither. A spawn over
+a hole in a loaded sector now probes down from the point itself, and one in
+a sector cut away doesn't wait for its collider (`Heightfield::cut_away`).
+B40 goes on to "Escape from the Nostalgia." `FC3_PLAYER_TRACE=1` also
+tells, every few seconds, why a spawn still waits.
 
 ## BAM_020 and BNG_010: the story going quiet
 
