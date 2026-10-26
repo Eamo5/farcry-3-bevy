@@ -406,9 +406,10 @@ fn write_save(slot: &mut SaveSlot, sources: &SaveSources) -> bool {
 /// Progress will be checkpointed automatically."), and leaving loses what
 /// came after the last. Saving the place and the kit as they stood, with
 /// the story's progress at its checkpoint, went on from the save with the
-/// mission begun again around a player who wasn't at its start.
+/// mission begun again around a player who wasn't at its start. (So too
+/// while a script has saving off: `SetEnableSaveGame 0`.)
 pub fn on_mission(host: Option<&crate::story::StoryHost>) -> bool {
-    host.is_some_and(|h| h.story.mission_in_progress().is_some())
+    host.is_some_and(|h| h.save_disabled || h.story.mission_in_progress().is_some())
 }
 
 fn save_now(mut slot: ResMut<SaveSlot>, sources: SaveSources, host: Option<NonSend<crate::story::StoryHost>>) {
@@ -833,6 +834,9 @@ mod tests {
         assert!(host.story.abandon_mission());
         assert!(!on_mission(Some(&host)));
         assert!(!on_mission(None));
+        // (Nor while a script has saving off.)
+        host.save_disabled = true;
+        assert!(on_mission(Some(&host)));
     }
 
     #[test]

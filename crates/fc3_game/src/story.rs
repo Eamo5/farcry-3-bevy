@@ -848,6 +848,9 @@ pub struct StoryHost {
     pub travel_due: Option<crate::map::TravelTo>,
     /// The autopilot's: the body it is searching, and since when.
     autopilot_search: Option<(u64, f32)>,
+    /// Saving turned off by a script (`SetEnableSaveGame 0`: BAM_020's
+    /// ship), till it turns it on again (`save::on_mission`).
+    pub save_disabled: bool,
     /// Placed particle systems scripts started (true) or stopped
     /// (`ParticleSystem`), for `story_fx`.
     pub fx_switched: HashMap<u64, bool>,
@@ -1041,6 +1044,7 @@ impl StoryHost {
             travel_asked: None,
             travel_due: None,
             autopilot_search: None,
+            save_disabled: false,
             fx_switched: HashMap::new(),
             lights_switched: HashMap::new(),
             alarm_sets: Vec::new(),
@@ -1907,6 +1911,8 @@ fn run_story(
         if let Some(story) = open_story(&info.root, checkpoint.as_ref()) {
             info!("story: back to the last checkpoint");
             host.story = story;
+            // (The scripts say again whether saving is off, as they replay.)
+            host.save_disabled = false;
             if let Some(save) = &host.checkpoint_game {
                 if let Ok(mut inv) = inventory.single_mut() { crate::save::restore_inventory(&mut inv, save); }
                 if let Ok(mut stats) = stats.single_mut() {
@@ -3346,6 +3352,7 @@ fn run_story(
                     }
                     // A placed object's light switch: an outpost's flag in
                     // the rebels' colours as it's taken.
+                    "SetEnableSaveGame" => host.save_disabled = !(a(0) == "1" || a(0) == "true"),
                     "CAPI_Entity.LightMaterialOveride" => {
                         if let Ok(id) = a(0).parse::<u64>() {
                             if a(1) == "true" || a(1) == "1" {

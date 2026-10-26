@@ -575,7 +575,8 @@ phone calls (they are its voices and subtitles): ours stands down. `FC3_PLAYER_D
 and our own pause menu stands down: `menu::OriginalPause`), and the game
 answers it as the engine did (above): `SetPageToLoad -1` for the pause
 page; on `SinglePlayerMenuLoaded`, `SetUnlockedMenus` (crafting and skills
-on; save off while on a mission, whose checkpoints save, `save::on_mission`;
+on; save off while on a mission, whose checkpoints save, `save::on_mission`,
+or while a script has saving off, `SetEnableSaveGame 0` (BAM_020's ship);
 the last checkpoint while a mission runs; abandon while the
 mission the player took on lets him, with its text, 119083 "Abandon
 mission"; no restart or debug), `SetObjective` (the mission's title and objective, the money and
