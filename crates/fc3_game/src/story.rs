@@ -727,7 +727,7 @@ pub struct StoryHost {
     last_completed: Option<String>,
     /// The autopilot's: the missions running and the last block completed,
     /// and since when they've been so.
-    focus_since: Option<((Vec<String>, Option<String>), f32)>,
+    focus_since: Option<((Vec<String>, Option<String>, usize), f32)>,
     /// Whether a scene held the view during the running block, and during
     /// the last one completed (its scene, played, left the player there).
     scene_in_block: bool,
@@ -846,6 +846,8 @@ pub struct StoryHost {
     /// carries it out: `map::travel_when_due`).
     pub travel_asked: Option<crate::map::TravelTo>,
     pub travel_due: Option<crate::map::TravelTo>,
+    /// The autopilot's: the body it is searching, and since when.
+    autopilot_search: Option<(u64, f32)>,
     /// Placed particle systems scripts started (true) or stopped
     /// (`ParticleSystem`), for `story_fx`.
     pub fx_switched: HashMap<u64, bool>,
@@ -1038,6 +1040,7 @@ impl StoryHost {
             reload_in_place: false,
             travel_asked: None,
             travel_due: None,
+            autopilot_search: None,
             fx_switched: HashMap::new(),
             lights_switched: HashMap::new(),
             alarm_sets: Vec::new(),
@@ -1766,7 +1769,7 @@ fn run_story(
         Res<crate::hud::OriginalHud>,
         ResMut<crate::mixer::Mixings>,
     ),
-    (actions, mut markers, heights, mut voices, driving, vehicle_views, mut seat_requests, mut vehicle_paths, mut drive, guns, helis): (
+    (actions, mut markers, heights, mut voices, driving, vehicle_views, mut seat_requests, mut vehicle_paths, mut drive, guns, helis, spatial): (
         Res<crate::controls::ActionState>,
         ResMut<ObjectiveMarkers>,
         Res<crate::terrain::Heightfield>,
@@ -1778,6 +1781,7 @@ fn run_story(
         ResMut<crate::vehicles::AutopilotDrive>,
         Query<&crate::turrets::Turret>,
         Query<(&crate::story_helis::Heli, &Transform, &crate::combat::Health), Without<Player>>,
+        avian3d::prelude::SpatialQuery,
     ),
     (info, slot, fov, mut bought, mut towers, ways, mut looted, loot_catalog, mut crafted, mut crafting): (
         Res<CacheInfo>,
@@ -2340,7 +2344,9 @@ fn run_story(
         // (Unless those missions have long gone nowhere, nothing of theirs
         // left it can do: a supply run it can't drive held CIT_010 and
         // BNG_010 back for good.)
-        let marker = (focus.clone(), host.last_completed.clone());
+        // (A foe down is getting somewhere too: BAM_020's ship was given up
+        // with its last pirate standing, mid-fight.)
+        let marker = (focus.clone(), host.last_completed.clone(), host.story.dead_count());
         if host.focus_since.as_ref().is_none_or(|(m, _)| *m != marker) {
             host.focus_since = Some((marker, now));
         }
@@ -2496,7 +2502,7 @@ fn run_story(
                     from.y = heights.height_at(from).unwrap_or(at.y);
                     drive.0 = Some((from, Some(0.0)));
                 } else {
-                    let ground = |x: f32, y: f32| heights.height_at(to_bevy([x, y, 0.0]));
+                    let ground = |x: f32, y: f32, top: f32| ground_under(&spatial, &heights, x, y, top);
                     drive.0 = Some((to_bevy(host.story.trigger_ground_point(*id, ground).unwrap_or(*point)), None));
                 }
                 host.quiet = 0.0;
@@ -2555,13 +2561,16 @@ fn run_story(
             host.used.insert((*id, event.clone()));
             host.last_step = Some((*id, event.clone(), now));
             // A region: somewhere its heights reach the ground.
-            let ground = |x: f32, y: f32| heights.height_at(to_bevy([x, y, 0.0]));
+            let ground = |x: f32, y: f32, top: f32| ground_under(&spatial, &heights, x, y, top);
             let point = host.story.trigger_ground_point(*id, ground).unwrap_or(*point);
             teleport(&mut t, &mut p, point, 0.0);
             // High up (a tower's top, a roof): held there, not set down on
-            // whatever is below.
+            // whatever is below. (Not with a floor just under it: BAM_020's
+            // ship stands 11 m over the ground of the place it's laid out
+            // in, and its triggers are walked into on its decks.)
             let at = to_bevy(point);
-            p.noclip = event != "EnterFOV" && heights.height_at(at).is_some_and(|g| at.y > g + 6.0);
+            let floor = spatial.cast_ray(at + Vec3::Y, Dir3::NEG_Y, 4.0, true, &avian3d::prelude::SpatialQueryFilter::default()).is_some();
+            p.noclip = event != "EnterFOV" && !floor && heights.height_at(at).is_some_and(|g| at.y > g + 6.0);
             if p.noclip {
                 t.translation = at + Vec3::Y * crate::player::HALF_HEIGHT;
                 p.spawning = false;
@@ -2589,7 +2598,7 @@ fn run_story(
             // guard physically reached the mission's distraction zone.
             let target = watched.iter().filter(|w| w.3 && w.1 == "Enter" && host.story.trigger_selects(w.0, id))
                 .min_by(|a, b| to_bevy(a.2).distance_squared(at).total_cmp(&to_bevy(b.2).distance_squared(at)))
-                .map(|w| host.story.trigger_ground_point(w.0, |x, y| heights.height_at(to_bevy([x, y, 0.0]))).unwrap_or(w.2))
+                .map(|w| host.story.trigger_ground_point(w.0, |x, y, top| ground_under(&spatial, &heights, x, y, top)).unwrap_or(w.2))
                 .map(to_bevy).unwrap_or(at + (t.translation - at).with_y(0.0).normalize_or_zero() * 3.0);
             info!("story autopilot: aim a rock to distract {} at {target:?}", data.name_of(id).unwrap_or("?"));
             host.used.insert((id, "distract".into()));
@@ -3840,11 +3849,11 @@ fn run_story(
                     | "CAPI_Player.SetCloseUpCamera"
                     | "CAPI_Player.ResetInputs" => {}
                     // (Told once a run, for finding what scripts ask that
-                    // nothing plays.)
+                    // nothing plays: RUST_LOG=story_unplayed=debug.)
                     other => {
                         static TOLD: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
                         if TOLD.lock().is_ok_and(|mut t| t.get_or_insert_default().insert(other.to_string())) {
-                            debug!("story: native {other} not played ({:?})", args.iter().take(4).collect::<Vec<_>>());
+                            debug!(target: "story_unplayed", "story: native {other} not played ({:?})", args.iter().take(4).collect::<Vec<_>>());
                         }
                     }
                 }
@@ -4385,6 +4394,28 @@ impl Drop for Slow {
     }
 }
 
+/// Where feet go at a place (Bevy space) near a height (the foe's or the
+/// player's feet): the surface just under that height there (a deck, a
+/// floor), else the terrain's. (The fight's moves took the terrain alone, and
+/// on BAM_020's ship, laid out 11 m over the ground, put the player under it.)
+fn feet_near(spatial: &avian3d::prelude::SpatialQuery, heights: &crate::terrain::Heightfield, me: Entity, feet: Vec3, near: f32) -> f32 {
+    let from = Vec3::new(feet.x, near + 2.0, feet.z);
+    let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+    spatial.cast_ray(from, Dir3::NEG_Y, 6.0, true, &filter).map(|h| from.y - h.distance).or_else(|| heights.height_at(feet)).unwrap_or(near)
+}
+
+/// The ground under a point at a height (Dunia `x, y`, under `top`): the
+/// first surface below it (a deck, a floor), else the terrain's.
+fn ground_under(spatial: &avian3d::prelude::SpatialQuery, heights: &crate::terrain::Heightfield, x: f32, y: f32, top: f32) -> Option<f32> {
+    let from = to_bevy([x, y, top]);
+    let terrain = heights.height_at(from);
+    let floor = spatial.cast_ray(from, Dir3::NEG_Y, 40.0, true, &avian3d::prelude::SpatialQueryFilter::default()).map(|h| from.y - h.distance);
+    match (floor, terrain) {
+        (Some(f), Some(t)) => Some(f.max(t)),
+        (f, t) => f.or(t),
+    }
+}
+
 pub(crate) fn teleport(t: &mut Transform, p: &mut Player, pos: [f32; 3], yaw_deg: f32) {
     t.translation = to_bevy(pos) + Vec3::Y * 1.0;
     p.swimming = false;
@@ -4692,6 +4723,8 @@ const TETHER_FROM: f32 = 45.0;
 /// Tests: how near (m) an animal after the player is shot before anything
 /// else.
 const DEFEND_WITHIN: f32 = 20.0;
+/// Tests: how long (s) the autopilot tries to search one body.
+const SEARCH_FOR: f32 = 12.0;
 
 /// CIT_030's fight with the Ink Monster: played (`boss_fight`), not ended.
 const BOSS_FIGHT: &str = "CCitraBossFight";
@@ -5046,6 +5079,18 @@ fn autopilot_loot(
         player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
         use crate::controls::Action;
         let now = time.elapsed_secs();
+        if std::env::var("FC3_STORY_WAIT_DEBUG").is_ok() && (now - time.delta_secs()) as u32 / 2 != now as u32 / 2 {
+            let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+            let meets = Dir3::new(aim).ok().and_then(|d| spatial.cast_ray(eye, d, aim.length() + 2.0, true, &filter)).map(|h| (h.entity, h.entity == e, aim.length() - h.distance));
+            info!(
+                "story autopilot: defending from {id}: it at {:?} ({:.0} health), {} with {} in the magazine, aim blend {:.2}; the aim meets {meets:?}",
+                to_dunia(t.translation),
+                h.current,
+                inventory.def().name,
+                inventory.slot().mag,
+                inventory.aim_blend
+            );
+        }
         if now >= *next_press {
             *next_press = now + 0.2;
             if inventory.slot().mag == 0 && inventory.slot().reserve > 0 {
@@ -5315,22 +5360,79 @@ fn autopilot_loot(
         }
         let body = npcs
             .iter()
-            .filter(|(t, h, body, ..)| h.dead && body.is_some_and(|b| !b.skin) && near(t) < AMMO_SEARCH && !leashed(t.translation))
+            .filter(|(t, h, body, _, actor, ..)| {
+                h.dead && body.is_some_and(|b| !b.skin) && near(t) < AMMO_SEARCH && !leashed(t.translation) && !skipped.contains_key(&actor.id)
+            })
             .min_by(|a, b| near(a.0).total_cmp(&near(b.0)));
         if let Some((nt, _, _, _, actor, _, _)) = body {
             if *last != Some((actor.id, "search for rounds")) {
                 info!("story autopilot: search {} for rounds", actor.id);
                 *last = Some((actor.id, "search for rounds"));
             }
+            // (One that won't be searched, another for a while: a body on
+            // BAM_020's ship, by a door whose use was on offer, was gone to
+            // again and again for a minute and the dry rifle never filled.)
+            match host.autopilot_search {
+                Some((id, since)) if id == actor.id => {
+                    if now - since > SEARCH_FOR {
+                        info!("story autopilot: {} not searched; another for a while", actor.id);
+                        skipped.insert(actor.id, now + 120.0);
+                        host.autopilot_search = None;
+                        return;
+                    }
+                }
+                _ => host.autopilot_search = Some((actor.id, now)),
+            }
             let delta = nt.translation - at.translation;
             if Vec2::new(delta.x, delta.z).length() > 1.6 || delta.y.abs() > 1.5 {
                 let mut feet = nt.translation + (at.translation - nt.translation).with_y(0.0).normalize_or(Vec3::Z) * 0.9;
-                feet.y = heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT).max(nt.translation.y - crate::player::HALF_HEIGHT - 0.5);
+                feet.y = feet_near(&spatial, &heights, me, feet, nt.translation.y).max(nt.translation.y - crate::player::HALF_HEIGHT - 0.5);
                 teleport(&mut at, &mut player, to_dunia(feet), 0.0);
                 host.quiet = 0.0;
                 return;
             }
             player.yaw = (-delta.x).atan2(-delta.z);
+            if now >= *next_press {
+                *next_press = now + 0.6;
+                actions.press(crate::controls::Action::Interact);
+            }
+            return;
+        }
+        // (Dry, and no rounds for its own guns about: a fallen foe's gun
+        // picked up, as a player would. BAM_020's heavy, armoured, was
+        // fired at with an empty rifle beside his men's dropped guns.)
+        let other = plants
+            .iter()
+            .filter(|(p, t)| {
+                dry && crate::pickups::is_dropped(p.id)
+                    && matches!(p.kind, crate::pickups::PickupKind::Weapon(_))
+                    && off(t) < AMMO_SEARCH
+                    && !leashed(t.translation())
+                    && !skipped.contains_key(&p.id)
+            })
+            .min_by(|a, b| off(a.1).total_cmp(&off(b.1)));
+        if let Some((p, gt)) = other {
+            if *last != Some((p.id, "pick up")) {
+                info!("story autopilot: dry; pick up a dropped {:?}", p.kind);
+                *last = Some((p.id, "pick up"));
+            }
+            match host.autopilot_search {
+                Some((id, since)) if id == p.id => {
+                    if now - since > SEARCH_FOR {
+                        skipped.insert(p.id, now + 120.0);
+                        host.autopilot_search = None;
+                        return;
+                    }
+                }
+                _ => host.autopilot_search = Some((p.id, now)),
+            }
+            let delta = gt.translation() - (at.translation - Vec3::Y * crate::player::HALF_HEIGHT);
+            if Vec2::new(delta.x, delta.z).length() > 1.0 || delta.y.abs() > 1.5 {
+                teleport(&mut at, &mut player, to_dunia(gt.translation()), 0.0);
+                host.quiet = 0.0;
+                return;
+            }
+            player.pitch = -0.9;
             if now >= *next_press {
                 *next_press = now + 0.6;
                 actions.press(crate::controls::Action::Interact);
@@ -5414,7 +5516,7 @@ fn autopilot_loot(
         let flat = (nt.translation - at.translation).with_y(0.0);
         if !fixed && flat.length() > (reach * 0.6).max(SHOOT_FROM * 1.5) {
             let mut feet = nt.translation - flat.normalize_or(Vec3::Z) * SHOOT_FROM;
-            feet.y = heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT);
+            feet.y = feet_near(&spatial, &heights, me, feet, nt.translation.y - crate::player::HALF_HEIGHT);
             if leashed(feet) {
                 info!("story autopilot: {} too far from the companion; another for a while", actor.id);
                 skipped.insert(actor.id, now + 20.0);
@@ -5486,7 +5588,7 @@ fn autopilot_loot(
             *kept_clear = now;
             let away = (at.translation - by).with_y(0.0).normalize_or(Vec3::X);
             let mut feet = by + away * (KEEP_CLEAR + 4.0);
-            feet.y = heights.height_at(feet).unwrap_or(at.translation.y - crate::player::HALF_HEIGHT);
+            feet.y = feet_near(&spatial, &heights, me, feet, at.translation.y - crate::player::HALF_HEIGHT);
             info!("story autopilot: {who}, someone to keep safe, beside the player; stepping away");
             teleport(&mut at, &mut player, to_dunia(feet), 0.0);
             host.quiet = 0.0;
@@ -5514,7 +5616,7 @@ fn autopilot_loot(
             if now - since > 3.0 && !fixed {
                 let away = (target - bystander).with_y(0.0).normalize_or(Vec3::X);
                 let mut feet = nt.translation + away * 6.0;
-                feet.y = heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT);
+                feet.y = feet_near(&spatial, &heights, me, feet, nt.translation.y - crate::player::HALF_HEIGHT);
                 // (Kept by a companion, as in an escort: a spot to its side
                 // with a clear shot, rather than round the foe. The player
                 // kept up behind Rongo, and Rongo was always in the way.)

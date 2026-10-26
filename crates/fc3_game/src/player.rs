@@ -1089,6 +1089,22 @@ pub(crate) fn player_move(
     // Down the sights, the weapon's slower pace on foot.
     let aimed_pace = inv.filter(|i| !i.slots.is_empty()).and_then(|i| i.def().aim.map(|a| 1.0 + (a.move_speed - 1.0) * i.aim_blend)).unwrap_or(1.0);
     let dt = time.delta_secs().min(0.05);
+    // FC3_PLAYER_TRACE (tests): where the player is and how he's held,
+    // twice a second.
+    static TRACE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("FC3_PLAYER_TRACE").is_some());
+    let now = time.elapsed_secs();
+    if *TRACE && (now * 2.0) as u32 != ((now - time.delta_secs()) * 2.0) as u32 {
+        info!(
+            "player trace: {:.1?} spawning {} noclip {} grounded {} swimming {} keep height {} velocity {:.1?}",
+            crate::data::to_dunia(t.translation),
+            p.spawning,
+            p.noclip,
+            p.grounded,
+            p.swimming,
+            p.keep_height,
+            p.velocity
+        );
+    }
     if dt <= 0.0 || p.spawning || p.driving || p.mounted.is_some() {
         return;
     }
@@ -1122,10 +1138,13 @@ pub(crate) fn player_move(
     if p.noclip {
         let look = Quat::from_rotation_y(p.yaw) * Quat::from_rotation_x(p.pitch) * Vec3::NEG_Z;
         let mut v = (look * wish.dot(forward) + right * wish.dot(right)).normalize_or_zero();
-        if key(Action::Jump) || keys.pressed(KeyCode::KeyE) {
+        // (Up and down by the keys themselves, not the actions: a script's
+        // held crouch, BAM_020's on its ship, sank a player the autopilot
+        // held up at a trigger through the deck and the world below.)
+        if input_ok && (keys.pressed(KeyCode::Space) || keys.pressed(KeyCode::KeyE)) {
             v += Vec3::Y;
         }
-        if key(Action::Crouch) || keys.pressed(KeyCode::KeyQ) {
+        if input_ok && (keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::KeyQ)) {
             v -= Vec3::Y;
         }
         let speed = if key(Action::Sprint) { 120.0 } else { 25.0 };

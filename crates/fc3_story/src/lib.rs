@@ -979,6 +979,11 @@ impl Story {
         self.core.borrow().is_dead(id)
     }
 
+    /// How many characters have died so far.
+    pub fn dead_count(&self) -> usize {
+        self.core.borrow().dead.len()
+    }
+
     /// A global event (`PlayGame`, UI page events, ...).
     pub fn generic_event(&mut self, event: &str, args: Vec<Arg>) {
         self.core.borrow_mut().raise(&Listen::Generic(event.to_string()), args);
@@ -1475,13 +1480,15 @@ impl Story {
     }
 
     /// A spot on the ground inside a region trigger, given the ground's height
-    /// at a point (its centre may lie above the region's heights, as on a
-    /// hill a region rings): the centre, else points between it and the
-    /// corners and edges.
-    pub fn trigger_ground_point(&self, id: u64, ground: impl Fn(f32, f32) -> Option<f32>) -> Option<[f32; 3]> {
+    /// at a point under a height (the region's top: a floor inside it, a
+    /// ship's deck over the ground it's laid out on, before the terrain)
+    /// (its centre may lie above the region's heights, as on a hill a region
+    /// rings): the centre, else points between it and the corners and edges.
+    pub fn trigger_ground_point(&self, id: u64, ground: impl Fn(f32, f32, f32) -> Option<f32>) -> Option<[f32; 3]> {
         let c = self.core.borrow();
         let shape = c.data.entities.get(&id).and_then(triggers::shape_of)?;
-        let triggers::Shape::Prism { points, .. } = &shape else { return None };
+        let triggers::Shape::Prism { points, z_max, .. } = &shape else { return None };
+        let top = *z_max;
         let n = points.len() as f32;
         let mid = points.iter().fold([0.0, 0.0], |a, p| [a[0] + p[0] / n, a[1] + p[1] / n]);
         let edges = (0..points.len()).map(|i| {
@@ -1492,7 +1499,7 @@ impl Story {
         let lerp = |p: [f32; 2], t: f32| [mid[0] + (p[0] - mid[0]) * t, mid[1] + (p[1] - mid[1]) * t];
         std::iter::once(mid)
             .chain([0.5, 0.75, 0.9].into_iter().flat_map(|t| rims.iter().map(move |p| lerp(*p, t))))
-            .filter_map(|[x, y]| ground(x, y).map(|z| [x, y, z + 0.2]))
+            .filter_map(|[x, y]| ground(x, y, top).map(|z| [x, y, z + 0.2]))
             .find(|p| shape.contains(*p) && shape.contains([p[0], p[1], p[2] + triggers::BODY_HALF_HEIGHT]))
     }
 
@@ -1612,7 +1619,9 @@ impl Story {
             .listeners
             .values()
             .filter_map(|l| match &l.on {
-                Listen::Group(g, event) if event == "CGroupSizeEvent" => Some(g.clone()),
+                Listen::Group(g, event) if event == "CGroupSizeEvent" || (event == "CGroupCombatEvent" && waits_for_dead(&l.callback.target)) => {
+                    Some(g.clone())
+                }
                 _ => None,
             })
             .collect();
@@ -1643,7 +1652,11 @@ impl Story {
             .listeners
             .values()
             .filter_map(|l| match &l.on {
-                Listen::Group(g, event) if event == "CGroupSizeEvent" || event == "CCounterEvent" => Some(g.clone()),
+                Listen::Group(g, event)
+                    if event == "CGroupSizeEvent" || event == "CCounterEvent" || (event == "CGroupCombatEvent" && waits_for_dead(&l.callback.target)) =>
+                {
+                    Some(g.clone())
+                }
                 _ => None,
             })
             .collect();
@@ -2177,6 +2190,14 @@ fn mission_of(c: &Core, target: &Table) -> Option<(String, missions::State)> {
         table = parent;
     }
     None
+}
+
+/// Whether a box hearing a group's combat events is a `StateListener` waiting
+/// for its members' deaths (`State` 4): a block counting the group down, as
+/// a size listener does (BAM_020's laptop opens once the ship's pirates,
+/// `#6D7F413B`, are dead, and the last of them, back at his post, was left).
+fn waits_for_dead(target: &Table) -> bool {
+    target.get::<f64>("State").is_ok_and(|s| s == 4.0)
 }
 
 /// The activities' graphs (`in_graph`): the races', the shooting gallery's,
@@ -2858,6 +2879,38 @@ mod tests {
         story.update(natives::ai::LEAVE_SECS as f32 + 0.1, view);
         assert_eq!(heard(&story), ["CA_End 5"]);
         assert_eq!(story.errors(), 0);
+    }
+
+    /// A group a state listener waits to see dead (`State` 4) is counted down
+    /// as a size listener's is; one waiting for combat isn't.
+    #[test]
+    fn a_group_waited_on_dead_is_counted_down() {
+        let mut data = StoryData::default();
+        data.groups.insert(0xABC, vec![10, 11]);
+        data.groups.insert(0xDEF, vec![12]);
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        let mut view = View::default();
+        for id in [10, 11, 12] {
+            view.spawned.insert(id, Live { alive: true, ..Default::default() });
+        }
+        story.update(0.0, view);
+        story
+            .domino()
+            .lua()
+            .load(
+                r##"
+            local dead = { State = 4, _type = { Got = function() end } }
+            local combat = { State = 3, _type = { Got = function() end } }
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("#00000ABC", "CGroupCombatEvent", dead, "Got")
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("#00000DEF", "CGroupCombatEvent", combat, "Got")
+        "##,
+            )
+            .exec()
+            .unwrap();
+        let mut counted: Vec<u64> = story.size_counted_members().into_iter().collect();
+        counted.sort();
+        assert_eq!(counted, [10, 11]);
+        assert!(!story.counted_members().contains(&12));
     }
 
     /// A group's members going into combat: its combat listeners hear the

@@ -4494,6 +4494,37 @@ briefing ("Exit the cave."), and on "Go talk to Buck." it stalled:
   within 20 m (`WildAnimal::after`) is shot first now, unless it goes 8 s
   unhurt (out of the shots' reach in the water), then it is left a minute.
 
+## BAM_020's ship: the Nostalgia's hold
+
+BAM_020's ship is laid out with the other interiors off the map (flat ground
+at 200 m), its decks 10 m and more above that ground. B20 sends the player
+below decks to a laptop (`SP_Explosion`: the third room's alert trigger
+opens a gate, using it spawns a heavy, and the laptop room's trigger sets
+"Hack the laptop to find the knife."; the laptop is usable once the ship's
+pirates, `#6D7F413B`, are dead, and its hacking plays a Bink).
+
+* **Sinking through the world.** The trigger step holds the player up
+  (noclip) at a trigger high over the ground, and noclip flight took "down"
+  from the crouch action, which the mission's stance modifier holds on the
+  ship: the player sank through the deck and the ground at 25 m/s, to
+  z −400. Noclip flight now answers only the keys themselves, and the
+  trigger step holds him up only with nothing to stand on under the point.
+* **Decks, not the ground.** A region's spot to step to was found on the
+  terrain under it (`trigger_ground_point`), so inside the ship it lay on
+  the ground below; the host now finds the first surface under the region's
+  top (`ground_under`). The fight's moves and the body search set the
+  feet the same way near the foe's height (`feet_near`).
+* **Waiting for the dead.** The laptop's group is waited on by a
+  `StateListener` for its members' deaths (`State` 4), not a size listener,
+  so the last pirate, back at his post, was never gone after. Such a group
+  now counts as one a block counts down (`size_counted_members`).
+* **Out of rounds below decks.** A body that won't be searched is left
+  after 12 s (one by a door was gone to for a minute), and dry, with no
+  rounds about for its own guns, the autopilot picks up a fallen foe's gun.
+  A foe down renews the four minutes before it gives up on a mission.
+
+From B20's checkpoint the laptop is hacked and B20 completes.
+
 ## BAM_020 and BNG_010: the story going quiet
 
 The autopilot acts only once the story has been quiet for a while (no
