@@ -149,6 +149,14 @@ renders a movie off screen. `fc3ui hud` loads a movie over the engine shim;
 `FC3UI_LEVEL` puts it at its own level and `FC3UI_CALL` calls its functions
 (`_level3.setTutorial|Title|Text|false;_level3.showTutorial`).
 
+**Warnings that are the movies' own.** Each movie that brings the shared
+classes logs `Avm1::pop: Stack underflow` as it loads: their class set-ups
+(`fire.event.BaseEvent`, `fire.event.Event`, `mx.utils.Delegate`, in each
+movie's `DoInitAction`s) write `_global.fire = new Object()` and the like as
+`SetMember` followed by a `Pop` of nothing, as their compiler left them; any
+player pops nothing there, and nothing comes of it. "Character ID
+collision" is the same: libraries imported whole register a few ids twice.
+
 **Icons in text.** The game's strings put icons in their text as
 `<img src="MC_TX_...">`: the bullets of the tutorials' lists, the map's icons
 in the handbook and the tutorials (an outpost, fast travel, a safe house),
