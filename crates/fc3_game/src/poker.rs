@@ -414,11 +414,27 @@ enum Next {
     Done(Vec<&'static str>),
 }
 
-fn next(awaited: &[String], sent: &[String]) -> Next {
-    match awaited.iter().find(|m| !DONE.contains(&m.as_str()) && !sent.contains(m)) {
+/// (Only the table's mission's scenes, by its tag (`JAS170_...` at
+/// `CPokerMiniGame_JAS_170`), its leaving last: JAS_170's table played its
+/// leaving scene first, and broadcast a speed quest's message besides.)
+fn next(awaited: &[String], sent: &[String], table: &str) -> Next {
+    let tag = scene_tag(table);
+    let ours = |m: &&String| tag.as_ref().is_none_or(|t| m.to_ascii_uppercase().starts_with(t.as_str()));
+    let leaving = |m: &&String| m.to_ascii_uppercase().contains("LEAVE");
+    let due = |m: &&String| !DONE.contains(&m.as_str()) && !sent.contains(m) && ours(m);
+    match awaited.iter().filter(due).find(|m| !leaving(m)).or_else(|| awaited.iter().filter(due).next()) {
         Some(scene) => Next::Scene(scene.clone()),
         None => Next::Done(DONE.into_iter().filter(|d| awaited.iter().any(|m| m == d)).collect()),
     }
+}
+
+/// The mission tag a story table's scenes go by: `JAS170` for
+/// `CPokerMiniGame_JAS_170`, `JAS220` for `CPokerMiniGame_JAS_220_PokerGym_G3`.
+fn scene_tag(table: &str) -> Option<String> {
+    let rest = table.split_once("PokerMiniGame_")?.1;
+    let mut parts = rest.split('_');
+    let (a, b) = (parts.next()?, parts.next()?);
+    (a.len() == 3 && b.len() == 3 && b.chars().all(|c| c.is_ascii_digit())).then(|| format!("{a}{b}").to_ascii_uppercase())
 }
 
 /// A poker table's gameplay (not the resources the scripts preload).
@@ -964,7 +980,7 @@ fn play(
     let seat = game.player_seat;
     let story = game.story();
     // (The script listens for all its scenes at once: the one due next.)
-    game.bet_life = game.settings.kind == 3 && next(&host.story.mission_messages(), &game.sent) == Next::Scene(BET_LIFE_SCENE.to_string());
+    game.bet_life = game.settings.kind == 3 && next(&host.story.mission_messages(), &game.sent, &game.name) == Next::Scene(BET_LIFE_SCENE.to_string());
     let Some(table) = game.table.as_mut() else { return };
     // Leaving (where the table lets the player).
     if cancel && (game.settings.leave || test.is_some()) {
@@ -1250,7 +1266,7 @@ fn after_hand(game: &mut Game, host: &mut StoryHost) {
     if !game.story() {
         return;
     }
-    match next(&host.story.mission_messages(), &game.sent) {
+    match next(&host.story.mission_messages(), &game.sent, &game.name) {
         Next::Scene(scene) => {
             info!("poker: a hand played; scene {scene}");
             game.sent.push(scene.clone());
@@ -1880,11 +1896,18 @@ mod tests {
     /// only the messages a script listens to, winning before leaving.
     #[test]
     fn a_tables_scenes_come_in_turn_then_its_end() {
+        const T: &str = "CPokerMiniGame_JAS_220_PokerGym_G3";
         let s = |v: &[&str]| v.iter().map(|m| m.to_string()).collect::<Vec<_>>();
-        assert_eq!(next(&s(&["JAS220_B10C_01", "JasonLeavesPoker"]), &[]), Next::Scene("JAS220_B10C_01".into()));
-        assert_eq!(next(&s(&["JAS220_B10C_01", "JasonLeavesPoker"]), &s(&["JAS220_B10C_01"])), Next::Done(vec!["JasonLeavesPoker"]));
-        assert_eq!(next(&s(&["JasonLeavesPoker", "JasonWinsGame"]), &[]), Next::Done(vec!["JasonWinsGame", "JasonLeavesPoker"]));
-        assert_eq!(next(&[], &[]), Next::Done(Vec::new()));
+        // (Its own mission's only, its leaving last.)
+        let jas170 = s(&["JAS170_B30C_Leave", "JAS170_B30C_Poker", "SpeedQuest_PlayerInVehicle", "JasonLeavesPoker"]);
+        assert_eq!(next(&jas170, &[], "CPokerMiniGame_JAS_170"), Next::Scene("JAS170_B30C_Poker".into()));
+        assert_eq!(next(&jas170, &s(&["JAS170_B30C_Poker"]), "CPokerMiniGame_JAS_170"), Next::Scene("JAS170_B30C_Leave".into()));
+        assert_eq!(next(&jas170, &s(&["JAS170_B30C_Poker", "JAS170_B30C_Leave"]), "CPokerMiniGame_JAS_170"), Next::Done(vec!["JasonLeavesPoker"]));
+        assert_eq!(scene_tag("CPokerMiniGame_JAS_220_PokerGym_G3").as_deref(), Some("JAS220"));
+        assert_eq!(next(&s(&["JAS220_B10C_01", "JasonLeavesPoker"]), &[], T), Next::Scene("JAS220_B10C_01".into()));
+        assert_eq!(next(&s(&["JAS220_B10C_01", "JasonLeavesPoker"]), &s(&["JAS220_B10C_01"]), T), Next::Done(vec!["JasonLeavesPoker"]));
+        assert_eq!(next(&s(&["JasonLeavesPoker", "JasonWinsGame"]), &[], T), Next::Done(vec!["JasonWinsGame", "JasonLeavesPoker"]));
+        assert_eq!(next(&[], &[], T), Next::Done(Vec::new()));
     }
 
     /// The tables' gameplays, not the resources their scripts preload.

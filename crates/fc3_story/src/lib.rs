@@ -1643,7 +1643,7 @@ impl Story {
             .listeners
             .values()
             .filter_map(|l| match &l.on {
-                Listen::Group(g, event) if event == "CGroupSizeEvent" || (event == "CGroupCombatEvent" && waits_for_dead(&l.callback.target)) => {
+                Listen::Group(g, event) if counts_down(event, &l.callback.target) => {
                     Some(g.clone())
                 }
                 _ => None,
@@ -1677,7 +1677,7 @@ impl Story {
             .values()
             .filter_map(|l| match &l.on {
                 Listen::Group(g, event)
-                    if event == "CGroupSizeEvent" || event == "CCounterEvent" || (event == "CGroupCombatEvent" && waits_for_dead(&l.callback.target)) =>
+                    if event == "CCounterEvent" || counts_down(event, &l.callback.target) =>
                 {
                     Some(g.clone())
                 }
@@ -2222,6 +2222,15 @@ fn mission_of(c: &Core, target: &Table) -> Option<(String, missions::State)> {
 /// `#6D7F413B`, are dead, and the last of them, back at his post, was left).
 fn waits_for_dead(target: &Table) -> bool {
     target.get::<f64>("State").is_ok_and(|s| s == 4.0)
+}
+
+/// Whether a group event a box waits on is a block counting the group down:
+/// its size, its state listener's deaths, or its members' deaths (`Die`:
+/// JAS_190's recruit, to be taken down quietly for his uniform), but not a
+/// fail listener's (`FailListener_NoDiveCheck`: the mission fails if those
+/// die).
+fn counts_down(event: &str, target: &Table) -> bool {
+    event == "CGroupSizeEvent" || (event == "CGroupCombatEvent" && waits_for_dead(target)) || (event == "Die" && !in_graph(target, "fail"))
 }
 
 /// The activities' graphs (`in_graph`): the races', the shooting gallery's,
@@ -2935,6 +2944,31 @@ mod tests {
         counted.sort();
         assert_eq!(counted, [10, 11]);
         assert!(!story.counted_members().contains(&12));
+        // (Waited on to die, too; not by a fail listener.)
+        story
+            .domino()
+            .lua()
+            .load(
+                r##"
+            local fail = { _type = { _path = "Domino/user/fc3/X/X_B30.FailListener_NoDiveCheck.lua", Got = function() end } }
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("#00000DEF", "Die", fail, "Got")
+        "##,
+            )
+            .exec()
+            .unwrap();
+        assert!(!story.counted_members().contains(&12));
+        story
+            .domino()
+            .lua()
+            .load(
+                r##"
+            local mine = { _type = { _path = "Domino/user/fc3/X/X_B30.X_B30.lua", Got = function() end } }
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("#00000DEF", "Die", mine, "Got")
+        "##,
+            )
+            .exec()
+            .unwrap();
+        assert!(story.size_counted_members().contains(&12));
     }
 
     /// A group's members going into combat: its combat listeners hear the

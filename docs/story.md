@@ -5087,6 +5087,14 @@ way out.
   kept the takedowns already taken away, and a reload had none to take.
   The progress is now the one at the story's save
   (`StoryHost::checkpoint_progress`).
+* **The recruit.** B30 has the player take down a recruit quietly for his
+  uniform, and waits on his `Die` (a group of one), which the fight
+  didn't count as one to kill; and gone up to him, the player was set on
+  the terrain over the dock, 54 m above him. A group a block waits on to
+  die counts now (not a fail listener's, `FailListener_NoDiveCheck`:
+  `counts_down`), and the take-down's and the other fight moves' feet
+  are found near the foe's height (`feet_near`). JAS_190 completed and
+  HOY_020's VIPs followed.
 
 * **Mercs at their posts.** B20 calls the cenote's crew in relaxed
   (`SpawnInRelax`) at their reinforcement points, two of them on the dock
@@ -5318,6 +5326,10 @@ ends when the game says the player leaves the table (`JasonLeavesPoker`).
   (see "Poker tables"); at a story's table anyone out has their stake again,
   as the scenes, not the cards, end the game. All five scenes play
   (OPTIONAL among them), with a hand before each, and B10 completes.
+  The scenes are the table's mission's only, by its tag (`JAS170_...` at
+  `CPokerMiniGame_JAS_170`), its leaving last: JAS_170's table played
+  its leaving scene before its game scene (in name order), and broadcast
+  a speed quest's message besides (`scene_tag`).
 
 ## JAS_220: from Hoyt's compound to the airport
 

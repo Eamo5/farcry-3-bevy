@@ -5396,7 +5396,7 @@ fn autopilot_loot(
                 }
                 let back = (if fight { KEEP_CLEAR + 2.0 } else { 4.0 }).min(keep * 0.6);
                 let mut feet = t.translation + flat.normalize_or(Vec3::Z) * back;
-                feet.y = heights.height_at(feet).unwrap_or(t.translation.y - crate::player::HALF_HEIGHT);
+                feet.y = feet_near(&spatial, &heights, me, feet, t.translation.y - crate::player::HALF_HEIGHT);
                 teleport(&mut at, &mut player, to_dunia(feet), 0.0);
                 if !fight {
                     let aim = t.translation - at.translation;
@@ -5719,7 +5719,7 @@ fn autopilot_loot(
                     });
                     let feet = clear.unwrap_or_else(|| {
                         let mut feet = nt.translation + flat * 3.0;
-                        feet.y = heights.height_at(feet).unwrap_or(his_feet).max(his_feet);
+                        feet.y = feet_near(&spatial, &heights, me, feet, his_feet).max(his_feet);
                         feet
                     });
                     if !fixed && !leashed(feet) && came_near.insert(actor.id) {
@@ -5990,7 +5990,7 @@ fn autopilot_loot(
         let delta = nt.translation - at.translation;
         if Vec2::new(delta.x, delta.z).length() > 1.6 || delta.y.abs() > 1.5 {
             let mut feet = behind;
-            feet.y = heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT).max(nt.translation.y - crate::player::HALF_HEIGHT - 0.5);
+            feet.y = feet_near(&spatial, &heights, me, feet, nt.translation.y - crate::player::HALF_HEIGHT).max(nt.translation.y - crate::player::HALF_HEIGHT - 0.5);
             teleport(&mut at, &mut player, to_dunia(feet), 0.0);
             host.quiet = 0.0;
             return;
@@ -6187,7 +6187,7 @@ fn autopilot_loot(
                 }
                 let side = flat.normalize_or(Vec3::Z);
                 let mut feet = spot + side * 4.0;
-                feet.y = heights.height_at(feet).unwrap_or(spot.y - crate::player::HALF_HEIGHT).max(spot.y - crate::player::HALF_HEIGHT - 0.5);
+                feet.y = feet_near(&spatial, &heights, me, feet, spot.y - crate::player::HALF_HEIGHT).max(spot.y - crate::player::HALF_HEIGHT - 0.5);
                 teleport(&mut at, &mut player, to_dunia(feet), 0.0);
                 host.quiet = 0.0;
                 return;
@@ -6326,7 +6326,7 @@ fn autopilot_loot(
             let flat = (bt.translation - at.translation).with_y(0.0);
             if flat.length() > 1.6 || (bt.translation.y - at.translation.y).abs() > 1.5 {
                 let mut feet = bt.translation - flat.normalize_or(Vec3::Z) * 1.0;
-                feet.y = heights.height_at(feet).unwrap_or(bt.translation.y);
+                feet.y = feet_near(&spatial, &heights, me, feet, bt.translation.y);
                 teleport(&mut at, &mut player, to_dunia(feet), 0.0);
                 host.quiet = 0.0;
             } else if now >= *next_press {
