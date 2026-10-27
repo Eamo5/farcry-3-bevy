@@ -851,6 +851,9 @@ pub struct StoryHost {
     /// Saving turned off by a script (`SetEnableSaveGame 0`: BAM_020's
     /// ship), till it turns it on again (`save::on_mission`).
     pub save_disabled: bool,
+    /// When a script last hurt the player (`CAPI_Pawn.DamagePawn`: fire on
+    /// the ground, scalding water), for the autopilot to get out of it.
+    hurt_at: f32,
     /// Placed particle systems scripts started (true) or stopped
     /// (`ParticleSystem`), for `story_fx`.
     pub fx_switched: HashMap<u64, bool>,
@@ -1045,6 +1048,7 @@ impl StoryHost {
             travel_due: None,
             autopilot_search: None,
             save_disabled: false,
+            hurt_at: f32::MIN,
             fx_switched: HashMap::new(),
             lights_switched: HashMap::new(),
             alarm_sets: Vec::new(),
@@ -2303,6 +2307,11 @@ fn run_story(
         .unwrap_or(6.0).max(0.5);
     // (At the wheel, the autopilot drives into the boxes scripts wait on.)
     let at_wheel = p.driving && vehicle_views.iter().any(|(e, v, _, _)| driving.vehicle == Some(e) && v.is_driver_seat(driving.seat));
+    // (Hurt by a script just now, as a player would it gets out without
+    // waiting for the story to go quiet: the scripts hurting him keep it
+    // from ever doing so. BAM_055's trap room sets the floor alight under
+    // the sarcophagus, and the autopilot stood there till it died.)
+    let scorched = now - host.hurt_at < SCORCHED_FOR && !p.spawning;
     // (Not while a sniping challenge holds the player at its rifle: WIL_050's
     // B20 has him cover Oliver from it on his way to the boat.)
     if gameplay
@@ -2318,7 +2327,7 @@ fn run_story(
         && !cinema.plays_player()
         && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
         && !landing_awaited(&host, &p)
-        && host.quiet > autopilot_delay
+        && (host.quiet > autopilot_delay || scorched)
         // (Not while it's still being set down where the last step put it,
         // unless that's taking far too long: a far step's ground streams in
         // a while, and stepping on meanwhile left WIL_020's village for a
@@ -2452,12 +2461,15 @@ fn run_story(
         // A region a running mission waits for the player to leave, him in
         // it (JAS_220's start: out of Hoyt's compound for the airport), the
         // story quiet a while: just outside it.
-        let leave = if host.quiet > LEAVE_AFTER && !p.driving && !vines.autopilot_climbing() {
+        // (Hurt by a script, at once, and again: the region hurting him, a
+        // floor alight, is one he may stand in more than once. On the floor
+        // under him, a tomb's under the terrain.)
+        let leave = if (host.quiet > LEAVE_AFTER || scorched) && !p.driving && !vines.autopilot_climbing() {
             let feet = to_dunia(t.translation - Vec3::Y * crate::player::HALF_HEIGHT);
             host.story.watched_leaves_of(&focus).into_iter().find_map(|(id, shape)| {
                 let key = (id, "Leave".to_string());
-                (shape.contains(feet) && !host.used.contains(&key) && !host.fatal.contains(&key))
-                    .then(|| exit_point(&shape, feet, |x, y| heights.height_at(to_bevy([x, y, 0.0])).map(|h| to_dunia(Vec3::Y * h)[2])))
+                (shape.contains(feet) && (scorched || !host.used.contains(&key)) && !host.fatal.contains(&key))
+                    .then(|| exit_point(&shape, feet, |x, y| ground_under(&spatial, &heights, x, y, feet[2] + 2.0)))
                     .flatten()
                     .map(|at| (id, at))
             })
@@ -3025,6 +3037,9 @@ fn run_story(
                                     info!("story autopilot: {event} {} killed the player; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
                                     learn_fatal(&mut host.fatal, id, event);
                                 }
+                            }
+                            if pawn == fc3_story::PLAYER && amount > 0.0 {
+                                host.hurt_at = now;
                             }
                             host.damages.push((pawn, amount));
                         }
@@ -4038,6 +4053,8 @@ const FATAL_WITHIN: f32 = 2.0;
 /// mission waits for the player to leave (short of the 25 s after which
 /// it steps into triggers it used again).
 const LEAVE_AFTER: f32 = 20.0;
+/// How long (s) after a script last hurt the player the autopilot hurries.
+const SCORCHED_FOR: f32 = 0.6;
 /// How long the story is quiet before the autopilot goes near a place a
 /// script waits for with a fight on still.
 const NEAR_DESPITE_FIGHT: f32 = 60.0;

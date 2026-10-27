@@ -4620,8 +4620,18 @@ there checkpoint after checkpoint for an hour:
 * **Hot water.** BAM_055's tomb has pools that scald whoever stands in
   them (`SHA_Fire_DangerZone`, `BAM_055_B20_DangerZone`), and the
   autopilot stepped into them one after another. A hazard's graph
-  (`dangerzone`, `deathzone`, `death_zone`) offers no triggers to step
-  into now.
+  (`dangerzone`, `deathzone`, `death_zone`, `burningground`) offers no
+  triggers to step into now.
+* **The trap room.** Opening the sarcophagus (B60) sets the room's floor
+  alight a few seconds on (`Sub_TrapRoom_BurningGround`: a region that
+  hurts whoever stands in it, 8 every 0.3 s), and the autopilot stood
+  where it opened it till it died: the scripts hurting the player kept the
+  story from going quiet, and it waits for quiet before each step. Hurt by
+  a script (`CAPI_Pawn.DamagePawn` on the player) within the last 0.6 s
+  (`SCORCHED_FOR`), it now steps without waiting, and first out of the
+  region it stands in that a script waits for it to leave (again, if need
+  be), onto the floor under it. It ran the room to `Tomb_End`, and
+  BAM_055, BAM_060 and the seventh chapter completed.
 
 ## BAM_055's escape and BAM_060's door
 

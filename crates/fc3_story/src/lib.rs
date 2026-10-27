@@ -1323,8 +1323,8 @@ impl Story {
             // counting as quiet.)
             // (Nor a hazard's: BAM_055's hot pools scald whoever stands in
             // them, `SHA_Fire_DangerZone`, and the autopilot stepped into one
-            // after another and died in each.)
-            if in_graph(&l.callback.target, "exitzonewarning|fc3_gfx/|dangerzone|deathzone|death_zone") {
+            // after another and died in each; its trap room's floor alight.)
+            if in_graph(&l.callback.target, "exitzonewarning|fc3_gfx/|dangerzone|deathzone|death_zone|burningground") {
                 continue;
             }
             // (Nor an activity's own outside a mission (a race's keeper, a
