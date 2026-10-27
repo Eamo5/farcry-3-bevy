@@ -4632,6 +4632,17 @@ there checkpoint after checkpoint for an hour:
   region it stands in that a script waits for it to leave (again, if need
   be), onto the floor under it. It ran the room to `Tomb_End`, and
   BAM_055, BAM_060 and the seventh chapter completed.
+* **A brief under way.** Then CIT_015's brief, "Leave Citra's temple.",
+  stalled four minutes: a giver's brief taken on is neither among the
+  missions taken on the trigger step goes after first (no givers) nor the
+  untaken ones whose objective is up (`Story::objective_missions`), so its
+  last block's door trigger waited behind a supply run's. A brief taken on
+  with its objective up is in focus now too; CIT_015 completed and CIT_020
+  began.
+* **Any death right after a step.** CIT_020's trigger by the burning fuel
+  truck put the player in its fire, dead within a second, again and
+  again. A death of any kind within 2 s of a step (`FATAL_WITHIN`) leaves
+  its trigger alone now, as a fall's within 12 s does.
 
 ## BAM_055's escape and BAM_060's door
 

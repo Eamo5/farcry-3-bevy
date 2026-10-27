@@ -1258,9 +1258,11 @@ impl Story {
         out
     }
 
-    /// The missions running, untaken, whose objective is up, by their
-    /// names' stem, the latest set first: what the player is to do next
-    /// before he takes anything on (JAS_145's brief, "Go talk to Buck.").
+    /// The missions running whose objective is up and that aren't among
+    /// those taken on (`missions_running`), by their names' stem, the latest
+    /// set first: what the player is to do next before he takes anything on
+    /// (JAS_145's brief, "Go talk to Buck."), or a brief he is in the middle
+    /// of (CIT_015's, "Leave Citra's temple.": a giver's, taken on).
     pub fn objective_missions(&self) -> Vec<String> {
         let c = self.core.borrow();
         c.missions
@@ -1268,7 +1270,7 @@ impl Story {
             .iter()
             .rev()
             .filter_map(|id| c.missions.by_id.get(id))
-            .filter(|m| m.block.is_none() && !m.acknowledged && m.state == missions::State::Running && m.current_objective.is_some())
+            .filter(|m| m.block.is_none() && (!m.acknowledged || m.giver) && m.state == missions::State::Running && m.current_objective.is_some())
             .map(|m| m.name.trim_end_matches("_MAIN").to_string())
             .collect()
     }
@@ -3887,8 +3889,8 @@ mod tests {
         assert_eq!(story.save().current.as_deref(), Some("WIL_010_MAIN"));
     }
 
-    /// The missions untaken whose objectives are up, the latest set first;
-    /// not one taken on, nor one whose objective is cleared.
+    /// The missions whose objectives are up, the latest set first; not one
+    /// taken on (but a brief taken on), nor one whose objective is cleared.
     #[test]
     fn missions_with_their_objective_up_latest_first() {
         let story = empty_story();
@@ -3896,7 +3898,7 @@ mod tests {
             let mut c = story.core.borrow_mut();
             let mut owners = Vec::new();
             for script in ["jas_145_brief.lua", "sqs_c4_main.lua", "wil_010_main.lua"] {
-                let id = c.register_mission(script, false, None, None, false, false, false, "");
+                let id = c.register_mission(script, script.contains("brief"), None, None, false, false, false, "");
                 c.missions.by_id.get_mut(&id).unwrap().state = missions::State::Running;
                 owners.push(c.missions.by_id[&id].owner);
             }
@@ -3908,8 +3910,11 @@ mod tests {
             owners
         };
         assert_eq!(story.objective_missions(), ["JAS_145_BRIEF", "SQS_C4"]);
+        // (A mission taken on is the running ones'; a brief taken on stays.)
+        story.core.borrow_mut().acknowledge(owners[1], false);
+        assert_eq!(story.objective_missions(), ["JAS_145_BRIEF"]);
         story.core.borrow_mut().acknowledge(owners[0], false);
-        assert_eq!(story.objective_missions(), ["SQS_C4"]);
+        assert_eq!(story.objective_missions(), ["JAS_145_BRIEF"]);
     }
 
     /// Another mission's acknowledge shape is closed while the player is on

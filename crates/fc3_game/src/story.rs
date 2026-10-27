@@ -1913,10 +1913,13 @@ fn run_story(
     // about it, left alone from now. BAM_040's temple path falls away under
     // whoever stands on it, piece by piece, and the autopilot, stepping onto
     // one piece after another, fell with each, checkpoint after checkpoint.)
-    if dead && !host.was_dead && stats.single().is_ok_and(|s| s.last_hurt == crate::combat::DamageKind::Fall) {
-        if let Some((id, event, _)) = host.last_step.take_if(|s| now - s.2 < FALL_FATAL_WITHIN) {
-            let ids = fatal_namesakes(&host.story.data(), id);
-            info!("story autopilot: {event} {} let the player fall; it and {} like it left alone from now", host.story.data().name_of(id).unwrap_or("?"), ids.len() - 1);
+    // (Any death right after a step is the step's too: CIT_020's trigger by
+    // the burning fuel truck, stepped into, put the player in its fire.)
+    let fell = stats.single().is_ok_and(|s| s.last_hurt == crate::combat::DamageKind::Fall);
+    if dead && !host.was_dead {
+        if let Some((id, event, _)) = host.last_step.take_if(|s| now - s.2 < if fell { FALL_FATAL_WITHIN } else { FATAL_WITHIN }) {
+            let ids = if fell { fatal_namesakes(&host.story.data(), id) } else { vec![id] };
+            info!("story autopilot: {event} {} let the player die; it and {} like it left alone from now", host.story.data().name_of(id).unwrap_or("?"), ids.len() - 1);
             for i in ids {
                 learn_fatal(&mut host.fatal, i, event.clone());
             }
