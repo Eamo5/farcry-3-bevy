@@ -1798,7 +1798,7 @@ fn run_story(
         Query<(&crate::story_helis::Heli, &Transform, &crate::combat::Health), Without<Player>>,
         avian3d::prelude::SpatialQuery,
     ),
-    (info, slot, fov, mut bought, mut towers, ways, mut looted, loot_catalog, mut crafted, mut crafting, mut target_markers): (
+    (info, slot, fov, mut bought, mut towers, ways, mut looted, loot_catalog, mut crafted, mut crafting, mut target_markers, mut ignitions): (
         Res<CacheInfo>,
         Res<crate::save::SaveSlot>,
         Res<crate::settings::Settings>,
@@ -1810,6 +1810,7 @@ fn run_story(
         ResMut<StoryCrafts>,
         ResMut<crate::crafting::CraftCatalog>,
         ResMut<crate::staged_fire::TargetMarkers>,
+        ResMut<crate::burning::ScriptIgnitions>,
     ),
     (checkpoint_actors, mut commands_out, mut hidden, tagged, mut tattoo, mut shakes): (
         Query<Entity, Or<(With<crate::story_actors::StoryActor>, With<crate::wildlife::WildAnimal>)>>, Commands, ResMut<HiddenEntities>,
@@ -1943,6 +1944,7 @@ fn run_story(
             // targets are on, as they replay.)
             host.save_disabled = false;
             target_markers.switched.clear();
+            ignitions.0.clear();
             if let Some(save) = &host.checkpoint_game {
                 if let Ok(mut inv) = inventory.single_mut() { crate::save::restore_inventory(&mut inv, save); }
                 if let Ok(mut stats) = stats.single_mut() {
@@ -2803,7 +2805,9 @@ fn run_story(
                 if !reload && host.abandoned_at.is_some_and(|at| now - at < 2.0) {
                     continue;
                 }
-                if let Some((id, event, _)) = host.last_step.take_if(|s| now - s.2 < FATAL_WITHIN) {
+                // (A few seconds on too: CIT_060's brief fails one stepped
+                // into its stuck-below region after a 4 s warning.)
+                if let Some((id, event, _)) = host.last_step.take_if(|s| now - s.2 < FAILED_WITHIN) {
                     info!("story autopilot: {event} {} failed the mission; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
                     learn_fatal(&mut host.fatal, id, event);
                 }
@@ -3402,6 +3406,9 @@ fn run_story(
                     // A placed object's light switch: an outpost's flag in
                     // the rebels' colours as it's taken.
                     "SetEnableSaveGame" => host.save_disabled = !(a(0) == "1" || a(0) == "true"),
+                    // A character set alight (`pawn`: the `Burn` box,
+                    // CIT_050's reinforcements; `burning`).
+                    "StartBurning" => ignitions.0.extend(a(0).parse::<u64>().ok()),
                     // A combat helper's target switched on or off (`marker,
                     // 0|1`: `staged_fire`).
                     "SetTargetActive" => {
@@ -4065,6 +4072,8 @@ const DESTROY_REACH: f32 = 80.0;
 /// A mission failing this soon after the autopilot stepped into a trigger
 /// failed for it.
 const FATAL_WITHIN: f32 = 2.0;
+/// As soon after (s), a mission failing; its scripts may warn a while first.
+const FAILED_WITHIN: f32 = 6.0;
 /// How long the story is quiet before the autopilot leaves a region a
 /// mission waits for the player to leave (short of the 25 s after which
 /// it steps into triggers it used again).

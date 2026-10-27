@@ -458,6 +458,11 @@ is the story's own:
   glint stays for pickups without one, and for bodies. Seen: a kelp
   pickup at JAS_100's outpost lit gold (`FC3_NO_HIGHLIGHTS=1`, for a
   comparison, leaves it dark).
+* **Set alight.** `StartBurning <pawn>` (the `Burn` box: CIT_050's
+  reinforcements in Vaas's dream) sets a story character alight as fire
+  that catches at once would (`burning::ScriptIgnitions`): the human
+  torch, the panic run, the death by fire. One not in the world yet waits
+  for it; a checkpoint's reload forgets them.
 * **Staged fire.** The combat helpers' targets (`CombatHelpers/
   TargetMarker_*`, an entity with a `CTargetComponent`) are places the AI
   fires at to stage a fight the player comes upon: WIL_050's guards firing
@@ -4902,6 +4907,12 @@ buttons, each a localized text (`Button_N_OasisID`) on a button type
 never showed. They now show in the HUD's prompt while it runs
 (`input_prompts`), with the key for the types we know (1, the face button
 that interacts; 22, the takedown) and the text alone for the rest.
+
+The scripts do wait on the choice: CIT_050's end listens for
+`GSFInputManager_Choice_1`, and the dream never ended. Pressing a
+button's action now broadcasts `GSFInputManager_Choice_N`, by the
+button's number; the autopilot, the prompts up 1.5 s, takes the first it
+can press, once. CIT_050 then completed and CIT_060's brief began.
 
 ## Specific gameplays the game doesn't play
 

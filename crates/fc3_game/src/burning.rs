@@ -21,7 +21,7 @@ pub struct BurningPlugin;
 
 impl Plugin for BurningPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<PlayerAlight>().add_systems(Startup, load_clips).add_systems(
+        app.init_resource::<PlayerAlight>().init_resource::<ScriptIgnitions>().add_systems(Startup, load_clips).add_systems(
             Update,
             (burn_test, ground_fire_test, catch_fire, player_catch_fire, burn, player_burn).chain().run_if(in_state(crate::menu::GameState::Playing)),
         );
@@ -118,10 +118,15 @@ pub struct Aflame {
     clips: Option<Arc<ClipSet>>,
 }
 
+/// Story characters a script sets alight (`StartBurning <pawn>`, the `Burn`
+/// box: CIT_050's reinforcements in Vaas's dream), by their ids.
+#[derive(Resource, Default)]
+pub struct ScriptIgnitions(pub Vec<u64>);
+
 /// Fire's harm sets those it touches alight (people and animals; the player
 /// takes it as his own harm). A character catches fire once fire has done it
 /// its counters' share within their time (`Burn`: a merc 25 in 8 s, a
-/// villager 50); an animal at once.
+/// villager 50); an animal at once. One a script sets alight catches at once.
 #[allow(clippy::too_many_arguments)]
 fn catch_fire(
     time: Res<Time>,
@@ -137,33 +142,40 @@ fn catch_fire(
     mut rng: ResMut<crate::weapons::Rng>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     mut commands: Commands,
+    (mut ignitions, actors): (ResMut<ScriptIgnitions>, Query<(Entity, &crate::story_actors::StoryActor)>),
 ) {
     let now = time.elapsed_secs();
     taken.retain(|_, l| l.last().is_some_and(|(t, _)| now - t < 30.0));
     // (`FC3_BURN_TEST`: any touch of fire sets alight.)
     let test = std::env::var_os("FC3_BURN_TEST").is_some();
     let mut lit = Vec::new();
-    for hit in hits.read().filter(|h| h.kind == DamageKind::Fire) {
-        let Ok((health, at, burning, npc, counters)) = targets.get(hit.target) else { continue };
-        if burning || health.dead || lit.contains(&hit.target) {
+    // (Those a script lights, as touched by a fire that catches at once;
+    // one not in the world yet waits for it.)
+    let scripted: Vec<(Entity, u64)> = ignitions.0.iter().filter_map(|id| actors.iter().find(|(_, a)| a.id == *id).map(|(e, _)| (e, *id))).collect();
+    ignitions.0.retain(|id| !scripted.iter().any(|s| s.1 == *id));
+    let script_hits = scripted.into_iter().map(|(target, _)| (target, None, None));
+    let fire_hits = hits.read().filter(|h| h.kind == DamageKind::Fire).map(|h| (h.target, h.instigator, Some(h.amount)));
+    for (target, instigator, amount) in script_hits.chain(fire_hits).collect::<Vec<_>>() {
+        let Ok((health, at, burning, npc, counters)) = targets.get(target) else { continue };
+        if burning || health.dead || lit.contains(&target) {
             continue;
         }
         // Fire's harm to it (as its counters take it) adds up over their time.
         let catch = npc.and(counters.and_then(|c| c.v.burn).or_else(|| table.0.as_ref().and_then(|d| d.others_burn))).filter(|_| !test);
-        if let Some(c) = catch {
+        if let (Some(c), Some(amount)) = (catch, amount) {
             let share = counters.map_or(1.0, |c| c.v.body * c.v.harm(fc3_formats::counters::Harm::Burn));
-            let list = taken.entry(hit.target).or_default();
+            let list = taken.entry(target).or_default();
             list.retain(|(t, _)| now - t < c.window);
-            list.push((now, hit.amount * share));
+            list.push((now, amount * share));
             if list.iter().map(|(_, a)| a).sum::<f32>() < c.threshold {
                 continue;
             }
-            taken.remove(&hit.target);
+            taken.remove(&target);
         }
-        lit.push(hit.target);
-        debug!("{} catches fire", hit.target);
+        lit.push(target);
+        debug!("{target} catches fire");
         let torch = crate::authored_fx::available(HUMAN_TORCH)
-            .then(|| commands.spawn((Transform::from_xyz(0.0, CHEST, 0.0), crate::authored_fx::AuthoredFx(HUMAN_TORCH), ChildOf(hit.target))).id());
+            .then(|| commands.spawn((Transform::from_xyz(0.0, CHEST, 0.0), crate::authored_fx::AuthoredFx(HUMAN_TORCH), ChildOf(target))).id());
         // A person takes up the burning move.
         let clips = match (npc.and_then(|n| n.rig).and_then(|r| rigs.get_mut(r).ok()), burn_clips.as_ref()) {
             (Some(mut rig), Some(burn)) => {
@@ -173,7 +185,7 @@ fn catch_fire(
             }
             _ => None,
         };
-        commands.entity(hit.target).insert(Aflame { left: BURN_SECS, torch, instigator: hit.instigator, tick: 1.0, clips });
+        commands.entity(target).insert(Aflame { left: BURN_SECS, torch, instigator, tick: 1.0, clips });
         sfx.write(crate::sound::PlaySfx { event: START_SOUND, at: Some(at.translation()), volume: 1.0 });
     }
 }
