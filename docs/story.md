@@ -458,6 +458,20 @@ is the story's own:
   glint stays for pickups without one, and for bodies. Seen: a kelp
   pickup at JAS_100's outpost lit gold (`FC3_NO_HIGHLIGHTS=1`, for a
   comparison, leaves it dark).
+* **Staged fire.** The combat helpers' targets (`CombatHelpers/
+  TargetMarker_*`, an entity with a `CTargetComponent`) are places the AI
+  fires at to stage a fight the player comes upon: WIL_050's guards firing
+  at Oliver's stand-ins, HOY_010's waves at their bombs, CIT_050's fake
+  targets. One is on as authored (`bActive`) or as a script switches it
+  (`SetTargetActive <marker> <0|1>`, the `TargetModifier` box, 32
+  single-player graphs; a checkpoint's reload forgets the switches, which
+  the scripts make again). While it's on, the player's foes within its
+  `fMaxRange` (the nearest `MaxShooters` of them), standing, and not
+  fighting him or not seeing him, turn to it and fire bursts: the gun's
+  third-person flash, a tracer and its sound (`staged_fire`). Its
+  `GroupFilter` names whom it stands for (Oliver), who don't fire at it.
+  No one is hurt. Seen: WIL_050 B20's three fake targets each drew a
+  guard's fire in turn as the convoy came on.
 
 ## In the game
 
@@ -4582,6 +4596,32 @@ the autopilot's alarm step (a script somewhere waits for `Alarm_Disabled`)
 carried him to an outpost's alarm box across the island, every 6 s. That
 step now waits, as the trigger step does, while a scene holds the view or
 plays the player, and only goes for a box within `ALARM_REACH` (150 m).
+
+## BAM_040's collapsing path and BAM_055's hot pools
+
+From BAM_020's flooded hold the autopilot ran BAM_020 out, BAM_030 and
+BAM_040 to B70, "Escape the temple before everything collapses.", and died
+there checkpoint after checkpoint for an hour:
+
+* **The falling path.** The temple's way out is a path whose pieces fall
+  away a moment after they're stood on (`Prefab_fallingPath`, ~30 copies
+  of `BAM_040_B70_fallingPath_Trigger`, and a numbered run,
+  `ProximityTrigger_fallingPathTest01`..`15`); the autopilot stepped onto
+  one piece after another and fell with each. Only a script's killing
+  blow right after a step (a death volume) taught it to leave a trigger
+  alone, and that blow, landing 4 s after the step as the player fell into
+  the volume below, threw the step away unlearned. A step older than
+  2 s is kept now, and a death by a fall within 12 s of a step
+  (`FALL_FATAL_WITHIN`) leaves that trigger alone, with its namesakes on
+  its layer within 150 m: its prefab's copies and a numbered run of it,
+  though not the editor's own numbering (`ProximityTrigger_31`)
+  (`fatal_namesakes`). With the path left alone it went to the way out
+  (`MB07_finished`), and BAM_040 completed.
+* **Hot water.** BAM_055's tomb has pools that scald whoever stands in
+  them (`SHA_Fire_DangerZone`, `BAM_055_B20_DangerZone`), and the
+  autopilot stepped into them one after another. A hazard's graph
+  (`dangerzone`, `deathzone`, `death_zone`) offers no triggers to step
+  into now.
 
 ## BAM_055's escape and BAM_060's door
 

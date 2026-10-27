@@ -1321,7 +1321,10 @@ impl Story {
             // (Nor a graphics script's: the waterfalls' screen droplets,
             // stepped through again and again, kept the story from ever
             // counting as quiet.)
-            if in_graph(&l.callback.target, "exitzonewarning|fc3_gfx/") {
+            // (Nor a hazard's: BAM_055's hot pools scald whoever stands in
+            // them, `SHA_Fire_DangerZone`, and the autopilot stepped into one
+            // after another and died in each.)
+            if in_graph(&l.callback.target, "exitzonewarning|fc3_gfx/|dangerzone|deathzone|death_zone") {
                 continue;
             }
             // (Nor an activity's own outside a mission (a race's keeper, a
@@ -3715,6 +3718,44 @@ mod tests {
         assert_eq!(id, 200);
         assert!((at[0] - 30.3).abs() < 1e-4 && (at[1] - 10.2).abs() < 1e-4 && (at[2] - 1.6).abs() < 1e-4, "{at:?}");
         assert!(seen);
+    }
+
+    /// A hazard's trigger (BAM_055's hot pools) isn't among those to step
+    /// into; an ordinary one is.
+    #[test]
+    fn a_hazards_triggers_are_not_stepped_into() {
+        use fc3_formats::fcb::Object;
+        use std::sync::Arc;
+        let mut data = StoryData::default();
+        for id in [200, 201] {
+            data.entities.insert(id, data::Entry {
+                id,
+                name: format!("e{id}"),
+                class: "CEntity".into(),
+                pos: [id as f32, 0.0, 0.0],
+                angles: [0.0; 3],
+                layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
+                origin: data::Origin::Global,
+                components: Arc::new(Object::default()),
+                fields: Arc::new(Object::default()),
+            });
+        }
+        let story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            local hot = { _type = { _path = "Domino/user/fc3/FC3_MainMissions/BAM_055/BAM_055_MAIN.SHA_Fire_DangerZone.lua", In = function(self) end } }
+            local way = { _type = { _path = "Domino/user/fc3/FC3_MainMissions/BAM_055/BAM_055_B20/BAM_055_B20.lua", In = function(self) end } }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("200", hot, "In", "Enter")
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("201", way, "In", "Enter")
+        "#,
+            )
+            .exec()
+            .unwrap();
+        let ids: Vec<u64> = story.watched_triggers().into_iter().map(|w| w.0).collect();
+        assert_eq!(ids, [201]);
     }
 
     #[test]

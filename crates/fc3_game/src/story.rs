@@ -1787,7 +1787,7 @@ fn run_story(
         Query<(&crate::story_helis::Heli, &Transform, &crate::combat::Health), Without<Player>>,
         avian3d::prelude::SpatialQuery,
     ),
-    (info, slot, fov, mut bought, mut towers, ways, mut looted, loot_catalog, mut crafted, mut crafting): (
+    (info, slot, fov, mut bought, mut towers, ways, mut looted, loot_catalog, mut crafted, mut crafting, mut target_markers): (
         Res<CacheInfo>,
         Res<crate::save::SaveSlot>,
         Res<crate::settings::Settings>,
@@ -1798,6 +1798,7 @@ fn run_story(
         Res<crate::progression::LootCatalog>,
         ResMut<StoryCrafts>,
         ResMut<crate::crafting::CraftCatalog>,
+        ResMut<crate::staged_fire::TargetMarkers>,
     ),
     (checkpoint_actors, mut commands_out, mut hidden, tagged, mut tattoo, mut shakes): (
         Query<Entity, Or<(With<crate::story_actors::StoryActor>, With<crate::wildlife::WildAnimal>)>>, Commands, ResMut<HiddenEntities>,
@@ -1904,6 +1905,19 @@ fn run_story(
     if dead && !host.was_dead && host.story.missions().iter().any(|m| m.1 == "Running") {
         host.reload_at = Some(now + 6.0);
     }
+    // (A fall soon after a step: the trigger stepped into, and its namesakes
+    // about it, left alone from now. BAM_040's temple path falls away under
+    // whoever stands on it, piece by piece, and the autopilot, stepping onto
+    // one piece after another, fell with each, checkpoint after checkpoint.)
+    if dead && !host.was_dead && stats.single().is_ok_and(|s| s.last_hurt == crate::combat::DamageKind::Fall) {
+        if let Some((id, event, _)) = host.last_step.take_if(|s| now - s.2 < FALL_FATAL_WITHIN) {
+            let ids = fatal_namesakes(&host.story.data(), id);
+            info!("story autopilot: {event} {} let the player fall; it and {} like it left alone from now", host.story.data().name_of(id).unwrap_or("?"), ids.len() - 1);
+            for i in ids {
+                learn_fatal(&mut host.fatal, i, event.clone());
+            }
+        }
+    }
     host.was_dead = dead;
     if host.reload_at.is_some_and(|at| now >= at) && !dead {
         host.reload_at = None;
@@ -1911,8 +1925,10 @@ fn run_story(
         if let Some(story) = open_story(&info.root, checkpoint.as_ref()) {
             info!("story: back to the last checkpoint");
             host.story = story;
-            // (The scripts say again whether saving is off, as they replay.)
+            // (The scripts say again whether saving is off, and which
+            // targets are on, as they replay.)
             host.save_disabled = false;
+            target_markers.switched.clear();
             if let Some(save) = &host.checkpoint_game {
                 if let Ok(mut inv) = inventory.single_mut() { crate::save::restore_inventory(&mut inv, save); }
                 if let Ok(mut stats) = stats.single_mut() {
@@ -2762,7 +2778,7 @@ fn run_story(
                 if !reload && host.abandoned_at.is_some_and(|at| now - at < 2.0) {
                     continue;
                 }
-                if let Some((id, event, _)) = host.last_step.take().filter(|s| now - s.2 < FATAL_WITHIN) {
+                if let Some((id, event, _)) = host.last_step.take_if(|s| now - s.2 < FATAL_WITHIN) {
                     info!("story autopilot: {event} {} failed the mission; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
                     learn_fatal(&mut host.fatal, id, event);
                 }
@@ -3001,9 +3017,11 @@ fn run_story(
                         if let (Ok(pawn), Ok(amount)) = (a(0).parse::<u64>(), a(2).parse::<f32>()) {
                             // A killing blow right after the autopilot
                             // stepped into a trigger (a fall-death zone):
-                            // that trigger is left alone from now.
+                            // that trigger is left alone from now. (An older
+                            // step is kept: a fall into a death volume a
+                            // while after it is the step's, BAM_040's path.)
                             if pawn == fc3_story::PLAYER && amount >= KILLING_BLOW {
-                                if let Some((id, event, _)) = host.last_step.take().filter(|s| now - s.2 < FATAL_WITHIN) {
+                                if let Some((id, event, _)) = host.last_step.take_if(|s| now - s.2 < FATAL_WITHIN) {
                                     info!("story autopilot: {event} {} killed the player; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
                                     learn_fatal(&mut host.fatal, id, event);
                                 }
@@ -3353,6 +3371,13 @@ fn run_story(
                     // A placed object's light switch: an outpost's flag in
                     // the rebels' colours as it's taken.
                     "SetEnableSaveGame" => host.save_disabled = !(a(0) == "1" || a(0) == "true"),
+                    // A combat helper's target switched on or off (`marker,
+                    // 0|1`: `staged_fire`).
+                    "SetTargetActive" => {
+                        if let Ok(id) = a(0).parse::<u64>() {
+                            target_markers.switched.insert(id, a(1) == "1" || a(1) == "true");
+                        }
+                    }
                     "CAPI_Entity.LightMaterialOveride" => {
                         if let Ok(id) = a(0).parse::<u64>() {
                             if a(1) == "true" || a(1) == "1" {
@@ -4066,6 +4091,35 @@ fn learn_fatal(fatal: &mut std::collections::HashSet<(u64, String)>, id: u64, ev
         }
     }
 }
+/// A trigger and the others of its name on its layer about it, the trigger
+/// first: a prefab's copies (the temple path's pieces,
+/// `BAM_040_B70_fallingPath_Trigger`), or a numbered run of them
+/// (`ProximityTrigger_fallingPathTest01`..`15`), though not the editor's
+/// own numbering of nameless ones (`ProximityTrigger_31`).
+fn fatal_namesakes(data: &fc3_story::data::StoryData, id: u64) -> Vec<u64> {
+    let mut ids = vec![id];
+    if let Some(me) = data.entities.get(&id) {
+        let near = |p: [f32; 3]| (p[0] - me.pos[0]).hypot(p[1] - me.pos[1]) < NAMESAKES_WITHIN;
+        let stem = |n: &str| {
+            let s = n.trim_end_matches(|c: char| c.is_ascii_digit());
+            let leaf = s.rsplit('/').next().unwrap_or(s).trim_end_matches('_');
+            let named = !["ProximityTrigger", "TriggerRegionShape", "Trigger", "Region"].iter().any(|d| leaf.eq_ignore_ascii_case(d));
+            (named && s.len() < n.len()).then(|| s.to_string())
+        };
+        let mine = stem(&me.name);
+        let alike = |n: &str| n == me.name || mine.as_ref().is_some_and(|m| stem(n).as_ref() == Some(m));
+        let mut more: Vec<u64> = data.entities.values().filter(|e| e.id != id && e.layer == me.layer && near(e.pos) && alike(&e.name)).map(|e| e.id).collect();
+        more.sort_unstable();
+        ids.extend(more);
+    }
+    ids
+}
+
+/// A fall killing the player this soon (s) after a step was the step's.
+const FALL_FATAL_WITHIN: f32 = 12.0;
+/// How near (m) a trigger's namesakes are left alone with it.
+const NAMESAKES_WITHIN: f32 = 150.0;
+
 /// How long before the autopilot goes near a place again, gone out of reach.
 const NEAR_AGAIN: f32 = 20.0;
 
@@ -6157,6 +6211,36 @@ mod tests {
         let at = exit_point(&shape, [0.0, 0.0, 0.0], |_, _| Some(1.0)).unwrap();
         assert!(!shape.contains([at[0], at[1], 1.5]));
         assert!(at[0].abs() > 10.0 && at[0].abs() < 16.0 && at[1].abs() < 1.0 && at[2] == 1.0, "{at:?}");
+    }
+
+    /// A trigger that let the player fall is left alone with a numbered run
+    /// of its namesakes about it on its layer, not the editor's numbered
+    /// nameless ones, nor those far off or on another layer.
+    #[test]
+    fn a_fatal_trigger_takes_its_numbered_run_with_it() {
+        let mut data = fc3_story::data::StoryData::default();
+        let mut put = |id: u64, name: &str, x: f32, layer: u64| {
+            data.entities.insert(id, fc3_story::data::Entry {
+                id,
+                name: name.into(),
+                class: "CEntity".into(),
+                pos: [x, 0.0, 0.0],
+                angles: [0.0; 3],
+                layer,
+                origin: fc3_story::data::Origin::Global,
+                components: Default::default(),
+                fields: Default::default(),
+            });
+        };
+        put(1, "Triggers/ProximityTrigger_fallingPathTest05", 0.0, 7);
+        put(2, "Triggers/ProximityTrigger_fallingPathTest06", 10.0, 7);
+        put(3, "Triggers/ProximityTrigger_fallingPathTest07", 500.0, 7);
+        put(4, "Triggers/ProximityTrigger_fallingPathTest08", 20.0, 8);
+        put(5, "Triggers/MB07_finished", 30.0, 7);
+        put(6, "Triggers/ProximityTrigger_31", 0.0, 7);
+        put(7, "Triggers/ProximityTrigger_32", 5.0, 7);
+        assert_eq!(fatal_namesakes(&data, 1), [1, 2]);
+        assert_eq!(fatal_namesakes(&data, 6), [6]);
     }
 
     #[test]

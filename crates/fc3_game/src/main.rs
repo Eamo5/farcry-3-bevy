@@ -75,6 +75,7 @@ mod qte;
 mod stims;
 mod vine;
 mod sniping;
+mod staged_fire;
 mod intoxication;
 mod input_prompts;
 mod chopper_fight;
@@ -477,6 +478,7 @@ fn main() {
         .add_plugins(poker::PokerPlugin)
         .add_plugins(credits::CreditsPlugin)
         .add_plugins(sniping::SnipingPlugin)
+        .add_plugins(staged_fire::StagedFirePlugin)
         .add_plugins(intoxication::IntoxicationPlugin)
         .add_plugins(input_prompts::InputPromptsPlugin)
         .add_plugins(chopper_fight::ChopperFightPlugin)
