@@ -148,6 +148,9 @@ struct Fight {
     flame_clocks: Vec<f32>,
     /// Seconds it has breathed this time (for `FC3_BOSS_SHOTS`).
     breathed: f32,
+    /// Where the player has been lately (seconds since, place), the newest
+    /// last: its breath goes where it saw him a moment before.
+    trail: std::collections::VecDeque<(f32, Vec3)>,
     /// Its effects on its bones (the ink off its arms, its eyes' glow),
     /// once they're on.
     dressed: Option<Vec<Entity>>,
@@ -337,6 +340,7 @@ fn start_and_end(
             flame,
             flame_clocks: Vec::new(),
             breathed: 0.0,
+            trail: Default::default(),
             dressed: None,
             mask: None,
             hinted: false,
@@ -469,6 +473,11 @@ fn fight(
     }
     // Hits on the mask, off the giant's health.
     let player_at = pt.translation;
+    for s in f.trail.iter_mut() {
+        s.0 += dt;
+    }
+    f.trail.retain(|s| s.0 <= BREATH_LEAD + 0.5);
+    f.trail.push_back((0.0, player_at));
     for amount in std::mem::take(&mut f.struck) {
         if f.act == Act::Knockout || f.act == Act::KnockedOut {
             continue;
@@ -633,7 +642,9 @@ fn fight(
                 }
             }
             "StartFirebreath" => {
-                f.breath = Some(player_at);
+                // (Where it saw him a moment ago: a player on the move is off
+                // its line already, one standing still is in it.)
+                f.breath = Some(f.trail.iter().find(|s| s.0 <= BREATH_LEAD).map_or(player_at, |s| s.1));
                 sound(&mut sfx, &f.s, "BossGruntAttack", head.map(|h| h.translation()));
             }
             "StopFirebreath" => f.breath = None,
@@ -662,9 +673,12 @@ fn fight(
         }
     }
     // The fire breath: from the mouth at where the player was, following him
-    // slowly; it burns within its reach of the flame.
+    // slowly; it burns within its reach of the flame. (Slowly enough that
+    // one running across it gets out of it: at 1.2 a second it kept within
+    // its 3 m of a player running sideways, and its 100 a second killed him
+    // as each phase began.)
     if let (Some(aim), Some(mouth)) = (f.breath.as_mut(), bone("Jaw").or(head).map(|j| j.translation())) {
-        *aim = aim.lerp(player_at, (dt * 1.2).min(1.0));
+        *aim = aim.lerp(player_at, (dt * BREATH_FOLLOW).min(1.0));
         let dir = (*aim - mouth).normalize_or_zero();
         let reach = mouth.distance(*aim) + 4.0;
         // Its own flame (the stream's effects and its mesh), else ours.
@@ -684,6 +698,9 @@ fn fight(
         }
         f.breathed += dt;
         let along = (player_at - mouth).dot(dir).clamp(0.0, reach);
+        if (f.breathed * 2.0).floor() > (f.breathed * 2.0 - dt * 2.0).floor() {
+            debug!("boss fight: breath from {mouth:.1} at {aim:.1}, the player at {player_at:.1}, {:.1} m off its line", (mouth + dir * along).distance(player_at));
+        }
         if (mouth + dir * along).distance(player_at) < f.s.breath_radius {
             harm(&mut damage, pe, f.s.breath_damage * dt, DamageKind::Fire, Some(mouth));
         }
@@ -1078,6 +1095,12 @@ fn rocks(
 
 /// A minion this near is the autopilot's first (m).
 const MINION_FIRST: f32 = 12.0;
+/// How fast the breath's aim closes on the player (of the gap, a second).
+const BREATH_FOLLOW: f32 = 0.35;
+/// How long before (s) the place its breath begins at is where the player was.
+const BREATH_LEAD: f32 = 1.0;
+/// How far (m) to either side of where he began the autopilot sidesteps.
+const DODGE_SPAN: f32 = 8.0;
 
 /// The story's autopilot (tests) in the fight: the bow in hand, shooting
 /// the mask through the sights (a minion close by first).
@@ -1086,19 +1109,25 @@ fn autopilot(
     time: Res<Time>,
     spots: Query<&GlobalTransform, With<WeakSpot>>,
     minions: Query<(&GlobalTransform, &Health), With<BossMinion>>,
-    mut players: Query<(&Transform, &mut Player, &crate::weapons::Inventory)>,
+    mut players: Query<(&Transform, &mut Player, &crate::weapons::Inventory, &Health, Option<&crate::combat::PlayerStats>)>,
     mut actions: ResMut<crate::controls::ActionState>,
     mut next_shot: Local<f32>,
+    mut next_heal: Local<f32>,
+    // Where he began the fight, and which way he sidesteps.
+    mut dodge: Local<(Option<Vec3>, f32)>,
 ) {
     if std::env::var_os("FC3_STORY_AUTOPILOT").is_none() {
         return;
     }
-    let Some(f) = fight.active.as_ref() else { return };
+    let Some(f) = fight.active.as_ref() else {
+        *dodge = (None, 0.0);
+        return;
+    };
     if matches!(f.act, Act::Arrival | Act::Knockout | Act::KnockedOut) {
         return;
     }
     let Some(spot) = f.mask.and_then(|m| spots.get(m).ok()) else { return };
-    let Ok((t, mut p, inv)) = players.single_mut() else { return };
+    let Ok((t, mut p, inv, health, stats)) = players.single_mut() else { return };
     let eye = t.translation + Vec3::Y * (p.eye - crate::player::HALF_HEIGHT);
     // (A minion close by first.)
     let minion = minions
@@ -1111,10 +1140,34 @@ fn autopilot(
     p.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
     use crate::controls::Action;
     let class = inv.def().class;
-    if class != crate::weapons::WeaponClass::Melee {
+    let now = time.elapsed_secs();
+    // (Hurt, a medkit between its attacks, as a player would: worn down by
+    // its rocks and sweeps, the breath at the third phase killed him.)
+    let can_heal = stats.is_some_and(|s| s.medkits > 0) || health.current < crate::combat::HEALTH_SEGMENT;
+    if can_heal && health.current < health.max * 0.6 && now >= *next_heal {
+        *next_heal = now + 1.0;
+        actions.press(Action::Medkit);
+    }
+    // (Its breath following him: away across its line from where it aims,
+    // sights down to go the faster, as a player would run from it. Stood
+    // still, he burnt in it as each phase began.)
+    // (Hurt, it breathes at once where he stands: on the move already as it
+    // rears, across the arena about where he began, turning back short of
+    // its sides; backing off, he was cornered and burnt.)
+    let home = *dodge.0.get_or_insert(t.translation);
+    if f.breath.is_some() || f.act == Act::Hurt {
+        let right = Vec3::new(p.yaw.cos(), 0.0, -p.yaw.sin());
+        let off = (t.translation - home).with_y(0.0).dot(right);
+        if dodge.1 == 0.0 {
+            dodge.1 = if off > 0.0 { -1.0 } else { 1.0 };
+        } else if off * dodge.1 > DODGE_SPAN {
+            dodge.1 = -dodge.1;
+        }
+        // (The walk reads the movement axis, not the actions held.)
+        actions.movement = Vec2::new(dodge.1, 0.0);
+    } else if class != crate::weapons::WeaponClass::Melee {
         actions.hold(Action::Aim);
     }
-    let now = time.elapsed_secs();
     if (now * 0.5) as u32 != ((now - time.delta_secs()) * 0.5) as u32 {
         info!(
             "boss fight autopilot: the mask at {:.1} ({:.0} m, yaw {:.2} pitch {:.2}), {} in hand ({:?}), aim blend {:.2}, {} in the magazine, {:.0} health left",

@@ -1742,7 +1742,10 @@ fn fire(
     }
     if (scripted || story_input) && std::env::var("FC3_FIRE_DEBUG").is_ok() && (time.elapsed_secs() * 4.0) as u32 != ((time.elapsed_secs() - dt) * 4.0) as u32 {
         info!(
-            "fire gate: can_act {can_act} dead {} swimming {} driving {} noclip {} captured {} bino {:.2} reloading {:.2} switching {:.2} cooldown {:.2} mag {}",
+            "fire gate: can_act {can_act} (no weapon {}, hands busy {}, wheel {}, zip {zip_ok}) dead {} swimming {} driving {} noclip {} captured {} bino {:.2} reloading {:.2} switching {:.2} cooldown {:.2} mag {}",
+            story_player.as_ref().is_some_and(|s| s.no_weapon),
+            busy.busy(),
+            wheel.open,
             health.dead,
             player.swimming,
             player.driving,

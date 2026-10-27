@@ -848,6 +848,8 @@ pub struct StoryHost {
     pub travel_due: Option<crate::map::TravelTo>,
     /// The autopilot's: the body it is searching, and since when.
     autopilot_search: Option<(u64, f32)>,
+    /// The autopilot's: when it may next reach for a medkit.
+    autopilot_heal_at: f32,
     /// Saving turned off by a script (`SetEnableSaveGame 0`: BAM_020's
     /// ship), till it turns it on again (`save::on_mission`).
     pub save_disabled: bool,
@@ -1047,6 +1049,7 @@ impl StoryHost {
             travel_asked: None,
             travel_due: None,
             autopilot_search: None,
+            autopilot_heal_at: 0.0,
             save_disabled: false,
             hurt_at: f32::MIN,
             fx_switched: HashMap::new(),
@@ -1151,6 +1154,9 @@ pub struct ScriptedPlayer {
     /// The weapon in hand is drawn again for the scripts (the one they gave
     /// was already in hand).
     redraw: bool,
+    /// A script put the weapon in hand away (`CAPI_Pawn.Holster`): the
+    /// scripts hear it holstered.
+    holstered: bool,
     /// Non-weapon inventory entries missions give and take (rock, camera).
     pub gadgets: std::collections::HashSet<String>,
     /// Weapons scripts gave by an archetype of their own (the Ink Monster
@@ -1237,6 +1243,7 @@ impl Default for ScriptedPlayer {
             auto_draw: false,
             last_granted: None,
             redraw: false,
+            holstered: false,
             gadgets: ["gadgets:FC3/Rock".into(), "gadgets:Equipped/Tablet".into()].into_iter().collect(),
             granted: HashMap::new(),
             animal_looting: true, plant_looting: true, camera_drawn: false, camera_up: false,
@@ -3357,7 +3364,10 @@ fn run_story(
                     "CAPI_Player.DrawGadget" if a(0) == fc3_story::PLAYER.to_string() && a(1).eq_ignore_ascii_case("binoculars") => {
                         scripted.camera_drawn = scripted.has_camera();
                     }
-                    "CAPI_Pawn.Holster" | "CAPI_Pawn.ForceHolster" if a(0) == fc3_story::PLAYER.to_string() => scripted.camera_drawn = false,
+                    "CAPI_Pawn.Holster" | "CAPI_Pawn.ForceHolster" if a(0) == fc3_story::PLAYER.to_string() => {
+                        scripted.camera_drawn = false;
+                        scripted.holstered = true;
+                    }
                     // The player's field of view set, or given back (`player,
                     // degrees, seconds, on`).
                     // The player's stance (`player, stance`: 0 standing, 1
@@ -4809,6 +4819,8 @@ const TETHER_FROM: f32 = 45.0;
 /// Tests: how near (m) an animal after the player is shot before anything
 /// else.
 const DEFEND_WITHIN: f32 = 20.0;
+/// Tests: the share of his health below which the autopilot heals.
+const HEAL_BELOW: f32 = 0.5;
 /// Tests: how long (s) the autopilot tries to search one body.
 const SEARCH_FOR: f32 = 12.0;
 
@@ -4848,6 +4860,13 @@ fn weapon_events(
         let name = fc3_formats::hash::crc32(inv.defs[def].name.to_ascii_lowercase().as_bytes());
         vec![Arg::id(fc3_story::PLAYER), Arg::Num(name as f64), Arg::Num(0.0), Arg::Num(ammo as f64)]
     };
+    // (Put away by a script: heard so, as the original's holster ends. A
+    // scene's set-up holsters the weapon and waits to hear it; unheard, it
+    // took the weapon away for good, and CIT_030's bow never drew against
+    // the Ink Monster.)
+    if std::mem::take(&mut scripted.holstered) {
+        host.story.group_event(fc3_story::PLAYER, "CWeaponHolsteredEvent", args(slot.def, 0));
+    }
     match *last {
         Some((def, _)) if def == slot.def => {}
         Some((def, _)) => {
@@ -5002,7 +5021,7 @@ fn autopilot_loot(
     catalog: Res<crate::progression::LootCatalog>,
     progress: Res<crate::progression::Progress>,
     (heights, stims, fires): (Res<crate::terrain::Heightfield>, Res<crate::stims::Stims>, Res<crate::fire::Fires>),
-    mut players: Query<(Entity, &mut Transform, &mut Player, &crate::combat::Health, &crate::weapons::Inventory)>,
+    mut players: Query<(Entity, &mut Transform, &mut Player, &crate::combat::Health, &crate::weapons::Inventory, Option<&crate::combat::PlayerStats>)>,
     animals: Query<(Entity, &Transform, &crate::wildlife::WildAnimal, &crate::combat::Health, Option<&crate::wildlife::Carcass>, Option<&crate::story_actors::StoryActor>), Without<Player>>,
     plants: Query<(&crate::pickups::Pickup, &GlobalTransform)>,
     mut actions: ResMut<crate::controls::ActionState>,
@@ -5076,7 +5095,7 @@ fn autopilot_loot(
     // anything.)
     let report = host.quiet > 20.0 && host.quiet - time.delta_secs() <= 20.0;
     if report {
-        if let Ok((_, _, p, h, _)) = players.single() {
+        if let Ok((_, _, p, h, _, _)) = players.single() {
             info!(
                 "story autopilot: loot step: paused {}, boxes {}, scene view {}, scene plays the player {}, qte {}, hands busy {}, dead {}, spawning {}, driving {}, landing awaited {}, reload due {}",
                 time.is_paused(),
@@ -5116,7 +5135,7 @@ fn autopilot_loot(
         }
         return;
     }
-    let Ok((me, mut at, mut player, health, inventory)) = players.single_mut() else { return };
+    let Ok((me, mut at, mut player, health, inventory, stats)) = players.single_mut() else { return };
     // Shooting from where he is, not going after anyone: a passenger, gun in
     // hand, or on a mounted gun (HUR_040's barge).
     // (Or with a rifle lent where it was taken: a sniping challenge's.)
@@ -5128,6 +5147,16 @@ fn autopilot_loot(
     }
     if host.reload_at.is_some() {
         return;
+    }
+    // Hurt, a medkit (or below the first segment, patched up), as a player
+    // would between shots: the fights wore him down and the next hit killed
+    // him with medkits in his pocket.
+    let now_h = time.elapsed_secs();
+    let can_heal = stats.is_some_and(|s| s.medkits > 0) || health.current < crate::combat::HEALTH_SEGMENT;
+    if can_heal && health.current < health.max * HEAL_BELOW && now_h >= host.autopilot_heal_at {
+        host.autopilot_heal_at = now_h + 1.0;
+        info!("story autopilot: heal at {:.0} health", health.current);
+        actions.press(crate::controls::Action::Medkit);
     }
     // Standing in flames (the grass his own flamethrower lit, a body still
     // burning, searched for rounds), out of them first, as a player would:

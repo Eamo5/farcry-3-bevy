@@ -4663,6 +4663,10 @@ there checkpoint after checkpoint for an hour:
   at the doctor's took it on and failed CIT_020, and the checkpoint then
   had both. On a mission, given up or not, it now takes only triggers of
   no mission or of one taken on (`Story::watched_triggers_taken`).
+* **Medkits.** The autopilot never healed, and fights wore the player
+  down till the next hit killed him with medkits in his pocket. Below half
+  his health (`HEAL_BELOW`) it uses one, or below the first segment
+  patches up, as a player would.
 * **The dance.** BNG_010's dance at Riley's club is a QTE whose gameplay
   names no anchor, and its moves played at the world's origin, out at sea,
   where the player drowned. A QTE with none plays where the player stands,
@@ -4850,7 +4854,20 @@ the game now plays (`boss_fight`) instead of ending it at once.
 * **The autopilot** leaves the player to the fight while it is on: the
   fight's own autopilot holds the bow's sights on the mask, or on a minion
   close by, and fires. `FC3_BOSS_HP=<health>` starts the giant with that
-  much (its phase for it).
+  much (its phase for it). As it rears hurt, and while it breathes, it
+  sidesteps across the arena about where it began (`DODGE_SPAN`, 8 m
+  either way; the walk reads the movement axis, not actions held), and
+  it heals when hurt, a medkit or a patch-up.
+* **The breath's aim.** It began on the player and closed on him at 1.2
+  of the gap a second, so within its 3 m it always burnt him at 100 a
+  second, and each new phase killed him. It begins now where the giant saw
+  him a moment before (`BREATH_LEAD`, 1 s) and closes slowly
+  (`BREATH_FOLLOW`, 0.35): standing, he is in it; on the move, he gets
+  out. The autopilot then fought it to its knockout.
+* **The bow drawn.** The scene set-up before the fight holsters the weapon
+  and waits to hear it put away (`CWeaponHolsteredEvent`) before it gives
+  up and takes the weapon away for good (`NoWeaponMode`). A script's
+  holster (`CAPI_Pawn.Holster`) is heard now, and the bow came up.
 * **Its looks.** The script removes the mask placed for the cinematics
   (`Mask_0`) as the fight starts; the fight puts its own on the head bone
   (`m_bossMaskArchetype`), the broken one at `ChangeMaskNow`
