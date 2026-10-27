@@ -1307,6 +1307,25 @@ impl Story {
         self.watched_triggers_where(graph, |c, target| mission_of(c, target).is_none(), false)
     }
 
+    /// The triggers scripts wait on of no mission or of one taken on (its
+    /// main mission acknowledged), as `watched_triggers_in_graph` lists
+    /// them: on a mission, not another's start, a block of one not taken on
+    /// (BNG_020's pills at the doctor's, used as CIT_020's chase went
+    /// nowhere, took it on and failed CIT_020).
+    pub fn watched_triggers_taken(&self, graph: Option<&str>) -> Vec<(u64, String, [f32; 3], bool)> {
+        self.watched_triggers_where(
+            graph,
+            |c, target| {
+                mission_of(c, target).is_none_or(|(name, _)| {
+                    c.missions.by_id.values().filter(|m| m.name == name).any(|m| {
+                        m.acknowledged || m.block.as_ref().and_then(|b| b.parent.as_ref()).and_then(|p| c.missions.by_id.get(p)).is_some_and(|p| p.acknowledged)
+                    })
+                })
+            },
+            false,
+        )
+    }
+
     /// (`armed`: in the order they were first listened to, else by id.)
     fn watched_triggers_where(&self, graph: Option<&str>, keep: impl Fn(&Core, &Table) -> bool, armed: bool) -> Vec<(u64, String, [f32; 3], bool)> {
         let c = self.core.borrow();
@@ -3720,6 +3739,59 @@ mod tests {
         assert_eq!(id, 200);
         assert!((at[0] - 30.3).abs() < 1e-4 && (at[1] - 10.2).abs() < 1e-4 && (at[2] - 1.6).abs() < 1e-4, "{at:?}");
         assert!(seen);
+    }
+
+    /// On a mission, the triggers of one taken on and of none are offered,
+    /// not another's start.
+    #[test]
+    fn on_a_mission_another_missions_start_is_not_offered() {
+        use fc3_formats::fcb::Object;
+        use std::sync::Arc;
+        let mut data = StoryData::default();
+        for id in [200, 201, 202] {
+            data.entities.insert(id, data::Entry {
+                id,
+                name: format!("e{id}"),
+                class: "CEntity".into(),
+                pos: [id as f32, 0.0, 0.0],
+                angles: [0.0; 3],
+                layer: fc3_formats::world::DEFAULT_MISSION_LAYER,
+                origin: data::Origin::Global,
+                components: Arc::new(Object::default()),
+                fields: Arc::new(Object::default()),
+            });
+        }
+        let story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        {
+            let mut c = story.core.borrow_mut();
+            for (script, taken) in [("CIT_020_MAIN.lua", true), ("BNG_020_MAIN.lua", false)] {
+                let id = c.register_mission(script, false, None, None, false, false, false, "");
+                c.missions.by_id.get_mut(&id).unwrap().state = missions::State::Running;
+                if taken {
+                    let owner = c.missions.by_id[&id].owner;
+                    c.acknowledge(owner, false);
+                }
+            }
+        }
+        story
+            .domino()
+            .lua()
+            .load(
+                r#"
+            local mine = { _type = { _path = "Domino/user/fc3/FC3_MainMissions/CIT_020/CIT_020_MAIN.CIT_020_MAIN.lua", In = function(self) end } }
+            local theirs = { _type = { _path = "Domino/user/fc3/FC3_MainMissions/BNG_020/BNG_020_MAIN.BNG_020_MAIN.lua", In = function(self) end } }
+            local none = { _type = { _path = "Domino/user/fc3/FC3_Base/base_c0_cave_main.lua", In = function(self) end } }
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("200", mine, "In", "Enter")
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("201", theirs, "In", "Use")
+            CScriptCallbackSystem_GetInstance():RegisterEventCallback("202", none, "In", "Enter")
+        "#,
+            )
+            .exec()
+            .unwrap();
+        let mut ids: Vec<u64> = story.watched_triggers_taken(None).into_iter().map(|w| w.0).collect();
+        ids.sort();
+        assert_eq!(ids, [200, 202]);
+        assert_eq!(story.watched_triggers().len(), 3);
     }
 
     /// A hazard's trigger (BAM_055's hot pools) isn't among those to step

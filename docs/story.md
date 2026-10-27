@@ -4648,6 +4648,25 @@ there checkpoint after checkpoint for an hour:
   moves are kept out of a lit emitter's reach now (`Stims::out_of_harm`:
   just out of it, the same way from it), and dropped guns and bodies in
   it aren't gone to. B20 completed, and the chase (B30) began.
+* **The last two privateers.** B30 ends counting down two privateers in
+  a shack, and they went unhurt: the rifle was empty, the flamethrower
+  full beside it, and the fight picked its gun by reach and harm alone.
+  It takes one with rounds first now, as the defence against animals
+  does (the wheel turned to it); dry, it searches bodies and dropped
+  guns out to 150 m (`AMMO_SEARCH_DRY`). Gone up to a foe, it stands
+  where nothing is between them (12 ways round at 2 to 8 m, the nearest
+  first; with a flamethrower from its reach's end, 8 m), and it gets out
+  of flames it stands in (`Fires::is_burning_at`; its own fire burnt it
+  to death), not searching a body or taking a gun in them.
+* **Another mission's start.** With B30 given up on (four minutes
+  nowhere), the autopilot took the others' triggers too: BNG_020's pills
+  at the doctor's took it on and failed CIT_020, and the checkpoint then
+  had both. On a mission, given up or not, it now takes only triggers of
+  no mission or of one taken on (`Story::watched_triggers_taken`).
+* **The dance.** BNG_010's dance at Riley's club is a QTE whose gameplay
+  names no anchor, and its moves played at the world's origin, out at sea,
+  where the player drowned. A QTE with none plays where the player stands,
+  facing his way.
 
 ## BAM_055's escape and BAM_060's door
 

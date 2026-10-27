@@ -2389,7 +2389,10 @@ fn run_story(
         if given_up && minute {
             info!("story autopilot: {focus:?} gone nowhere a while; the others' triggers too");
         }
-        let mut watched = if focus.is_empty() || given_up {
+        let mut watched = if (focus.is_empty() || given_up) && mission_on {
+            // (On a mission, given up or not, no other mission is taken on.)
+            host.story.watched_triggers_taken(graph.as_deref())
+        } else if focus.is_empty() || given_up {
             host.story.watched_triggers_in_graph(graph.as_deref())
         } else {
             host.story.watched_triggers_unowned(graph.as_deref())
@@ -4733,6 +4736,8 @@ const SHOOT_FROM: f32 = 15.0;
 /// Tests: how far (m) the autopilot goes to search a body for rounds once
 /// its guns are dry.
 const AMMO_SEARCH: f32 = 40.0;
+/// Tests: as far (m), every gun dry.
+const AMMO_SEARCH_DRY: f32 = 150.0;
 
 /// Tests: beyond how far (m) the autopilot shoots through the sights.
 const LONG_SHOT: f32 = 30.0;
@@ -4996,7 +5001,7 @@ fn autopilot_loot(
     scripted: Res<ScriptedPlayer>,
     catalog: Res<crate::progression::LootCatalog>,
     progress: Res<crate::progression::Progress>,
-    (heights, stims): (Res<crate::terrain::Heightfield>, Res<crate::stims::Stims>),
+    (heights, stims, fires): (Res<crate::terrain::Heightfield>, Res<crate::stims::Stims>, Res<crate::fire::Fires>),
     mut players: Query<(Entity, &mut Transform, &mut Player, &crate::combat::Health, &crate::weapons::Inventory)>,
     animals: Query<(Entity, &Transform, &crate::wildlife::WildAnimal, &crate::combat::Health, Option<&crate::wildlife::Carcass>, Option<&crate::story_actors::StoryActor>), Without<Player>>,
     plants: Query<(&crate::pickups::Pickup, &GlobalTransform)>,
@@ -5066,7 +5071,7 @@ fn autopilot_loot(
     // stands within 3 m of it, and a dropped gun beside it, or a foe gone up
     // to by it, put the player in it. Just out of it instead.)
     let teleport = |t: &mut Transform, p: &mut Player, pos: [f32; 3], yaw: f32| teleport(t, p, stims.out_of_harm(pos), yaw);
-    let harmless = |at: Vec3| stims.harm_near(at, 1.0).is_none();
+    let harmless = |at: Vec3| stims.harm_near(at, 1.0).is_none() && !fires.is_burning_at(at);
     // (Once the story has stalled a while: what holds this step back, if
     // anything.)
     let report = host.quiet > 20.0 && host.quiet - time.delta_secs() <= 20.0;
@@ -5124,6 +5129,23 @@ fn autopilot_loot(
     if host.reload_at.is_some() {
         return;
     }
+    // Standing in flames (the grass his own flamethrower lit, a body still
+    // burning, searched for rounds), out of them first, as a player would:
+    // the autopilot burnt to death in its own fire.
+    let feet_here = at.translation - Vec3::Y * crate::player::HALF_HEIGHT;
+    if fires.is_burning_at(feet_here) && !fixed && !player.swimming {
+        let out = (1..=4)
+            .flat_map(|k| (0..8).map(move |i| (k as f32 * 3.0, i as f32 * std::f32::consts::TAU / 8.0)))
+            .map(|(r, a)| feet_here + Vec3::new(a.cos() * r, 0.0, a.sin() * r))
+            .find(|p| !fires.is_burning_at(*p) && harmless(*p));
+        if let Some(mut p) = out {
+            p.y = feet_near(&spatial, &heights, me, p, feet_here.y);
+            info!("story autopilot: out of the flames");
+            teleport(&mut at, &mut player, to_dunia(p), 0.0);
+            host.quiet = 0.0;
+            return;
+        }
+    }
     // An animal after the player, near: shot first, as a player would (a
     // crocodile by one of WIL_010's packages took him at the water's edge
     // again and again while he photographed them).
@@ -5179,8 +5201,12 @@ fn autopilot_loot(
         }
         if now >= *next_press {
             *next_press = now + 0.2;
+            let loaded = |s: &crate::weapons::WeaponSlot| s.mag + s.reserve > 0 && inventory.defs[s.def].class != crate::weapons::WeaponClass::Melee;
             if inventory.slot().mag == 0 && inventory.slot().reserve > 0 {
                 actions.press(Action::Reload);
+            } else if !loaded(inventory.slot()) && inventory.slots.iter().any(loaded) {
+                // (Dry: the next gun with rounds, as the wheel turns.)
+                actions.cycle = 1;
             } else {
                 actions.press(Action::Fire);
             }
@@ -5423,6 +5449,9 @@ fn autopilot_loot(
     let out_of_rounds = guns().all(|s| s.mag + s.reserve < inventory.defs[s.def].magazine.max(1));
     let dry = guns().all(|s| s.mag + s.reserve == 0);
     if out_of_rounds && (host.quiet > 4.0 || dry) && !on_call && !fixed {
+        // (Dry, further: CIT_020's chase ended with the rifle empty and the
+        // convoy's dead well off.)
+        let ammo_reach = if dry { AMMO_SEARCH_DRY } else { AMMO_SEARCH };
         // (A gun dropped of a kind it carries first: walked over, its
         // rounds are taken.)
         let carried = |name: &str| {
@@ -5432,7 +5461,7 @@ fn autopilot_loot(
         let gun = plants
             .iter()
             .filter(|(p, t)| {
-                crate::pickups::is_dropped(p.id) && matches!(p.kind, crate::pickups::PickupKind::Weapon(n) if carried(n)) && off(t) < AMMO_SEARCH && !leashed(t.translation()) && harmless(t.translation())
+                crate::pickups::is_dropped(p.id) && matches!(p.kind, crate::pickups::PickupKind::Weapon(n) if carried(n)) && off(t) < ammo_reach && !leashed(t.translation()) && harmless(t.translation())
             })
             .min_by(|a, b| off(a.1).total_cmp(&off(b.1)));
         if let Some((p, gt)) = gun {
@@ -5447,7 +5476,7 @@ fn autopilot_loot(
         let body = npcs
             .iter()
             .filter(|(t, h, body, _, actor, ..)| {
-                h.dead && body.is_some_and(|b| !b.skin) && near(t) < AMMO_SEARCH && !leashed(t.translation) && !skipped.contains_key(&actor.id) && harmless(t.translation)
+                h.dead && body.is_some_and(|b| !b.skin) && near(t) < ammo_reach && !leashed(t.translation) && !skipped.contains_key(&actor.id) && harmless(t.translation)
             })
             .min_by(|a, b| near(a.0).total_cmp(&near(b.0)));
         if let Some((nt, _, _, _, actor, _, _)) = body {
@@ -5492,7 +5521,7 @@ fn autopilot_loot(
             .filter(|(p, t)| {
                 dry && crate::pickups::is_dropped(p.id)
                     && matches!(p.kind, crate::pickups::PickupKind::Weapon(_))
-                    && off(t) < AMMO_SEARCH
+                    && off(t) < ammo_reach
                     && !leashed(t.translation())
                     && !skipped.contains_key(&p.id)
                     && harmless(t.translation())
@@ -5541,10 +5570,30 @@ fn autopilot_loot(
                     *shooting = Some((id, nh.current, now));
                 } else if now - since > 8.0 {
                     // On foot, the first time: right up to him (a cliff or
-                    // the water's edge between), on the ground beside him.
+                    // the water's edge between), on the ground beside him,
+                    // where nothing stands between (CIT_020's last two
+                    // privateers keep to a shack, and from beside it the
+                    // shots met its walls), the nearest such, else his side.
                     let flat = (at.translation - nt.translation).with_y(0.0).normalize_or(Vec3::Z);
-                    let mut feet = nt.translation + flat * 3.0;
-                    feet.y = heights.height_at(feet).unwrap_or(nt.translation.y - crate::player::HALF_HEIGHT).max(nt.translation.y - crate::player::HALF_HEIGHT);
+                    let chest = nt.translation + Vec3::Y * 0.4;
+                    let his_feet = nt.translation.y - crate::player::HALF_HEIGHT;
+                    let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+                    // (A flamethrower in hand, from its reach's end: close
+                    // up, its fire took the shack and the player with it.)
+                    let radii = if inventory.def().class == crate::weapons::WeaponClass::Flamethrower { [8.0f32, 6.0, 10.0, 5.0] } else { [2.0, 3.0, 5.0, 8.0] };
+                    let clear = radii.into_iter().flat_map(|r| (0..12).map(move |i| (r, i as f32 * std::f32::consts::TAU / 12.0))).find_map(|(r, a)| {
+                        let mut p = nt.translation + Quat::from_rotation_y(a) * flat * r;
+                        p.y = feet_near(&spatial, &heights, me, p, his_feet);
+                        let eye = p + Vec3::Y * crate::player::EYE_HEIGHT;
+                        let to = chest - eye;
+                        let open = Dir3::new(to).is_ok_and(|d| spatial.cast_ray(eye, d, to.length(), true, &filter).is_none_or(|h| h.distance > to.length() - 0.6));
+                        (open && (p.y - his_feet).abs() < 2.0).then_some(p)
+                    });
+                    let feet = clear.unwrap_or_else(|| {
+                        let mut feet = nt.translation + flat * 3.0;
+                        feet.y = heights.height_at(feet).unwrap_or(his_feet).max(his_feet);
+                        feet
+                    });
                     if !fixed && !leashed(feet) && came_near.insert(actor.id) {
                         info!("story autopilot: {} out of reach; going up to him", actor.id);
                         teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
@@ -5760,15 +5809,19 @@ fn autopilot_loot(
             // (a heavy stood a pistol for minutes beside the rifle carried),
             // else the one that reaches furthest: the next weapon round, as
             // the wheel would turn it, until it's in hand.
+            // (One with rounds first: CIT_020's last two privateers stood an
+            // empty rifle, the flamethrower full beside it.)
             let dist = aim.length();
             let score = |slot: usize| {
-                let d = &inventory.defs[inventory.slots[slot].def];
+                let s = &inventory.slots[slot];
+                let d = &inventory.defs[s.def];
+                let loaded = s.mag + s.reserve > 0;
                 if d.class == crate::weapons::WeaponClass::Melee {
-                    (false, 0.0)
+                    (false, false, 0.0)
                 } else if d.range >= dist {
-                    (true, d.damage * d.pellets.max(1) as f32 / d.interval.max(0.05))
+                    (loaded, true, d.damage * d.pellets.max(1) as f32 / d.interval.max(0.05))
                 } else {
-                    (false, d.range)
+                    (loaded, false, d.range)
                 }
             };
             let best = (0..inventory.slots.len()).max_by(|a, b| score(*a).partial_cmp(&score(*b)).unwrap_or(std::cmp::Ordering::Equal));

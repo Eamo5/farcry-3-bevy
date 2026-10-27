@@ -254,6 +254,7 @@ fn run_qtes(
     mut meters: Query<&mut Node, With<QteMeter>>,
     mut shown: Local<String>,
     mut commands: Commands,
+    players: Query<(&Transform, &crate::player::Player)>,
 ) {
     // Tutorial modals pause virtual time while remaining in Playing. Their
     // inputs must not also answer a QTE in the paused world.
@@ -276,8 +277,15 @@ fn run_qtes(
         let handles = paths.into_iter().map(|c| (c.clone(), server.load(cache_path(&fc3_formats::cache::anim_rel(c))))).collect();
         let data = host.story.data();
         let anchor = start.params.get("AnchorScene").and_then(|a| a.parse::<u64>().ok()).and_then(|a| data.entities.get(&a));
+        // (None named: where the player stands, facing his way (the move's
+        // own forward is its +Z). BNG_010's dance at Riley's club names none,
+        // and played at the world's origin, out at sea.)
         let anchor = anchor
             .map(|e| Transform { translation: to_bevy(e.pos), rotation: Quat::from_array(fc3_formats::world::angles_to_bevy_quat(e.angles)), scale: Vec3::ONE })
+            .or_else(|| {
+                let (t, p) = players.single().ok()?;
+                Some(Transform::from_translation(t.translation - Vec3::Y * crate::player::HALF_HEIGHT).with_rotation(Quat::from_rotation_y(p.yaw + std::f32::consts::PI)))
+            })
             .unwrap_or_default();
         let opponent = start.params.get("Optional_pawn/EntityID").and_then(|e| e.parse::<u64>().ok());
         info!("qte: {player} (opponent {opponent:?}, {npc:?})");
@@ -461,6 +469,9 @@ fn run_qtes(
             });
             if qt.state != Some(n) {
                 info!("qte: {} plays {} ({:.1} s)", qt.player, next.name, d);
+            }
+            if origin.translation.distance(qt.anchor.translation) > 20.0 || !origin.translation.is_finite() {
+                warn!("qte: {} {} starts {:?} from its anchor {:?} (anchored {})", qt.player, next.name, origin.translation, qt.anchor.translation, next.anchored);
             }
             (qt.state, qt.t, qt.fired, qt.length, qt.origin, qt.playing) = (Some(n), 0.0, -1.0, d, origin, Some(name));
         }
