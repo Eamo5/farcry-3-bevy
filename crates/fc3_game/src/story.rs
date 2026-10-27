@@ -104,6 +104,31 @@ fn apply_sides(
             }
         }
     }
+    // The regions scripts keep them to: to fight from (handed to one come
+    // into the world since too), and to wait in (a post outside it moved to
+    // its middle).
+    if !host.combat_areas.is_empty() || !host.idle_areas.is_empty() || host.areas_changed {
+        let changed = std::mem::take(&mut host.areas_changed);
+        let data = host.story.data();
+        let shape = |region: Option<&u64>| region.and_then(|r| data.entities.get(r)).and_then(fc3_story::triggers::shape_of).map(std::sync::Arc::new);
+        for (actor, mut npc) in &mut npcs {
+            let wanted = host.combat_areas.get(&actor.id);
+            if changed || (wanted.is_some() && npc.combat_area.is_none()) {
+                npc.combat_area = shape(wanted);
+            }
+            if changed {
+                if let Some(area) = shape(host.idle_areas.get(&actor.id)) {
+                    let post = npc.post;
+                    if !area.holds(to_dunia(post), 0.0, fc3_story::triggers::BODY_HALF_HEIGHT) {
+                        if let Some(mid) = crate::npc::area_middle(&area) {
+                            npc.post = to_bevy(mid).with_y(post.y);
+                            npc.at_spot = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
     // Whom scripts set them against or beside (SQC_010's rebels turned on
     // the player, CIT_020's held back from the pirates a while).
     if !host.relations.is_empty() {
@@ -546,9 +571,21 @@ const LANDING_AFTER: f32 = 1.5;
 /// The player in the air where a script waits for him to land: the
 /// autopilot's other steps wait for the landing (one setting him down by a
 /// foe left JAS_170's drop zone waiting for a landing it never heard).
-fn landing_awaited(host: &StoryHost, p: &Player) -> bool {
-    !p.grounded && !p.swimming && !p.driving && host.story.awaits_event(fc3_story::PLAYER, "DominoEvent_PlayerLanded")
+fn landing_awaited(host: &StoryHost, p: &Player, t: &Transform, heights: &crate::terrain::Heightfield) -> bool {
+    // (Or high in the air, before any listens: JAS_170's drop zone arms some
+    // seconds after the jump, and meanwhile a step to its flare point set
+    // the player down from 390 m up, no landing heard.)
+    // (Not held up at a high trigger: that's the autopilot's own.)
+    let high = !p.noclip && heights.height_at(t.translation).is_some_and(|g| t.translation.y - g.max(crate::sky::SEA_LEVEL) > HIGH_IN_AIR);
+    // (Or under the parachute or in the wingsuit, however low: a fight's
+    // step set him down from his canopy, no landing heard.)
+    let flying = p.air != crate::player::AirMode::None;
+    !p.grounded && !p.swimming && !p.driving && (high || flying || host.story.awaits_event(fc3_story::PLAYER, "DominoEvent_PlayerLanded"))
 }
+
+/// How high (m) over the ground or the sea the player falling counts as in
+/// the air: the autopilot's steps wait for him to come down.
+const HIGH_IN_AIR: f32 = 30.0;
 
 /// The story autopilot, falling from high up (JAS_170's wingsuit drop, from
 /// 300 m over the sea): down to 60 m over the objective marker nearest, to
@@ -564,6 +601,7 @@ fn autopilot_drop(
     mut players: Query<(&mut Transform, &mut Player)>,
     mut dropped: Local<bool>,
     mut held: Local<f32>,
+    progress: Res<crate::progression::Progress>,
 ) {
     let _slow = crate::story::Slow::new("autopilot_drop");
     if std::env::var_os("FC3_STORY_AUTOPILOT").is_none() {
@@ -574,6 +612,12 @@ fn autopilot_drop(
         *dropped = false;
         *held = 0.0;
         return;
+    }
+    // (Over the drop zone, the parachute open, as a player opens it to come
+    // down there: with the wingsuit owned, the fall glided off 115 m and into
+    // the ground.)
+    if *dropped && !p.spawning && progress.upgrade(crate::freefall::PARACHUTE) > 0 && p.air != crate::player::AirMode::Chute {
+        p.air = crate::player::AirMode::Chute;
     }
     let surface = heights.height_at(t.translation).unwrap_or(0.0).max(crate::sky::SEA_LEVEL);
     let high = t.translation.y - crate::player::HALF_HEIGHT - surface > DROP_FROM && p.velocity.y < 0.0;
@@ -603,8 +647,16 @@ fn autopilot_drop(
     *dropped = true;
     let ground = heights.height_at(to_bevy(at)).unwrap_or(at[2]).max(crate::sky::SEA_LEVEL);
     info!("story autopilot: down to land at {}", host.story.data().name_of(id).unwrap_or("?"));
-    teleport(&mut t, &mut p, [at[0], at[1], ground + DROP_HEIGHT], 0.0);
+    // (Under the parachute he drifts on the way he faces, north as set
+    // down here, some 45 m from 60 m up: from that far short of the zone,
+    // as a player steers to come down in it. Straight over it, he came down
+    // in the sea past the beach.)
+    let short = if progress.upgrade(crate::freefall::PARACHUTE) > 0 { CHUTE_DRIFT } else { 0.0 };
+    teleport(&mut t, &mut p, [at[0], at[1] - short, ground + DROP_HEIGHT], 0.0);
 }
+
+/// How far (m) the parachute drifts from `DROP_HEIGHT` down.
+const CHUTE_DRIFT: f32 = 45.0;
 
 /// How high over the drop zone the autopilot puts the player to land there,
 /// and how high over the ground a fall must be for the autopilot to steer it.
@@ -864,6 +916,12 @@ pub struct StoryHost {
     pub lights_switched: HashMap<u64, bool>,
     /// Allied fighters sent to a battlefield's point (`SetBattlefields`).
     pub battlefield_posts: HashMap<u64, u64>,
+    /// Characters a script keeps to a region when they fight (their combat
+    /// BSR, `SetBattlefields <group> <region> 3`) or idle (1), by id: the
+    /// region; and whether any changed since they were last handed out.
+    pub combat_areas: HashMap<u64, u64>,
+    pub idle_areas: HashMap<u64, u64>,
+    pub areas_changed: bool,
     /// Alarm boxes scripts switched (`SetAlarmState`), for `story_alarms`.
     pub alarm_sets: Vec<(u64, u8)>,
     /// Health scripts set (`SetPawnHealth`), by pawn.
@@ -1035,6 +1093,9 @@ impl StoryHost {
             impaired: HashMap::new(),
             relations: HashMap::new(),
             battlefield_posts: HashMap::new(),
+            combat_areas: HashMap::new(),
+            idle_areas: HashMap::new(),
+            areas_changed: false,
             npc_damage: HashMap::new(),
             invincible: HashMap::new(),
             vehicle_explosions: Vec::new(),
@@ -1971,6 +2032,9 @@ fn run_story(
             host.impaired.clear();
             host.relations.clear();
             host.battlefield_posts.clear();
+            host.combat_areas.clear();
+            host.idle_areas.clear();
+            host.areas_changed = true;
             host.npc_damage.clear();
             host.invincible.clear();
             host.collision_immune.clear();
@@ -2338,7 +2402,7 @@ fn run_story(
         && cinema.view.is_none()
         && !cinema.plays_player()
         && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
-        && !landing_awaited(&host, &p)
+        && !landing_awaited(&host, &p, &t, &heights)
         && (host.quiet > autopilot_delay || scorched)
         // (Not while it's still being set down where the last step put it,
         // unless that's taking far too long: a far step's ground streams in
@@ -2991,6 +3055,22 @@ fn run_story(
                     // fighter (Oliver being freed) goes to the battlefield
                     // he is given to be at (kind 0), as an action with no
                     // move of its own. (Fighters keep to their own AI.)
+                    // A group's idle region (1) and combat region (3), its
+                    // BSRs: where they wait, and where they fight from
+                    // (`npc::Npc::combat_area`). (The search region, 2, is
+                    // left to their own search.)
+                    "SetBattlefields" if a(2) == "1" || a(2) == "3" => {
+                        if let Ok(region) = a(1).parse::<u64>() {
+                            for pawn in host.story.group_members(&a(0)) {
+                                if a(2) == "3" {
+                                    host.combat_areas.insert(pawn, region);
+                                } else {
+                                    host.idle_areas.insert(pawn, region);
+                                }
+                            }
+                            host.areas_changed = true;
+                        }
+                    }
                     "SetBattlefields" if a(2) == "0" => {
                         if let Ok(field) = a(1).parse::<u64>() {
                             let data = host.story.data();
@@ -3340,6 +3420,16 @@ fn run_story(
                     }
                     // The scripts open an ability in the skill tree.
                     "CAPI_Player.SetAbilityUpgradable" if a(0) == fc3_story::PLAYER.to_string() => {
+                        // (The wingsuit isn't a skill: enabling it, as JAS_170's
+                        // brief does before the plane, hands it over, and the
+                        // parachute that ends its flights. The mission then
+                        // shows both's controls as the player drops 390 m,
+                        // and without them he fell to his death.)
+                        if a(1) == "SP_Wingsuit" {
+                            for gear in [crate::freefall::WINGSUIT, crate::freefall::PARACHUTE] {
+                                progress.upgrades.entry(gear.to_string()).or_insert(1);
+                            }
+                        }
                         progress.upgradable.insert(a(1));
                     }
                     // A script group opened (shop items, handbook pages).
@@ -5104,7 +5194,7 @@ fn autopilot_loot(
     // anything.)
     let report = host.quiet > 20.0 && host.quiet - time.delta_secs() <= 20.0;
     if report {
-        if let Ok((_, _, p, h, _, _)) = players.single() {
+        if let Ok((_, pt, p, h, _, _)) = players.single() {
             info!(
                 "story autopilot: loot step: paused {}, boxes {}, scene view {}, scene plays the player {}, qte {}, hands busy {}, dead {}, spawning {}, driving {}, landing awaited {}, reload due {}",
                 time.is_paused(),
@@ -5116,7 +5206,7 @@ fn autopilot_loot(
                 h.dead,
                 p.spawning,
                 p.driving && !p.armed_passenger,
-                landing_awaited(&host, p),
+                landing_awaited(&host, p, pt, &heights),
                 host.reload_at.is_some()
             );
         }
@@ -5151,7 +5241,7 @@ fn autopilot_loot(
     let fixed = player.armed_passenger || inventory.mounted_from.is_some();
     // (Held up where a high trigger was stepped into, the player may still
     // go after a character: getting there sets him down.)
-    if health.dead || player.spawning || (player.driving && !player.armed_passenger) || landing_awaited(&host, &player) {
+    if health.dead || player.spawning || (player.driving && !player.armed_passenger) || landing_awaited(&host, &player, &at, &heights) {
         return;
     }
     if host.reload_at.is_some() {

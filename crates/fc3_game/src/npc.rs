@@ -611,6 +611,9 @@ pub struct Npc {
     pub mag: u32,
     pub reload: f32,
     pub strafe_dir: f32,
+    /// Where a script keeps him fighting (his combat BSR, `SetBattlefields
+    /// <group> <region> 3`): a fight's moves and cover stay inside it.
+    pub combat_area: Option<std::sync::Arc<fc3_story::triggers::Shape>>,
     pub marker_id: u64,
     pub accuracy: f32,
     pub damage: f32,
@@ -1696,6 +1699,7 @@ pub(crate) fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker
         mag: stats.mag,
         reload: 0.0,
         strafe_dir: if rng.f32() < 0.5 { -1.0 } else { 1.0 },
+        combat_area: None,
         marker_id,
         accuracy: stats.accuracy,
         damage: stats.damage,
@@ -2411,7 +2415,10 @@ fn act(
                 npc.cover_search -= dt;
                 if takes_cover && npc.cover.is_none() && npc.cover_search <= 0.0 && dist > 9.0 && nav.ready() {
                     npc.cover_search = rng.range(2.5, 4.5);
-                    npc.cover = find_cover(&nav, &spatial, e, pe, pos, tgt.pos).map(|spot| Cover {
+                    let in_area = |spot: &Vec3| {
+                        npc.combat_area.as_ref().is_none_or(|a| a.holds(crate::data::to_dunia(*spot + Vec3::Y * HALF_HEIGHT), 0.0, fc3_story::triggers::BODY_HALF_HEIGHT))
+                    };
+                    npc.cover = find_cover(&nav, &spatial, e, pe, pos, tgt.pos).filter(in_area).map(|spot| Cover {
                         spot,
                         settled: false,
                         up: false,
@@ -2526,6 +2533,18 @@ fn act(
                         &spare,
                         &is_vehicle,
                     );
+                }
+                // (Kept to the area a script gives his fight: a move that
+                // would take him out of it goes back in, toward its middle,
+                // instead; one already out of it walks back.)
+                if let Some(area) = npc.combat_area.clone() {
+                    let inside = |p: Vec3| area.holds(crate::data::to_dunia(p), 0.0, fc3_story::triggers::BODY_HALF_HEIGHT);
+                    if goal.is_some_and(|g| !inside(g)) || (goal.is_none() && !inside(pos)) {
+                        if let Some(mid) = area_middle(&area) {
+                            goal = Some(crate::data::to_bevy(mid).with_y(pos.y));
+                            speed = speed.max(2.6);
+                        }
+                    }
                 }
             }
             NpcState::Search => {
@@ -2702,6 +2721,21 @@ fn act(
             };
         }
         animate_limbs(children, &mut limbs, npc.velocity.length(), time.elapsed_secs(), npc.state == NpcState::Combat);
+    }
+}
+
+/// A region's middle (Dunia; its height not meant): a polygon's centroid
+/// of corners, a box's or sphere's centre.
+pub(crate) fn area_middle(area: &fc3_story::triggers::Shape) -> Option<[f32; 3]> {
+    use fc3_story::triggers::Shape;
+    match area {
+        Shape::Prism { points, .. } if !points.is_empty() => {
+            let n = points.len() as f32;
+            let (x, y) = points.iter().fold((0.0, 0.0), |(x, y), p| (x + p[0] / n, y + p[1] / n));
+            Some([x, y, 0.0])
+        }
+        Shape::Prism { .. } => None,
+        Shape::Box { centre, .. } | Shape::Sphere { centre, .. } => Some(*centre),
     }
 }
 
@@ -3888,6 +3922,15 @@ pub fn player_noise(writer: &mut MessageWriter<Noise>, at: Vec3, radius: f32, ki
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A region's middle: a polygon's centroid of corners, a box's centre.
+    #[test]
+    fn a_regions_middle() {
+        use fc3_story::triggers::Shape;
+        let square = Shape::Prism { points: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 20.0], [0.0, 20.0]], z_min: 0.0, z_max: 5.0 };
+        assert_eq!(area_middle(&square), Some([5.0, 10.0, 0.0]));
+        assert_eq!(area_middle(&Shape::Box { centre: [1.0, 2.0, 3.0], half: [1.0; 3], yaw: 0.0 }), Some([1.0, 2.0, 3.0]));
+    }
 
     /// Armies as the world places them, and as scripts change a pawn's
     /// hostility and alliances (`PawnRelationshipModifier`'s masks).

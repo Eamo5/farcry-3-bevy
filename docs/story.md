@@ -458,6 +458,16 @@ is the story's own:
   glint stays for pickups without one, and for bodies. Seen: a kelp
   pickup at JAS_100's outpost lit gold (`FC3_NO_HIGHLIGHTS=1`, for a
   comparison, leaves it dark).
+* **Where they fight.** `SetBattlefields <group> <region> <kind>` gives a
+  group a region by kind (the `SetBattlefields` box: 0 the battlefield,
+  1 the idle BSR, 2 the search BSR, 3 the combat BSR; `SetAll` sends all
+  four, 147 uses, `SetCombatBSR` 113). Besides the battlefield (walkers
+  sent there, allies posted round it), the combat region now keeps their
+  fight in it (`npc::Npc::combat_area`): a move out of it goes toward its
+  middle instead, cover outside it isn't taken, and one out of it walks
+  back; a member come into the world later gets it too. The idle region
+  moves a post outside it to its middle. (The search region is left to
+  their own search.)
 * **Set alight.** `StartBurning <pawn>` (the `Burn` box: CIT_050's
   reinforcements in Vaas's dream) sets a story character alight as fire
   that catches at once would (`burning::ScriptIgnitions`): the human
@@ -5026,7 +5036,19 @@ off, fails it.
 * **Landing first.** While a script waits for the landing and the player
   is in the air, the autopilot's other steps wait too (`landing_awaited`):
   its fight step set the player down by a pirate mid-fall, and the drop
-  zone never heard a landing.
+  zone never heard a landing. So too while he is more than 30 m up
+  (`HIGH_IN_AIR`), before any listener is armed (a step to the flare
+  point set him down from 390 m), and while he flies the wingsuit or the
+  parachute however low; and the door step waits for him to be down.
+* **The gear.** The wingsuit isn't a skill: JAS_170's brief enables it
+  (`SetAbilityUpgradable SP_Wingsuit`) before the plane, and the drop
+  shows the wingsuit's and the parachute's controls. Enabling it now
+  hands both over (a save from after it gets them on loading). The
+  autopilot's drop opens the parachute over the zone, from 45 m short of
+  it (`CHUTE_DRIFT`), the way the canopy drifts: dropped straight over it,
+  the wingsuit glided him 115 m off into the ground, and the canopy then
+  drifted him past the beach into the sea. He lands in the zone, and B05
+  goes on to Sam at the Crazy Cock.
 * **The truck.** B05 ends with the pirates' truck taken. Its listener
   (`VehicleListener`) names the truck only in its own box (`vehicle`),
   and nothing else of the truck is listened to, so the autopilot, boarding

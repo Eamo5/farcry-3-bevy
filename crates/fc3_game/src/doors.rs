@@ -228,8 +228,11 @@ fn autopilot_doors(
         }
         return;
     }
-    // (Not while there's something to use first, unless long stuck.)
-    if host.quiet() < 6.0 || (host.pending_use() && host.quiet() < 40.0) {
+    // (Not while there's something to use first, unless long stuck; nor in
+    // the air: JAS_170's door was gone to mid-drop, and the drop zone never
+    // heard the landing.)
+    let airborne = !p.grounded && !p.swimming && !p.driving;
+    if airborne || host.quiet() < 6.0 || (host.pending_use() && host.quiet() < 40.0) {
         return;
     }
     let awaited = host.story.awaited_doors();

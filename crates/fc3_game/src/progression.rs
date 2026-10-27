@@ -645,6 +645,13 @@ impl Progress {
                 self.skills.insert(rest.trim().to_string());
             }
             "upgradable" => {
+                // (The wingsuit enabled came with its gear: a save from
+                // before it was handed over has it now.)
+                if rest.trim() == "SP_Wingsuit" {
+                    for gear in [crate::freefall::WINGSUIT, crate::freefall::PARACHUTE] {
+                        self.upgrades.entry(gear.to_string()).or_insert(1);
+                    }
+                }
                 self.upgradable.insert(rest.trim().to_string());
             }
             "mission" => {
