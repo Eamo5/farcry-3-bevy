@@ -34,6 +34,28 @@ impl Stims {
         self.switched.clear();
         self.active.clear();
     }
+
+    /// An emitter on that would hurt whoever stands at `p` (within its
+    /// stims' reach and `margin` more): its place and its reach.
+    pub fn harm_near(&self, p: Vec3, margin: f32) -> Option<(Vec3, f32)> {
+        self.active.values().find_map(|em| {
+            let reach = em.stims.iter().map(|s| s.radius).fold(0.0, f32::max);
+            (em.at.distance(p) < reach + margin).then_some((em.at, reach))
+        })
+    }
+
+    /// `p` (Dunia), or, within an emitter's harm, just out of it, the same
+    /// way from it.
+    pub fn out_of_harm(&self, p: [f32; 3]) -> [f32; 3] {
+        let at = to_bevy(p);
+        match self.harm_near(at, 1.0) {
+            Some((em, reach)) => {
+                let away = (at - em).with_y(0.0).normalize_or(Vec3::X);
+                crate::data::to_dunia(em.with_y(at.y) + away * (reach + 2.0))
+            }
+            None => p,
+        }
+    }
 }
 
 struct Emitter {
@@ -149,5 +171,18 @@ mod tests {
         });
         let component = fc3_formats::fcb::Object { name_hash: fc3_formats::hash::name_hash("CStimsEmitterComponent"), fields: vec![], children: vec![list] };
         assert_eq!(stims_of(&component), [Stim { fire: true, level: 500.0, radius: 3.0 }]);
+    }
+
+    /// A place in an emitter's harm is moved just out of it, the same way
+    /// from it; one clear of it stays.
+    #[test]
+    fn a_place_in_harms_way_is_moved_out_of_it() {
+        let mut stims = Stims::default();
+        let at = [100.0, 200.0, 10.0];
+        stims.active.insert(1, Emitter { at: to_bevy(at), stims: vec![Stim { fire: true, level: 500.0, radius: 3.0 }], every: 1.0, next: 0.0, single: false });
+        let moved = stims.out_of_harm([101.0, 200.0, 10.5]);
+        assert!(((moved[0] - 105.0).abs() < 1e-3) && (moved[1] - 200.0).abs() < 1e-3 && (moved[2] - 10.5).abs() < 1e-3, "{moved:?}");
+        assert!(stims.harm_near(to_bevy(moved), 1.0).is_none());
+        assert_eq!(stims.out_of_harm([110.0, 200.0, 10.0]), [110.0, 200.0, 10.0]);
     }
 }

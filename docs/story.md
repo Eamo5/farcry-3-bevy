@@ -4643,6 +4643,11 @@ there checkpoint after checkpoint for an hour:
   truck put the player in its fire, dead within a second, again and
   again. A death of any kind within 2 s of a step (`FATAL_WITHIN`) leaves
   its trigger alone now, as a fall's within 12 s does.
+* **Out of the fire.** Then the fight put it there: out of rounds, it went
+  to a dropped gun beside the truck, and up to a foe by it. The fight's
+  moves are kept out of a lit emitter's reach now (`Stims::out_of_harm`:
+  just out of it, the same way from it), and dropped guns and bodies in
+  it aren't gone to. B20 completed, and the chase (B30) began.
 
 ## BAM_055's escape and BAM_060's door
 

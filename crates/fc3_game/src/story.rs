@@ -4996,7 +4996,7 @@ fn autopilot_loot(
     scripted: Res<ScriptedPlayer>,
     catalog: Res<crate::progression::LootCatalog>,
     progress: Res<crate::progression::Progress>,
-    heights: Res<crate::terrain::Heightfield>,
+    (heights, stims): (Res<crate::terrain::Heightfield>, Res<crate::stims::Stims>),
     mut players: Query<(Entity, &mut Transform, &mut Player, &crate::combat::Health, &crate::weapons::Inventory)>,
     animals: Query<(Entity, &Transform, &crate::wildlife::WildAnimal, &crate::combat::Health, Option<&crate::wildlife::Carcass>, Option<&crate::story_actors::StoryActor>), Without<Player>>,
     plants: Query<(&crate::pickups::Pickup, &GlobalTransform)>,
@@ -5062,6 +5062,11 @@ fn autopilot_loot(
     let _slow = crate::story::Slow::new("autopilot_loot");
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() { return }
     let Some(mut host) = host else { return };
+    // (Never into a fire a script lit: CIT_020's fuel truck burns whoever
+    // stands within 3 m of it, and a dropped gun beside it, or a foe gone up
+    // to by it, put the player in it. Just out of it instead.)
+    let teleport = |t: &mut Transform, p: &mut Player, pos: [f32; 3], yaw: f32| teleport(t, p, stims.out_of_harm(pos), yaw);
+    let harmless = |at: Vec3| stims.harm_near(at, 1.0).is_none();
     // (Once the story has stalled a while: what holds this step back, if
     // anything.)
     let report = host.quiet > 20.0 && host.quiet - time.delta_secs() <= 20.0;
@@ -5427,7 +5432,7 @@ fn autopilot_loot(
         let gun = plants
             .iter()
             .filter(|(p, t)| {
-                crate::pickups::is_dropped(p.id) && matches!(p.kind, crate::pickups::PickupKind::Weapon(n) if carried(n)) && off(t) < AMMO_SEARCH && !leashed(t.translation())
+                crate::pickups::is_dropped(p.id) && matches!(p.kind, crate::pickups::PickupKind::Weapon(n) if carried(n)) && off(t) < AMMO_SEARCH && !leashed(t.translation()) && harmless(t.translation())
             })
             .min_by(|a, b| off(a.1).total_cmp(&off(b.1)));
         if let Some((p, gt)) = gun {
@@ -5442,7 +5447,7 @@ fn autopilot_loot(
         let body = npcs
             .iter()
             .filter(|(t, h, body, _, actor, ..)| {
-                h.dead && body.is_some_and(|b| !b.skin) && near(t) < AMMO_SEARCH && !leashed(t.translation) && !skipped.contains_key(&actor.id)
+                h.dead && body.is_some_and(|b| !b.skin) && near(t) < AMMO_SEARCH && !leashed(t.translation) && !skipped.contains_key(&actor.id) && harmless(t.translation)
             })
             .min_by(|a, b| near(a.0).total_cmp(&near(b.0)));
         if let Some((nt, _, _, _, actor, _, _)) = body {
@@ -5490,6 +5495,7 @@ fn autopilot_loot(
                     && off(t) < AMMO_SEARCH
                     && !leashed(t.translation())
                     && !skipped.contains_key(&p.id)
+                    && harmless(t.translation())
             })
             .min_by(|a, b| off(a.1).total_cmp(&off(b.1)));
         if let Some((p, gt)) = other {
