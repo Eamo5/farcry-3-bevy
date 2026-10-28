@@ -465,9 +465,68 @@ pub fn hud(library: &Object) -> Option<Hud> {
     out
 }
 
+/// The field a pawn's graphic kit names a model by its path in.
+const KIT_MODEL: u32 = 0x3182_766C;
+
+/// The player's pawns (the prototype and the story's others, by their
+/// names: `.PawnPlayer_Privateer`, `.PawnPlayer_MissingFinger`,
+/// `.PawnPlayer_Skydiving`...) with the first-person model each wears: the
+/// first model its kit names (`jason_fp_privateer.xbg`).
+pub fn player_pawn_arms(library: &Object) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    library.walk(&mut |o, _| {
+        if !o.is("EntityPrototype") {
+            return;
+        }
+        let Some(name) = o.child("Entity").and_then(|e| e.str("hidName")).filter(|n| n.starts_with(PLAYER)) else { return };
+        let mut model = None;
+        o.walk(&mut |k, _| {
+            if model.is_none() {
+                model = k.str_h(KIT_MODEL).filter(|m| m.to_ascii_lowercase().ends_with(".xbg"));
+            }
+        });
+        if let Some(m) = model {
+            out.push((name, m));
+        }
+    });
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each of the player's pawns wears the first model its kit names; other
+    /// prototypes aren't the player's.
+    #[test]
+    fn the_players_pawns_wear_their_kits_models() {
+        use std::sync::Arc;
+        let named = |name: &str, fields: Vec<(u32, Vec<u8>)>, children: Vec<Arc<Object>>| {
+            Arc::new(Object { name_hash: crate::hash::name_hash(name), fields, children })
+        };
+        let text = |s: &str| [s.as_bytes(), &[0]].concat();
+        let proto = |pawn: &str, model: &str| {
+            let entity = named("Entity", vec![(crate::hash::name_hash("hidName"), text(pawn))], vec![]);
+            let kit = named("Kit", vec![], vec![named("Part", vec![(KIT_MODEL, text(model))], vec![]), named("Part", vec![(KIT_MODEL, text("other.xbg"))], vec![])]);
+            named("EntityPrototype", vec![], vec![entity, kit])
+        };
+        let library = Object {
+            name_hash: 0,
+            fields: vec![],
+            children: vec![
+                proto("player:MainCharacter/PawnPlayer", r"jason\jason_fp_clean.xbg"),
+                proto("player:MainCharacter/PawnPlayer.PawnPlayer_Privateer", r"jason\jason_fp_privateer.xbg"),
+                proto("npc:Merc", r"merc\merc.xbg"),
+            ],
+        };
+        assert_eq!(
+            player_pawn_arms(&library),
+            [
+                ("player:MainCharacter/PawnPlayer".to_string(), r"jason\jason_fp_clean.xbg".to_string()),
+                ("player:MainCharacter/PawnPlayer.PawnPlayer_Privateer".to_string(), r"jason\jason_fp_privateer.xbg".to_string()),
+            ]
+        );
+    }
 
     #[test]
     fn round_trips_and_jumps_to_its_height() {

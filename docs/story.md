@@ -666,6 +666,20 @@ is the story's own:
   the whole design. The right arm's material names the downloadable tribal
   tattoo in the same slot; it keeps the standard material, the skin without
   it.
+* **The player's pawn** (`CAPI_Player.SwitchPlayerPawn <player>
+  <archetype>`, the `SwitchPawnPlayer` box): the story makes the player
+  one of his other pawns, each with its own first-person arms: the
+  privateer's uniform from JAS_190's recruit on Hoyt's island (`.Pawn
+  Player_Privateer`), the finger Hoyt cuts at the poker table and its
+  bandage (`_MissingFinger`, `_Bandaged`), the skydiver's suit of the
+  opening jump (`_Skydiving`); the Bangkok flashbacks put the plain one on
+  and back (`Lib_Common.BNG_PlayerModel`). The pawn is kept with the
+  progress (`pawn`, saved) and the arms dressed in its model
+  (`fp::dress_arms`): each pawn's first-person model is the first its kit
+  names in the entity library (`body::player_pawn_arms`), read when the
+  first switch comes; the arms rig keeps its joints and clips and takes the
+  new model's skinned parts (`characters::redress_rig`). Seen: JAS_190's
+  B40C put the arms in the privateer's tan sleeves and black gloves.
 * **Handbook**: the converter writes `progression/handbook.txt` from
   `wikiitems.lib` and the encyclopedia's categories (localised names and
   texts; the manual's pages left out, tutorials put under the tutorial

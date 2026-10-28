@@ -3474,6 +3474,11 @@ fn run_story(
                         }
                     }
                     // The scripts open an ability in the skill tree.
+                    // The player made another of his pawns (`player, archetype`:
+                    // the privateer on Hoyt's island; `fp::dress_arms`).
+                    "CAPI_Player.SwitchPlayerPawn" if a(0) == fc3_story::PLAYER.to_string() => {
+                        progress.pawn = Some(a(1)).filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("player:MainCharacter/PawnPlayer"));
+                    }
                     "CAPI_Player.SetAbilityUpgradable" if a(0) == fc3_story::PLAYER.to_string() => {
                         // (The wingsuit isn't a skill: enabling it, as JAS_170's
                         // brief does before the plane, hands it over, and the

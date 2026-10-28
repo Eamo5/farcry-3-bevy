@@ -655,6 +655,33 @@ pub fn spawn_rig_with(
     spawn_dressed_rig(commands, parent, &dressed, weapon, set, offset, skin)
 }
 
+/// Dresses a rig in another model's skinned parts instead of `old` (the
+/// player's arms in the privateer's sleeves), bound to its joints by bone
+/// name; the new parts.
+pub fn redress_rig(commands: &mut Commands, rig: Entity, r: &CharacterRig, old: impl IntoIterator<Item = Entity>, model: &Fc3Model) -> Vec<Entity> {
+    let (Some(ibp), Some(lod), Some(&root)) = (model.inverse_bindposes.clone(), model.lods.first(), r.joints.first()) else { return Vec::new() };
+    for e in old {
+        commands.entity(e).despawn();
+    }
+    let joints: Vec<Entity> = model.bones.iter().map(|b| r.joint(b.name_hash).map_or(root, |(_, e)| e)).collect();
+    lod.parts
+        .iter()
+        .map(|p| {
+            commands
+                .spawn((
+                    Mesh3d(p.mesh.clone()),
+                    MeshMaterial3d(p.material.clone()),
+                    SkinnedMesh { inverse_bindposes: ibp.clone(), joints: joints.clone() },
+                    crate::original_shaders::SkinnedPart,
+                    NoFrustumCulling,
+                    Transform::IDENTITY,
+                    ChildOf(rig),
+                ))
+                .id()
+        })
+        .collect()
+}
+
 /// A body part and the materials swapped in for this character.
 pub struct Dressed<'a> {
     pub model: &'a Fc3Model,

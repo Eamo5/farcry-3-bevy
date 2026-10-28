@@ -459,6 +459,10 @@ pub struct Progress {
     /// The syringes put in the two quick slots (the crafting page's: used
     /// with `use_recipe_a`, `_b`), by recipe.
     pub quick_slots: [Option<String>; 2],
+    /// The pawn the story has the player be (`CAPI_Player.SwitchPlayerPawn`:
+    /// the privateer's uniform on Hoyt's island, the finger Hoyt cut), by its
+    /// archetype; none, the player's own.
+    pub pawn: Option<String>,
 }
 
 impl Default for Progress {
@@ -496,6 +500,7 @@ impl Default for Progress {
             removed_plans: Default::default(),
             trials: Default::default(),
             quick_slots: Default::default(),
+            pawn: None,
         }
     }
 }
@@ -626,6 +631,9 @@ impl Progress {
         for plan in &self.removed_plans {
             s += &format!("removedplan {plan}\n");
         }
+        if let Some(pawn) = &self.pawn {
+            s += &format!("pawn {pawn}\n");
+        }
         s
     }
 
@@ -712,6 +720,7 @@ impl Progress {
                 self.met.insert(rest.trim().to_string());
             }
             "wholetattoo" => self.whole_tattoo = true,
+            "pawn" => self.pawn = Some(rest.trim().to_string()).filter(|p| !p.is_empty()),
             "bonusplan" => {
                 self.bonus_plans.insert(rest.trim().to_ascii_lowercase());
             }

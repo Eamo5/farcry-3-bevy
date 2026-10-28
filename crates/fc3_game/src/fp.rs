@@ -34,7 +34,7 @@ impl Plugin for FpPlugin {
             .add_systems(OnExit(crate::menu::GameState::Loading), load_fp)
             .add_systems(
                 Update,
-                (spawn_arms, select_weapon, action_test, start_takedowns, start_actions, drive_arms, action_props, gesture_props)
+                (spawn_arms, dress_arms, select_weapon, action_test, start_takedowns, start_actions, drive_arms, action_props, gesture_props)
                     .chain()
                     .before(crate::weapons::ViewModelSystems),
             )
@@ -1497,7 +1497,16 @@ pub struct FpState {
     camera: Option<Entity>,
     /// The thrower's knife in hand.
     knife: Option<Entity>,
+    /// The pawn whose arms are on (none: the player's own, `ARMS`), the
+    /// player's pawns' arms by pawn (lower case; read once one is switched
+    /// to), and the arms loading for the pawn wanted.
+    wearing: Option<String>,
+    arms_of: Option<HashMap<String, String>>,
+    next_arms: Option<(String, Handle<Fc3Model>)>,
 }
+
+/// The player's own pawn, whose arms are `ARMS`.
+const PLAYER_PAWN: &str = "player:MainCharacter/PawnPlayer";
 
 impl FpState {
     /// A takedown is playing (it moves the view itself).
@@ -1606,6 +1615,70 @@ fn spawn_arms(
     let Some(rig) = spawn_rig_with(&mut commands, vm, &[model], None, set, Vec3::ZERO, None) else { return };
     commands.entity(rig).insert((AnimRestart::default(), Visibility::Hidden));
     state.rig = Some(rig);
+}
+
+/// The arms of the pawn the story has the player be (`Progress::pawn`,
+/// `CAPI_Player.SwitchPlayerPawn`): the privateer's sleeves on Hoyt's
+/// island, the finger Hoyt cut and its bandage, the skydiver's suit; each
+/// pawn's first-person model as the entity library has it
+/// (`body::player_pawn_arms`). The rig keeps its joints and clips and is
+/// dressed in the new model's parts.
+#[allow(clippy::too_many_arguments)]
+fn dress_arms(
+    mut state: ResMut<FpState>,
+    progress: Res<crate::progression::Progress>,
+    info: Res<crate::data::CacheInfo>,
+    server: Res<AssetServer>,
+    models: Res<Assets<Fc3Model>>,
+    rigs: Query<(&CharacterRig, &Children)>,
+    parts: Query<(), With<crate::original_shaders::SkinnedPart>>,
+    mut commands: Commands,
+) {
+    let wanted = progress.pawn.clone().unwrap_or_else(|| PLAYER_PAWN.to_string());
+    let wearing = state.wearing.clone().unwrap_or_else(|| PLAYER_PAWN.to_string());
+    if wanted.eq_ignore_ascii_case(&wearing) || std::env::var_os("FC3_FP_ARMS").is_some() {
+        state.next_arms = None;
+        return;
+    }
+    let (Some(rig), Some(_)) = (state.rig, state.mount) else { return };
+    let table = state.arms_of.get_or_insert_with(|| {
+        let library = std::fs::read(info.root.join("story/entitylibrary.fcb")).ok().and_then(|b| {
+            let at = b.windows(4).position(|w| w == b"nbCF")?;
+            fc3_formats::fcb::parse(&b[at..]).ok()
+        });
+        let table: HashMap<String, String> =
+            library.map(|l| fc3_formats::body::player_pawn_arms(&l).into_iter().map(|(p, m)| (p.to_ascii_lowercase(), m)).collect()).unwrap_or_default();
+        info!("first-person arms: {} of the player's pawns", table.len());
+        table
+    });
+    let Some(path) = table.get(&wanted.to_ascii_lowercase()).cloned() else {
+        warn!("first-person arms: no model for the pawn {wanted}; the arms stay");
+        state.wearing = Some(wanted);
+        return;
+    };
+    if state.next_arms.as_ref().is_none_or(|(p, _)| *p != wanted) {
+        let handle = server.load_builder().with_settings(|s: &mut ModelSettings| s.skinned = true).load(skinned_cache_path(&cache::model_rel(&path)));
+        state.next_arms = Some((wanted, handle));
+        return;
+    }
+    let Some((pawn, handle)) = state.next_arms.clone() else { return };
+    let Some(model) = models.get(&handle) else {
+        if !crate::cache_assets::usable(&server, handle.id()) && server.load_state(handle.id()).is_failed() {
+            warn!("first-person arms: {path} didn't load; the arms stay");
+            state.wearing = Some(pawn);
+            state.next_arms = None;
+        }
+        return;
+    };
+    let Ok((r, children)) = rigs.get(rig) else { return };
+    let old: Vec<Entity> = children.iter().filter(|c| parts.contains(*c)).collect();
+    for part in crate::characters::redress_rig(&mut commands, rig, r, old, model) {
+        commands.entity(part).insert(NotShadowCaster);
+    }
+    info!("first-person arms: {pawn} ({path})");
+    state.arms = Some(handle);
+    state.wearing = Some(pawn);
+    state.next_arms = None;
 }
 
 /// Picks the clips for the weapon in hand and tells the view model which way
