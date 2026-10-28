@@ -5733,9 +5733,22 @@ fn autopilot_loot(
         let gun = plants
             .iter()
             .filter(|(p, t)| {
-                crate::pickups::is_dropped(p.id) && matches!(p.kind, crate::pickups::PickupKind::Weapon(n) if carried(n)) && off(t) < ammo_reach && !leashed(t.translation()) && harmless(t.translation())
+                crate::pickups::is_dropped(p.id)
+                    && matches!(p.kind, crate::pickups::PickupKind::Weapon(n) if carried(n))
+                    && off(t) < ammo_reach
+                    && !leashed(t.translation())
+                    && harmless(t.translation())
+                    && !skipped.contains_key(&p.id)
             })
             .min_by(|a, b| off(a.1).total_cmp(&off(b.1)));
+        // (Stood on and still there, it gave nothing: JAS_220's dropped
+        // rocket launchers, none to take for one with no rockets, were gone
+        // to again and again. Another for a while.)
+        if let Some((p, _)) = gun.filter(|(p, t)| off(t) < 1.5 && *last == Some((p.id, "rounds"))) {
+            skipped.insert(p.id, now + 60.0);
+            *last = None;
+            return;
+        }
         if let Some((p, gt)) = gun {
             if *last != Some((p.id, "rounds")) {
                 info!("story autopilot: out of rounds; to a dropped gun");

@@ -5429,6 +5429,10 @@ the airport where Riley is held, within twelve minutes.
   stood by him 40 m from it, and neither moved. After a minute's quiet
   (`NEAR_DESPITE_FIGHT`) the trigger is taken regardless, Riley follows,
   and the chopper scenes play: JAS_220 completes, and JAS_230 starts.
+* **Guns that give nothing.** Short of rounds, the autopilot goes to a
+  dropped gun of a kind it carries; the guards' rocket launchers, with no
+  rockets to take for one carrying none, were gone to again and again. A
+  gun stood on and still there is left a minute.
 
 ## JAS_240: the end credits
 
