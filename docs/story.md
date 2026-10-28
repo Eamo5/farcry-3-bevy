@@ -5306,6 +5306,13 @@ start, its crew seated, then driven along its way), and being seen fails it.
   `FC3_STORY_FATAL`'s file; one that killed the player, always). B40
   completed.
 
+* **The sheet taken too soon.** B50 listens for the role sheet to be
+  looted only once it begins (past the bridge, where the boss lies), and
+  the autopilot, out of rounds, had searched his body for them first:
+  the sheet came then, unheard, and B50 waited for it for good. A body
+  carrying a mission's item no script waits for yet isn't searched for
+  rounds now; JAS_200 and JAS_210 completed, and SAM_020 began.
+
 ## SAM_015: the fuel depot
 
 SAM_015 has the player drive into a fuel depot with Sam and plant bombs in

@@ -5533,6 +5533,18 @@ fn autopilot_loot(
     };
     let engaged = last.is_some_and(|l| l.1 == "take down" || l.1 == "search");
     let quest_of = |own: Option<&crate::pickups::OwnLoot>| own.is_some_and(|o| carries_quest(o));
+    // (One carrying a mission's item no script waits for yet isn't searched
+    // for rounds: JAS_200's boss was, before the next block listened for
+    // his role sheet, and it never heard it taken.)
+    let keeps_quest_item = |own: Option<&crate::pickups::OwnLoot>| {
+        let any_quest = |own: &crate::pickups::OwnLoot| {
+            crafting.as_ref().is_some_and(|c| {
+                let quest_name = |id| c.item(id).filter(|i| i.key.starts_with(fc3_formats::progression::QUEST_ITEMS)).map(|i| i.name_id);
+                own.0.iter().any(|&(group, chance)| chance > 0.0 && c.groups.iter().any(|g| g.id == group && g.items.iter().any(|&(id, _)| quest_name(id).is_some())))
+            })
+        };
+        own.is_some_and(|o| any_quest(o) && !carries_quest(o))
+    };
     let near = |t: &Transform| t.translation.distance(at.translation);
     // (Or one a script waits to see searched: HOY_020's VIPs. Not one it
     // waits to see photographed first: JAS_200's meeting, watched unseen.)
@@ -5721,8 +5733,14 @@ fn autopilot_loot(
         }
         let body = npcs
             .iter()
-            .filter(|(t, h, body, _, actor, ..)| {
-                h.dead && body.is_some_and(|b| !b.skin) && near(t) < ammo_reach && !leashed(t.translation) && !skipped.contains_key(&actor.id) && harmless(t.translation)
+            .filter(|(t, h, body, own, actor, ..)| {
+                h.dead
+                    && body.is_some_and(|b| !b.skin)
+                    && near(t) < ammo_reach
+                    && !leashed(t.translation)
+                    && !skipped.contains_key(&actor.id)
+                    && harmless(t.translation)
+                    && !keeps_quest_item(*own)
             })
             .min_by(|a, b| near(a.0).total_cmp(&near(b.0)));
         if let Some((nt, _, _, _, actor, _, _)) = body {
