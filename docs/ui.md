@@ -544,6 +544,17 @@ only what changed (and everything again until the movies have loaded):
   hints, until it is hidden or its seconds run out. The shim's `call` turns null arguments into empty strings
   (the host can only send a blank string as null). Checklists stay in the
   game's own text for now.
+* **Tutorials once.** A queued tutorial (`PushTutorialBox`, the
+  `CreateTutorialMsgBox` box: nothing waits for its answer) shows once:
+  the titles shown are kept with the progress (`tutorial` lines, saved,
+  and kept over a checkpoint's reload). SQW_C4's graph tells of the WANTED
+  posters each time it starts while none has been done, and a reload
+  started it again, a box in the middle of JAS_220's fight.
+* **The mission's objective.** On a mission, the objective box shows its
+  objective only: a side activity running alongside sets its own again on
+  a reload ("Follow the flares to the drop point before time runs out."),
+  which took JAS_220's place; an objective now shows only when it is the
+  mission in progress's own (`Story::objective_in_progress`).
 * **Camera**: while the camera is up its viewfinder
   (`UI\Singleplayer\Hud\Camera\H_Camera.feu`) plays at level 2 over the
   HUD (and the reticule hides): `CameraZoomLevel` shows the magnification

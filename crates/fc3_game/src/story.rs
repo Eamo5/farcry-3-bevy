@@ -2059,7 +2059,10 @@ fn run_story(
                     stats.hurt_dir = None;
                     stats.respawn_timer = 0.0;
                 }
+                // (The tutorials seen since stay seen.)
+                let seen = std::mem::take(&mut progress.tutorials);
                 *progress = save.progress.clone();
+                progress.tutorials.extend(seen);
                 if let Some(h) = health.as_mut() { **h = crate::combat::Health::new(h.max); }
                 info!("story checkpoint: restored {} carried weapons, {} medkits, ${}", save.weapons.len(), save.medkits, save.progress.money);
             }
@@ -2898,8 +2901,14 @@ fn run_story(
                 }
                 let _ = LayerState::Active;
             }
-            Command::Objective { text, .. } => {
+            Command::Objective { text, id, .. } => {
                 info!("story: objective {:?}", text.as_deref().map(plain));
+                // (On a mission, only its objective: a side activity's
+                // running alongside, set again on a reload ("Follow the
+                // flares to the drop point"), took JAS_220's place.)
+                if host.story.mission_in_progress().is_some() && id != host.story.objective_in_progress() {
+                    continue;
+                }
                 // (The original HUD's objective box announces it itself.)
                 if let Some(t) = text.as_ref().filter(|_| !original_hud.0) {
                     hud.notify_native(format!("New objective: {}", plain(t)));
@@ -3423,6 +3432,11 @@ fn run_story(
                             ui.checklist.remove(&id);
                         }
                     }
+                    // (A queued tutorial (`PushTutorialBox`: no answer awaited)
+                    // once only: SQW_C4's tells of the WANTED posters each
+                    // time its graph starts, while none has been done, and a
+                    // checkpoint's reload starts it again.)
+                    "ShowTutorialBox" if args.len() >= 6 && !progress.tutorials.insert(plain(&a(1)).replace('\n', " ")) => {}
                     "ShowDialogBox" | "ShowTutorialBox" => {
                         let box_ = StoryBox {
                             id: a(0).parse().unwrap_or(0), title: plain(&a(1)), body: plain(&a(2)), choice: a(3) == "true",
