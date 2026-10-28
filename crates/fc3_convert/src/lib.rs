@@ -2610,7 +2610,7 @@ fn convert_story(job: &Job) -> Result<()> {
             }
         }
     }
-    let current = std::fs::read(job.root().join(story::ENTITIES_REL)).is_ok_and(|b| story::is_current(&b));
+    let current = std::fs::read(job.root().join(story::ENTITIES_REL)).is_ok_and(|b| story::is_current(&b)) && job.root().join(story::ZONES_STAMP).exists();
     if current && !job.opts.force {
         return Ok(());
     }
@@ -2639,7 +2639,13 @@ fn convert_story(job: &Job) -> Result<()> {
         for (layer, e) in entries {
             let id = e.u64("disEntityId").unwrap_or(0);
             let components = e.child("Components").cloned().unwrap_or_default();
-            if layer == fw::DEFAULT_MISSION_LAYER && !named.contains(&id) && !prefab_children.contains(&id) && !story::has_story_component(&components) {
+            let class = e.str_h(fw::h::CLASS_NAME).unwrap_or_default();
+            if layer == fw::DEFAULT_MISSION_LAYER
+                && !named.contains(&id)
+                && !prefab_children.contains(&id)
+                && !story::has_story_component(&components)
+                && !story::KEPT_CLASSES.contains(&class.as_str())
+            {
                 continue;
             }
             out.push(story::StoryEntity {
@@ -2647,7 +2653,7 @@ fn convert_story(job: &Job) -> Result<()> {
                 layer,
                 source,
                 name: e.str("hidName").unwrap_or_default(),
-                class: e.str_h(fw::h::CLASS_NAME).unwrap_or_default(),
+                class,
                 pos: e.vec3("hidPos_precise").or_else(|| e.vec3("hidPos")).unwrap_or_default(),
                 angles: e.vec3("hidAngles").unwrap_or_default(),
                 components,
@@ -2657,7 +2663,8 @@ fn convert_story(job: &Job) -> Result<()> {
         Some(out)
     })?;
     let entities: Vec<story::StoryEntity> = lists.into_iter().flatten().collect();
-    write_atomic(job.root(), story::ENTITIES_REL, &story::to_bytes(&entities), job.ctx)
+    write_atomic(job.root(), story::ENTITIES_REL, &story::to_bytes(&entities), job.ctx)?;
+    write_atomic(job.root(), story::ZONES_STAMP, b"outpost zones kept\n", job.ctx)
 }
 
 /// The fires a prefab's props burn, as the world's own camp fires are

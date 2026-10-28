@@ -862,6 +862,9 @@ struct MapPage {
     dragged: f32,
     /// A test's drag, made once the map is in place (`FC3_MAP_PAN`).
     pan_test: Option<Vec2>,
+    /// The zone a reveal fades once the icons are in
+    /// (`map::ScriptedMap`).
+    fade: Option<u64>,
 }
 
 /// How far (window pixels) the mouse goes with its button down before it
@@ -1110,7 +1113,7 @@ fn drive_map_page(
         Res<crate::progression::Progress>,
         Res<crate::story::ObjectiveMarkers>,
     ),
-    (mut waypoint, explored): (ResMut<crate::map::Waypoint>, Res<crate::map::Explored>),
+    (mut waypoint, explored, mut scripted_map): (ResMut<crate::map::Waypoint>, Res<crate::map::Explored>, ResMut<crate::map::ScriptedMap>),
     (island, treasure, world, scripted_player): (
         Res<crate::treasure_maps::Island>,
         Res<crate::treasure_maps::TreasureMaps>,
@@ -1157,6 +1160,23 @@ fn drive_map_page(
                 }
                 for (row, col) in lifted {
                     host.event("SetFog", &["0", &row.to_string(), &col.to_string()]);
+                }
+                // The outposts' zones (`SetOutpostZone <id> <type> <x> <y>
+                // ...`, the outline's corners as fractions of the map): the
+                // movie shades the enemy's (type 0) red; the player's (1)
+                // only while it reveals them, the one just taken fading out.
+                if let Some(zone) = scripted_map.reveal.take() {
+                    host.event("OutpostReveal", &[]);
+                    page.fade = Some(zone);
+                }
+                for (id, outline, taken) in outposts.zones() {
+                    let mut args = vec![id.to_string(), if taken { "1" } else { "0" }.to_string()];
+                    for p in outline {
+                        let uv = map_uv(Vec3::new(p.x, 0.0, p.y));
+                        args.extend([uv.x.to_string(), uv.y.to_string()]);
+                    }
+                    debug!("original UI: world map: zone {id}, taken {taken}, {} corners", outline.len());
+                    host.event("SetOutpostZone", &args.iter().map(String::as_str).collect::<Vec<_>>());
                 }
                 let mut items = Vec::new();
                 let mut places = Vec::new();
@@ -1259,6 +1279,16 @@ fn drive_map_page(
             "IconsLoaded" => {
                 let zoom = page.zoom;
                 host.event("CenterMap", &[&map_level(zoom).to_string(), &zoom.to_string()]);
+                if let Some(zone) = page.fade.take() {
+                    host.event("HideOutpostZone", &[&zone.to_string()]);
+                }
+                // FC3_MAP_PATHS=<path>;... (tools): what the movie holds there.
+                if std::env::var_os("FC3_MAP_PATHS").is_some() {
+                    info!("original UI: world map MapVisual {}; MapScale {}", host.dps_info("MapVisual"), host.dps_info("MapScale"));
+                }
+                for path in std::env::var("FC3_MAP_PATHS").unwrap_or_default().split(';').filter(|p| !p.is_empty()) {
+                    info!("original UI: world map {path} = {} [{}]", host.path_info(path), host.path_members(path).join(" "));
+                }
                 // FC3_MAP_ZOOM_STEPS=<n> (tests): n wheel steps in (out
                 // when negative) once it's centred.
                 if let Some(steps) = std::env::var("FC3_MAP_ZOOM_STEPS").ok().and_then(|s| s.parse::<i32>().ok()) {

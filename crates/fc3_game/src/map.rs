@@ -97,6 +97,7 @@ impl Plugin for MapPlugin {
             .init_resource::<FullMapView>()
             .init_resource::<MapPad>()
             .init_resource::<MapAutomation>()
+            .init_resource::<ScriptedMap>()
             .init_resource::<Gps>()
             .init_resource::<MinimapReach>()
             .init_resource::<MinimapPlacement>()
@@ -494,7 +495,23 @@ fn setup_map_ui(mut done: Local<bool>, server: Res<AssetServer>, explored: Res<E
     ));
 }
 
+/// The world map a script opens or closes (`ShowWorldMap <bool>`;
+/// `ShowWorldMapOutpostReveal`, JAS_100's once its outpost is taken: the
+/// outposts' zones shown, the one just taken fading), and the zone a
+/// reveal fades. The autopilot closes a map a script opened after
+/// `SCRIPTED_MAP_FOR`.
+#[derive(Resource, Default)]
+pub struct ScriptedMap {
+    pub open: Option<bool>,
+    pub reveal: Option<u64>,
+    opened_at: Option<f32>,
+}
+
+const SCRIPTED_MAP_FOR: f32 = 4.0;
+
+#[allow(clippy::too_many_arguments)]
 fn toggle_map(
+    (mut scripted, real): (ResMut<ScriptedMap>, Res<Time<Real>>),
     keys: Res<ButtonInput<KeyCode>>,
     actions: Res<crate::controls::ActionState>,
     gamepads: Query<&Gamepad>,
@@ -509,6 +526,32 @@ fn toggle_map(
     ui: Res<crate::story::StoryUi>,
     mut automation: ResMut<MapAutomation>,
 ) {
+    let now = real.elapsed_secs();
+    if let Some(open) = scripted.open.take() {
+        match (open, state.get()) {
+            (true, GameState::Playing) => {
+                if let Ok((t, _)) = players.single() {
+                    view.center = map_uv(t.translation);
+                }
+                scripted.opened_at = Some(now);
+                info!("world map: opened by the story (zone to fade {:?})", scripted.reveal);
+                next.set(GameState::Map);
+                return;
+            }
+            (false, GameState::Map) => {
+                next.set(GameState::Playing);
+                return;
+            }
+            _ => scripted.reveal = None,
+        }
+    }
+    if *state.get() != GameState::Map {
+        scripted.opened_at = None;
+    } else if scripted.opened_at.is_some_and(|at| now - at > SCRIPTED_MAP_FOR) && std::env::var("FC3_STORY_AUTOPILOT").is_ok() {
+        scripted.opened_at = None;
+        next.set(GameState::Playing);
+        return;
+    }
     if *state.get() == GameState::Playing && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
         && ui.boxes.is_empty() && players.single().is_ok_and(|(_, p)| !p.spawning && !p.driving)
     {

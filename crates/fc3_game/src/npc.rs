@@ -1209,15 +1209,18 @@ fn spawn_from_sectors(
         }
         director.occupied.insert(id);
         // An encounter marker outside the outposts: one of its prefabs, the
-        // friendly ones once the nearest outpost is liberated (an empty pick
-        // is nobody there this time), placed about the marker.
+        // friendly ones once its zone's outpost is liberated (outside the
+        // zones, the nearest outpost's; an empty pick is nobody there this
+        // time), placed about the marker.
         if let (None, Some((hostile, friendly)), Some(table)) = (outpost, encounters.0.as_ref().and_then(|t| t.markers.get(&marker)), encounters.0.as_ref()) {
-            let liberated = outposts
-                .list
-                .iter()
-                .filter(|o| o.centre.distance(pos) < 600.0)
-                .min_by(|a, b| a.centre.distance(pos).total_cmp(&b.centre.distance(pos)))
-                .is_some_and(|o| o.liberated);
+            let liberated = outposts.zone_taken(pos).unwrap_or_else(|| {
+                outposts
+                    .list
+                    .iter()
+                    .filter(|o| o.centre.distance(pos) < 600.0)
+                    .min_by(|a, b| a.centre.distance(pos).total_cmp(&b.centre.distance(pos)))
+                    .is_some_and(|o| o.liberated)
+            });
             let list = if liberated && !friendly.is_empty() { friendly } else { hostile };
             let Some(&pick) = list.get((rng.f32() * list.len() as f32) as usize % list.len().max(1)) else { continue };
             // FC3_ENCOUNTER_PREFAB=<id> (tests): every marker spawns that prefab.

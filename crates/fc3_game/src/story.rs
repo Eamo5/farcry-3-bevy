@@ -1948,7 +1948,7 @@ fn run_story(
             mut chopper,
             mut car_chase,
             mut gallery,
-            (poker, minigame, mut races, mut trials),
+            (poker, minigame, mut races, mut trials, outposts, mut scripted_map),
             detection,
             mut env_overrides,
         ),
@@ -1977,7 +1977,14 @@ fn run_story(
             ResMut<crate::chopper_fight::ChopperFight>,
             ResMut<crate::car_chase::CarChase>,
             ResMut<crate::shooting_gallery::Gallery>,
-            (Res<crate::poker::PokerTable>, Res<crate::hud::Minigame>, ResMut<crate::races::Races>, ResMut<crate::trials::Trials>),
+            (
+                Res<crate::poker::PokerTable>,
+                Res<crate::hud::Minigame>,
+                ResMut<crate::races::Races>,
+                ResMut<crate::trials::Trials>,
+                Res<crate::outposts::Outposts>,
+                ResMut<crate::map::ScriptedMap>,
+            ),
             Res<crate::stealth::Detection>,
             ResMut<crate::sky::EnvOverrides>,
         ),
@@ -3499,6 +3506,20 @@ fn run_story(
                     // The scripts open an ability in the skill tree.
                     // The player made another of his pawns (`player, archetype`:
                     // the privateer on Hoyt's island; `fp::dress_arms`).
+                    // The world map opened or closed (`map::ScriptedMap`);
+                    // JAS_100's reveal of the outposts' zones, the one just
+                    // taken (the player's nearest) fading.
+                    "ShowWorldMap" => scripted_map.open = Some(a(0) == "true" || a(0) == "1"),
+                    "ShowWorldMapOutpostReveal" => {
+                        scripted_map.reveal = outposts
+                            .list
+                            .iter()
+                            .filter(|o| o.liberated)
+                            .filter_map(|o| Some((o.zone.as_ref()?.id, o.centre.distance(t.translation))))
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .map(|z| z.0);
+                        scripted_map.open = Some(true);
+                    }
                     "CAPI_Player.SwitchPlayerPawn" if a(0) == fc3_story::PLAYER.to_string() => {
                         progress.pawn = Some(a(1)).filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("player:MainCharacter/PawnPlayer"));
                     }

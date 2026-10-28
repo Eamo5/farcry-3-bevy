@@ -5559,6 +5559,14 @@ told the story of an outpost taken, so no activity ever opened.
   scripts read, `SafeHouseUnlockedEvent` raised once); one a script
   unlocks has its outpost taken with it; on a load the two agree again
   (`outposts::sync_safe_houses`).
+* **The country.** Each outpost holds a zone (`COutpostZone`, kept with
+  the story's entities: `Story::outpost_zones`), the country that changes
+  sides with it. The road patrols and the encounters at the world's
+  markers in a zone are the rebels' once its outpost is taken, the
+  enemy's till then (`Outposts::zone_taken`); outside every zone the
+  nearest outpost still says, as before. The map shades the enemy's zones
+  (`docs/ui.md`). The converter keeps them since the table's stamp
+  (`story/stamp-outpost-zones.txt`) and writes it again once.
 * **The story's own outpost.** JAS_100's safe house starts unlocked in the
   data (`bLocked` off) and the master's initialization locks it; B10
   unlocks it itself once its fight is through (the waves, the dog), and

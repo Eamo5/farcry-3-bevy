@@ -164,8 +164,13 @@ pub fn shop_items(library: &crate::fcb::Object) -> Vec<(String, String, u32)> {
 
 const MAGIC: &[u8; 4] = b"FCSE";
 /// Bumped when what the table keeps changes (2: grouped entities, 3: the
-/// entity's own fields, 4: authored prefab child references).
+/// entity's own fields, 4: authored prefab child references). A table kept
+/// before the outposts' zones were is rewritten once (`ZONES_STAMP`), its
+/// form the same.
 const VERSION: u32 = 4;
+
+/// Written once the table keeps the outposts' zones (`KEPT_CLASSES`).
+pub const ZONES_STAMP: &str = "story/stamp-outpost-zones.txt";
 
 /// Whether a stored table is this version's (an older one is rewritten).
 pub fn is_current(data: &[u8]) -> bool {
@@ -224,6 +229,11 @@ pub fn kept_fields(entity: &Object) -> Arc<Object> {
     Arc::new(Object { name_hash: entity.name_hash, fields: entity.fields.iter().filter(|(h, _)| hashes.contains(h)).cloned().collect(),
         children: entity.children.iter().filter(|c| c.is("Children")).cloned().collect() })
 }
+
+/// Entity classes the table keeps whatever their layer: the outposts' zones
+/// (`COutpostZone`, the country each outpost holds: the world map shades
+/// the enemy's, and its people change sides with it).
+pub const KEPT_CLASSES: [&str; 1] = ["COutpostZone"];
 
 /// Component classes that make an entity matter to the story whatever its
 /// layer: scripts, mission zones, triggers, cinematic scenes, markers, and

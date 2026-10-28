@@ -56,7 +56,7 @@ fn sync_safe_houses(host: Option<NonSendMut<crate::story::StoryHost>>, mut outpo
     if outposts.list.is_empty() {
         return;
     }
-    let matched = matched.get_or_insert_with(|| {
+    if matched.is_none() {
         let houses = host.story.safe_houses();
         let found: Vec<Option<u64>> = outposts
             .list
@@ -71,9 +71,30 @@ fn sync_safe_houses(host: Option<NonSendMut<crate::story::StoryHost>>, mut outpo
                     .map(|(id, _)| id)
             })
             .collect();
-        info!("outposts: {} of {} with their safe house", found.iter().flatten().count(), found.len());
-        found
-    });
+        // Each outpost's zone: the one its safe house names, else the one
+        // its outline holds it in.
+        let zones = host.story.outpost_zones();
+        for (o, house) in outposts.list.iter_mut().zip(&found) {
+            let outline = |z: &fc3_story::OutpostZone| -> Vec<Vec2> {
+                z.outline.iter().map(|p| crate::data::to_bevy([p[0], p[1], 0.0])).map(|b| Vec2::new(b.x, b.z)).collect()
+            };
+            let centre = Vec2::new(o.centre.x, o.centre.z);
+            o.zone = zones
+                .iter()
+                .find(|z| house.is_some() && z.safe_house == *house)
+                .or_else(|| zones.iter().find(|z| inside(&outline(z), centre)))
+                .map(|z| Zone { id: z.id, outline: outline(z) });
+        }
+        info!(
+            "outposts: {} of {} with their safe house, {} with their zone (of {})",
+            found.iter().flatten().count(),
+            found.len(),
+            outposts.list.iter().filter(|o| o.zone.is_some()).count(),
+            zones.len()
+        );
+        *matched = Some(found);
+    }
+    let Some(matched) = matched.as_ref() else { return };
     for (o, house) in outposts.list.iter_mut().zip(matched.iter()) {
         let Some(id) = *house else { continue };
         o.scripted = host.story.safe_house_scripted(id);
@@ -142,6 +163,36 @@ pub struct OutpostState {
     /// Its safe house is the story's to unlock (`Story::safe_house_scripted`):
     /// cleared, it isn't taken till a script unlocks it.
     scripted: bool,
+    /// The country it holds (`COutpostZone`), once the story has said.
+    pub zone: Option<Zone>,
+}
+
+/// An outpost's zone: the country it holds, the enemy's till it's taken
+/// (the world map shades it; the patrols and encounters in it change sides
+/// with it).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Zone {
+    pub id: u64,
+    /// Its outline's corners (Bevy x, z).
+    pub outline: Vec<Vec2>,
+}
+
+impl Zone {
+    pub fn contains(&self, p: Vec3) -> bool {
+        inside(&self.outline, Vec2::new(p.x, p.z))
+    }
+}
+
+/// Whether a point is inside an outline (even-odd).
+fn inside(outline: &[Vec2], p: Vec2) -> bool {
+    let mut odd = false;
+    for (i, a) in outline.iter().enumerate() {
+        let b = outline[(i + 1) % outline.len()];
+        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+            odd = !odd;
+        }
+    }
+    odd
 }
 
 impl OutpostState {
@@ -163,6 +214,7 @@ impl OutpostState {
             engaged: false,
             posts: Vec::new(),
             scripted: false,
+            zone: None,
         }
     }
 
@@ -197,9 +249,34 @@ impl Outposts {
         self.list.iter().position(|o| o.contains(p))
     }
 
-    /// Whether the rebels hold the country round `p`: the nearest outpost
-    /// within `REBEL_COUNTRY` is liberated.
+    /// The zones, each once: its id, outline and whether it's the player's
+    /// (an outpost holding it taken).
+    pub fn zones(&self) -> Vec<(u64, &[Vec2], bool)> {
+        let mut out: Vec<(u64, &[Vec2], bool)> = Vec::new();
+        for o in &self.list {
+            let Some(z) = &o.zone else { continue };
+            match out.iter_mut().find(|s| s.0 == z.id) {
+                Some(s) => s.2 |= o.liberated,
+                None => out.push((z.id, &z.outline, o.liberated)),
+            }
+        }
+        out
+    }
+
+    /// Whether the country at `p` is the player's, if a zone holds it.
+    pub fn zone_taken(&self, p: Vec3) -> Option<bool> {
+        let mut held = self.list.iter().filter(|o| o.zone.as_ref().is_some_and(|z| z.contains(p))).peekable();
+        held.peek()?;
+        Some(held.any(|o| o.liberated))
+    }
+
+    /// Whether the rebels hold the country round `p`: its zone's outpost is
+    /// taken (outside the zones, the nearest outpost within `REBEL_COUNTRY`
+    /// is).
     pub fn rebel_country(&self, p: Vec3) -> bool {
+        if let Some(taken) = self.zone_taken(p) {
+            return taken;
+        }
         self.list
             .iter()
             .map(|o| (o.centre.distance(p), o.liberated))
@@ -623,5 +700,39 @@ fn outpost_test(
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outpost(at: [f32; 3]) -> OutpostState {
+        OutpostState::new(&Outpost { centre: at, radius: 60.0, alarms: vec![], rebels: vec![], flag: None, legacy: None })
+    }
+
+    /// The country an outpost holds is its zone's outline: the rebels' once
+    /// it's taken, wherever in the outline, and only there; outside every
+    /// zone the nearest outpost still says.
+    #[test]
+    fn a_taken_outposts_zone_is_the_rebels_country() {
+        let square = |x: f32, z: f32| vec![Vec2::new(x, z), Vec2::new(x + 400.0, z), Vec2::new(x + 400.0, z + 400.0), Vec2::new(x, z + 400.0)];
+        let mut outposts = Outposts::default();
+        let mut a = outpost([200.0, 0.0, 200.0]);
+        a.zone = Some(Zone { id: 7, outline: square(0.0, 0.0) });
+        let mut b = outpost([1200.0, 0.0, 200.0]);
+        b.zone = Some(Zone { id: 8, outline: square(1000.0, 0.0) });
+        outposts.list = vec![a, b];
+        let corner = Vec3::new(390.0, 0.0, 390.0);
+        assert_eq!(outposts.zone_taken(corner), Some(false));
+        assert!(!outposts.rebel_country(corner));
+        outposts.list[0].liberated = true;
+        assert_eq!(outposts.zone_taken(corner), Some(true));
+        assert!(outposts.rebel_country(corner));
+        // (Beside it, the other's country stays the enemy's.)
+        assert!(!outposts.rebel_country(Vec3::new(1010.0, 0.0, 10.0)));
+        assert_eq!(outposts.zone_taken(Vec3::new(700.0, 0.0, 200.0)), None);
+        let zones = outposts.zones();
+        assert_eq!(zones.iter().map(|z| (z.0, z.2)).collect::<Vec<_>>(), [(7, true), (8, false)]);
     }
 }

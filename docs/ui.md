@@ -989,6 +989,25 @@ Everything else is the engine's to drive (`original_ui::drive_map_page`):
   legend strings; the quests share the handbook's). `fc3tool
   story-map-markers [filter]` lists the markers by type and sub-type.
   `FC3_MAP_REVEAL` (tests) lifts all the fog.
+* The country the outposts hold is shaded red, as the original's map
+  shows it (the regions an outpost controls, clearing as it is liberated):
+  each outpost's zone (`COutpostZone`, its outline in `hidShapePoints`;
+  the safe house names its own in `entOutpostZoneEntity`), sent as
+  `SetOutpostZone <id> <type> <x> <y> ...` with the corners as fractions of
+  the map. The movie's `COutpostZone` fills type 0, the enemy's, in red
+  (`0xC1001A` at 85%) over the map and keeps type 1, the player's, aside.
+  Seen: from JAS_220 the island red but for Amanaki's outpost's country,
+  cleared, the player and its safe house in it.
+* **The reveal.** JAS_100 opens the map once its outpost is taken
+  (`WorldMapModifier`'s `OutpostReveal`: `ShowWorldMapOutpostReveal`). The
+  engine sends `OutpostReveal` first, so the player's zones are filled red
+  too, and `HideOutpostZone <id>` once the icons are in: the zone just
+  taken (the taken outpost's nearest the player) fades out after 1.7 s and
+  the others the player holds go. A script's `ShowWorldMap <bool>` opens or
+  closes the map as well (`map::ScriptedMap`); the autopilot closes one a
+  script opened after 4 s. `FC3_MAP_PATHS=<path>;...` (tools) logs what the
+  movie holds at those paths once the icons are in, with the map's own
+  clips (`_level10.container_mc.oPage` is the page's object).
 * The treasure maps bought at the shops (`treasure_maps`) show what they
   reveal in their cells, until it's picked up: relics 34, lost letters 32,
   memory cards 33, loot chests 21 and the plants by the leaf they give

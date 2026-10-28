@@ -125,6 +125,29 @@ mod tests {
         assert_eq!(story.respawn_point(), Some(30));
     }
 
+    /// An outpost's zone comes with its outline and the safe house that
+    /// names it.
+    #[test]
+    fn outpost_zones_carry_their_outline_and_safe_house() {
+        let mut data = StoryData::default();
+        let safehouse = Object { name_hash: name_hash("CSafeHouseComponent"), fields: vec![(name_hash("entOutpostZoneEntity"), 40_u64.to_le_bytes().to_vec())], ..Default::default() };
+        let entry = |id: u64, class: &str, components: Object, fields: Object| Entry {
+            id, name: format!("e{id}"), class: class.into(), pos: [0.0; 3], angles: [0.0; 3],
+            layer: fc3_formats::world::DEFAULT_MISSION_LAYER, origin: Origin::Global, components: components.into(), fields: fields.into(),
+        };
+        data.entities.insert(10, entry(10, "CGameElementEntity", Object { children: vec![Arc::new(safehouse)], ..Default::default() }, Object::default()));
+        let mut shape = 3_u32.to_le_bytes().to_vec();
+        for p in [[0.0f32, 0.0, 5.0], [100.0, 0.0, 5.0], [100.0, 50.0, 5.0]] {
+            shape.extend(p.iter().flat_map(|v| v.to_le_bytes()));
+        }
+        data.entities.insert(40, entry(40, "COutpostZone", Object::default(), Object { fields: vec![(name_hash("hidShapePoints"), shape)], ..Default::default() }));
+        let story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        let zones = story.outpost_zones();
+        assert_eq!(zones.len(), 1);
+        assert_eq!((zones[0].id, zones[0].safe_house), (40, Some(10)));
+        assert_eq!(zones[0].outline, [[0.0, 0.0], [100.0, 0.0], [100.0, 50.0]]);
+    }
+
     #[test]
     fn mission_travel_locks_are_owned_and_only_running_graphs_block_travel() {
         let story = fixture();

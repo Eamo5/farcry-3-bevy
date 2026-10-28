@@ -170,6 +170,17 @@ pub struct Pose {
     pub angles: [f32; 3],
 }
 
+/// An outpost's zone (`Story::outpost_zones`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutpostZone {
+    pub id: u64,
+    pub name: String,
+    /// Its outline's corners (Dunia x, y).
+    pub outline: Vec<[f32; 2]>,
+    /// The safe house that names it.
+    pub safe_house: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct UseTarget {
     pub entity: u64,
@@ -1035,6 +1046,39 @@ impl Story {
 
     pub fn safe_house_unlocked(&self, id: u64) -> bool {
         self.core.borrow().safehouses_unlocked.contains(&id)
+    }
+
+    /// The outposts' zones (`COutpostZone`: the country each outpost holds),
+    /// each with its outline and the safe house that names it
+    /// (`entOutpostZoneEntity`): the zone is the player's once that safe
+    /// house is.
+    pub fn outpost_zones(&self) -> Vec<OutpostZone> {
+        let c = self.core.borrow();
+        let houses: HashMap<u64, u64> = c
+            .data
+            .entities
+            .values()
+            .filter_map(|e| Some((e.component("CSafeHouseComponent")?.u64("entOutpostZoneEntity")?, e.id)))
+            .collect();
+        let mut out: Vec<OutpostZone> = c
+            .data
+            .entities
+            .values()
+            .filter(|e| e.class == "COutpostZone")
+            .filter_map(|e| {
+                let raw = e.fields.field("hidShapePoints")?;
+                let n = raw.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize)?;
+                let outline: Vec<[f32; 2]> = raw
+                    .get(4..)?
+                    .chunks_exact(12)
+                    .take(n)
+                    .map(|p| [f32::from_le_bytes(p[0..4].try_into().unwrap()), f32::from_le_bytes(p[4..8].try_into().unwrap())])
+                    .collect();
+                (outline.len() >= 3).then(|| OutpostZone { id: e.id, name: e.name.clone(), outline, safe_house: houses.get(&e.id).copied() })
+            })
+            .collect();
+        out.sort_by_key(|z| z.id);
+        out
     }
 
     /// Whether a safe house starts unlocked in the data (`bLocked` off): one
