@@ -5167,6 +5167,12 @@ of Sam's, 28 m near and 32 m far, that warns on the screen).
   player off Sam. It now burns only with a flamethrower or molotovs, and
   leaves a field that didn't catch for two minutes (`BURN_AGAIN`).
 
+* **The last pirates.** After the last bomb B30 counts its last pirates
+  down with Sam told to wait (`CompanionSetWait`), and the leash kept the
+  autopilot off them for good. A waiting companion holds the fight by him
+  only until the story has been quiet 30 s (`UNTETHER_AFTER`); then the
+  autopilot goes after them, and B30 completes.
+
 * **Sam's own way.** On his way to the last bomb Sam stopped to wait for
   the player, and a contextual action point of the next block's, switched
   on and free, was offered to the nearest of its group within its reach:

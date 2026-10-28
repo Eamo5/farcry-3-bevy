@@ -4915,6 +4915,9 @@ const ESCORT_IN_FIGHT: f32 = 20.0;
 const SNIPE_EVERY: f32 = 2.5;
 /// Tests: how near (m) a companion is for the fight's moves to keep by it.
 const TETHER_FROM: f32 = 45.0;
+/// Tests: how long (s) the story is quiet before a waiting companion no
+/// longer keeps the fight by it.
+const UNTETHER_AFTER: f32 = 30.0;
 /// Tests: how near (m) an animal after the player is shot before anything
 /// else.
 const DEFEND_WITHIN: f32 = 20.0;
@@ -5543,10 +5546,14 @@ fn autopilot_loot(
     // `ESCORT_IN_FIGHT` of it, else that foe is shot from there or left a
     // while: going off after one left WIL_040's Rongo 40 m behind, and the
     // mission failed.)
+    // (Not one told to wait, the story long quiet: HOY_010's Sam waits at
+    // the last bomb, and its last pirates, beyond the leash, were left for
+    // good while the block counted them down.)
     let companions = host.story.companions();
+    let tethers = |id: u64| companions.iter().any(|c| c.0 == id && (c.1 != fc3_story::Companion::Wait || host.quiet < UNTETHER_AFTER));
     let tether = story_actors
         .iter()
-        .filter(|(t, a, _)| !a.dead && companions.iter().any(|c| c.0 == a.id) && t.translation.distance(at.translation) < TETHER_FROM)
+        .filter(|(t, a, _)| !a.dead && tethers(a.id) && t.translation.distance(at.translation) < TETHER_FROM)
         .map(|(t, _, _)| t.translation)
         .min_by(|a, b| a.distance(at.translation).total_cmp(&b.distance(at.translation)));
     let leashed = |feet: Vec3| tether.is_some_and(|c| c.with_y(0.0).distance(feet.with_y(0.0)) > ESCORT_IN_FIGHT);
