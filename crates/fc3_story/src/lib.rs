@@ -1037,6 +1037,15 @@ impl Story {
         self.core.borrow().safehouses_unlocked.contains(&id)
     }
 
+    /// Whether a safe house starts unlocked in the data (`bLocked` off): one
+    /// the story locks and unlocks itself (JAS_100's outpost, locked by the
+    /// master's initialization and unlocked by B10 once its fight is over),
+    /// not one the engine unlocks as its outpost is cleared.
+    pub fn safe_house_scripted(&self, id: u64) -> bool {
+        let c = self.core.borrow();
+        c.data.entities.get(&id).and_then(|e| e.component("CSafeHouseComponent")).is_some_and(|s| s.bool("bLocked") == Some(false))
+    }
+
     /// The loading screen's movie a mission asks for instead of the usual
     /// one (`SetFlashLoadingScreen`), if any.
     pub fn loading_screen(&self) -> Option<String> {

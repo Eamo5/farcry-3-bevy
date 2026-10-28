@@ -76,6 +76,7 @@ fn sync_safe_houses(host: Option<NonSendMut<crate::story::StoryHost>>, mut outpo
     });
     for (o, house) in outposts.list.iter_mut().zip(matched.iter()) {
         let Some(id) = *house else { continue };
+        o.scripted = host.story.safe_house_scripted(id);
         let unlocked = host.story.safe_house_unlocked(id);
         if o.liberated && !unlocked {
             info!("outpost taken: safe house {id} unlocked");
@@ -138,6 +139,9 @@ pub struct OutpostState {
     pub flag: Option<u64>,
     /// Its index in older tables, which older saves name it by.
     legacy: Option<u32>,
+    /// Its safe house is the story's to unlock (`Story::safe_house_scripted`):
+    /// cleared, it isn't taken till a script unlocks it.
+    scripted: bool,
 }
 
 impl OutpostState {
@@ -158,6 +162,7 @@ impl OutpostState {
             reinforced: f32::MIN,
             engaged: false,
             posts: Vec::new(),
+            scripted: false,
         }
     }
 
@@ -437,15 +442,25 @@ fn liberate(
     mut story_ui: ResMut<crate::story::StoryUi>,
     mut done: MessageWriter<OutpostLiberated>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
+    story_foes: Query<(&Transform, &Health, &crate::npc::Npc), (With<crate::story_actors::StoryActor>, Without<Garrison>, Without<Player>)>,
 ) {
     let Ok(pt) = players.single() else { return };
     let mut count = outposts.list.iter().filter(|o| o.liberated).count();
     for (i, o) in outposts.list.iter_mut().enumerate() {
-        if o.liberated {
+        // (Nor one the story takes itself: JAS_100's, whose B10 listens for
+        // its taking only once its own fight is through; taken as its
+        // garrison fell, the outpost's news came before it listened.)
+        if o.liberated || o.scripted {
             continue;
         }
         let near = Vec2::new(pt.translation.x - o.centre.x, pt.translation.z - o.centre.z).length() < o.radius + 120.0;
-        let alive = garrison.iter().filter(|(h, g, _)| g.0 == i && !h.dead).count();
+        // (A mission's own men in it hold it too: JAS_100's pirates, its
+        // outpost on the mission's layer, stood while the rebels killed
+        // the garrison, and the outpost fell before the mission listened
+        // for it.)
+        let inside = |t: &Transform| Vec2::new(t.translation.x - o.centre.x, t.translation.z - o.centre.z).length() < o.radius;
+        let mission_men = story_foes.iter().filter(|(t, h, n)| !h.dead && n.hostile() && inside(t)).count();
+        let alive = garrison.iter().filter(|(h, g, _)| g.0 == i && !h.dead).count() + mission_men;
         if garrison.iter().any(|(h, g, n)| g.0 == i && !h.dead && n.state == crate::npc::NpcState::Combat) {
             o.detected = true;
         }

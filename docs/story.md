@@ -5559,6 +5559,17 @@ told the story of an outpost taken, so no activity ever opened.
   scripts read, `SafeHouseUnlockedEvent` raised once); one a script
   unlocks has its outpost taken with it; on a load the two agree again
   (`outposts::sync_safe_houses`).
+* **The story's own outpost.** JAS_100's safe house starts unlocked in the
+  data (`bLocked` off) and the master's initialization locks it; B10
+  unlocks it itself once its fight is through (the waves, the dog), and
+  only then listens for `JAS_100_OUTPOST_UNLOCKED`, which the flag
+  controller broadcasts once the taking has played. Taken as soon as the
+  garrison at its posts fell (the rebels shot them), the news came before
+  B10 listened, and the mission waited for good. An outpost whose safe
+  house starts unlocked in the data is now taken only as a script unlocks
+  it (`Story::safe_house_scripted`), and the mission's own men inside an
+  outpost (its story characters, hostile and alive) hold it as its
+  garrison does. JAS_100 completed again.
 * **Seen working.** Outpost 22 taken (`--outpost-test`, placed beside it
   with `--pos` over a kept checkpoint, which no longer sends the player to
   its respawn point then): its safe house unlocked, its flag scene played,
