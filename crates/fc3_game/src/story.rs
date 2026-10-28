@@ -805,7 +805,10 @@ pub struct StoryHost {
     /// at once (CIT_020 B30's escaping-on-foot box), left alone since, over
     /// reloads.
     last_step: Option<(u64, String, f32)>,
-    fatal: std::collections::HashSet<(u64, String)>,
+    fatal: Fatal,
+    /// The objective up for the mission in progress before this frame's
+    /// scripts ran (`Fatal`).
+    objective_before: Option<u32>,
     /// The last checkpoint's progress, and when a reload to it is due.
     checkpoint: Option<fc3_story::save::StorySave>,
     reload_at: Option<f32>,
@@ -1068,6 +1071,7 @@ impl StoryHost {
             used: Default::default(),
             last_step: None,
             fatal: fatal_learned(),
+            objective_before: None,
             checkpoint,
             reload_at: None,
             was_dead: false,
@@ -1604,6 +1608,34 @@ impl ScriptedPlayer {
         });
     }
 
+    /// The inventory put aside, as a checkpoint keeps it.
+    pub(crate) fn saved_backup(&self, inv: &crate::weapons::Inventory) -> Option<crate::save::SavedBackup> {
+        let b = self.backup.as_ref()?;
+        let name = |s: &crate::weapons::WeaponSlot| inv.defs.get(s.def).map(|d| d.name.to_string());
+        let mut gadgets: Vec<String> = b.gadgets.iter().cloned().collect();
+        gadgets.sort();
+        Some(crate::save::SavedBackup {
+            current: b.slots.get(b.current).and_then(name).unwrap_or_default(),
+            weapons: b.slots.iter().filter_map(|s| Some((name(s)?, s.mag, s.reserve))).collect(),
+            explosives: b.explosives,
+            gadgets,
+        })
+    }
+
+    /// The inventory put aside as a checkpoint kept it (none: nothing put
+    /// aside).
+    pub(crate) fn load_backup(&mut self, inv: &crate::weapons::Inventory, saved: Option<&crate::save::SavedBackup>) {
+        self.backup = saved.map(|b| {
+            let slots: Vec<crate::weapons::WeaponSlot> = b
+                .weapons
+                .iter()
+                .filter_map(|(name, mag, reserve)| Some(crate::weapons::WeaponSlot { def: inv.defs.iter().position(|d| d.name == name)?, mag: *mag, reserve: *reserve }))
+                .collect();
+            let current = slots.iter().position(|s| inv.defs[s.def].name == b.current).unwrap_or(0);
+            InventoryBackup { slots, current, explosives: b.explosives, gadgets: b.gadgets.iter().cloned().collect() }
+        });
+    }
+
     fn restore_inventory(&mut self, inv: &mut crate::weapons::Inventory) {
         let Some(backup) = self.backup.take() else { return };
         inv.slots = backup.slots;
@@ -1993,7 +2025,7 @@ fn run_story(
             let ids = if fell { fatal_namesakes(&host.story.data(), id) } else { vec![id] };
             info!("story autopilot: {event} {} let the player die; it and {} like it left alone from now", host.story.data().name_of(id).unwrap_or("?"), ids.len() - 1);
             for i in ids {
-                learn_fatal(&mut host.fatal, i, event.clone());
+                learn_fatal(&mut host.fatal, i, event.clone(), None);
             }
         }
     }
@@ -2055,6 +2087,11 @@ fn run_story(
             orders.0.clear();
             cinema.reset();
             *scripted = ScriptedPlayer::default();
+            // (But for the inventory the mission put aside at the
+            // checkpoint, to give back at its end.)
+            if let (Some(save), Ok(inv)) = (&host.checkpoint_game, inventory.single()) {
+                scripted.load_backup(&inv, save.backup.as_ref());
+            }
             shop_override.0 = None;
             *pause_menu = crate::progression::PauseMenu::from_story(&host.story);
             if let Some(save) = &host.checkpoint_game {
@@ -2276,6 +2313,10 @@ fn run_story(
     for tower in towers.read() {
         tower_taken(&mut host.story, tower.at);
     }
+    // (The objective up before this frame's scripts run: a failure they make
+    // is learned under it, the objective it clears with it.)
+    host.objective_before = host.story.objective_in_progress();
+    host.fatal.objective = host.objective_before;
     // Purchases, as the shop's buy event on the player (the game's item,
     // its name's section and string id).
     let mut commands = host.story.update(dt, view);
@@ -2887,7 +2928,7 @@ fn run_story(
                 // into its stuck-below region after a 4 s warning.)
                 if let Some((id, event, _)) = host.last_step.take_if(|s| now - s.2 < FAILED_WITHIN) {
                     info!("story autopilot: {event} {} failed the mission; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
-                    learn_fatal(&mut host.fatal, id, event);
+                    learn_fatal(&mut host.fatal, id, event, host.objective_before);
                 }
                 let text = text.map(|t| plain(&t)).unwrap_or_default();
                 ui.banner = Some((format!("Mission failed\n{text}"), 5.0));
@@ -3146,7 +3187,7 @@ fn run_story(
                             if pawn == fc3_story::PLAYER && amount >= KILLING_BLOW {
                                 if let Some((id, event, _)) = host.last_step.take_if(|s| now - s.2 < FATAL_WITHIN) {
                                     info!("story autopilot: {event} {} killed the player; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
-                                    learn_fatal(&mut host.fatal, id, event);
+                                    learn_fatal(&mut host.fatal, id, event, None);
                                 }
                             }
                             if pawn == fc3_story::PLAYER && amount > 0.0 {
@@ -4217,21 +4258,71 @@ const MARKER_DRIVE_FAR: f32 = 400.0;
 /// The triggers the autopilot learned to leave alone in earlier runs, kept
 /// in the file `FC3_STORY_FATAL` names (one `id event` a line), if any: a
 /// run from a checkpoint need not fail the mission again to learn them.
-fn fatal_learned() -> std::collections::HashSet<(u64, String)> {
+fn fatal_learned() -> Fatal {
     let Some(text) = std::env::var_os("FC3_STORY_FATAL").and_then(|p| std::fs::read_to_string(p).ok()) else { return Default::default() };
     parse_fatal(&text)
 }
 
-fn parse_fatal(text: &str) -> std::collections::HashSet<(u64, String)> {
-    text.lines().filter_map(|l| l.trim().split_once(' ')).filter_map(|(id, event)| Some((id.parse().ok()?, event.trim().to_string()))).collect()
+/// The triggers the autopilot leaves alone: those that killed the player,
+/// always; those that failed the mission, while the objective then up is up
+/// (JAS_200's trigger under the bridge lets the pirate boss go while he is
+/// to be stopped, and ends the block once he's dead).
+#[derive(Default)]
+struct Fatal {
+    always: std::collections::HashSet<(u64, String)>,
+    under: std::collections::HashSet<(u64, String, u32)>,
+    /// The objective up for the mission in progress.
+    objective: Option<u32>,
 }
 
-fn learn_fatal(fatal: &mut std::collections::HashSet<(u64, String)>, id: u64, event: String) {
-    if fatal.insert((id, event.clone())) {
+impl Fatal {
+    fn contains(&self, key: &(u64, String)) -> bool {
+        self.always.contains(key) || self.objective.is_some_and(|o| self.under.contains(&(key.0, key.1.clone(), o)))
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.always.len() + self.under.len()
+    }
+}
+
+/// `id event` a line, or `id event<tab>objective` for one left alone while
+/// that objective is up.
+fn parse_fatal(text: &str) -> Fatal {
+    let mut fatal = Fatal::default();
+    for line in text.lines() {
+        let (head, objective) = line.split_once('\t').map_or((line, None), |(h, o)| (h, Some(o.trim().parse::<u32>().ok())));
+        let Some((id, event)) = head.trim().split_once(' ') else { continue };
+        let (Ok(id), event) = (id.parse::<u64>(), event.trim().to_string()) else { continue };
+        match objective {
+            None => {
+                fatal.always.insert((id, event));
+            }
+            Some(Some(o)) => {
+                fatal.under.insert((id, event, o));
+            }
+            Some(None) => {}
+        }
+    }
+    fatal
+}
+
+/// Leaves a trigger alone from now (while `objective` is up, if one is
+/// given), and keeps it in `FC3_STORY_FATAL`'s file.
+fn learn_fatal(fatal: &mut Fatal, id: u64, event: String, objective: Option<u32>) {
+    let new = match objective {
+        Some(o) => fatal.under.insert((id, event.clone(), o)),
+        None => fatal.always.insert((id, event.clone())),
+    };
+    if new {
         if let Some(path) = std::env::var_os("FC3_STORY_FATAL") {
             use std::io::Write;
             let file = std::fs::OpenOptions::new().create(true).append(true).open(&path);
-            if let Err(e) = file.and_then(|mut f| writeln!(f, "{id} {event}")) {
+            let line = match objective {
+                Some(o) => format!("{id} {event}\t{o}"),
+                None => format!("{id} {event}"),
+            };
+            if let Err(e) = file.and_then(|mut f| writeln!(f, "{line}")) {
                 warn!("story autopilot: can't keep the trigger left alone in {path:?}: {e}");
             }
         }
@@ -5460,6 +5551,7 @@ fn autopilot_loot(
     // group a block counts down (the reinforcements and guards it waits on
     // to die), taken down the same way.
     let counted = host.story.counted_members();
+    let singly = host.story.watched_singly();
     // (Gone after unprovoked only when a block counts its group down: one
     // a health listener watches is fought once he fights, JAS_200's
     // visitor not before the meeting is photographed.)
@@ -5519,9 +5611,14 @@ fn autopilot_loot(
                         || (fc3_story::spawned_id(actor.id) && (npc.awareness > 0.3 || npc.last_known.is_some())))
                     && (near(t) < FIGHT_REACH || wanted.contains(&actor.id) || (to_kill.contains(&actor.id) && host.quiet > FAR_FOE_AFTER))
             })
+            // (And of those, one a script watches by himself first: JAS_200's
+            // pirate boss got away in his 4x4 while his bodyguards were shot.)
             .min_by(|a, b| {
                 let held = |id: u64| if last.is_some_and(|l| l.0 == id) { TARGET_STICK } else { 0.0 };
-                (!counted.contains(&a.4.id)).cmp(&!counted.contains(&b.4.id)).then((near(a.0) - held(a.4.id)).total_cmp(&(near(b.0) - held(b.4.id))))
+                (!singly.contains(&a.4.id))
+                    .cmp(&!singly.contains(&b.4.id))
+                    .then((!counted.contains(&a.4.id)).cmp(&!counted.contains(&b.4.id)))
+                    .then((near(a.0) - held(a.4.id)).total_cmp(&(near(b.0) - held(b.4.id))))
             })
     });
     // (In the stall report: the hostile ones about, and what holds each.)
@@ -6477,6 +6574,16 @@ mod tests {
         assert_eq!(fatal.len(), 2);
         assert!(fatal.contains(&(2075603644094367013, "Enter".to_string())));
         assert!(fatal.contains(&(2077037199833972030, "Enter".to_string())));
+        // (One that failed the mission: alone while its objective is up.)
+        let mut fatal = parse_fatal("2077037199833972030 Enter\t436474\n5 near 40\n6 Use\tnot-an-objective\n");
+        assert_eq!(fatal.len(), 2);
+        let under_bridge = (2077037199833972030, "Enter".to_string());
+        assert!(!fatal.contains(&under_bridge));
+        fatal.objective = Some(436474);
+        assert!(fatal.contains(&under_bridge) && fatal.contains(&(5, "near 40".to_string())));
+        fatal.objective = Some(436475);
+        assert!(!fatal.contains(&under_bridge));
+        assert!(!fatal.contains(&(6, "Use".to_string())));
     }
 
     #[test]
@@ -6890,6 +6997,13 @@ mod tests {
         };
         let mut scripted = ScriptedPlayer::default();
         scripted.backup_inventory(&inv);
+        // (Kept with a checkpoint, and back from it after a reload.)
+        let saved = scripted.saved_backup(&inv).unwrap();
+        assert_eq!(saved.current, "1911");
+        assert_eq!(saved.explosives, [2, 1, 3, 2]);
+        scripted = ScriptedPlayer::default();
+        scripted.load_backup(&inv, Some(&saved));
+        assert_eq!(scripted.saved_backup(&inv), Some(saved));
         scripted.gadgets.clear();
         inv.slots.clear();
         inv.current = 0;

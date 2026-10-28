@@ -79,6 +79,21 @@ pub struct SaveGame {
     /// Weapon paint jobs: weapon name and paint name.
     pub paints: Vec<(String, String)>,
     pub progress: crate::progression::Progress,
+    /// The inventory a mission has put aside, to give back at its end.
+    pub backup: Option<SavedBackup>,
+}
+
+/// The inventory a mission put aside (`BackupInventory`: CIT_030's for the
+/// bow it hands the player against the Ink Monster), kept with a checkpoint
+/// taken meanwhile: reloaded without it, the mission gave nothing back, and
+/// the player went on with the bow alone.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SavedBackup {
+    pub current: String,
+    pub weapons: Vec<(String, u32, u32)>,
+    /// Grenades, molotovs, C4 and mines.
+    pub explosives: [u32; 4],
+    pub gadgets: Vec<String>,
 }
 
 impl SaveGame {
@@ -126,6 +141,16 @@ impl SaveGame {
         if !self.liberated.legacy.is_empty() {
             let ids: Vec<String> = self.liberated.legacy.iter().map(|i| i.to_string()).collect();
             out += &format!("liberated {}\n", ids.join(" "));
+        }
+        if let Some(b) = &self.backup {
+            let [g, m, c4, mines] = b.explosives;
+            out += &format!("backup {g} {m} {c4} {mines} {}\n", b.current);
+            for (name, mag, reserve) in &b.weapons {
+                out += &format!("backup_weapon {mag} {reserve} {name}\n");
+            }
+            for gadget in &b.gadgets {
+                out += &format!("backup_gadget {gadget}\n");
+            }
         }
         out += &self.progress.to_lines();
         out
@@ -192,6 +217,21 @@ impl SaveGame {
                 "waypoint" => s.waypoint = Some(Vec3::new(f(), f(), f())),
                 "taken" => s.liberated.flags.extend(rest.split_whitespace().filter_map(|v| u64::from_str_radix(v, 16).ok())),
                 "liberated" => s.liberated.legacy.extend(rest.split_whitespace().filter_map(|v| v.parse::<u32>().ok())),
+                "backup" => {
+                    let mut it = rest.splitn(5, ' ');
+                    let mut n = || it.next().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+                    let explosives = [n(), n(), n(), n()];
+                    let current = it.next().unwrap_or("").to_string();
+                    let b = s.backup.get_or_insert_with(Default::default);
+                    (b.explosives, b.current) = (explosives, current);
+                }
+                "backup_weapon" => {
+                    let mut it = rest.splitn(3, ' ');
+                    let mag = it.next()?.parse().ok()?;
+                    let reserve = it.next()?.parse().ok()?;
+                    s.backup.get_or_insert_with(Default::default).weapons.push((it.next()?.to_string(), mag, reserve));
+                }
+                "backup_gadget" => s.backup.get_or_insert_with(Default::default).gadgets.push(rest.trim().to_string()),
                 _ => {
                     s.progress.read_line(key, rest);
                 }
@@ -299,6 +339,7 @@ struct SaveSources<'w, 's> {
     outposts: Res<'w, crate::outposts::Outposts>,
     progress: Res<'w, crate::progression::Progress>,
     pause_menu: Res<'w, crate::progression::PauseMenu>,
+    scripted: Option<Res<'w, crate::story::ScriptedPlayer>>,
 }
 
 impl SaveSources<'_, '_> {
@@ -350,6 +391,7 @@ impl SaveSources<'_, '_> {
             waypoint: self.waypoint.0,
             liberated: self.outposts.taken(),
             progress: self.progress.clone(),
+            backup: self.scripted.as_ref().and_then(|s| s.saved_backup(inv)),
         })
     }
 }
@@ -499,7 +541,7 @@ pub fn continue_game(
     pickups: Query<(Entity, &Pickup)>,
     explosives: Query<(Entity, &Explosive)>,
     mut commands: Commands,
-    host: Option<NonSendMut<crate::story::StoryHost>>,
+    (host, mut scripted): (Option<NonSendMut<crate::story::StoryHost>>, Option<ResMut<crate::story::ScriptedPlayer>>),
     args: Option<Res<Args>>,
 ) {
     if requests.read().count() == 0 {
@@ -530,6 +572,9 @@ pub fn continue_game(
     stats.kills = save.kills;
     stats.spawn_point = position;
     restore_inventory(&mut inv, save);
+    if let Some(s) = scripted.as_mut() {
+        s.load_backup(&inv, save.backup.as_ref());
+    }
     world.herbs = save.herbs;
     world.removed = save.removed.iter().copied().collect();
     tod.hours = save.hours;
@@ -805,6 +850,12 @@ mod tests {
                 p.plants[crate::syringes::Plant::SacredLotus.index()] = 2;
                 p
             },
+            backup: Some(SavedBackup {
+                current: "AK-74M Rifle".into(),
+                weapons: vec![("Machete".into(), 0, 0), ("AK-74M Rifle".into(), 30, 90)],
+                explosives: [2, 1, 0, 3],
+                gadgets: vec!["gadgets:Equipped/Tablet".into()],
+            }),
         };
         assert_eq!(SaveGame::from_text(&s.to_text()), Some(s));
         assert_eq!(SaveGame::from_text("not a save"), None);

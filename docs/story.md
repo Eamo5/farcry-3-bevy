@@ -4883,6 +4883,15 @@ the game now plays (`boss_fight`) instead of ending it at once.
   and waits to hear it put away (`CWeaponHolsteredEvent`) before it gives
   up and takes the weapon away for good (`NoWeaponMode`). A script's
   holster (`CAPI_Pawn.Holster`) is heard now, and the bow came up.
+* **The arsenal given back.** The fight puts the player's inventory aside
+  for the bow (`BackupInventory`) and gives it back at its end
+  (`RestoreBackupInventory`, as B15E and B20C do again, and CIT_050's
+  dream). What was put aside lived only until a checkpoint's reload, and
+  one death in the fight left the player the bow alone for the rest of the
+  game (at JAS_200, an empty rifle). A checkpoint keeps it now
+  (`SaveGame::backup`: `backup`, `backup_weapon` and `backup_gadget`
+  lines), and a reload or a load from it puts it aside again. Seen: CIT_030
+  played through from B00 with a death in it, the arsenal back for CIT_050.
 * **Its looks.** The script removes the mask placed for the cinematics
   (`Mask_0`) as the fight starts; the fight puts its own on the head bone
   (`m_bossMaskArchetype`), the broken one at `ChangeMaskNow`
@@ -5281,6 +5290,21 @@ start, its crew seated, then driven along its way), and being seen fails it.
   (`Vehicle::release`), and a driverless car rolls to a stop instead of
   driving on along its way. The autopilot goes after a seated foe a
   block counts.
+
+* **The boss first.** With the timer on, the autopilot shot his bodyguards
+  and the traitors first and the boss got away, again and again. Of the
+  foes a block counts, one a script watches by himself (his own health
+  listener, by his id, not a group's name: `Story::watched_singly`) is now
+  gone after first.
+
+* **Under the bridge.** The trigger under the bridge lets the boss go
+  while he is to be stopped (stepped into then, it failed the mission),
+  and ends the block once he is dead. Learned as one that failed the
+  mission, it was left alone for good and the block waited forever. A
+  trigger that failed a mission is now left alone only while the objective
+  then up is up (`Fatal`: kept as `id event<tab>objective` in
+  `FC3_STORY_FATAL`'s file; one that killed the player, always). B40
+  completed.
 
 ## SAM_015: the fuel depot
 

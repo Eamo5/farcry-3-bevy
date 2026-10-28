@@ -1180,6 +1180,11 @@ impl Story {
         self.core.borrow().in_progress().map(|m| m.name.clone())
     }
 
+    /// The objective up for the mission the player is on, by its text's id.
+    pub fn objective_in_progress(&self) -> Option<u32> {
+        self.core.borrow().in_progress().and_then(|m| m.current_objective)
+    }
+
     /// The mission the player could abandon now (the pause menu's Abandon
     /// mission), by its main graph's name.
     pub fn abandonable(&self) -> Option<String> {
@@ -1685,6 +1690,21 @@ impl Story {
             })
             .collect();
         groups.into_iter().flat_map(|g| c.groups(&values::Text(g))).filter(|&id| c.is_loaded(id) && !c.dead.contains(&id)).collect()
+    }
+
+    /// Those of `counted_members` a script watches by themselves (its health
+    /// listener on the one character, by his id, not a group's name): the
+    /// mission's target among his guards (JAS_200's pirate boss, fleeing).
+    pub fn watched_singly(&self) -> std::collections::HashSet<u64> {
+        let c = self.core.borrow();
+        c.listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Group(g, event) if event == "CCounterEvent" || counts_down(event, &l.callback.target) => g.parse::<u64>().ok(),
+                _ => None,
+            })
+            .filter(|&id| id != PLAYER && c.is_loaded(id) && !c.dead.contains(&id))
+            .collect()
     }
 
     /// The groups blocks count down, each with its members still alive
@@ -2969,6 +2989,21 @@ mod tests {
             .exec()
             .unwrap();
         assert!(story.size_counted_members().contains(&12));
+        // (One watched by himself, by his id: the target among them.)
+        assert!(story.watched_singly().is_empty());
+        story
+            .domino()
+            .lua()
+            .load(
+                r##"
+            local boss = { _type = { _path = "Domino/user/fc3/X/X_B40.X_B40.lua", Got = function() end } }
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("11", "CCounterEvent", boss, "Got")
+            CEntityGroupManager_GetInstance():RegisterScriptEvent("1", "CCounterEvent", boss, "Got")
+        "##,
+            )
+            .exec()
+            .unwrap();
+        assert_eq!(story.watched_singly().into_iter().collect::<Vec<_>>(), [11]);
     }
 
     /// A group's members going into combat: its combat listeners hear the
