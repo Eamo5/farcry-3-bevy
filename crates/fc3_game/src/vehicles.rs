@@ -1632,6 +1632,7 @@ fn autopilot_board(
     mut players: Query<(&mut Transform, &mut Player), Without<Vehicle>>,
     mut actions: ResMut<ActionState>,
     mut last: Local<f32>,
+    foes: Query<(&Transform, &crate::story_actors::StoryActor, &crate::npc::Npc, &Health), (Without<Player>, Without<Vehicle>)>,
 ) {
     let _slow = crate::story::Slow::new("autopilot_board");
     if std::env::var_os("FC3_STORY_AUTOPILOT").is_none() || std::env::var_os("FC3_STORY_BOARD").is_some() {
@@ -1656,6 +1657,15 @@ fn autopilot_board(
         return;
     }
     let here = pt.translation;
+    // (Not with foes a block counts near, nor something near to use on
+    // foot: what `autopilot_exit` gets out for. SAM_015's jeep, listened to
+    // while Sam rides in it, had the autopilot in and out every few seconds,
+    // its bombs never planted.)
+    let counted = host.story.counted_members();
+    let fight = foes.iter().any(|(t, a, npc, h)| !h.dead && counted.contains(&a.id) && npc.hostile() && t.translation.distance(here) < FIGHT_FROM_VEHICLE);
+    if fight || host.pending_use_near(here, ON_FOOT_REACH) {
+        return;
+    }
     let named = host.story.awaited_vehicles(fc3_story::PLAYER);
     // (One whose gun stands on a tripod is boarded at its gun, free:
     // HUR_040's barge, its gun manned.)

@@ -5364,6 +5364,15 @@ its four key areas, its alarms to be switched off first.
   player move over to a free seat, not the wheel (`move_over`), and B40
   completes.
 
+* **In and out.** With the jeep listened to (Sam's invincibility follows
+  whether the player rides in it), the step that boards a vehicle a
+  script waits for put the autopilot back in every few seconds after it
+  got out to fight the depot's guards, and the bombs after the first were
+  never planted. It doesn't board now with foes a block counts near, nor
+  with something near to use on foot (`StoryHost::pending_use_near`):
+  what the exit step gets out for. The four areas went up, and SAM_015
+  and HOY_040 completed.
+
 ## HOY_040: Hoyt's poker table
 
 HOY_040 sits the player at Hoyt's poker table (`CPokerMiniGame_JAS_220_

@@ -968,6 +968,15 @@ impl StoryHost {
             })
     }
 
+    /// As `pending_use`, one within `reach` of `at` (Bevy).
+    pub fn pending_use_near(&self, at: Vec3, reach: f32) -> bool {
+        let focus = self.story.missions_running();
+        !focus.is_empty()
+            && self.story.watched_triggers_of(None, &focus).iter().any(|w| {
+                w.1 == "Use" && w.3 && to_bevy(w.2).distance(at) < reach && !self.used.contains(&(w.0, w.1.clone())) && !self.fatal.contains(&(w.0, w.1.clone()))
+            })
+    }
+
     /// Something happened (a test's step).
     pub fn reset_quiet(&mut self) {
         self.quiet = 0.0;
