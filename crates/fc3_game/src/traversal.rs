@@ -34,6 +34,7 @@ impl Plugin for TraversalPlugin {
                 (zip_prompt, tower_prompt).before(HudSet).after(crate::turrets::man_turrets).run_if(traversal_controls_available),
                 climb.run_if(traversal_controls_available),
                 ride.run_if(traversal_controls_available),
+                tower_beacons,
             )
                 .chain(),
         ).add_systems(PreUpdate, traversal_test.after(crate::controls::update_actions).before(crate::controls::apply_action_maps)
@@ -557,6 +558,45 @@ const CARD_TOWERS: u32 = 156252;
 
 /// At a radio tower's panel: take the tower over.
 #[allow(clippy::too_many_arguments)]
+/// How near (m) a radio tower's beacon is lit: its far glow (the red one,
+/// eight metres wide, blinking, shown beyond 400 m) fades out by 10 km
+/// (`FarClipping`): over the whole island.
+const BEACON_REACH: f32 = 10_000.0;
+
+/// Each radio tower's beacon on its top (where its panel is), the panel's
+/// own effect blinking: the one till it's taken, the other after
+/// (`particle_effects::TOWER_BEACON_OFF`, `TOWER_BEACON_ON`); lit within
+/// `BEACON_REACH` of the player.
+fn tower_beacons(
+    ways: Res<Ways>,
+    progress: Res<crate::progression::Progress>,
+    players: Query<&Transform, With<Player>>,
+    mut lit: Local<Vec<Option<(Entity, bool)>>>,
+    mut commands: Commands,
+) {
+    use fc3_formats::particle_effects::{TOWER_BEACON_OFF, TOWER_BEACON_ON};
+    let Ok(pt) = players.single() else { return };
+    lit.resize(ways.data.towers.len(), None);
+    for (i, at) in ways.data.towers.iter().enumerate() {
+        let at = Vec3::from(*at);
+        let taken = progress.towers.contains(&(i as u32));
+        let near = at.distance(pt.translation) < BEACON_REACH;
+        match lit[i] {
+            Some((e, was)) if !near || was != taken => {
+                commands.entity(e).despawn();
+                lit[i] = None;
+            }
+            _ => {}
+        }
+        if near && lit[i].is_none() {
+            let name = if taken { TOWER_BEACON_ON } else { TOWER_BEACON_OFF };
+            if crate::authored_fx::available(name) {
+                lit[i] = Some((commands.spawn((Transform::from_translation(at), crate::authored_fx::AuthoredFx(name))).id(), taken));
+            }
+        }
+    }
+}
+
 fn tower_prompt(
     mut actions: ResMut<ActionState>,
     settings: Res<crate::settings::Settings>,

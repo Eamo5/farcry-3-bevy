@@ -5720,6 +5720,14 @@ on: follow the flares to the drop point against the clock
   take. A tower isn't taken while the player is still coming into the
   world (the autopilot had taken one it was put beside behind the loading
   screen). Seen: D5's tower, the flight 15 s, the panel done after it.
+* **The beacon.** Each panel names the effect its tower's light plays
+  (`psTowerOffFX`, `psTowerOnFX`: `becon_desactivated` till it's taken,
+  `becon_activated` after); both are among the authored effects now
+  (`particle_effects::TOWER_BEACON_OFF`, `_ON`) and every tower plays its
+  own where its panel is (`traversal::tower_beacons`), its far glow (red,
+  eight metres, blinking twice a second) shown from 400 m out to 10 km, so
+  the untaken towers mark the skyline at night. Seen: D5's beacon blinking
+  red at the tower's top from 150 m off.
 * **The autopilot drives the run.** It already boards a vehicle a script
   waits for the player to get into, and accepts the dialog. A distance
   check on the vehicle the player is in (either way round: the flares

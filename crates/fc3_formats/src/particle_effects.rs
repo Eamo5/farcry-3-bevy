@@ -9,11 +9,18 @@ pub const VINE_CACHE_REL: &str = "particles/vine-puff.xml";
 /// the player prototype names in its `ScreenDropletParticle`.
 pub const SCREEN_DROPLETS_REL: &str = "particles/screen-droplets.xml";
 
+/// A radio tower's beacon (its panel's `psTowerOffFX` and `psTowerOnFX`):
+/// the light blinking on its top till it's taken, and the one after.
+pub const TOWER_BEACON_OFF: &str = "fc3_environment.lightseffects.becon_desactivated";
+pub const TOWER_BEACON_ON: &str = "fc3_environment.lightseffects.becon_activated";
+
 /// Authored effects the game plays as the game did (`fc3_game::authored_fx`),
-/// each cached whole with its textures: the race gates' flares, the blasts
-/// the vehicles' engine fires (their archetypes' `EngineFire`: the smoking
-/// stage and the burning one) and burning people's.
+/// each cached whole with its textures: the radio towers' beacons, the race
+/// gates' flares, the blasts the vehicles' engine fires (their archetypes'
+/// `EngineFire`: the smoking stage and the burning one) and burning people's.
 pub const AUTHORED_EFFECTS: &[&str] = &[
+    TOWER_BEACON_OFF,
+    TOWER_BEACON_ON,
     "fc3_gameplay_exotic.racing_challenge.waypointflare",
     "fc3_gameplay_exotic.racing_challenge.finishflare",
     blast::FRAG,
