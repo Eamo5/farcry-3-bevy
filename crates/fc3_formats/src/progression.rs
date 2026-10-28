@@ -179,6 +179,10 @@ pub const TATTOO_MASK: &str = r"graphics\__fc3_graphics\_common\_textures\charac
 /// The downloadable tribal tattoo the right arm's material names in the same
 /// slot (not part of the game without it).
 pub const TATTOO_DLC_IMAGE: &str = r"graphics\__fc3_graphics\_common\_textures\characters\firstperson\tribtattoo_dlc.xbt";
+/// An older tribal design the privateer's first-person arms still name in
+/// that slot (none of the tattoo's parts: drawn whole, it put a spiral on
+/// the right hand's fingers).
+pub const TATTOO_OLD_IMAGE: &str = r"graphics\__fc3_graphics\_common\_textures\characters\firstperson\tribtattoo.xbt";
 
 /// The skill tree and XP levels.
 #[derive(Debug, Clone, PartialEq, Default)]

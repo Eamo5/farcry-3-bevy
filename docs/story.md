@@ -554,8 +554,9 @@ is the story's own:
   armour, and `SP_SilentRun` quietens
   steps (guards hear steps out of sight, a sprint farthest and a crouch
   hardly at all), and `SP_LootTakedown` searches a takedown's victim as he
-  falls. The tattoo grows with what is learned (below). Not done yet: the
-  knife throw's extra XP.
+  falls. The tattoo grows with what is learned (below). The knife throw
+  that ends a chained takedown pays its own XP (`Takedown/
+  TakedownKnifeThrow`, five times a kill's) and counts in the statistics.
 * **The handbook's statistics** (`statistics`; the page in `docs/ui.md`):
   the engine's counters by their numbers (`enumStatisticType`, kept in
   `Progress::stats`, saved with it), counted as they happen:
@@ -679,7 +680,11 @@ is the story's own:
   names in the entity library (`body::player_pawn_arms`), read when the
   first switch comes; the arms rig keeps its joints and clips and takes the
   new model's skinned parts (`characters::redress_rig`). Seen: JAS_190's
-  B40C put the arms in the privateer's tan sleeves and black gloves.
+  B40C put the arms in the privateer's tan sleeves and black gloves. The
+  privateer's skin names an older tribal design in the tattoo's slot
+  (`tribtattoo.xbt`, none of the tattoo's parts), which the original
+  skin shader drew whole, a spiral on the right hand's fingers; it keeps
+  the standard material, as the right arm's downloadable tattoo does.
 * **Handbook**: the converter writes `progression/handbook.txt` from
   `wikiitems.lib` and the encyclopedia's categories (localised names and
   texts; the manual's pages left out, tutorials put under the tutorial

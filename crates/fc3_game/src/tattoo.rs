@@ -81,9 +81,10 @@ pub fn note_material(path: &str, samplers: &[(u8, String, bool)]) {
         debug!("tattoo: material {path} draws the tattoo");
         TATTOO_MATERIALS.lock().unwrap().get_or_insert_with(HashSet::new).insert(path.to_string());
     }
-    let dlc = fc3_formats::cache::texture_rel(fc3_formats::progression::TATTOO_DLC_IMAGE);
-    if samplers.iter().any(|s| s.1 == dlc) {
-        debug!("tattoo: material {path} would draw the downloadable tattoo");
+    // (Nor the older design the privateer's arms name: kept standard too.)
+    let others = [fc3_formats::progression::TATTOO_DLC_IMAGE, fc3_formats::progression::TATTOO_OLD_IMAGE].map(fc3_formats::cache::texture_rel);
+    if samplers.iter().any(|s| others.contains(&s.1)) {
+        debug!("tattoo: material {path} would draw the downloadable or the old tattoo");
         DLC_TATTOO_MATERIALS.lock().unwrap().get_or_insert_with(HashSet::new).insert(path.to_string());
     }
 }
