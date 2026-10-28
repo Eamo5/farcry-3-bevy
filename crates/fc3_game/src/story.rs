@@ -829,6 +829,8 @@ pub struct StoryHost {
     shop_items: HashMap<String, (String, u32)>,
     /// The character last sent on an action (tests: the one to follow).
     last_ordered: Option<u64>,
+    /// The autopilot's: whom it last caught up with, and from where.
+    followed: Option<(u64, Vec3)>,
     /// The hidden entities were set from the story's removed ones.
     hidden_synced: bool,
     /// Reinforcements the story has called in, not yet in the world.
@@ -1077,6 +1079,7 @@ impl StoryHost {
             checkpoint_progress: None,
             shop_items: HashMap::new(),
             last_ordered: None,
+            followed: None,
             hidden_synced: false,
             reinforcements: Vec::new(),
             ai_events: Vec::new(),
@@ -2790,10 +2793,21 @@ fn run_story(
             .filter(|at| at.distance(t.translation) > 6.0)
         {
             // Following someone: catch up with the friend last sent off.
-            info!("story autopilot: follow");
-            let to = to_dunia(at + Vec3::new(1.5, 0.0, 1.5) - Vec3::Y * crate::player::HALF_HEIGHT);
-            teleport(&mut t, &mut p, to, 0.0);
-            host.quiet = 0.0;
+            // (Not one each catching up leaves where he was: a rebel come to
+            // reward the player, out of reach, was followed every 12 s for
+            // two hours, and the story never went quiet for anything else.)
+            let id = host.last_ordered.unwrap_or_default();
+            if host.followed.is_some_and(|(f, was)| f == id && was.distance(t.translation) < 2.0) {
+                info!("story autopilot: {id} can't be caught up with; no more following");
+                host.last_ordered = None;
+                host.followed = None;
+            } else {
+                info!("story autopilot: follow");
+                host.followed = Some((id, t.translation));
+                let to = to_dunia(at + Vec3::new(1.5, 0.0, 1.5) - Vec3::Y * crate::player::HALF_HEIGHT);
+                teleport(&mut t, &mut p, to, 0.0);
+                host.quiet = 0.0;
+            }
         } else if let Some(at) = ways
             .data
             .towers

@@ -5173,6 +5173,13 @@ of Sam's, 28 m near and 32 m far, that warns on the screen).
   only until the story has been quiet 30 s (`UNTETHER_AFTER`); then the
   autopilot goes after them, and B30 completes.
 
+* **Following.** Then "Talk to Sam." stalled two hours: a rebel come to
+  reward the player (an encounter's, out of reach) was the friend last
+  sent off, and the autopilot caught up with him every 12 s, each time
+  from where the last left it, so the story never went quiet for anything
+  else. A catch-up that starts where the last one ended now gives that
+  friend up (`StoryHost::followed`); the autopilot went on to JAS_200.
+
 * **Sam's own way.** On his way to the last bomb Sam stopped to wait for
   the player, and a contextual action point of the next block's, switched
   on and free, was offered to the nearest of its group within its reach:
