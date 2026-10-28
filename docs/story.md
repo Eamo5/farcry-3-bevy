@@ -5710,6 +5710,16 @@ on: follow the flares to the drop point against the clock
   marked the tower unlocked, so `IsRadioTowerUnlocked` stayed false (what
   the manager asks on a load and after an exclusive mission). It is now
   (`Story::take_radio_tower`: the state first, then the events, once).
+* **The camera's flight.** Each panel names the flight the engine plays
+  once its tower is taken (`CRadioTowerPanelComponent`: the scene
+  `entCinemaEntity` and the sequence beside `fileCameraSequence`,
+  `seq_radiotower_narrative_<cell>_*.cseq`: 15 s of camera over the
+  country the tower opens, with depth of field and motion blur). The cinema
+  plays it now, and the panel's finish (`CRadioTowerFinishedEvent`,
+  `Story::radio_tower_finished`) comes once it's over, the start at the
+  take. A tower isn't taken while the player is still coming into the
+  world (the autopilot had taken one it was put beside behind the loading
+  screen). Seen: D5's tower, the flight 15 s, the panel done after it.
 * **The autopilot drives the run.** It already boards a vehicle a script
   waits for the player to get into, and accepts the dialog. A distance
   check on the vehicle the player is in (either way round: the flares

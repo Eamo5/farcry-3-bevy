@@ -566,13 +566,15 @@ fn tower_prompt(
     mut explored: ResMut<crate::map::Explored>,
     mut hud: ResMut<HudState>,
     mut xp: MessageWriter<crate::progression::XpGain>,
-    players: Query<(&Transform, &Health, &crate::weapons::Inventory), With<Player>>,
+    players: Query<(&Transform, &Health, &crate::weapons::Inventory, &Player)>,
     mut taken: MessageWriter<TowerTaken>,
     skills: Option<Res<crate::progression::Skills>>,
     mut story_ui: ResMut<crate::story::StoryUi>,
 ) {
-    let Ok((t, h, inv)) = players.single() else { return };
-    if hud.prompt.is_some() || h.dead {
+    let Ok((t, h, inv, p)) = players.single() else { return };
+    // (Not while the world comes in round him: the autopilot took a tower
+    // it was put beside behind the loading screen.)
+    if hud.prompt.is_some() || h.dead || p.spawning {
         return;
     }
     let Some((i, at)) = ways.data.towers.iter().enumerate().find(|(_, p)| Vec3::from(**p).distance(t.translation) < 2.6) else { return };

@@ -806,6 +806,9 @@ pub struct StoryHost {
     /// reloads.
     last_step: Option<(u64, String, f32)>,
     fatal: Fatal,
+    /// Radio towers' panels whose camera flight plays (panel, scene, file):
+    /// each is done once its flight is over.
+    tower_flights: Vec<(u64, u64, String)>,
     /// The objective up for the mission in progress before this frame's
     /// scripts ran (`Fatal`).
     objective_before: Option<u32>,
@@ -1080,6 +1083,7 @@ impl StoryHost {
             used: Default::default(),
             last_step: None,
             fatal: fatal_learned(),
+            tower_flights: Vec::new(),
             objective_before: None,
             checkpoint,
             reload_at: None,
@@ -2330,7 +2334,23 @@ fn run_story(
     // A radio tower taken: its panel's start and finish (on the player and
     // on the panel).
     for tower in towers.read() {
-        tower_taken(&mut host.story, tower.at);
+        // (Then the camera's flight over the country it opens, as the
+        // panel names it; the panel is done once it's over.)
+        let Some(panel) = tower_taken(&mut host.story, tower.at) else { continue };
+        match tower_flight(&host.story, panel) {
+            Some((scene, file)) => {
+                scripted.fade = (scripted.fade.0, 0.0, 0.6);
+                cinema.requests.push(crate::cinema::Request { mode: "play".into(), scene, file: file.clone(), sync: None, meta: None });
+                host.tower_flights.push((panel, scene, file));
+            }
+            None => host.story.radio_tower_finished(panel),
+        }
+    }
+    let flown: Vec<u64> = host.tower_flights.iter().filter(|f| !cinema.plays(f.1, &f.2)).map(|f| f.0).collect();
+    host.tower_flights.retain(|f| !flown.contains(&f.0));
+    for panel in flown {
+        info!("story: radio tower {panel} done, its flight over");
+        host.story.radio_tower_finished(panel);
     }
     // (The objective up before this frame's scripts run: a failure they make
     // is learned under it, the objective it clears with it.)
@@ -4704,8 +4724,8 @@ pub fn ask_abandon(ui: &mut StoryUi, story: &fc3_story::Story) {
 
 /// Puts the player at a place (Dunia space) facing a heading (degrees).
 /// A radio tower taken at its panel (Bevy space): the panel's start and
-/// finish, on the player and on the panel.
-fn tower_taken(story: &mut Story, at: Vec3) {
+/// finish, on the player and on the panel; the panel.
+fn tower_taken(story: &mut Story, at: Vec3) -> Option<u64> {
     let at = to_dunia(at);
     let panel = story
         .data()
@@ -4716,9 +4736,18 @@ fn tower_taken(story: &mut Story, at: Vec3) {
         .filter(|(_, d)| *d < 40.0 * 40.0)
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(id, _)| id);
-    if let Some(panel) = panel {
-        story.take_radio_tower(panel);
-    }
+    panel.filter(|&p| story.take_radio_tower(p))
+}
+
+/// The camera's flight a radio tower's panel plays once it is taken: its
+/// scene (`entCinemaEntity`) and sequence (`fileCameraSequence`, its path
+/// kept beside the hash), as the cinema plays them.
+fn tower_flight(story: &Story, panel: u64) -> Option<(u64, String)> {
+    let data = story.data();
+    let c = data.entities.get(&panel)?.component("CRadioTowerPanelComponent")?;
+    let scene = c.u64("entCinemaEntity").filter(|&s| s != u64::MAX && s != 0)?;
+    let file = c.str_h(0xF6B7_FCD3).filter(|f| f.to_ascii_lowercase().ends_with(".cseq"))?;
+    Some((scene, file))
 }
 
 /// `FC3_SLOW_SYSTEMS` (tests): logs a system that took longer than 20 ms

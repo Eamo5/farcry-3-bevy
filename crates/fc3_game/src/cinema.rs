@@ -120,6 +120,12 @@ impl Cinema {
         true
     }
 
+    /// Whether a scene's sequence is asked for or playing.
+    pub fn plays(&self, scene: u64, file: &str) -> bool {
+        self.requests.iter().any(|r| r.scene == scene && r.file.eq_ignore_ascii_case(file))
+            || self.playing.iter().any(|p| p.scene == scene && p.file.eq_ignore_ascii_case(file))
+    }
+
     /// A built sequence's time played and length, while it plays (or waits
     /// to start).
     pub fn progress(&self, name: &str) -> Option<(f32, f32)> {

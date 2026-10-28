@@ -1147,17 +1147,24 @@ impl Story {
 
     /// A radio tower the player has taken (its panel used), as the engine
     /// reports one: the state scripts read (`IsRadioTowerUnlocked`), then the
-    /// panel's start and finish on the player and on the panel (the radio
-    /// towers manager then tells the region its tower is unlocked, which
-    /// opens its supply runs).
-    pub fn take_radio_tower(&mut self, panel: u64) {
+    /// panel's start on the player and on the panel; false if it was taken
+    /// before. Its finish comes with `radio_tower_finished`.
+    pub fn take_radio_tower(&mut self, panel: u64) -> bool {
         if !self.core.borrow_mut().radio_towers_unlocked.insert(panel) {
-            return;
+            return false;
         }
-        for event in ["CRadioTowerStartedEvent", "CRadioTowerFinishedEvent"] {
-            for on in [PLAYER, panel] {
-                self.entity_event(on, event, vec![Arg::id(panel)]);
-            }
+        for on in [PLAYER, panel] {
+            self.entity_event(on, "CRadioTowerStartedEvent", vec![Arg::id(panel)]);
+        }
+        true
+    }
+
+    /// A taken radio tower's panel done (its camera's flight over): its
+    /// finish on the player and on the panel (the radio towers manager then
+    /// tells the region its tower is unlocked, which opens its supply runs).
+    pub fn radio_tower_finished(&mut self, panel: u64) {
+        for on in [PLAYER, panel] {
+            self.entity_event(on, "CRadioTowerFinishedEvent", vec![Arg::id(panel)]);
         }
     }
 
@@ -2724,8 +2731,9 @@ mod tests {
             )
             .exec()
             .unwrap();
-        story.take_radio_tower(88);
-        story.take_radio_tower(88);
+        assert!(story.take_radio_tower(88));
+        assert!(!story.take_radio_tower(88));
+        story.radio_tower_finished(88);
         let unlocked: bool = story.domino().lua().load(r#"return IsRadioTowerUnlocked("88")"#).eval().unwrap();
         let heard: Vec<String> = story.domino().lua().load("return heard").eval::<mlua::Table>().unwrap().sequence_values().map(Result::unwrap).collect();
         assert!(unlocked && story.radio_tower_unlocked(88));
