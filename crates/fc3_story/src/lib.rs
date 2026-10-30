@@ -1421,6 +1421,12 @@ impl Story {
             if in_graph(&l.callback.target, ACTIVITIES) && std::env::var_os("FC3_STORY_ACTIVITIES").is_none() && mission_of(&c, &l.callback.target).is_none() {
                 continue;
             }
+            // (Nor a quest's giver on a mission: a hunt's poster, used in
+            // the middle of WIL_050's watch over Oliver, took the player
+            // across the island and the watch never went on.)
+            if c.in_progress().is_some() && in_graph(&l.callback.target, QUEST_GIVERS) {
+                continue;
+            }
             // A spot a script spawned to be used (a bomb's): where it stands.
             if e == "Use" && c.spawned.contains_key(t) && !c.data.entities.contains_key(t) {
                 if graph.as_deref().is_some_and(|needle| !in_graph(&l.callback.target, needle)) || !keep(&c, &l.callback.target) {
@@ -2316,6 +2322,10 @@ fn counts_down(event: &str, target: &Table) -> bool {
 /// The activities' graphs (`in_graph`): the races', the shooting gallery's,
 /// the knife throwing's, poker's.
 const ACTIVITIES: &str = "fc3_activities/racechallenge/|fc3_activities/shootingchallenge/|fc3_activities/knifethrow/|fc3_activities/poker/";
+
+/// The country's quests' givers (a hunt's poster, a supply run's car, a
+/// WANTED poster): what takes a quest on.
+const QUEST_GIVERS: &str = "lib_sidequest.animalsidequestgiver|lib_sidequest.speedsidequestgiver|lib_sidequest.wantedsidequestgiver";
 
 /// Whether a box belongs to a graph whose script path contains `needle`
 /// (lower case; any of several split by `|`): the box's own, or one it is

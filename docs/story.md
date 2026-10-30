@@ -4375,6 +4375,34 @@ about as non-fighters and the first wave never emptied.
     (`SNIPE_EVERY`), as a player works the bolt; the comrades see the fall
     and fight. It also aims at what of a foe it can hit (head, chest, hips)
     past cover in front of him.
+* **Played on from B10 (`full3`).** Four more things held WIL_050:
+  * A hunt's poster was used in the middle of the watch over the convoy
+    (its giver's use trigger belongs to no mission), which took the player
+    across the island. A quest giver's triggers (`Lib_SideQuest.*Giver`)
+    aren't stepped into while a mission is in progress now
+    (`QUEST_GIVERS`).
+  * The photograph step took the player from the vantage point to a spot
+    within 60 m of Oliver, and the next block's beating was to be watched
+    from the vantage. Where a script holds the player at the camera (an
+    action map in force) the autopilot stays and waits for him to come into
+    the camera's reach (`HELD_PHOTO_PATIENCE`, 60 s); and the follow step no
+    longer takes the player after the friend last sent off meanwhile.
+  * The last three reinforcements (`ReinforcementPoint_WIL050OliverStopper03`)
+    were called to a battlefield region by the dock, but searched beside
+    their point, behind a gas station, gave up and stood there, and the
+    rifle fired into the wall in front of them for hours, each crack
+    keeping them looking about. Reinforcements called to a region now fight
+    and wait in it (`combat_areas`, `idle_areas`: their post its middle);
+    from the sniping rifle the autopilot holds fire on a foe none of whom
+    it can hit and turns to another.
+  * They still stood: the gas station's platform is above the dock, and a
+    step off its navigation polygons, or below its edge, met the ground
+    below (the sea floor) and held them at the edge. With a path to follow,
+    a character now takes the floor a path drops to off a ledge
+    (`NavMesh::floor_under`) or the mesh just beside him
+    (`NavMesh::nearest_floor`). A fighter with no line of fire also looks
+    for a spot near (in his area) that has one (`npc::find_vantage`). B20
+    completed and B25C began.
 * **Groups going into combat.** The engine tells the groups scripts watch
   (`CGroupCombatEvent`) when their members' AI states change:
   `<State>Start` as the first member enters idle, investigate, alert or

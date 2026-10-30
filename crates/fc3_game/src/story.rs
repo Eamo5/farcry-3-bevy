@@ -113,10 +113,13 @@ fn apply_sides(
         let shape = |region: Option<&u64>| region.and_then(|r| data.entities.get(r)).and_then(fc3_story::triggers::shape_of).map(std::sync::Arc::new);
         for (actor, mut npc) in &mut npcs {
             let wanted = host.combat_areas.get(&actor.id);
-            if changed || (wanted.is_some() && npc.combat_area.is_none()) {
+            // (One come into the world since, a reinforcement called to its
+            // battlefield, too.)
+            let newly = wanted.is_some() && npc.combat_area.is_none();
+            if changed || newly {
                 npc.combat_area = shape(wanted);
             }
-            if changed {
+            if changed || newly {
                 if let Some(area) = shape(host.idle_areas.get(&actor.id)) {
                     let post = npc.post;
                     if !area.holds(to_dunia(post), 0.0, fc3_story::triggers::BODY_HALF_HEIGHT) {
@@ -2867,7 +2870,10 @@ fn run_story(
             host.quiet = 0.0;
         } else if let Some(at) = host
             .last_ordered
-            .filter(|_| host.quiet > 12.0)
+            // (Not with the camera a script drew, an action map holding the
+            // player to it: WIL_050's watch over Oliver's beating, followed
+            // down to the convoy, never got its scene.)
+            .filter(|_| host.quiet > 12.0 && !(scripted.camera_drawn && action_maps.in_force().is_some()))
             .and_then(|id| actors.iter().find(|(a, _, npc)| a.id == id && npc.is_none() && !a.dead))
             .map(|(_, at, _)| at.translation)
             .filter(|at| at.distance(t.translation) > 6.0)
@@ -3211,6 +3217,18 @@ fn run_story(
                         let mercs: Vec<(u64, u64)> = args.iter().skip(4).filter_map(pair).collect();
                         // (A point's army is its mercs': G3_SC_05's ducks.)
                         host.called_from.extend(mercs.iter().map(|(id, _)| (*id, point)));
+                        // (Their battlefield, a region, is where they fight
+                        // and wait: WIL_050's last three, called to the dock
+                        // below the player's rifle, gave up searching beside
+                        // their point behind a gas station and stood there.)
+                        let field = a(2).parse::<u64>().ok().filter(|b| host.story.data().entities.get(b).and_then(fc3_story::triggers::shape_of).is_some());
+                        if let Some(field) = field {
+                            for (id, _) in &mercs {
+                                host.combat_areas.insert(*id, field);
+                                host.idle_areas.insert(*id, field);
+                            }
+                            host.areas_changed = true;
+                        }
                         host.reinforcements.push(crate::story_actors::Reinforcement {
                             point,
                             battlefield: a(2).parse().ok().filter(|&b| b != u64::MAX),
@@ -5287,6 +5305,9 @@ struct PhotoStand {
 
 /// How long the camera is held up at a thing from one stand before another.
 const PHOTO_PATIENCE: f32 = 6.0;
+/// As long where a script holds the player at the camera (the one to
+/// photograph on his way there).
+const HELD_PHOTO_PATIENCE: f32 = 60.0;
 
 const TAIL_NEAR: f32 = 8.0;
 const TAIL_FAR: f32 = 30.0;
@@ -6035,10 +6056,18 @@ fn autopilot_loot(
                 h.distance > to.length() - 0.45 || (hit - nt.translation).with_y(0.0).length() < 0.6
             })
         };
-        let point = [head_at, head_at + Vec3::Y * 0.12, nt.translation + Vec3::Y * 0.4, nt.translation - Vec3::Y * 0.3]
-            .into_iter()
-            .find(|p| clear(*p))
-            .unwrap_or(head_at);
+        let clear_point = [head_at, head_at + Vec3::Y * 0.12, nt.translation + Vec3::Y * 0.4, nt.translation - Vec3::Y * 0.3].into_iter().find(|p| clear(*p));
+        // (Held where he is, none of him in sight: another, not a shot into
+        // the wall in front of him. WIL_050's last three, behind the gas
+        // station on the dock, were fired at for hours, and each shot's
+        // crack kept them looking about where they stood.)
+        if clear_point.is_none() && fixed {
+            skipped.insert(actor.id, now + 6.0);
+            *shooting = None;
+            *last = None;
+            return;
+        }
+        let point = clear_point.unwrap_or(head_at);
         let aim = point - eye;
         player.yaw = (-aim.x).atan2(-aim.z);
         player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
@@ -6354,13 +6383,19 @@ fn autopilot_loot(
                 let aim = spot + Vec3::Y * rise;
                 // (Not steeply up or down at it: the view's pitch has its
                 // limits.)
-                let sees = |eye: Vec3| {
+                let sees = |eye: Vec3, reach: f32| {
                     let to = aim - eye;
                     let dist = to.length();
                     to.y.abs() < to.with_y(0.0).length() * 1.7
-                        && dist < 60.0
+                        && dist < reach
                         && Dir3::new(to).is_ok_and(|dir| spatial.cast_ray(eye, dir, dist, true, &filter).is_none_or(|hit| hit.distance > dist - 1.0))
                 };
+                // (Where a script holds the player at the camera, from there,
+                // the camera on him till he comes into its reach: WIL_050's
+                // vantage point over the convoy, left for a spot by Oliver,
+                // was where the next block wanted the player to watch his
+                // beating from.)
+                let held_here = action_maps.in_force().is_some();
                 let feet_now = at.translation - Vec3::Y * crate::player::HALF_HEIGHT;
                 if photo_stand.at.is_none_or(|s| s.0 != id) {
                     if photo_stand.at.is_some() {
@@ -6369,7 +6404,7 @@ fn autopilot_loot(
                     let tried = &photo_stand.tried;
                     let fresh = |feet: Vec3| tried.iter().all(|t| t.distance(feet) > 3.0);
                     let toward = flat.normalize_or(Vec3::Z);
-                    let stand = if !player.noclip && fresh(feet_now) && sees(feet_now + Vec3::Y * player.eye) {
+                    let stand = if !player.noclip && fresh(feet_now) && (held_here || sees(feet_now + Vec3::Y * player.eye, 60.0)) {
                         Some(feet_now)
                     } else {
                         [10.0f32, 16.0, 24.0, 32.0].into_iter().flat_map(|d| (0..8).map(move |k| (d, k))).find_map(|(d, k)| {
@@ -6377,7 +6412,7 @@ fn autopilot_loot(
                             let probe = spot + side * d + Vec3::Y * 6.0;
                             let floor = spatial.cast_ray(probe, Dir3::NEG_Y, 80.0, true, &filter)?;
                             let feet = probe - Vec3::Y * floor.distance;
-                            (fresh(feet) && sees(feet + Vec3::Y * player.eye)).then_some(feet)
+                            (fresh(feet) && sees(feet + Vec3::Y * player.eye, 60.0)).then_some(feet)
                         })
                     };
                     info!("story autopilot: photo stand {:?}", stand.map(to_dunia));
@@ -6393,7 +6428,7 @@ fn autopilot_loot(
                     }
                     // (No photo from there after a while: another stand.)
                     *held += time.delta_secs();
-                    if *held > PHOTO_PATIENCE {
+                    if *held > if held_here { HELD_PHOTO_PATIENCE } else { PHOTO_PATIENCE } {
                         info!("story autopilot: no photo from {:?}; another stand", to_dunia(*feet));
                         tried.push(*feet);
                         *stand = None;

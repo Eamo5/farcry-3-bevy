@@ -656,6 +656,10 @@ pub struct Npc {
     /// Taking cover in a fight, and seconds until the next look for some.
     cover: Option<Cover>,
     cover_search: f32,
+    /// Without a line of fire: a spot to get it back from (`find_vantage`),
+    /// and seconds until the next look for one.
+    vantage: Option<Vec3>,
+    vantage_search: f32,
     /// Seconds left of a flinch from a hit.
     flinch: f32,
     /// Seconds left of getting up from a guard spot, startled (its move's
@@ -965,6 +969,38 @@ fn find_cover(nav: &crate::nav::NavMesh, spatial: &SpatialQuery, me: Entity, pla
         let view = spatial.cast_ray(high, dh, (eyes.distance(high) - 1.0).max(0.1), true, &filter).is_none();
         if covered && view {
             return Some(spot);
+        }
+    }
+    None
+}
+
+/// A spot near `pos` on the navigation mesh (within `area`, if he is kept
+/// to one) from where his eyes see `threat`, the nearest: where a fighter
+/// who has lost his line of fire goes to get it back. WIL_050's
+/// reinforcements, kept to the dock below the player's rifle, stood behind
+/// a wall all the while and were never shot.
+fn find_vantage(nav: &crate::nav::NavMesh, spatial: &SpatialQuery, me: Entity, player: Entity, pos: Vec3, threat: Vec3, area: Option<&fc3_story::triggers::Shape>) -> Option<Vec3> {
+    let filter = SpatialQueryFilter::from_excluded_entities([me, player]);
+    let aim = threat + Vec3::Y * 0.4;
+    let toward = (threat - pos).with_y(0.0).normalize_or(Vec3::Z);
+    for r in [3.0f32, 6.0, 9.0, 13.0, 18.0] {
+        for k in 0..10 {
+            // (Nearest the threat's side first.)
+            let turn = (if k % 2 == 0 { 1.0 } else { -1.0 }) * (k / 2) as f32 * std::f32::consts::TAU / 10.0;
+            let probe = pos + Quat::from_rotation_y(turn) * toward * r;
+            let Some(ground) = nav.height_at(probe) else { continue };
+            let spot = probe.with_y(ground);
+            if (ground - (pos.y - HALF_HEIGHT)).abs() > 4.0 {
+                continue;
+            }
+            if area.is_some_and(|a| !a.holds(crate::data::to_dunia(spot + Vec3::Y * HALF_HEIGHT), 0.0, fc3_story::triggers::BODY_HALF_HEIGHT)) {
+                continue;
+            }
+            let eye = spot + Vec3::Y * 1.6;
+            let to = aim - eye;
+            if Dir3::new(to).is_ok_and(|d| spatial.cast_ray(eye, d, (to.length() - 1.0).max(0.1), true, &filter).is_none()) {
+                return Some(spot);
+            }
         }
     }
     None
@@ -1727,6 +1763,8 @@ pub(crate) fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker
         wander_wait: rng.range(0.0, 6.0),
         cover: None,
         cover_search: rng.range(0.0, 2.0),
+        vantage: None,
+        vantage_search: rng.range(2.0, 4.0),
         flinch: 0.0,
         breaking_off: 0.0,
     }
@@ -2483,7 +2521,26 @@ fn act(
                         }
                     }
                 }
-                if npc.cover.is_some() {
+                // No line of fire on the player: to a spot near with one (kept
+                // to his area), as the game's fighters shift to see their
+                // target.
+                if npc.cover.is_none() && !tgt.seen && tgt.is_player && npc.hostile() && nav.ready() {
+                    npc.vantage_search -= dt;
+                    if npc.vantage.is_none() && npc.vantage_search <= 0.0 {
+                        npc.vantage_search = rng.range(3.0, 5.0);
+                        npc.vantage = find_vantage(&nav, &spatial, e, pe, pos, tgt.pos, npc.combat_area.as_deref());
+                    }
+                } else {
+                    npc.vantage = None;
+                }
+                if let Some(v) = npc.vantage.filter(|_| npc.cover.is_none()) {
+                    if flat_distance(pos, v) < 0.8 {
+                        npc.vantage = None;
+                    } else {
+                        goal = Some(v + Vec3::Y * HALF_HEIGHT);
+                        speed = 3.6;
+                    }
+                } else if npc.cover.is_some() {
                     // (Handled above.)
                 } else {
                     // Keep the role's fighting distance, strafing to be harder to hit.
@@ -2558,6 +2615,19 @@ fn act(
                     }
                     goal = Some(lk);
                     speed = 2.8;
+                    // (Kept to an area the place searched is out of: a spot
+                    // in it that sees there, rather than its edge.)
+                    if let Some(area) = npc.combat_area.clone().filter(|a| !a.holds(crate::data::to_dunia(lk), 0.0, fc3_story::triggers::BODY_HALF_HEIGHT)) {
+                        npc.vantage_search -= dt;
+                        if npc.vantage.is_none() && npc.vantage_search <= 0.0 && nav.ready() {
+                            npc.vantage_search = rng.range(3.0, 5.0);
+                            npc.vantage = find_vantage(&nav, &spatial, e, pe, pos, lk, Some(&area));
+                        }
+                        goal = npc.vantage.map(|v| v + Vec3::Y * HALF_HEIGHT).or_else(|| area_middle(&area).map(|m| crate::data::to_bevy(m).with_y(pos.y)));
+                        if npc.vantage.is_some_and(|v| flat_distance(pos, v) < 0.8) {
+                            goal = None;
+                        }
+                    }
                     if flat_distance(pos, lk) < 2.0 {
                         npc.last_known = Some(lk + Vec3::new(rng.range(-12.0, 12.0), 0.0, rng.range(-12.0, 12.0)));
                     }
@@ -2671,10 +2741,40 @@ fn act(
         // (caves); and not over a cliff's edge (a goal beyond one is walked
         // toward, not dropped to).
         if let Some(ground) = heights.height_at(next) {
-            let floor = nav.height_at(next - Vec3::Y * HALF_HEIGHT).filter(|h| (*h > ground + 0.5 || *h < ground - 2.0) && (*h - feet.y).abs() < 1.0);
+            let floor = nav
+                .height_at(next - Vec3::Y * HALF_HEIGHT)
+                .filter(|h| (*h > ground + 0.5 || *h < ground - 2.0) && (*h - feet.y).abs() < 1.0)
+                // (Or a lower one the path drops down to off a ledge: WIL_050's
+                // reinforcements, on the gas station's platform above the
+                // dock, stood at its edge for good.)
+                .or_else(|| {
+                    npc.path
+                        .first()
+                        .filter(|w| w.y < feet.y - 0.5)
+                        .and_then(|_| nav.floor_under(next - Vec3::Y * HALF_HEIGHT, LEDGE_DROP))
+                        .filter(|h| *h > ground + 0.5 || *h < ground - 2.0)
+                })
+                // (Or, a path to follow, the mesh just beside: one pushed a
+                // step off it, between its polygons, or below a platform's
+                // edge, back onto it rather than held there for good.)
+                .or_else(|| {
+                    (!npc.path.is_empty())
+                        .then(|| nav.nearest_floor(next - Vec3::Y * HALF_HEIGHT, 1.0))
+                        .flatten()
+                        .filter(|h| (*h - feet.y).abs() < LEDGE_DROP && (*h > ground + 0.5 || *h < ground - 2.0))
+                });
             if let Some(f) = floor {
                 next.y = f + HALF_HEIGHT;
             } else if ground < crate::water::surface(next, Some(ground)) - 0.8 || ground < feet.y - LEDGE_DROP || over_edge(next) {
+                if log_nav && npc.velocity != Vec3::ZERO {
+                    debug!(
+                        "npc {}: held at an edge at {pos:.2?} (ground {ground:.2}, nav {:?}, under {:?}, waypoint {:?})",
+                        npc.marker_id,
+                        nav.height_at(next - Vec3::Y * HALF_HEIGHT),
+                        nav.floor_under(next - Vec3::Y * HALF_HEIGHT, LEDGE_DROP),
+                        npc.path.first()
+                    );
+                }
                 next = pos;
                 npc.velocity = Vec3::ZERO;
             } else {

@@ -202,6 +202,28 @@ impl NavGraph {
         g
     }
 
+    /// The highest walkable surface right under a point, no more than
+    /// `depth` below it (nor above it by more than a step).
+    fn floor_under(&self, p: Vec3, depth: f32) -> Option<f32> {
+        let sector = sector_of(p);
+        let mut best: Option<f32> = None;
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                let Some(&(start, count)) = self.by_sector.get(&SectorCoord::new(sector.x + dx, sector.y + dz)) else { continue };
+                for poly in &self.polys[start..start + count] {
+                    if p.xz().clamp(poly.min, poly.max) != p.xz() || !contains(&poly.verts, p) {
+                        continue;
+                    }
+                    let h = plane_height(&poly.verts, p);
+                    if h <= p.y + 0.5 && h >= p.y - depth && best.is_none_or(|b| h > b) {
+                        best = Some(h);
+                    }
+                }
+            }
+        }
+        best
+    }
+
     /// The polygon under (or nearest to, within a few metres) a point.
     fn locate(&self, p: Vec3) -> Option<usize> {
         let sector = sector_of(p);
@@ -329,6 +351,20 @@ impl NavMesh {
         let i = self.graph.locate(p)?;
         let poly = &self.graph.polys[i];
         contains(&poly.verts, p).then(|| plane_height(&poly.verts, p))
+    }
+
+    /// The walkable surface right under a point, no more than `depth` below
+    /// it: a lower floor a path drops down to off a ledge.
+    pub fn floor_under(&self, p: Vec3, depth: f32) -> Option<f32> {
+        self.graph.floor_under(p, depth)
+    }
+
+    /// The height of the mesh's nearest point to `p`, if that is within
+    /// `reach` (m) of it across the ground: for one just off the mesh.
+    pub fn nearest_floor(&self, p: Vec3, reach: f32) -> Option<f32> {
+        let i = self.graph.locate(p)?;
+        let near = closest_point(&self.graph.polys[i].verts, p);
+        (near.xz().distance(p.xz()) < reach).then_some(near.y)
     }
 
     /// A walkable path (waypoints after the start, ending at `to` or as close as
