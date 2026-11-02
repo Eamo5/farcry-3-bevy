@@ -2008,7 +2008,7 @@ fn run_story(
             mut chopper,
             mut car_chase,
             mut gallery,
-            (poker, minigame, mut races, mut trials, outposts, mut scripted_map, mut fp, mut glows),
+            (poker, minigame, mut races, mut trials, outposts, mut scripted_map, mut fp, mut glows, startled),
             detection,
             mut env_overrides,
         ),
@@ -2046,6 +2046,7 @@ fn run_story(
                 ResMut<crate::map::ScriptedMap>,
                 ResMut<crate::fp::FpState>,
                 ResMut<crate::unlit_effects::GlowBlends>,
+                Res<crate::story_actors::Startled>,
             ),
             Res<crate::stealth::Detection>,
             ResMut<crate::sky::EnvOverrides>,
@@ -2338,8 +2339,10 @@ fn run_story(
     for (a, at, npc) in &actors {
         // The AI's state as scripts' state listeners know it: relaxed,
         // investigating, alerted, in combat, dead.
+        // (One who doesn't fight, startled: in combat, as the engine's are.)
         let ai_state = match npc.map(|n| n.state) {
             _ if a.dead => 4,
+            None if startled.now(a.id, now) => 3,
             Some(crate::npc::NpcState::Suspicious) => 1,
             Some(crate::npc::NpcState::Search) => 2,
             Some(crate::npc::NpcState::Combat) => 3,
@@ -5459,7 +5462,7 @@ fn autopilot_loot(
     scripted: Res<ScriptedPlayer>,
     catalog: Res<crate::progression::LootCatalog>,
     progress: Res<crate::progression::Progress>,
-    (heights, stims, fires): (Res<crate::terrain::Heightfield>, Res<crate::stims::Stims>, Res<crate::fire::Fires>),
+    (heights, stims, fires, startled): (Res<crate::terrain::Heightfield>, Res<crate::stims::Stims>, Res<crate::fire::Fires>, Res<crate::story_actors::Startled>),
     mut players: Query<(Entity, &mut Transform, &mut Player, &crate::combat::Health, &crate::weapons::Inventory, Option<&crate::combat::PlayerStats>)>,
     animals: Query<(Entity, &Transform, &crate::wildlife::WildAnimal, &crate::combat::Health, Option<&crate::wildlife::Carcass>, Option<&crate::story_actors::StoryActor>), Without<Player>>,
     plants: Query<(&crate::pickups::Pickup, &GlobalTransform)>,
@@ -6406,6 +6409,56 @@ fn autopilot_loot(
         }
         return;
     }
+    // One who doesn't fight a script waits to see in combat, scared (SQC_010:
+    // "Shoot the ground at Senin's feet."): a shot into the ground a couple
+    // of metres before him, from a few metres off, with a gun that puts its
+    // round where it's aimed.
+    if host.quiet > 8.0 {
+        let scare = host.story.awaited_in_combat();
+        let now_s = time.elapsed_secs();
+        let fighters: std::collections::HashSet<u64> = npcs.iter().map(|q| q.4.id).collect();
+        let him = story_actors
+            .iter()
+            .filter(|(_, a, creature)| !creature && !a.dead && scare.contains(&a.id) && !fighters.contains(&a.id) && !startled.now(a.id, now_s))
+            .min_by(|a, b| a.0.translation.distance(at.translation).total_cmp(&b.0.translation.distance(at.translation)));
+        if let Some((ht, him, _)) = him {
+            if *last != Some((him.id, "scare")) {
+                info!("story autopilot: scare {} with a shot at his feet", host.story.data().name_of(him.id).unwrap_or("?"));
+                *last = Some((him.id, "scare"));
+            }
+            let his_feet = ht.translation - Vec3::Y * crate::player::HALF_HEIGHT;
+            let feet = at.translation - Vec3::Y * crate::player::HALF_HEIGHT;
+            let away = (feet - his_feet).with_y(0.0);
+            let off = away.length();
+            let toward_me = away.normalize_or(Vec3::Z);
+            if !(3.0..=9.0).contains(&off) || (feet.y - his_feet.y).abs() > 2.0 {
+                let mut stand = his_feet + toward_me * 6.0;
+                stand.y = feet_near(&spatial, &heights, me, stand, his_feet.y);
+                teleport(&mut at, &mut player, to_dunia(stand), 0.0);
+                return;
+            }
+            let spot = his_feet + toward_me * 2.0;
+            let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
+            let aim = spot - eye;
+            player.yaw = (-aim.x).atan2(-aim.z);
+            player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
+            if now_s >= *next_press && !player.spawning {
+                *next_press = now_s + 0.5;
+                use crate::controls::Action;
+                use crate::weapons::WeaponClass as W;
+                let precise = |c: W| matches!(c, W::Pistol | W::Smg | W::Rifle | W::Sniper | W::Lmg);
+                if !precise(inventory.def().class) && inventory.slots.iter().any(|s| precise(inventory.defs[s.def].class)) {
+                    actions.cycle = 1;
+                } else if inventory.slot().mag == 0 {
+                    actions.press(Action::Reload);
+                } else {
+                    actions.hold(Action::Aim);
+                    actions.press(Action::Fire);
+                }
+            }
+            return;
+        }
+    }
     // A pickup a script waits on (a mission's diamonds): gone to and taken
     // (from wherever a high trigger held him up). And, a script counting
     // the player's collectibles, the ones a mission lays out (ULC_010's
@@ -6448,10 +6501,14 @@ fn autopilot_loot(
             }
             let feet = at.translation - Vec3::Y * crate::player::HALF_HEIGHT;
             let to = spot - feet;
-            if Vec2::new(to.x, to.z).length() > 1.2 || to.y.abs() > 1.5 {
-                // Beside it, on its level.
+            if Vec2::new(to.x, to.z).length() > 1.2 || to.y < -1.5 || to.y > player.eye + 0.95 {
+                // Beside it, on the floor under it (one on a shelf is
+                // reached up to; set at its height, he fell to the floor and
+                // was set there again and again).
                 let side = Vec3::new(-to.x, 0.0, -to.z).normalize_or(Vec3::Z);
-                teleport(&mut at, &mut player, to_dunia(spot + side * 0.8), 0.0);
+                let mut stand = spot + side * 0.8;
+                stand.y = feet_near(&spatial, &heights, me, stand, spot.y).max(spot.y - player.eye - 0.9);
+                teleport(&mut at, &mut player, to_dunia(stand), 0.0);
                 host.quiet = 0.0;
                 return;
             }

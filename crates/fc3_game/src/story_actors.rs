@@ -51,6 +51,8 @@ impl Plugin for StoryActorsPlugin {
             .init_resource::<ActorOrders>()
             .init_resource::<Arrivals>()
             .init_resource::<CalledIn>()
+            .init_resource::<Startled>()
+            .add_systems(Update, startle.run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(
                 Update,
                 (
@@ -72,6 +74,53 @@ impl Plugin for StoryActorsPlugin {
                     .after(crate::story::EntityPosesSet)
                     .run_if(in_state(crate::menu::GameState::Playing)),
             );
+    }
+}
+
+/// The story's characters who don't fight (quest givers, captives, the
+/// cheering outsiders) startled by a shot landing at their feet, a blast
+/// near them or a hit: in combat as the scripts' state listeners know it a
+/// while, as the engine's own are (SQC_010's Senin, scared by a shot at his
+/// feet), by story id: until when.
+#[derive(Resource, Default)]
+pub struct Startled(pub HashMap<u64, f32>);
+
+impl Startled {
+    pub fn now(&self, id: u64, at: f32) -> bool {
+        self.0.get(&id).is_some_and(|until| *until > at)
+    }
+}
+
+/// How near (m) a shot's impact startles one who doesn't fight, a blast's,
+/// and for how long (s).
+const STARTLE_SHOT: f32 = 3.0;
+const STARTLE_BLAST: f32 = 10.0;
+const STARTLE_SECS: f32 = 12.0;
+
+fn startle(
+    time: Res<Time>,
+    mut startled: ResMut<Startled>,
+    mut shots: MessageReader<crate::weapons::WorldHit>,
+    mut blasts: MessageReader<crate::weapons::Explosion>,
+    mut hits: MessageReader<crate::combat::DamageEvent>,
+    actors: Query<(Entity, &StoryActor, &Transform), Without<crate::npc::Npc>>,
+) {
+    let now = time.elapsed_secs();
+    startled.0.retain(|_, until| *until > now);
+    let near: Vec<(Vec3, f32)> =
+        shots.read().map(|s| (s.at, STARTLE_SHOT)).chain(blasts.read().map(|b| (b.at, STARTLE_BLAST.max(b.radius)))).collect();
+    let hit: Vec<Entity> = hits.read().map(|h| h.target).collect();
+    if near.is_empty() && hit.is_empty() {
+        return;
+    }
+    for (e, a, t) in &actors {
+        if a.dead {
+            continue;
+        }
+        let feet = t.translation - Vec3::Y * crate::player::HALF_HEIGHT;
+        if hit.contains(&e) || near.iter().any(|(at, r)| at.distance(feet) < *r) {
+            startled.0.insert(a.id, now + STARTLE_SECS);
+        }
     }
 }
 

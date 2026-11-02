@@ -4243,7 +4243,13 @@ Run again later in the campaign (`camp91`), the escort failed every time
   "use the panel"), it stays, and the scripts hear it picked. B15
   completed. The power puzzle's electrified water kills (its
   `HealthModifier`), and the autopilot had learned the control room's
-  trigger beside it as fatal from a death the water dealt.
+  trigger beside it as fatal from a death the water dealt. Lab #2's last
+  fragment sits on a shelf 2.5 m up: things were taken only within 2 m of
+  the feet up or down, and the game's use distance is from the eye; now
+  anything up to a metre over the eye is in reach (`USE_REACH_UP`), and the
+  autopilot stands on the floor under a thing to take, not at its height
+  (it fell to the floor and was set up there again and again). Collectibles
+  already taken aren't gone after again.
 * **Reinforcements that fight.** Each wave's reinforcements are sent to
   guard posts in the village (`Cautious_Guard_*`). Alerted, one's AI took
   over and the story heard his action broken off; it sent him to the next
@@ -5753,6 +5759,26 @@ told the story of an outpost taken, so no activity ever opened.
   come and gone, by when the keeper is long settled there: a listener for
   a contextual action's start that comes while a character is on it hears
   it then. `FC3_USE_DEBUG` logs the usable pawns near the player.
+* **The whole island open (tests).** `FC3_LIBERATE_ALL` takes every outpost
+  the story doesn't take itself, and every radio tower, 20 s into a run
+  (as each would be: its safe house unlocked in the story, the panel's
+  start and finish told), so a checkpoint's side quests across the island
+  all open: from the campaign's end, 33 outposts and 17 towers.
+
+### Side characters (SQC)
+
+The island's people with a favour to ask (`fc3_sidequestcharacters`: SQC_010
+to SQC_080, each a brief at its giver then its blocks):
+
+* **Scared, not shot.** SQC_010 has the player "shoot the ground at
+  Senin's feet": its `StateListener` waits for his group's `CombatStart`.
+  Senin, a quest giver, doesn't fight, so he had no AI state but idle. One
+  of the story's characters who doesn't fight is now startled by a shot
+  landing within 3 m of his feet, a blast within 10 m or a hit, and is in
+  combat to the scripts' state listeners for 12 s (`story_actors::Startled`),
+  as the engine's are. The autopilot scares one a script waits to see in
+  combat (`Story::awaited_in_combat`) with a shot into the ground 2 m before
+  him, from a gun that puts its round where it's aimed. SQC_010 completed.
 
 ### Hunts (SQA, Path of the Hunter)
 

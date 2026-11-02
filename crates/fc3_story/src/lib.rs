@@ -352,6 +352,8 @@ pub struct Story {
     errors: usize,
     /// The collectibles missions lay out in their own layers.
     collectibles: Vec<u64>,
+    /// The collectibles picked up since the story started.
+    collected: HashSet<u64>,
 }
 
 impl Story {
@@ -379,7 +381,7 @@ impl Story {
         core.borrow_mut().zone_scripts = zone_scripts;
         natives::register(&domino, &core).map_err(|e| anyhow::anyhow!("{e}"))?;
         domino.lua().load(include_str!("glue.lua")).set_name("glue").exec().map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(Story { domino, core, instances: HashMap::new(), loaded_scripts: HashSet::new(), held_scripts: HashSet::new(), errors: 0, collectibles })
+        Ok(Story { domino, core, instances: HashMap::new(), loaded_scripts: HashSet::new(), held_scripts: HashSet::new(), errors: 0, collectibles, collected: HashSet::new() })
     }
 
     pub fn data(&self) -> Rc<StoryData> {
@@ -1760,6 +1762,28 @@ impl Story {
     /// the guards to kill), not those a health listener only watches
     /// (`CCounterEvent` on one character: JAS_200's visitor, to be
     /// photographed, not killed).
+    /// The characters of the groups scripts wait to see go into combat (a
+    /// `StateListener` on its `Combat` state: SQC_010's Senin, to be scared
+    /// by a shot at his feet).
+    pub fn awaited_in_combat(&self) -> Vec<u64> {
+        let c = self.core.borrow();
+        let mut out: Vec<u64> = c
+            .listeners
+            .values()
+            .filter_map(|l| match &l.on {
+                Listen::Group(g, event) if event == "CGroupCombatEvent" && l.callback.target.get::<f64>("State").is_ok_and(|s| s == 3.0) => {
+                    Some(c.groups(&values::Text(g.clone())))
+                }
+                _ => None,
+            })
+            .flatten()
+            .filter(|e| !c.dead.contains(e))
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     pub fn size_counted_members(&self) -> std::collections::HashSet<u64> {
         let c = self.core.borrow();
         let groups: std::collections::BTreeSet<_> = c
@@ -1903,6 +1927,7 @@ impl Story {
         // a POI's relic found, its layer switched for good.)
         let collectible = self.core.borrow().data.entities.get(&pickup).is_some_and(|e| e.component("CPickupCollectible").is_some());
         if collectible {
+            self.collected.insert(pickup);
             self.core.borrow_mut().raise(&Listen::Entity(PLAYER, "CCollectibleCollectedEvent".into()), vec![Arg::id(pickup)]);
         }
         self.group_event(pickup, "DominoCallbackPickupPicked", vec![Arg::id(pickup)]);
@@ -2018,7 +2043,7 @@ impl Story {
         let running: HashSet<u64> =
             c.missions.by_id.values().filter(|m| m.state == missions::State::Running).filter_map(|m| m.block.as_ref().map(|b| b.block)).collect();
         let playing = |layer: u64| c.data.layers.get(&layer).is_some_and(|l| running.contains(&l.block));
-        self.collectibles.iter().copied().filter(|id| c.data.entities.get(id).is_some_and(|e| c.layer_state(e.layer).present() && playing(e.layer))).collect()
+        self.collectibles.iter().copied().filter(|id| !self.collected.contains(id)).filter(|id| c.data.entities.get(id).is_some_and(|e| c.layer_state(e.layer).present() && playing(e.layer))).collect()
     }
 
     pub fn awaited_pickups(&self) -> Vec<u64> {
@@ -3123,6 +3148,8 @@ mod tests {
         counted.sort();
         assert_eq!(counted, [10, 11]);
         assert!(!story.counted_members().contains(&12));
+        // (The one waited on to go into combat: SQC_010's Senin.)
+        assert_eq!(story.awaited_in_combat(), [12]);
         // (Waited on to die, too; not by a fail listener.)
         story
             .domino()

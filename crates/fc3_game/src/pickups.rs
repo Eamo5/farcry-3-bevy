@@ -108,6 +108,9 @@ pub fn is_dropped(id: u64) -> bool {
     id & 0xFFFF_0000_0000_0000 == DROP_IDS
 }
 
+/// How far (m) over the eye a thing is still in reach to take.
+const USE_REACH_UP: f32 = 1.0;
+
 /// How much of a magazine walking over a dropped gun gives.
 const DROPPED_ROUNDS: f32 = 0.5;
 
@@ -760,7 +763,10 @@ fn interact(
         let to = gt.translation() - feet;
         let flat = Vec3::new(to.x, 0.0, to.z);
         let d = flat.length();
-        if d > 2.6 || to.y.abs() > 2.0 {
+        // (Up to a reach over the eye: the game's use distance is from the
+        // eye, and ULC_010's fragment on a shelf 2.5 m up is taken from the
+        // floor.)
+        if d > 2.6 || to.y < -2.0 || to.y > player.eye + USE_REACH_UP {
             continue;
         }
         // Prefer what the player is facing.

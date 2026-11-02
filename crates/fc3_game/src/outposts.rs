@@ -51,7 +51,7 @@ const SAFE_HOUSE_REACH: f32 = 40.0;
 /// country's activities: hunting, wanted dead, supplies); one a script
 /// unlocks (JAS_100's first outpost) has its outpost taken with it. On
 /// a load the two agree again.
-fn sync_safe_houses(host: Option<NonSendMut<crate::story::StoryHost>>, mut outposts: ResMut<Outposts>, mut matched: Local<Option<Vec<Option<u64>>>>) {
+fn sync_safe_houses(host: Option<NonSendMut<crate::story::StoryHost>>, time: Res<Time>, mut outposts: ResMut<Outposts>, mut matched: Local<Option<Vec<Option<u64>>>>) {
     let Some(mut host) = host else { return };
     if outposts.list.is_empty() {
         return;
@@ -95,6 +95,26 @@ fn sync_safe_houses(host: Option<NonSendMut<crate::story::StoryHost>>, mut outpo
         *matched = Some(found);
     }
     let Some(matched) = matched.as_ref() else { return };
+    // FC3_LIBERATE_ALL (tests): every outpost the story doesn't take itself
+    // taken, and every radio tower, as the story starts: the whole island's
+    // side quests and activities open.
+    // (Once the story is under way: a save it loads would undo it.)
+    if std::env::var_os("FC3_LIBERATE_ALL").is_some() && time.elapsed_secs() > 20.0 && !std::mem::replace(&mut outposts.all_taken_test, true) {
+        let mut n = 0;
+        for o in outposts.list.iter_mut().filter(|o| !o.scripted && !o.liberated) {
+            o.liberated = true;
+            n += 1;
+        }
+        let panels: Vec<u64> = host.story.data().entities.values().filter(|e| e.has("CRadioTowerPanelComponent")).map(|e| e.id).collect();
+        let mut towers = 0;
+        for panel in panels {
+            if host.story.take_radio_tower(panel) {
+                host.story.radio_tower_finished(panel);
+                towers += 1;
+            }
+        }
+        info!("liberate-all: {n} outposts and {towers} radio towers taken");
+    }
     for (o, house) in outposts.list.iter_mut().zip(matched.iter()) {
         let Some(id) = *house else { continue };
         o.scripted = host.story.safe_house_scripted(id);
@@ -233,6 +253,8 @@ pub struct Outposts {
     loaded: bool,
     /// Liberated outposts restored from a save before the table loaded.
     pending: Option<Taken>,
+    /// `FC3_LIBERATE_ALL` has taken them all.
+    all_taken_test: bool,
 }
 
 /// Liberated outposts as a save names them: by their flag pole's id, or
