@@ -5742,7 +5742,11 @@ then kill the rare animal with that weapon (B20) and skin it to craft
   the source type (`BulletImpact`, `WeaponMeleeAttack`, `FirePropagation`,
   `explosion`, `Generic`), an arrow names itself, and a round the player
   fired names the gun in their hands; the weapon classes are the engine's
-  numbers.
+  numbers (`EWeaponClass`: machete 0, pistol 1, assault 2, SMG 3, shotgun
+  4, sniper 5, LMG 6, RPG 7, flamethrower 9, bow 15, as the check compares
+  them). They had been mixed up, which only the bow's arrows got past: the
+  full campaign's first gun hunt (SQA_C4, a shotgun) failed the moment its
+  quarry was shot.
 * **Its weapon and arrows.** A weapon pickup of a mission's own name gives
   the weapon its model is (`weapons\bow\`: the Recurve Bow), not a mission
   item; ammo a mission lays out under its own names

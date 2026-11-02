@@ -294,19 +294,22 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     Ok(())
 }
 
-/// The engine's number for a weapon class (`CAPI_Pawn.GetWeaponClassFromName`),
-/// -1 for one it doesn't number.
+/// The engine's number for a weapon class (`CAPI_Pawn.GetWeaponClassFromName`,
+/// `EWeaponClass` as `GetWeaponClass.lua` lists it and the hunts' checks
+/// compare it), -1 for one it doesn't number. (They were mixed up: a hunt
+/// for a shotgun failed the moment its quarry was shot with one.)
 fn weapon_class_number(class: &str) -> f64 {
     match class {
-        "flamethrower" => 0.0,
+        "melee" | "machete" => 0.0,
         "handgun" | "pistol" => 1.0,
-        "melee" => 2.0,
-        "lmg" => 3.0,
-        "rpg" => 4.0,
+        "assault" => 2.0,
+        "smg" => 3.0,
+        "shotgun" => 4.0,
         "sniper" => 5.0,
-        "shotgun" => 6.0,
-        "assault" => 9.0,
-        "smg" => 15.0,
+        "lmg" => 6.0,
+        "rpg" => 7.0,
+        "flamethrower" => 9.0,
+        "bow" => 15.0,
         _ => -1.0,
     }
 }

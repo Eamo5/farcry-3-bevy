@@ -3560,6 +3560,22 @@ mod tests {
         assert!(story.take_commands().is_empty());
     }
 
+    /// A weapon's class by the engine's numbers, as a hunt's weapon check
+    /// compares them (`AnimalSQWeaponsClassCheck`: a shotgun is 4).
+    #[test]
+    fn weapon_classes_take_the_engines_numbers() {
+        let mut story = empty_story();
+        let mut view = View::default();
+        let gun = |name: &str, class: &str| Item { name: name.into(), class: class.into(), category: class.into(), count: 1 };
+        view.player_state.weapons = vec![gun("weapons:FC3/870", "shotgun"), gun("weapons:FC3/AK47", "assault"), gun("weapons:FC3/Bow", "bow")];
+        story.update(0.0, view);
+        let classes: Vec<f64> = story.domino().lua().load(r#"
+            return { CAPI_Pawn.GetWeaponClassFromName("1", "weapons:FC3/870"), CAPI_Pawn.GetWeaponClassFromName("1", "weapons:FC3/AK47"),
+                CAPI_Pawn.GetWeaponClassFromName("1", "weapons:FC3/Bow"), CAPI_Pawn.GetWeaponClassFromName("1", "nothing") }
+        "#).eval().unwrap();
+        assert_eq!(classes, vec![4.0, 2.0, 15.0, -1.0]);
+    }
+
     /// An entity set where a script says and turned as it says (a mission's
     /// bomb put down at its spot), each a move the host makes.
     #[test]
