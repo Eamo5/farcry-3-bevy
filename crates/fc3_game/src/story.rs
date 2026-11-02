@@ -2064,6 +2064,7 @@ fn run_story(
             host.save_disabled = false;
             target_markers.switched.clear();
             ignitions.0.clear();
+            clock.axis_yaw = None;
             if let Some(save) = &host.checkpoint_game {
                 if let Ok(mut inv) = inventory.single_mut() { crate::save::restore_inventory(&mut inv, save); }
                 if let Ok(mut stats) = stats.single_mut() {
@@ -4114,6 +4115,12 @@ fn run_story(
                             let on = a(1) == "true" || a(1) == "1";
                             shimmers.script.insert(id, on.then(|| ([f(2), f(3), f(4)], f(5))));
                         }
+                    }
+                    // The sky turned about another axis for a scene's light
+                    // (`ChangeSunOrientation`), and back.
+                    "SetSunYaw" => {
+                        let yaw = a(0).parse::<f32>().unwrap_or(fc3_story::SKY_YAW as f32);
+                        clock.axis_yaw = (yaw != fc3_story::SKY_YAW as f32).then_some(yaw);
                     }
                     // An effect played once where the script puts it (`id,
                     // effect, "x y z", angles`); none where it knew no place.

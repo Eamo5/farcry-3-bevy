@@ -10,6 +10,10 @@ use mlua::Value;
 
 use super::{callback, vec3, Reg};
 use crate::core::{Callback, Core, Listen};
+
+/// The world's sky turns about a level axis at this yaw (degrees, Dunia:
+/// `RotationAxisYaw` in its environment settings).
+pub const SKY_YAW: f64 = 240.0;
 use crate::values::{oasis_id, Arg, Flag, Num, Text};
 use crate::Command;
 
@@ -58,7 +62,9 @@ pub struct Media {
     /// Water levels being filled or discharged, by the id their scripts
     /// were given.
     pub fills: BTreeMap<u64, Fill>,
-    pub sun_yaw: f64,
+    /// The sky's turning axis a script has set (`SetSunYaw`, degrees);
+    /// none, the world's own (`SKY_YAW`).
+    pub sun_yaw: Option<f64>,
     /// The HUD's objective timer (`ShowObjectiveTimer`: a supply run's or
     /// a hunt's time left) and its gauge (`ShowObjectiveGageTimer`: an
     /// outpost held against its attack), counting down while shown.
@@ -531,10 +537,13 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         let ss = (((h - hh) * 60.0 - mm) * 60.0).floor();
         vec3(lua, [hh, mm, ss])
     })?;
-    r.f("GetSunYaw", |c, ()| c.media.sun_yaw)?;
+    // The sky's turning axis (`ChangeSunOrientation`: CIT_030's and
+    // JAS_240's scenes turn it for their light, and put it back).
+    r.f("GetSunYaw", |c, ()| c.media.sun_yaw.unwrap_or(SKY_YAW))?;
     r.f("SetSunYaw", |c, yaw: Num| {
-        c.media.sun_yaw = yaw.or(0.0);
-        c.emit(Command::Native { name: "SetSunYaw".into(), args: vec![yaw.or(0.0).to_string()] });
+        let yaw = yaw.or(SKY_YAW);
+        c.media.sun_yaw = (yaw != SKY_YAW).then_some(yaw);
+        c.emit(Command::Native { name: "SetSunYaw".into(), args: vec![yaw.to_string()] });
     })?;
     // Water levels: the story moves them (the host shows what
     // `Story::water_levels` gives).

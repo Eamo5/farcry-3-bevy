@@ -21,6 +21,8 @@ pub mod travel;
 pub mod vehicles;
 pub mod values;
 
+pub use natives::media::SKY_YAW;
+
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

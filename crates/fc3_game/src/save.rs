@@ -668,7 +668,7 @@ mod tests {
     fn paired_checkpoint_keeps_inventory_and_handles_an_empty_weapon_list() {
         let mut world = World::new();
         world.init_resource::<WorldState>();
-        world.insert_resource(TimeOfDay { hours: 13.0, speed: 0.0 });
+        world.insert_resource(TimeOfDay { hours: 13.0, speed: 0.0, axis_yaw: None });
         world.init_resource::<crate::map::Explored>();
         world.init_resource::<crate::map::Waypoint>();
         world.init_resource::<crate::outposts::Outposts>();

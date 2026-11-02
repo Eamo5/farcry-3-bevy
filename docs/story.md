@@ -174,6 +174,15 @@ is the story's own:
   timing in the story. Visible named timers expose their localized labels
   and current values to the host HUD; hidden timers still run and deliver
   callbacks.
+* **The sky's axis** (`SetSunYaw`, the `ChangeSunOrientation` box: CIT_030's
+  B20C and JAS_240's B40C turn the sky for their scenes' light, then put it
+  back). The world's sky turns about a level axis at yaw 240
+  (`RotationAxisYaw`, `fc3_story::SKY_YAW`, what `GetSunYaw` reports
+  untouched); a script's yaw turns that axis (`TimeOfDay::axis_yaw`), the
+  sun rising a quarter turn on from it and still overhead at noon, the
+  moon with it. A checkpoint's reload puts the world's back. (The terrain's
+  horizon shadows are traced along the world's axis: under a turned sky
+  they are the world's still.)
 * **Water levels** (`CDominoWaterLevelManager`: BAM_020's sinking ship,
   BAM_030's flooding tunnel, BAM_055's sub). A sector's level starts as
   the world has it (`world/water_planes.txt`, in `StoryData::water`), so

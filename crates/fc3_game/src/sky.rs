@@ -14,7 +14,7 @@ pub struct SkyPlugin;
 
 impl Plugin for SkyPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(TimeOfDay { hours: 10.5, speed: 0.0 })
+        app.insert_resource(TimeOfDay { hours: 10.5, speed: 0.0, axis_yaw: None })
             .insert_resource(load_environment())
             .insert_resource(GlobalAmbientLight { color: Color::srgb(0.75, 0.85, 1.0), brightness: 150.0, ..default() })
             .init_resource::<Indoors>()
@@ -238,6 +238,9 @@ fn lux_per_unit(e: &fc3_formats::environment::Environment, elevation: f32) -> f3
 pub struct TimeOfDay {
     pub hours: f32,
     pub speed: f32,
+    /// The sky's turning axis a script has set (`SetSunYaw`: Dunia
+    /// degrees); none, the world's own (`SKY_AXIS`).
+    pub axis_yaw: Option<f32>,
 }
 
 /// The sky's turning axis (level, at yaw 240: Dunia yaw counts
@@ -263,14 +266,34 @@ impl TimeOfDay {
     /// sun rises toward NNE, passes overhead at noon and sets toward SSW.
     /// The terrain's horizon maps are traced along the same line.
     pub fn sun_dir(&self) -> Vec3 {
-        Quat::from_axis_angle(SKY_AXIS, self.sky_angle()) * SUN_RISE
+        let (axis, rise) = self.axes();
+        Quat::from_axis_angle(axis, self.sky_angle()) * rise
+    }
+
+    /// The sky's turning axis and where the sun rises across it (Bevy
+    /// space): the world's, else one a script has turned it to (Dunia yaw
+    /// counts counter-clockwise from north; the sun rises a quarter turn on).
+    fn axes(&self) -> (Vec3, Vec3) {
+        match self.axis_yaw {
+            None => (SKY_AXIS, SUN_RISE),
+            Some(yaw) => {
+                let at = |deg: f32| {
+                    let (s, c) = deg.to_radians().sin_cos();
+                    Vec3::new(-s, 0.0, -c)
+                };
+                (at(yaw), at(yaw + 90.0))
+            }
+        }
     }
 
     /// Direction toward the moon: on the same turning sky, 25 degrees up in
     /// the south at sunrise (`MoonYawAtSunrise` 180, `MoonPitchAtSunrise` 25).
     pub fn moon_dir(&self) -> Vec3 {
         let (s, c) = 25f32.to_radians().sin_cos();
-        Quat::from_axis_angle(SKY_AXIS, self.sky_angle()) * Vec3::new(0.0, s, c)
+        let (axis, rise) = self.axes();
+        // (Its rest: south, as the sky's own turns it; turned with it.)
+        let turn = Quat::from_rotation_arc(SUN_RISE, rise);
+        Quat::from_axis_angle(axis, self.sky_angle()) * (turn * Vec3::new(0.0, s, c))
     }
 
     /// 0 at night, 1 by day, easing through dusk and dawn.
@@ -402,4 +425,25 @@ pub(crate) fn advance_time(
     // The sky's light is less blue by day (the world's sky light saturation).
     let saturation = env.0.as_ref().map_or(1.0, |e| e.sky_saturation.at(tod.hours / 24.0));
     ambient.color = Color::WHITE.mix(&Color::srgb(0.75, 0.85, 1.0), saturation);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The sky turned to its own yaw is the world's sky; turned to another,
+    /// the sun still crosses overhead at noon but rises elsewhere.
+    #[test]
+    fn a_turned_sky_keeps_noon_overhead_and_moves_the_sunrise() {
+        let at = |hours: f32, axis_yaw: Option<f32>| TimeOfDay { hours, speed: 0.0, axis_yaw }.sun_dir();
+        for h in [6.0, 9.0, 12.0, 17.0] {
+            assert!(at(h, None).distance(at(h, Some(240.0))) < 1e-4);
+        }
+        assert!(at(12.0, Some(309.0)).y > 0.999);
+        let (rise, turned) = (at(6.0, None), at(6.0, Some(309.0)));
+        assert!(rise.y.abs() < 1e-4 && turned.y.abs() < 1e-4);
+        assert!((rise.angle_between(turned).to_degrees() - 69.0).abs() < 0.1);
+        let moon = TimeOfDay { hours: 6.0, speed: 0.0, axis_yaw: Some(240.0) }.moon_dir();
+        assert!(moon.distance(TimeOfDay { hours: 6.0, speed: 0.0, axis_yaw: None }.moon_dir()) < 1e-4);
+    }
 }
