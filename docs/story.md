@@ -4431,7 +4431,12 @@ about as non-fighters and the first wave never emptied.
   brings its next wave when the guards go into combat). Only deaths were
   told (`DeadStart`/`DeadMemberIn`); the story now compares each watched
   group's members' states (as the host reports them) every update and
-  tells the changes.
+  tells the changes. A fighter the story drives (`npc::Scripted`: a
+  companion it leads, one on a contextual action) still calms down once
+  his fight is over, as the game's AI does under script control: out of
+  combat 1.5 s after the last foe is out of sight, back to rest 25 s on
+  (`npc::think`; he isn't stirred up by his own senses meanwhile). One
+  taken over mid-fight had stayed in combat for good.
 * **Actions on from the start.** After the fight Oliver is sent to a
   battlefield where an action placed on (`Enable` set) for his group waits
   for him; we only ever offered actions a script had switched on. Actions

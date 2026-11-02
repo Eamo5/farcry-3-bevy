@@ -855,9 +855,10 @@ fn actor_tasks(
     let debug_id = *debug_actor.get_or_insert_with(|| std::env::var("FC3_STORY_ACTOR_DEBUG").ok().and_then(|s| s.parse().ok()));
     for (entity, mut a, mut t, npc, scripted) in &mut actors {
         if debug_id == Some(a.id) && time.elapsed_secs() as u32 != (time.elapsed_secs() - dt) as u32 {
-            info!("story actor diagnostic {}: at {:.2?}, scene {}, seated {}, dead {}, task {:?}, pending {:?}, next {:?}",
+            info!("story actor diagnostic {}: at {:.2?}, scene {}, seated {}, dead {}, task {:?}, pending {:?}, next {:?}, ai {:?} scripted {scripted}",
                 a.id, t.translation, a.in_scene, a.seated, a.dead,
-                a.task.as_ref().map(|t| (t.action, t.arrived)), orders.0.get(&a.id), a.path.first());
+                a.task.as_ref().map(|t| (t.action, t.arrived)), orders.0.get(&a.id), a.path.first(),
+                npc.as_ref().map(|n| (n.state, n.state_time, n.sees_player, n.foe_seen, n.foe.is_some())));
         }
         if a.dead || a.seated {
             continue;

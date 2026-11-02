@@ -2236,10 +2236,10 @@ fn perceive(
 
 fn think(
     time: Res<Time>,
-    mut npcs: Query<(&mut Npc, &Health, &Transform), (Without<Corpse>, Without<Frozen>, Without<Riding>, Without<crate::turrets::Gunner>, Without<Scripted>)>,
+    mut npcs: Query<(&mut Npc, &Health, &Transform, Has<Scripted>), (Without<Corpse>, Without<Frozen>, Without<Riding>, Without<crate::turrets::Gunner>)>,
 ) {
     let dt = time.delta_secs();
-    for (mut npc, h, t) in &mut npcs {
+    for (mut npc, h, t, scripted) in &mut npcs {
         if h.dead {
             continue;
         }
@@ -2248,6 +2248,28 @@ fn think(
             npc.engaged += dt;
         } else {
             npc.engaged = 0.0;
+        }
+        // One the story drives only calms down, the fight over: no foe in
+        // sight, out of combat and back to rest, as the game's AI is under
+        // script control. (A companion taken over mid-fight stayed in
+        // combat for good, and scripts' state listeners wait for one at
+        // rest.)
+        if scripted {
+            let next = match npc.state {
+                NpcState::Combat if !npc.sees_player && !npc.foe_seen && npc.state_time > 1.5 => Some(NpcState::Search),
+                NpcState::Search | NpcState::Suspicious if !npc.sees_player && !npc.foe_seen && npc.state_time > 25.0 => Some(NpcState::Idle),
+                _ => None,
+            };
+            if let Some(s) = next {
+                npc.state = s;
+                npc.state_time = 0.0;
+                if s == NpcState::Idle {
+                    npc.last_known = None;
+                    npc.awareness = 0.0;
+                    npc.foe = None;
+                }
+            }
+            continue;
         }
         let next = match npc.state {
             // An armed foe in plain sight: fight at once.
@@ -4033,6 +4055,32 @@ pub fn player_noise(writer: &mut MessageWriter<Noise>, at: Vec3, radius: f32, ki
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One the story drives calms down once his fight is over (no foe in
+    /// sight), back to rest, but isn't stirred up by the AI's own senses.
+    #[test]
+    fn a_scripted_fighter_calms_down_after_the_fight() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_systems(Update, think);
+        let mut rng = crate::weapons::Rng::seeded(7);
+        let (mut npc, _, _) = story_npc(Faction::Rebel, Role::Assault, Vec3::ZERO, 0.0, 1, None, &mut rng);
+        npc.state = NpcState::Combat;
+        npc.state_time = 2.0;
+        let e = app.world_mut().spawn((npc, crate::combat::Health::new(100.0), Transform::default(), Scripted)).id();
+        let mut step = |secs: f32, app: &mut App| {
+            app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(secs));
+            app.world_mut().run_system_once(think).unwrap();
+            app.world().get::<Npc>(e).unwrap().state
+        };
+        assert_eq!(step(0.1, &mut app), NpcState::Search);
+        assert_eq!(step(10.0, &mut app), NpcState::Search);
+        assert_eq!(step(20.0, &mut app), NpcState::Idle);
+        // (Aware of something, he isn't sent to look into it.)
+        app.world_mut().get_mut::<Npc>(e).unwrap().awareness = 0.6;
+        app.world_mut().get_mut::<Npc>(e).unwrap().last_known = Some(Vec3::X);
+        assert_eq!(step(1.0, &mut app), NpcState::Idle);
+    }
 
     /// A region's middle: a polygon's centroid of corners, a box's centre.
     #[test]
