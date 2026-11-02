@@ -663,6 +663,40 @@ fn main() -> Result<()> {
                 }
             }
         }
+        "fcm-tris" => {
+            // The LOD-0 triangles of a converted model with a corner within r
+            // metres of a model-space point, with each corner's UVs, normal,
+            // tangent and colour: fcm-tris <file.fcm> <x,y,z> <r>
+            let p = args.get(1).context("usage: fcm-tris <file.fcm> <x,y,z> <r>")?;
+            let at: Vec<f32> = args.get(2).context("usage: fcm-tris <file.fcm> <x,y,z> <r>")?.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+            let r: f32 = args.get(3).map(|s| s.parse()).transpose()?.unwrap_or(0.5);
+            anyhow::ensure!(at.len() == 3, "a point is x,y,z");
+            let m = fc3_formats::cache::CachedModel::from_bytes(&std::fs::read(p)?)?;
+            for (pi, part) in m.lods.first().map(|l| l.parts.as_slice()).unwrap_or(&[]).iter().enumerate() {
+                for (ti, t) in part.indices.chunks_exact(3).enumerate() {
+                    let near = t.iter().any(|&i| {
+                        let v = part.positions[i as usize];
+                        (0..3).map(|k| (v[k] - at[k]).powi(2)).sum::<f32>() < r * r
+                    });
+                    if !near {
+                        continue;
+                    }
+                    println!("part {pi} tri {ti}:");
+                    for &i in t {
+                        let i = i as usize;
+                        println!(
+                            "  {:.3?} uv {:.3?} uv1 {:.3?} n {:.2?} t {:.2?} c {:.2?}",
+                            part.positions[i],
+                            part.uvs.get(i),
+                            part.uvs1.get(i),
+                            part.normals.get(i),
+                            part.tangents.get(i),
+                            part.colors.get(i)
+                        );
+                    }
+                }
+            }
+        }
         "fcm-winding" => {
             // Signed volume per LOD-0 part of a converted model (> 0: CCW faces point out).
             let p = args.get(1).context("usage: fcm-winding <file.fcm>")?;

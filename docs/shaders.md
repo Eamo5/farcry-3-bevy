@@ -823,7 +823,16 @@ Runtime glue:
   so target 0 is squared back.
 - Target 0 (albedo) and target 1 (world normal) are decoded into Bevy's PBR
   input. Lighting, shadows, fog and the atmosphere stay Bevy's. Prepass and
-  shadow pipelines use Bevy's default shaders.
+  shadow pipelines use Bevy's default shaders, culling as the main pass does
+  (back faces, unless the material is two-sided). Bevy's prepass culls
+  nothing unless the material says so, and a corrugated fence's sheet, two
+  layers that cross, had its back layer drawn into the depth prepass where it
+  lay nearer: the main pass, culling it, failed the depth test there, and the
+  sheet showed black holes (a trapezoid on each panel by Amanaki's safe
+  house). `fc3tool fcm-tris <file.fcm> <x,y,z> <r>` lists a converted model's
+  triangles round a point, with each corner's attributes; `FC3_VIEW_MESH_DEBUG`
+  also names how each mesh on the crosshair is drawn, and the GPU-only meshes
+  whose bounds it crosses.
 - Vertex colours (blend weights, baked occlusion) are passed as a custom
   attribute that standard materials ignore.
 - Self-lit materials (`Unlit`, `EffectLit`: signs, lamp glass, screens) show

@@ -29,7 +29,7 @@ use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    AsBindGroup, Extent3d, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError, TextureDimension, TextureFormat,
+    AsBindGroup, Extent3d, Face, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError, TextureDimension, TextureFormat,
 };
 use bevy::render::storage::ShaderBuffer;
 use bevy::shader::Shader;
@@ -433,8 +433,14 @@ impl Material for OriginalMaterial {
         layout: &MeshVertexBufferLayoutRef,
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        // Prepass and shadow pipelines keep Bevy's default shaders.
+        // Prepass and shadow pipelines keep their own shaders, but cull as
+        // the main pass does (Bevy's prepass culls nothing unless told, as the
+        // standard material tells it). A corrugated fence's sheet is two
+        // layers that cross; the back one, nearer in places and drawn into
+        // the depth prepass though the main pass culls it, showed there as
+        // black holes.
         if descriptor.label.as_deref() == Some("prepass_pipeline") {
+            descriptor.primitive.cull_mode = if key.bind_group_data.double_sided { None } else { Some(Face::Back) };
             return Ok(());
         }
         let mut attributes = vec![Mesh::ATTRIBUTE_POSITION.at_shader_location(0), Mesh::ATTRIBUTE_NORMAL.at_shader_location(1)];

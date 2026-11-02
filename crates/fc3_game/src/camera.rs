@@ -88,7 +88,9 @@ fn ground_map_at(
 fn view_mesh_debug(time: Res<Time>, mut done: Local<bool>, server: Res<AssetServer>, meshes: Res<Assets<Mesh>>,
     cameras: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
     parts: Query<(Entity, &Mesh3d, &GlobalTransform, &InheritedVisibility)>,
-    owners: Query<(Option<&crate::objects::PlacedId>, Option<&ChildOf>)>) {
+    owners: Query<(Option<&crate::objects::PlacedId>, Option<&ChildOf>)>,
+    kinds: Query<DrawnAs>,
+    aabbs: Query<&bevy::camera::primitives::Aabb>) {
     let Some(at) = std::env::var("FC3_VIEW_MESH_DEBUG").ok().and_then(|s| s.parse::<f32>().ok()).filter(|v| v.is_finite()) else { return };
     if *done || time.elapsed_secs() < at { return; }
     let Ok(camera) = cameras.single() else { return };
@@ -97,10 +99,24 @@ fn view_mesh_debug(time: Res<Time>, mut done: Local<bool>, server: Res<AssetServ
     let direction = camera.forward().as_vec3();
     let mut hits = Vec::new();
     let mut inspected = 0;
+    let mut boxed = Vec::new();
     for (entity, handle, transform, visible) in &parts {
         if !visible.get() { continue; }
-        let Some(mesh) = meshes.get(&handle.0) else { continue };
-        if !mesh.asset_usage.contains(bevy::asset::RenderAssetUsages::MAIN_WORLD) { continue; }
+        let cpu = meshes.get(&handle.0).filter(|m| m.asset_usage.contains(bevy::asset::RenderAssetUsages::MAIN_WORLD));
+        let Some(mesh) = cpu else {
+            // (A mesh only the GPU holds: by its bounds, within 10 m.)
+            if let Ok(aabb) = aabbs.get(entity) {
+                let inverse = transform.affine().inverse();
+                let (o, d) = (inverse.transform_point3(origin), inverse.transform_vector3(direction));
+                let (lo, hi) = (Vec3::from(aabb.center - aabb.half_extents), Vec3::from(aabb.center + aabb.half_extents));
+                let (t1, t2) = ((lo - o) / d, (hi - o) / d);
+                let (near, far) = (t1.min(t2).max_element(), t1.max(t2).min_element());
+                if near <= far && far >= 0.0 && near < 10.0 {
+                    boxed.push((near.max(0.0), entity, server.get_path(handle.0.id()).map(|p| p.to_string())));
+                }
+            }
+            continue;
+        };
         if mesh.primitive_topology() != bevy::mesh::PrimitiveTopology::TriangleList { continue; }
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { continue };
         inspected += 1;
@@ -141,8 +157,32 @@ fn view_mesh_debug(time: Res<Time>, mut done: Local<bool>, server: Res<AssetServ
     }
     hits.sort_by(|a, b| a.0.total_cmp(&b.0));
     info!("view mesh inspection: origin {origin:?} direction {direction:?}, {inspected} meshes, {} hits", hits.len());
-    for hit in hits.iter().take(12) { info!("view mesh inspection: {hit:?}"); }
+    for hit in hits.iter().take(12) {
+        // (And how each is drawn: its material and its visibility range.)
+        let kinds = kinds
+            .get(hit.1)
+            .map(|(s, o, r, l, t)| {
+                let range = r.map(|r| (r.start_margin.clone(), r.end_margin.clone()));
+                format!("standard {s} original {o} range {range:?} layers {l:?} at {:?} turned {:?}", t.translation(), t.rotation())
+            })
+            .unwrap_or_default();
+        info!("view mesh inspection: {hit:?} {kinds}");
+    }
+    boxed.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (near, e, path) in boxed.iter().take(12) {
+        let kinds = kinds.get(*e).map(|(s, o, _, l, t)| format!("standard {s} original {o} layers {l:?} at {:?}", t.translation())).unwrap_or_default();
+        info!("view mesh inspection: bounds from {near:.2} m: {e:?} {path:?} {kinds}");
+    }
 }
+
+/// How a part is drawn, for `view_mesh_debug`.
+type DrawnAs<'a> = (
+    Has<MeshMaterial3d<StandardMaterial>>,
+    Has<MeshMaterial3d<crate::original_shaders::OriginalMaterial>>,
+    Option<&'a bevy::camera::visibility::VisibilityRange>,
+    Option<&'a bevy::camera::visibility::RenderLayers>,
+    &'a GlobalTransform,
+);
 
 /// `FC3_HITCH`: for each frame over 25 ms, where the main thread's time went
 /// (named stretches of the schedules, the physics loop summed over its
