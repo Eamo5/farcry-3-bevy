@@ -4234,7 +4234,16 @@ Run again later in the campaign (`camp91`), the escort failed every time
   autopilot found one by chance and stood still. While a script counts
   them it now goes for the collectibles a mission lays out in its layers
   in the world (`Story::mission_collectibles`), as for pickups a script
-  waits on, and the first lab completed.
+  waits on, and the first lab completed. (A playing block's own only: the
+  world-state blocks' loot, Hoyt's HQ laid out across the island, had the
+  autopilot touring the island's cash boxes; and one it can't take, out of
+  reach, is left two minutes after 24 s.) B15's lab door opens from the
+  control room's power panel, a `COpeningPickup` (no `CPickup...` of the
+  kinds we knew): a panel now, used where it is (`PickupKind::Opening`,
+  "use the panel"), it stays, and the scripts hear it picked. B15
+  completed. The power puzzle's electrified water kills (its
+  `HealthModifier`), and the autopilot had learned the control room's
+  trigger beside it as fatal from a death the water dealt.
 * **Reinforcements that fight.** Each wave's reinforcements are sent to
   guard posts in the village (`Cautious_Guard_*`). Alerted, one's AI took
   over and the story heard his action broken off; it sent him to the next
@@ -4683,7 +4692,8 @@ never let it go quiet:
   and a scene the scripts start again within 30 s of starting it before
   (and its stop) isn't the story stirring either
   (`StoryHost::replayed`), nor the arrow pickups each start clears first
-  (`PlaySequence:Play` calls `DeleteAllArrowPickups`).
+  (`PlaySequence:Play` calls `DeleteAllArrowPickups`; now that spent arrows
+  stay to be picked up, it clears them: `story::sweep_arrows`).
 * **The same command again.** The club also switches the same contextual
   action on again and again (`UseContextualActionModifier:Enable`), and
   BAM_030's ruins play and stop their particles on their own entities. Any

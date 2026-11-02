@@ -454,6 +454,10 @@ pub enum PickupKind {
     /// A mission's own item, a weapon pickup we don't know as a weapon
     /// (WIL_010's tracking device): taken for the scripts, nothing kept.
     Mission,
+    /// A mission's panel to open (`COpeningPickup`: a lab's power panel in
+    /// the Lost Expeditions): used where it is for the scripts, and it
+    /// stays.
+    Opening,
 }
 
 /// How many of each collectible the island holds.
@@ -474,6 +478,7 @@ impl PickupKind {
             PickupKind::Weapon(w) => w.to_string(),
             PickupKind::Loot => "loot".into(),
             PickupKind::Mission => "item".into(),
+            PickupKind::Opening => "panel".into(),
             PickupKind::Plant(p) => p.name().to_ascii_lowercase(),
             PickupKind::Molotov => "molotov".into(),
             PickupKind::Relic => "relic".into(),
@@ -788,8 +793,9 @@ fn interact(
         PickupKind::Mission => gp::TAKE_ITEM,
         _ => gp::PICK_UP,
     };
-    let said = text.as_deref().and_then(|t| t.prompt(game, &actions, &settings));
-    hud.prompt = Some(said.unwrap_or_else(|| format!("{}  pick up {}", actions.label(crate::controls::Action::Interact, &settings), p.kind.label())));
+    let said = text.as_deref().and_then(|t| t.prompt(game, &actions, &settings)).filter(|_| p.kind != PickupKind::Opening);
+    let verb = if p.kind == PickupKind::Opening { "use the" } else { "pick up" };
+    hud.prompt = Some(said.unwrap_or_else(|| format!("{}  {verb} {}", actions.label(crate::controls::Action::Interact, &settings), p.kind.label())));
     // FC3_PICKUP_TEST (tests): the one in reach taken.
     if std::env::var("FC3_PICKUP_TEST").is_ok() {
         actions.press(crate::controls::Action::Interact);
@@ -847,7 +853,8 @@ fn interact(
         world.removed.insert(p.id);
         picked.write(PickedUp(p.id));
     }
-    if let Some(v) = p.visual {
+    // (A panel stays where it is, opened.)
+    if let Some(v) = p.visual.filter(|_| p.kind != PickupKind::Opening) {
         commands.entity(v).despawn();
     }
     commands.entity(e).despawn();
@@ -882,7 +889,7 @@ fn apply_reward(
         // (Worn in `interact`, at the converted armour value.)
         PickupKind::Armour => String::new(),
         // (The scripts hear it was picked up; they give what they give.)
-        PickupKind::Mission => String::new(),
+        PickupKind::Mission | PickupKind::Opening => String::new(),
         PickupKind::Ammo => format!("+{} rounds", give_ammo(inv, 1.0)),
         PickupKind::Arrows(n) => format!("+{} arrows", inv.add_ammo(WeaponClass::Bow, n)),
         PickupKind::Explosives => {

@@ -54,6 +54,7 @@ impl Plugin for StoryPlugin {
             .add_systems(PreUpdate, collect_loot)
             .add_systems(Update, forward_pickups)
             .add_systems(Update, ui_interaction_exited)
+            .add_systems(Update, sweep_arrows)
             .add_systems(Update, forward_camera)
             .add_systems(PreUpdate, collect_crafts)
             .add_systems(PreUpdate, collect_menu_events)
@@ -568,6 +569,19 @@ fn ui_interaction_exited(
     host.story.entity_event(fc3_story::PLAYER, "Pause_0_UnLoaded", vec![]);
 }
 
+/// The spent arrows lying about cleared, as a script asks (a scene starting).
+fn sweep_arrows(host: Option<NonSendMut<StoryHost>>, pickups: Query<(Entity, &crate::pickups::Pickup)>, mut commands: Commands) {
+    let Some(mut host) = host else { return };
+    if !std::mem::take(&mut host.sweep_arrows) {
+        return;
+    }
+    for (e, p) in &pickups {
+        if matches!(p.kind, crate::pickups::PickupKind::Arrows(_)) && crate::pickups::is_dropped(p.id) {
+            commands.entity(e).despawn();
+        }
+    }
+}
+
 /// Pickups picked up: the scripts waiting on them hear of it.
 fn forward_pickups(host: Option<NonSendMut<StoryHost>>, mut picked: MessageReader<crate::pickups::PickedUp>) {
     let Some(mut host) = host else {
@@ -930,6 +944,8 @@ pub struct StoryHost {
     pub autopilot_wrecking: bool,
     /// When a script opened a shop (`StartUIInteraction`), till it closes.
     pub ui_interaction: Option<f32>,
+    /// Spent arrows lying about to be cleared (`DeleteAllArrowPickups`).
+    pub sweep_arrows: bool,
     /// When the player last gave up a mission (its scripts' failure, heard
     /// just after, isn't shown), and whether the reload it's due goes on
     /// where he stands.
@@ -1162,6 +1178,7 @@ impl StoryHost {
             autopilot_burning: false,
             autopilot_wrecking: false,
             ui_interaction: None,
+            sweep_arrows: false,
             abandoned_at: None,
             reload_in_place: false,
             travel_asked: None,
@@ -3512,6 +3529,9 @@ fn run_story(
                     // own, opened as he is used; its closing is told
                     // (`ui_interaction_exited`).
                     "StartUIInteraction" => host.ui_interaction = Some(now),
+                    // A scene starting clears the spent arrows lying about
+                    // (`PlaySequence`: none stuck in the set).
+                    "DeleteAllArrowPickups" => host.sweep_arrows = true,
                     "MusicState" => music.request(&a(0), a(1) == "play"),
                     "CAPI_Player.StartPhoneCall" => ui.phone = Some((plain(&a(2)), a(3) == "true", 0.0)),
                     "CFCXMusicService:SetMissionMTParameters" => {
@@ -6403,15 +6423,28 @@ fn autopilot_loot(
             && inventory.slots.iter().any(|s| inventory.defs[s.def].class == w && s.mag + s.reserve > 0)
     });
     if !awaited.is_empty() && host.quiet > 6.0 && !hunt_ready {
+        let now = time.elapsed_secs();
+        // (One it can't take, out of reach on a shelf, is left a while.)
         let near = plants
             .iter()
-            .filter(|(p, _)| awaited.contains(&p.id))
+            .filter(|(p, _)| awaited.contains(&p.id) && !skipped.get(&p.id).is_some_and(|until| *until > now))
             .map(|(p, t)| (p.id, t.translation()))
             .min_by(|a, b| a.1.distance(at.translation).total_cmp(&b.1.distance(at.translation)));
         if let Some((id, spot)) = near {
             if *last != Some((id, "pick up")) {
                 info!("story autopilot: pick up {}", host.story.data().name_of(id).unwrap_or("?"));
                 *last = Some((id, "pick up"));
+            }
+            match host.autopilot_search {
+                Some((was, since)) if was == id => {
+                    if now - since > SEARCH_FOR * 2.0 {
+                        info!("story autopilot: {id} not taken; another for a while");
+                        skipped.insert(id, now + 120.0);
+                        host.autopilot_search = None;
+                        return;
+                    }
+                }
+                _ => host.autopilot_search = Some((id, now)),
             }
             let feet = at.translation - Vec3::Y * crate::player::HALF_HEIGHT;
             let to = spot - feet;

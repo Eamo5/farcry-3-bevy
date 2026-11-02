@@ -2013,7 +2013,12 @@ impl Story {
         if !c.listeners.values().any(|l| matches!(&l.on, Listen::Entity(id, e) if *id == PLAYER && e == "CCollectibleCollectedEvent")) {
             return Vec::new();
         }
-        self.collectibles.iter().copied().filter(|id| c.data.entities.get(id).is_some_and(|e| c.layer_state(e.layer).present())).collect()
+        // (A playing block's own: not a world-state block's loot, Hoyt's HQ
+        // laid out across the island.)
+        let running: HashSet<u64> =
+            c.missions.by_id.values().filter(|m| m.state == missions::State::Running).filter_map(|m| m.block.as_ref().map(|b| b.block)).collect();
+        let playing = |layer: u64| c.data.layers.get(&layer).is_some_and(|l| running.contains(&l.block));
+        self.collectibles.iter().copied().filter(|id| c.data.entities.get(id).is_some_and(|e| c.layer_state(e.layer).present() && playing(e.layer))).collect()
     }
 
     pub fn awaited_pickups(&self) -> Vec<u64> {

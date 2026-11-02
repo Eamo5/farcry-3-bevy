@@ -178,13 +178,16 @@ fn layer_pickup(
     let has = |component: &str| data.and_then(|d| d.entities.get(&entity.id)).is_some_and(|e| e.component(component).is_some());
     // Some plants have a colocated _02 minimap marker. Only the original
     // collectible gets a transaction, not its marker or a similarly named prop.
-    if data.is_some() && !["CPickupCollectible", "CPickupAmmo", "CPickupMultipleAmmo", "CPickupWeapon"].into_iter().any(has) {
+    if data.is_some() && !["CPickupCollectible", "CPickupAmmo", "CPickupMultipleAmmo", "CPickupWeapon", "COpeningPickup"].into_iter().any(has) {
         return None;
     }
     let weapon = has("CPickupWeapon");
     match crate::pickups::classify(&entity.name) {
         Some(crate::pickups::Classified::Pickup(kind)) => Some(kind),
         Some(crate::pickups::Classified::Explosive) => None,
+        // A panel a mission has opened (ULC_010's power panel): used where
+        // it is, and it stays.
+        None if has("COpeningPickup") => Some(crate::pickups::PickupKind::Opening),
         // A mission's own pickup, named for the mission (a stash to hide
         // something in): picked up like loot, its own loot given.
         None if !entity.name.to_ascii_lowercase().starts_with("pickups/")
