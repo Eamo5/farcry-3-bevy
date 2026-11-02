@@ -5403,6 +5403,22 @@ start, its crew seated, then driven along its way), and being seen fails it.
   carrying a mission's item no script waits for yet isn't searched for
   rounds now; JAS_200 and JAS_210 completed, and SAM_020 began.
 
+* **Find an RPG.** Played again from HOY_010 (`full7`), B40 failed time
+  after time: the sniper rifle was spent, the boss drove off in his 4x4,
+  and the autopilot never took up the RPGs lying by the mine. Out of
+  rounds, it now picks up a weapon lying in the world, not only one
+  dropped by the fallen. And it goes after a vehicle carrying a foe the
+  story waits to see dead (one watched by himself, or a counted member),
+  crewed by foes, as after one a script watches: with a launcher before
+  any gun (the flamethrower first still). Its trigger was held down, as
+  the flamethrower's is, and a weapon that fires a shot a pull never
+  fired: it is pulled again each time now, a rocket led where the vehicle
+  will be. Where it stood to fire, a steep bank put it in the river and a
+  palm's trunk, met by the ray down, 37 m over it: a spot is ground or a
+  floor the navmesh has, and one that left it swimming isn't tried again.
+  And the rocket did no harm (see physics.md: a blast and the hull it hits).
+  B40 completed, the boss dead in his 4x4.
+
 ## SAM_015: the fuel depot
 
 SAM_015 has the player drive into a fuel depot with Sam and plant bombs in

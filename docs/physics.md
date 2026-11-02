@@ -271,6 +271,13 @@ sphere inertia: 3, 2).
   the burning share and blows up as any burning vehicle does
   (`vehicles::catch_fire`). It burnt down at the flames' own rate before,
   about 25 s of the flamethrower on WIL_020's drug boat.
+* A blast harms what it reaches unsheltered: a ray from it to each target in
+  its radius that meets solid geometry first spares it. Neither the target's
+  own colliders nor a hull the blast bursts inside count: a vehicle's hull is
+  a collider of its own under it, so a rocket bursting on a 4x4 had its own
+  hull in the way of its middle and did it no harm, and a vehicle going up,
+  its blast inside its hull, harmed nobody, its riders least (JAS_200's boss
+  escaping in his 4x4 lived through an RPG and the wreck).
 * `FC3_BREAK_TEST=<id>:<secs>` breaks a placed entity that long into a run.
 
 ## Survey

@@ -5944,12 +5944,13 @@ fn autopilot_loot(
         }
         // (Dry, and no rounds for its own guns about: a fallen foe's gun
         // picked up, as a player would. BAM_020's heavy, armoured, was
-        // fired at with an empty rifle beside his men's dropped guns.)
+        // fired at with an empty rifle beside his men's dropped guns. Or one
+        // lying where the world has it: JAS_200's escaping boss is to be
+        // stopped with the RPGs left by the mine, the sniper rifle spent.)
         let other = plants
             .iter()
             .filter(|(p, t)| {
-                dry && crate::pickups::is_dropped(p.id)
-                    && matches!(p.kind, crate::pickups::PickupKind::Weapon(_))
+                dry && matches!(p.kind, crate::pickups::PickupKind::Weapon(_))
                     && off(t) < ammo_reach
                     && !leashed(t.translation())
                     && !skipped.contains_key(&p.id)
@@ -5958,7 +5959,7 @@ fn autopilot_loot(
             .min_by(|a, b| off(a.1).total_cmp(&off(b.1)));
         if let Some((p, gt)) = other {
             if *last != Some((p.id, "pick up")) {
-                info!("story autopilot: dry; pick up a dropped {:?}", p.kind);
+                info!("story autopilot: dry; pick up a {} {:?}", if crate::pickups::is_dropped(p.id) { "dropped" } else { "lying" }, p.kind);
                 *last = Some((p.id, "pick up"));
             }
             match host.autopilot_search {

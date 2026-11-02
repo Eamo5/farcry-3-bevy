@@ -394,6 +394,8 @@ pub const ARROW_MODEL: &str = r"graphics\__fc3_graphics\_common\weapons\bow\arro
 pub const MOLOTOV_MODEL: &str = r"graphics\__fc3_graphics\_common\weapons\molotov\molotov.xbg";
 /// Launched grenades and rockets arm this far from the muzzle (closer, they bounce off).
 const ARMING_DISTANCE: f32 = 5.0;
+/// A rocket's speed as it leaves the launcher (m/s).
+pub const ROCKET_SPEED: f32 = 70.0;
 
 /// Molotovs carried at most.
 pub const MOLOTOV_CAP: u32 = 4;
@@ -1801,7 +1803,7 @@ fn fire(
             Projectile {
                 incendiary: false,
                 arrow: false,
-                velocity: forward * 70.0,
+                velocity: forward * ROCKET_SPEED,
                 gravity: 2.0,
                 fuse: None,
                 explode_on_impact: true,
@@ -2409,7 +2411,8 @@ fn explode(
     mut particles: ResMut<crate::particles::Particles>,
     mut decals: ResMut<crate::particles::Decals>,
     mut commands: Commands,
-    targets: Query<(Entity, &GlobalTransform), With<Health>>,
+    targets: Query<(Entity, &GlobalTransform, Option<&Children>), With<Health>>,
+    parents: Query<&ChildOf>,
     spatial: SpatialQuery,
     mut damage: MessageWriter<DamageEvent>,
     mut markers: MessageWriter<HitMarker>,
@@ -2447,16 +2450,26 @@ fn explode(
             Effect { age: 0.0, life: 0.35, grow: 0.0, light: true },
         ));
         let mut hit_any = false;
-        for (e, gt) in &targets {
+        // (Nor by the hull it bursts in: a vehicle going up, its blast from
+        // inside its own collider, sheltered nobody, its riders least.)
+        let within: Vec<Entity> = spatial
+            .point_intersections(ex.at + Vec3::Y * 0.3, &SpatialQueryFilter::default())
+            .into_iter()
+            .filter(|c| parents.get(*c).is_ok_and(|p| targets.contains(p.parent())))
+            .collect();
+        for (e, gt, children) in &targets {
             let p = gt.translation();
             let dist = p.distance(ex.at);
             if dist > ex.radius {
                 continue;
             }
-            // Blocked by solid geometry?
+            // Blocked by solid geometry? (Not by its own: a vehicle's hull is
+            // a collider of its own under it, and a rocket bursting on it
+            // had it in the way of its middle and did it no harm.)
             let to = p + Vec3::Y * 0.8 - ex.at;
             if let Ok(dir) = Dir3::new(to) {
-                let filter = SpatialQueryFilter::from_excluded_entities([e]);
+                let filter =
+                    SpatialQueryFilter::from_excluded_entities(std::iter::once(e).chain(children.into_iter().flatten().copied()).chain(within.iter().copied()));
                 if let Some(h) = spatial.cast_ray(ex.at + Vec3::Y * 0.3, dir, to.length(), true, &filter) {
                     if h.distance < to.length() - 0.5 {
                         continue;

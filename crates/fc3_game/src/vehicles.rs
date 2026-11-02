@@ -1462,7 +1462,7 @@ const WRECK_RETREAT: f32 = 30.0;
 fn autopilot_wreck(
     host: Option<NonSendMut<crate::story::StoryHost>>,
     time: Res<Time>,
-    heights: Res<crate::terrain::Heightfield>,
+    (heights, nav): (Res<crate::terrain::Heightfield>, Res<crate::nav::NavMesh>),
     spatial: SpatialQuery,
     mut actions: ResMut<ActionState>,
     mut players: Query<(Entity, &mut Transform, &mut Player, &crate::weapons::Inventory), Without<Vehicle>>,
@@ -1472,6 +1472,7 @@ fn autopilot_wreck(
     mut at: Local<Option<(u64, f32, f32, u32)>>,
     mut given_up: Local<std::collections::HashMap<u64, f32>>,
     mut came_from: Local<Option<(u64, Vec3)>>,
+    (mut stood, mut wet): (Local<Option<Vec3>>, Local<Vec<Vec3>>),
 ) {
     let _slow = crate::story::Slow::new("autopilot_wreck");
     if std::env::var_os("FC3_STORY_AUTOPILOT").is_none() {
@@ -1481,11 +1482,20 @@ fn autopilot_wreck(
     let Ok((me, mut t, mut p, inv)) = players.single_mut() else { return };
     let now = time.elapsed_secs();
     given_up.retain(|_, until| *until > now);
-    let watched = host.story.vehicles_watched_whole();
+    let mut watched = host.story.vehicles_watched_whole();
     let hostile_crew = |v: &Vehicle| {
         let mut crew = v.npc_occupants().map(|(pawn, _)| pawn).peekable();
         crew.peek().is_some() && crew.all(|pawn| crews.iter().any(|(a, n)| a.id == pawn && n.hostile()))
     };
+    // (And one carrying a foe the story waits to see dead, off in it:
+    // JAS_200's boss escaping in his 4x4, "Find an RPG and shoot their
+    // 4x4.", hit through it by nothing else.)
+    let wanted: std::collections::HashSet<u64> = host.story.watched_singly().into_iter().chain(host.story.counted_members()).collect();
+    for (_, _, v, h, _) in &vehicles {
+        if !h.dead && v.npc_occupants().any(|(pawn, _)| wanted.contains(&pawn)) && hostile_crew(v) && !watched.contains(&v.story_id()) {
+            watched.push(v.story_id());
+        }
+    }
     // (In the stall report: the vehicles it might set about, and what holds
     // each back.)
     if !watched.is_empty() && (now / 15.0) as u32 != ((now - time.delta_secs()) / 15.0) as u32 {
@@ -1532,11 +1542,15 @@ fn autopilot_wreck(
     if came_from.is_none_or(|(was, _)| was != id) {
         *came_from = Some((id, t.translation - Vec3::Y * HALF_HEIGHT));
     }
-    // The weapon: the flamethrower with fuel, else a gun with rounds.
+    // The weapon: the flamethrower with fuel, else a launcher with
+    // rockets or grenades, else a gun with rounds.
+    use crate::weapons::WeaponClass as C;
     let loaded = |i: usize| inv.slots[i].mag + inv.slots[i].reserve > 0;
+    let class = |i: usize| inv.defs[inv.slots[i].def].class;
     let pick = (0..inv.slots.len())
-        .find(|&i| inv.defs[inv.slots[i].def].class == crate::weapons::WeaponClass::Flamethrower && loaded(i))
-        .or_else(|| (0..inv.slots.len()).find(|&i| inv.defs[inv.slots[i].def].class != crate::weapons::WeaponClass::Melee && loaded(i)));
+        .find(|&i| class(i) == C::Flamethrower && loaded(i))
+        .or_else(|| (0..inv.slots.len()).find(|&i| matches!(class(i), C::Launcher | C::GrenadeLauncher) && loaded(i)))
+        .or_else(|| (0..inv.slots.len()).find(|&i| class(i) != C::Melee && loaded(i)));
     let Some(slot) = pick else {
         host.autopilot_wrecking = false;
         *at = None;
@@ -1575,6 +1589,15 @@ fn autopilot_wreck(
             }
         }
         state.2 = now;
+        // (A spot that put him in the water after all, what the ray found
+        // there not to be stood on, isn't tried again: JAS_200's canyon
+        // put him in its river again and again.)
+        if let Some(s) = stood.take().filter(|_| p.swimming) {
+            if wet.len() >= 64 {
+                wet.remove(0);
+            }
+            wet.push(s);
+        }
         // Somewhere to stand out of the water round where it is going (the
         // shore, a jetty), the nearest to it first, another after each try
         // that did no harm.
@@ -1588,8 +1611,16 @@ fn autopilot_wreck(
                 let top = heights.height_at(p).unwrap_or(centre.y).max(centre.y) + 12.0;
                 let hit = spatial.cast_ray(p.with_y(top), Dir3::NEG_Y, 40.0, true, &filter)?;
                 let ground = top - hit.distance;
+                // (Something walked on: the ground, else a floor the navmesh
+                // has. A ray down in JAS_200's canyon met a palm's trunk 37 m
+                // over the river, and the player put on it fell to his death.)
+                let walked = heights.height_at(p).is_some_and(|h| (ground - h).abs() < 1.5) || nav.floor_under(p.with_y(ground + 1.0), 2.0).is_some();
+                if !walked {
+                    return None;
+                }
                 (ground > crate::water::surface(p.with_y(ground), heights.height_at(p)) + 0.3).then(|| (p.with_y(ground).distance(ahead), p.with_y(ground)))
             })
+            .filter(|(_, s)| !wet.iter().any(|w| w.distance(*s) < 2.0))
             .collect();
         spots.sort_by(|a, b| a.0.total_cmp(&b.0));
         let Some(&(_, feet)) = spots.get(state.3 as usize % spots.len().max(1)) else {
@@ -1600,12 +1631,17 @@ fn autopilot_wreck(
             return;
         };
         debug!(
-            "story autopilot: at {id} from {feet:.1?} (try {}, {:.1} m off, swimming {}, {} spots)",
+            "story autopilot: at {id} from {feet:.1?} (try {}, {:.1} m off, swimming {} at {:.1?} in water to {:.1} over ground {:?}, {} spots, {} wet)",
             state.3,
             t.translation.distance(centre),
             p.swimming,
-            spots.len()
+            t.translation,
+            crate::water::surface_at(t.translation, &heights),
+            heights.height_at(t.translation),
+            spots.len(),
+            wet.len()
         );
+        *stood = Some(feet);
         crate::story::teleport(&mut t, &mut p, crate::data::to_dunia(feet), 0.0);
         return;
     }
@@ -1617,10 +1653,18 @@ fn autopilot_wreck(
         return;
     }
     let eye = t.translation + Vec3::Y * (p.eye - crate::player::HALF_HEIGHT);
-    let aim = centre - eye;
+    // (A rocket is led, where the vehicle will be as it gets there.)
+    let lead = if class(slot) == C::Launcher { velocity.map_or(Vec3::ZERO, |v| v.0) * (centre.distance(eye) / crate::weapons::ROCKET_SPEED) } else { Vec3::ZERO };
+    let aim = centre + lead - eye;
     p.yaw = (-aim.x).atan2(-aim.z);
     p.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
-    actions.hold(crate::controls::Action::Fire);
+    // (A trigger held suits the flamethrower; one that fires a shot a pull,
+    // the RPG's, is pulled again each time: held, it never fired.)
+    if inv.defs[inv.slots[slot].def].automatic {
+        actions.hold(crate::controls::Action::Fire);
+    } else {
+        actions.press(crate::controls::Action::Fire);
+    }
 }
 
 fn autopilot_board(
