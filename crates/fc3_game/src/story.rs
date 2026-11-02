@@ -2008,7 +2008,7 @@ fn run_story(
             mut chopper,
             mut car_chase,
             mut gallery,
-            (poker, minigame, mut races, mut trials, outposts, mut scripted_map, mut fp, mut glows, startled),
+            (poker, minigame, mut races, mut trials, outposts, mut scripted_map, mut fp, mut glows, startled, mut metas),
             detection,
             mut env_overrides,
         ),
@@ -2047,6 +2047,7 @@ fn run_story(
                 ResMut<crate::fp::FpState>,
                 ResMut<crate::unlit_effects::GlowBlends>,
                 Res<crate::story_actors::Startled>,
+                ResMut<crate::story_actors::MetaCharacters>,
             ),
             Res<crate::stealth::Detection>,
             ResMut<crate::sky::EnvOverrides>,
@@ -2206,6 +2207,7 @@ fn run_story(
             boss_fight.reset();
             binds.reset();
             glows.reset();
+            metas.reset();
             unlimited_ammo.0 = false;
             intoxication.reset();
             prompts.reset();
@@ -3535,6 +3537,13 @@ fn run_story(
                     // A scene starting clears the spent arrows lying about
                     // (`PlaySequence`: none stuck in the set).
                     "DeleteAllArrowPickups" => host.sweep_arrows = true,
+                    // A character made a kind of character (Amanaki's flower
+                    // girl): its idle and walk theirs.
+                    "CAPI_NPC.SetMetaCharacterType" => {
+                        if let (Ok(id), Ok(kind)) = (a(0).parse(), a(1).parse()) {
+                            metas.wanted.insert(id, kind);
+                        }
+                    }
                     "MusicState" => music.request(&a(0), a(1) == "play"),
                     "CAPI_Player.StartPhoneCall" => ui.phone = Some((plain(&a(2)), a(3) == "true", 0.0)),
                     "CFCXMusicService:SetMissionMTParameters" => {

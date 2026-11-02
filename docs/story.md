@@ -5780,6 +5780,16 @@ to SQC_080, each a brief at its giver then its blocks):
   combat (`Story::awaited_in_combat`) with a shot into the ground 2 m before
   him, from a gun that puts its round where it's aimed. SQC_010 completed.
 
+### Kinds of character
+
+`PawnSetMetaCharacterType` (`CAPI_NPC.SetMetaCharacterType`) makes a
+character a kind: Amanaki's town makes one of its women the flower girl
+(3), WIL_040 Rongo a kneeling hostage. A kind with its own idle and walk
+among the civilians' `metacharacters` (the drunk man, the flower girl, the
+hungry woman, the prostitute) has the character take them, once per rig,
+while no action or scene has it (`story_actors::MetaCharacters`); the
+others' moves are their actions'.
+
 ### Hunts (SQA, Path of the Hunter)
 
 An outpost's hunting poster (`Lib_SideQuest.AnimalSideQuestGiver`) starts

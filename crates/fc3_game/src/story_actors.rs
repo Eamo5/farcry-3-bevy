@@ -52,7 +52,8 @@ impl Plugin for StoryActorsPlugin {
             .init_resource::<Arrivals>()
             .init_resource::<CalledIn>()
             .init_resource::<Startled>()
-            .add_systems(Update, startle.run_if(in_state(crate::menu::GameState::Playing)))
+            .init_resource::<MetaCharacters>()
+            .add_systems(Update, (startle, dress_meta_characters).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(
                 Update,
                 (
@@ -88,6 +89,75 @@ pub struct Startled(pub HashMap<u64, f32>);
 impl Startled {
     pub fn now(&self, id: u64, at: f32) -> bool {
         self.0.get(&id).is_some_and(|until| *until > at)
+    }
+}
+
+/// The kinds of character scripts make the story's characters
+/// (`CAPI_NPC.SetMetaCharacterType`: Amanaki's flower girl), by story id,
+/// and the rig each was last given its kind's moves on.
+#[derive(Resource, Default)]
+pub struct MetaCharacters {
+    pub wanted: HashMap<u64, u8>,
+    given: HashMap<u64, (Entity, u8)>,
+}
+
+impl MetaCharacters {
+    pub fn reset(&mut self) {
+        self.wanted.clear();
+        self.given.clear();
+    }
+}
+
+/// A kind's own idle and walk (`smart_terrain_points\civilians\metacharacters`):
+/// the drunk man (1), the flower girl (3), the hungry woman (4), the
+/// prostitute (7). The others' moves are their actions'.
+fn meta_moves(kind: u8) -> Option<(&'static str, Option<&'static str>)> {
+    Some(match kind {
+        1 => (
+            r"graphics\characters\_common\animations\smart_terrain_points\civilians\metacharacters\drunkman\locomotion\3rdcivm_fulbst_drunkman_characteridle_+000fw_noweap.mab",
+            Some(r"graphics\characters\_common\animations\smart_terrain_points\civilians\metacharacters\drunkman\locomotion\3rdcivm_fulbst_drunkman_walkrelax_+000fw_noweap.mab"),
+        ),
+        3 => (
+            r"graphics\characters\_common\animations\smart_terrain_points\civilians\metacharacters\flowergirl\locomotion\3rdcivf_fulbst_flowergirl_idle_+000fw_nowep.mab",
+            Some(r"graphics\characters\_common\animations\smart_terrain_points\civilians\metacharacters\flowergirl\locomotion\3rdcivf_fulbst_flowergirl_walkrelax_+000fw_nowep.mab"),
+        ),
+        4 => (r"graphics\characters\_common\animations\smart_terrain_points\civilians\metacharacters\hungrywoman\locomotion\3rdcivf_fulbst_hungrywoman_characteridle_+000fw_noweap.mab", None),
+        7 => (
+            r"graphics\characters\_common\animations\smart_terrain_points\civilians\metacharacters\vip\locomotion\3rdge_prostitute_characteridle_v01_loop_000fw_nowep.mab",
+            Some(r"graphics\characters\_common\animations\smart_terrain_points\civilians\metacharacters\vip\locomotion\3rdge_prostitute_walkrelax_v00_loop_000fw_nowep.mab"),
+        ),
+        _ => return None,
+    })
+}
+
+/// Characters given a kind take its idle and walk (once per rig: a
+/// character streamed in again takes them again).
+fn dress_meta_characters(
+    mut metas: ResMut<MetaCharacters>,
+    server: Res<AssetServer>,
+    actors: Query<(&StoryActor, &Transform)>,
+    mut rigs: Query<&mut crate::characters::CharacterRig>,
+) {
+    if metas.wanted.is_empty() {
+        return;
+    }
+    for (a, at) in &actors {
+        let Some(&kind) = metas.wanted.get(&a.id) else { continue };
+        let Some(rig_e) = a.rig.filter(|_| !a.dead && !a.script_driven()) else { continue };
+        if metas.given.get(&a.id) == Some(&(rig_e, kind)) {
+            continue;
+        }
+        let Ok(mut rig) = rigs.get_mut(rig_e) else { continue };
+        metas.given.insert(a.id, (rig_e, kind));
+        let Some((idle, walk)) = meta_moves(kind) else { continue };
+        debug!("story: {} at {:.1?} takes the moves of character kind {kind}", a.id, crate::data::to_dunia(at.translation));
+        let load = |p: &str| server.load(crate::cache_assets::cache_path(&fc3_formats::cache::anim_rel(p)));
+        let mut set = crate::characters::ClipSet { skeleton: rig.clips().skeleton.clone(), clips: rig.clips().clips.clone() };
+        set.clips.insert(AnimKind::Idle, load(idle));
+        if let Some(w) = walk {
+            set.clips.insert(AnimKind::Walk, load(w));
+        }
+        rig.set_clips_blended(std::sync::Arc::new(set));
     }
 }
 
