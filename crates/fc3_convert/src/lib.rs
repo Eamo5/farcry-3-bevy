@@ -743,7 +743,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     // ---- vegetation (baked per-sector plant instances; rewritten once for
     // the meshes' rotation order)
     let veg_lib = fc3_formats::vegetation::ClusterLibrary::load(&vfs).ok();
-    let refresh_vegetation = !exists(job.root(), VEGETATION_ORDER_STAMP);
+    let refresh_vegetation = !exists(job.root(), VEGETATION_ORDER_STAMP) || !exists(job.root(), VEGETATION_VARIANTS_STAMP);
     let veg_results: Vec<SectorVegetation> = match &veg_lib {
         Some(lib) => job.run(Stage::Sectors, &sectors, |&id| match convert_vegetation(&job, lib, id, refresh_vegetation) {
             Ok(r) => r,
@@ -761,13 +761,18 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         if let Err(e) = write_atomic(job.root(), VEGETATION_ORDER_STAMP, b"vegetation meshes rotated yaw, roll, pitch\n", job.ctx) {
             job.error(format!("vegetation stamp: {e:#}"));
         }
+        if let Err(e) = write_atomic(job.root(), VEGETATION_VARIANTS_STAMP, b"vegetation meshes worn with their resources' materials\n", job.ctx) {
+            job.error(format!("vegetation stamp: {e:#}"));
+        }
     }
     let mut veg_ids = Vec::new();
     let mut forest = cache::VistaForest::default();
     let mut cards: HashMap<String, u16> = HashMap::new();
-    for (id, models, vista) in veg_results {
+    let mut veg_variants: HashSet<VegVariant> = HashSet::new();
+    for (id, models, vista, variants) in veg_results {
         veg_ids.push(id);
         model_paths.extend(models);
+        veg_variants.extend(variants);
         for (card, pos, scale) in vista {
             let next = forest.cards.len() as u16;
             let card = *cards.entry(card.clone()).or_insert_with(|| {
@@ -813,6 +818,18 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     })?;
     for m in model_materials {
+        material_paths.extend(m);
+    }
+    // (Then the vegetation's variants of them, in their resources' materials.)
+    let veg_variants: Vec<VegVariant> = veg_variants.into_iter().collect();
+    let variant_materials: Vec<Vec<String>> = job.run(Stage::Models, &veg_variants, |v| match write_veg_variant(&job, v) {
+        Ok(m) => Some(m),
+        Err(e) => {
+            job.error(format!("vegetation variant {}: {e:#}", v.key()));
+            None
+        }
+    })?;
+    for m in variant_materials {
         material_paths.extend(m);
     }
     if refresh_states && opts.only_sectors.is_none() {
@@ -3519,12 +3536,73 @@ fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool, reorder: bool) ->
 }
 
 /// Bakes one sector's vegetation; returns the model paths it references.
-/// A sector's vegetation: its id, the models it uses, and its trees'
-/// far-distance billboards (card path, base in Bevy space, scale).
-type SectorVegetation = (u32, Vec<String>, Vec<(String, [f32; 3], f32)>);
+/// A sector's vegetation: its id, the models it uses, its trees'
+/// far-distance billboards (card path, base in Bevy space, scale), and its
+/// models worn with a cluster resource's own materials (`VegVariant`).
+type SectorVegetation = (u32, Vec<String>, Vec<(String, [f32; 3], f32)>, Vec<VegVariant>);
+
+/// A vegetation model as a cluster resource has it: its slots' materials
+/// overridden (`MaterialOverridesMap`, slot name to material: the volcanic
+/// rocks, whose model has the grey placeholder, each in its own rock's).
+/// Cached as a copy of the model's own with those materials
+/// (`veg_variant_rel`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct VegVariant {
+    model: String,
+    overrides: Vec<(String, String)>,
+}
+
+impl VegVariant {
+    fn key(&self) -> String {
+        let mut key = self.model.clone();
+        for (slot, material) in &self.overrides {
+            key += &format!("|{}={}", slot.to_ascii_lowercase(), material.to_ascii_lowercase());
+        }
+        key
+    }
+
+    fn rel(&self) -> String {
+        cache::model_rel(&self.key())
+    }
+}
+
+/// Writes a vegetation model variant: the model's cached copy with its
+/// overridden slots' materials (and their flags); the materials to convert.
+fn write_veg_variant(job: &Job, v: &VegVariant) -> Result<Vec<String>> {
+    let stem = |p: &str| p.rsplit(['\\', '/']).next().unwrap_or(p).to_ascii_lowercase().trim_end_matches(".material.bin").to_string();
+    let raw = job.model_materials_raw(&v.model);
+    let mut swaps: Vec<(usize, String)> = Vec::new();
+    for (slot, material) in &v.overrides {
+        let bin = material_bin_path(material);
+        for (i, r) in raw.iter().enumerate() {
+            if stem(r) == slot.to_ascii_lowercase() && job.vfs.exists(&bin) {
+                swaps.push((i, bin.clone()));
+            }
+        }
+    }
+    let materials: Vec<String> = swaps.iter().map(|s| s.1.clone()).collect();
+    let rel = v.rel();
+    if job.should_write(&rel) || !exists(job.root(), &rel) {
+        let base = std::fs::read(job.root().join(cache::model_rel(&v.model))).context("the model's own")?;
+        let mut cm = fc3_formats::cache::CachedModel::from_bytes(&base)?;
+        for (i, bin) in &swaps {
+            if let Some(m) = cm.materials.get_mut(*i) {
+                *m = cache::material_rel(bin);
+            }
+            if let Some(f) = cm.material_flags.get_mut(*i) {
+                *f = job.material(bin).cached.flags;
+            }
+        }
+        write_atomic(job.root(), &rel, &cm.to_bytes(), job.ctx)?;
+    }
+    Ok(materials)
+}
 
 /// Marks the vegetation as written with its meshes' own rotation order.
 const VEGETATION_ORDER_STAMP: &str = "vegetation/stamp-mesh-order.txt";
+/// Marks the vegetation as written with its meshes' resources' materials
+/// (`VegVariant`).
+const VEGETATION_VARIANTS_STAMP: &str = "vegetation/stamp-mesh-variants.txt";
 
 fn convert_vegetation(job: &Job, lib: &fc3_formats::vegetation::ClusterLibrary, id: u32, refresh: bool) -> Result<Option<SectorVegetation>> {
     use fc3_formats::cache::{veg_kind, CachedVegetation, VegInstance};
@@ -3541,6 +3619,7 @@ fn convert_vegetation(job: &Job, lib: &fc3_formats::vegetation::ClusterLibrary, 
     let origin = coord.origin();
     let mut originals = Vec::new();
     let mut vista = Vec::new();
+    let mut variants: Vec<VegVariant> = Vec::new();
     for p in &plants {
         if p.kind == PlantKind::Tree {
             if let Some(card) = lib.get(p.resource).and_then(|r| r.vista.clone()).filter(|c| job.vfs.exists(&c.to_ascii_lowercase())) {
@@ -3560,10 +3639,17 @@ fn convert_vegetation(job: &Job, lib: &fc3_formats::vegetation::ClusterLibrary, 
         if !(lower.ends_with(".xbg") || lower.ends_with(".rtx")) || !job.vfs.exists(&lower) {
             continue;
         }
+        // (A rock with its resource's own materials: a variant of its model.)
+        let overrides = lib.get(p.resource).filter(|_| p.kind == PlantKind::Mesh).map(|r| r.material_overrides.clone()).unwrap_or_default();
+        let variant = (!overrides.is_empty()).then(|| VegVariant { model: lower.clone(), overrides });
+        let key = variant.as_ref().map_or_else(|| lower.clone(), VegVariant::key);
         let next = index.len() as u16;
-        let mi = *index.entry(lower.clone()).or_insert_with(|| {
-            v.models.push(cache::model_rel(&lower));
+        let mi = *index.entry(key).or_insert_with(|| {
+            v.models.push(variant.as_ref().map_or_else(|| cache::model_rel(&lower), VegVariant::rel));
             originals.push(lower.clone());
+            if let Some(variant) = variant.clone() {
+                variants.push(variant);
+            }
             next
         });
         let rotation = match (p.kind, p.normal) {
@@ -3605,7 +3691,7 @@ fn convert_vegetation(job: &Job, lib: &fc3_formats::vegetation::ClusterLibrary, 
     if job.should_write(&rel) || (refresh && v.instances.iter().any(|i| i.kind == veg_kind::MESH)) {
         write_atomic(job.root(), &rel, &v.to_bytes(), job.ctx)?;
     }
-    Ok(Some((id, originals, vista)))
+    Ok(Some((id, originals, vista, variants)))
 }
 
 fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {

@@ -130,6 +130,17 @@ Every `clusterResId` referenced by the world resolves in this library. When the
 library cannot classify a resource, the decoder falls back to trying the three
 layouts with backtracking. The shipped data never needs this fallback.
 
+The material overrides are what the resource's instances wear: 402 resources
+have them, nearly all the volcanic rocks, whose models carry only the grey
+placeholder (`Grey_Placeholder_DoNotModify`, slot `lpcantin-m-20110323153738`)
+and each resource names its own rock material for that slot (a pebble mossy,
+a cliff bare). The converter caches each model so worn as a model of its own
+(`VegVariant`: the model's cached copy with those slots' materials, under a
+key of the model and its overrides) and the vegetation's sectors name it; the
+grey slot went to a generic rock stand-in before, one mottled brown for every
+rock. `fc3veg resources <model>` lists a model's resources and overrides.
+`vegetation/stamp-mesh-variants.txt` marks the sectors as written so.
+
 The editor catalog's `CollectionResId` values are the same IDs as
 `clusterResId`: 168 of the 206 non-zero IDs resolve here. The fc3_main world
 data never references the other 38.

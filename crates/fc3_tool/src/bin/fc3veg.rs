@@ -57,6 +57,17 @@ fn main() -> Result<()> {
             plot(&vfs, &lib, id, Path::new(out), radius, ppm)
         }
         "find" => find(&vfs, &lib, arg(1).context("usage: find <model substring> [level]")?, arg(2)),
+        "resources" => {
+            // The library's resources whose model names a text, with their
+            // material overrides: resources <model substring>
+            let needle = arg(1).context("usage: resources <model substring>")?.to_ascii_lowercase();
+            let mut found: Vec<_> = lib.resources.values().filter(|r| r.path.to_ascii_lowercase().contains(&needle)).collect();
+            found.sort_by_key(|r| r.id);
+            for r in found {
+                println!("{:016x} {} {:?}", r.id, r.path, r.material_overrides);
+            }
+            Ok(())
+        }
         _ => {
             println!("usage: fc3veg survey [level] | sector <id> | dump <id> [out.csv] | plot <id> <out.png> [radius] [px_per_m] | find <model> [level]");
             Ok(())
