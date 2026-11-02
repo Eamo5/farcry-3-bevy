@@ -149,6 +149,12 @@ renders a movie off screen. `fc3ui hud` loads a movie over the engine shim;
 `FC3UI_LEVEL` puts it at its own level and `FC3UI_CALL` calls its functions
 (`_level3.setTutorial|Title|Text|false;_level3.showTutorial`).
 
+The game draws the movies only when something in them changed since they
+were last drawn (a frame of a movie run, an event handled: Ruffle's
+`needs_render`), as they run at their own rate, slower than the game's
+frames; drawing them every frame took about 4 ms of the main thread's time.
+`FC3_UI_RENDER_ALWAYS` draws them every frame.
+
 **Warnings that are the movies' own.** Each movie that brings the shared
 classes logs `Avm1::pop: Stack underflow` as it loads: their class set-ups
 (`fire.event.BaseEvent`, `fire.event.Event`, `mx.utils.Delegate`, in each

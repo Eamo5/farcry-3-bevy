@@ -427,6 +427,19 @@ impl Host {
         self.player.lock().unwrap().render();
     }
 
+    /// Draws the interface if anything in it changed since it was last
+    /// drawn (a frame of a movie run, an event handled): whether it did.
+    /// The movies run at their own rate, slower than the game's frames, and
+    /// drawing them every frame cost as much as the rest of the HUD.
+    pub fn render_if_changed(&self) -> bool {
+        let mut player = self.player.lock().unwrap();
+        let changed = player.needs_render();
+        if changed {
+            player.render();
+        }
+        changed
+    }
+
     pub fn resize(&self, width: u32, height: u32) {
         self.player.lock().unwrap().set_viewport_dimensions(ruffle_core::ViewportDimensions { width, height, scale_factor: 1.0 });
     }

@@ -293,7 +293,13 @@ fn run_interface(
             None => debug!("original UI: sound {name} not in the movies' table"),
         }
     }
-    host.render();
+    // (Only when something changed: the movies' frames come at their own
+    // rate. FC3_UI_RENDER_ALWAYS draws them every frame.)
+    if std::env::var_os("FC3_UI_RENDER_ALWAYS").is_some() {
+        host.render();
+    } else {
+        host.render_if_changed();
+    }
 }
 
 /// The pause menu's movie (a page manager) and its level, over the HUD's.

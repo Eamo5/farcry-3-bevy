@@ -276,12 +276,13 @@ impl Damage {
     /// An archetype by name, or the longest one a derived name starts with
     /// ("Pirate_Assaulter_Commander" -> "Pirate_Assaulter").
     pub fn get(&self, name: &str) -> Option<&Vulnerability> {
-        let n = name.to_ascii_lowercase();
+        // (Without allocating: characters' melee asks it every frame.)
+        let n = name.as_bytes();
         self.archetypes
             .iter()
             .filter(|v| {
-                let a = v.name.to_ascii_lowercase();
-                n == a || n.starts_with(&format!("{a}_")) || n.starts_with(&format!("{a}."))
+                let a = v.name.as_bytes();
+                n.len() >= a.len() && n[..a.len()].eq_ignore_ascii_case(a) && (n.len() == a.len() || matches!(n[a.len()], b'_' | b'.'))
             })
             .max_by_key(|v| v.name.len())
     }
@@ -554,5 +555,7 @@ mod tests {
         assert_eq!(back.get("Tiger").unwrap().burn, None);
         assert_eq!(back.get("Tiger").and_then(|v| v.health), Some(800.0));
         assert!(back.get("Pirate").is_none());
+        assert!(back.get("Pirate_HeavyGunnerX").is_none());
+        assert_eq!(back.get("TIGER.Big").and_then(|v| v.health), Some(800.0));
     }
 }
