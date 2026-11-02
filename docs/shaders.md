@@ -899,6 +899,15 @@ They cast no shadow. What the game's eye adaptation does to `HDRMul` isn't
 modelled: the multiplier is taken as it is, as the other self-lit materials
 take their maps.
 
+Scripts turn a glow's `HDRMul` up or down (`CAPI_Entity.UpdateMaterialFloat`,
+the `MaterialModifier` box: CIT_015's murals in Citra's temple lit one after
+another, 5 on and 0 off, as she tells her story; JAS_240's tattoo floor).
+The entity's effect parts get their own copy of the material, and the
+multiplier goes from where it is to the one wanted, the blend rate's share
+of the way a second (at once for none: `unlit_effects::GlowBlends`). Every
+glow part of the entity is turned: the converted models don't keep their
+slots' names, and the turned entities have the one material.
+
 The deferred omni and spot light passes (`PointLightAttenuation`,
 `SpotLightAttenuation`) compute their falloff with one `mad_sat`:
 `saturate(a / d² + b')`, where the engine sets `a = R²·Ri² / (R² − Ri²)` and

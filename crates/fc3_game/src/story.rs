@@ -1962,7 +1962,7 @@ fn run_story(
             mut chopper,
             mut car_chase,
             mut gallery,
-            (poker, minigame, mut races, mut trials, outposts, mut scripted_map, mut fp),
+            (poker, minigame, mut races, mut trials, outposts, mut scripted_map, mut fp, mut glows),
             detection,
             mut env_overrides,
         ),
@@ -1999,6 +1999,7 @@ fn run_story(
                 Res<crate::outposts::Outposts>,
                 ResMut<crate::map::ScriptedMap>,
                 ResMut<crate::fp::FpState>,
+                ResMut<crate::unlit_effects::GlowBlends>,
             ),
             Res<crate::stealth::Detection>,
             ResMut<crate::sky::EnvOverrides>,
@@ -2157,6 +2158,7 @@ fn run_story(
             sniping.reset();
             boss_fight.reset();
             binds.reset();
+            glows.reset();
             unlimited_ammo.0 = false;
             intoxication.reset();
             prompts.reset();
@@ -3399,6 +3401,13 @@ fn run_story(
                     "CAPI_Entity.UnBind" => {
                         if let Ok(child) = a(1).parse() {
                             binds.unbind(child);
+                        }
+                    }
+                    // A glow turned up or down: `entity, material, param,
+                    // value, rate` (only `HDRMul` is ever turned).
+                    "CAPI_Entity.UpdateMaterialFloat" if a(2) == "HDRMul" => {
+                        if let (Ok(id), Ok(value)) = (a(0).parse(), a(3).parse()) {
+                            glows.set(id, value, a(4).parse().unwrap_or(0.0));
                         }
                     }
                     "CreateSpecificGameplay" if a(1).starts_with("CSnipingChallenge") => sniping.pending.push(crate::sniping::Start {
