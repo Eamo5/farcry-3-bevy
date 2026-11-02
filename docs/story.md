@@ -4228,7 +4228,13 @@ Run again later in the campaign (`camp91`), the escort failed every time
   world's data; the graph came later, in the patch), so nothing ran it. A
   zone without one now runs its block's own graph where its mission keeps
   its blocks' (`<mission dir>/<block>/<block>.<block>.lua`, by the folder
-  its other blocks' zones name; `zone_script_fallbacks`).
+  its other blocks' zones name; `zone_script_fallbacks`). ULC_020
+  completed. ULC_010's labs count document fragments, collectibles the
+  scripts hear of as `CCollectibleCollectedEvent` on the player; the
+  autopilot found one by chance and stood still. While a script counts
+  them it now goes for the collectibles a mission lays out in its layers
+  in the world (`Story::mission_collectibles`), as for pickups a script
+  waits on, and the first lab completed.
 * **Reinforcements that fight.** Each wave's reinforcements are sent to
   guard posts in the village (`Cautious_Guard_*`). Alerted, one's AI took
   over and the story heard his action broken off; it sent him to the next

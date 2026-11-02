@@ -350,6 +350,8 @@ pub struct Story {
     /// (a race's controller while the race drives far from it).
     held_scripts: HashSet<u64>,
     errors: usize,
+    /// The collectibles missions lay out in their own layers.
+    collectibles: Vec<u64>,
 }
 
 impl Story {
@@ -366,12 +368,18 @@ impl Story {
 
     pub fn new(pack: ScriptPack, data: StoryData) -> Result<Story> {
         let zone_scripts = zone_script_fallbacks(&data, &pack);
+        let collectibles = data
+            .entities
+            .values()
+            .filter(|e| e.layer != fc3_formats::world::DEFAULT_MISSION_LAYER && e.has("CPickupCollectible"))
+            .map(|e| e.id)
+            .collect();
         let domino = Domino::new(Pack(pack)).map_err(|e| anyhow::anyhow!("{e}"))?;
         let core = Rc::new(RefCell::new(Core::new(Rc::new(data))));
         core.borrow_mut().zone_scripts = zone_scripts;
         natives::register(&domino, &core).map_err(|e| anyhow::anyhow!("{e}"))?;
         domino.lua().load(include_str!("glue.lua")).set_name("glue").exec().map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(Story { domino, core, instances: HashMap::new(), loaded_scripts: HashSet::new(), held_scripts: HashSet::new(), errors: 0 })
+        Ok(Story { domino, core, instances: HashMap::new(), loaded_scripts: HashSet::new(), held_scripts: HashSet::new(), errors: 0, collectibles })
     }
 
     pub fn data(&self) -> Rc<StoryData> {
@@ -1997,6 +2005,17 @@ impl Story {
 
     /// The pickups scripts wait to be picked up (their `PickupListener`s'
     /// ids, groups resolved).
+    /// The collectibles a mission lays out, in its layers now in the world,
+    /// while a script counts the player's collectibles (`CCollectibleCollectedEvent`:
+    /// ULC_010's document fragments in its labs).
+    pub fn mission_collectibles(&self) -> Vec<u64> {
+        let c = self.core.borrow();
+        if !c.listeners.values().any(|l| matches!(&l.on, Listen::Entity(id, e) if *id == PLAYER && e == "CCollectibleCollectedEvent")) {
+            return Vec::new();
+        }
+        self.collectibles.iter().copied().filter(|id| c.data.entities.get(id).is_some_and(|e| c.layer_state(e.layer).present())).collect()
+    }
+
     pub fn awaited_pickups(&self) -> Vec<u64> {
         let c = self.core.borrow();
         let mut out: Vec<u64> = c

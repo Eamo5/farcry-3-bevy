@@ -6387,8 +6387,15 @@ fn autopilot_loot(
         return;
     }
     // A pickup a script waits on (a mission's diamonds): gone to and taken
-    // (from wherever a high trigger held him up).
-    let awaited = host.story.awaited_pickups();
+    // (from wherever a high trigger held him up). And, a script counting
+    // the player's collectibles, the ones a mission lays out (ULC_010's
+    // document fragments, about its labs).
+    let mut awaited = host.story.awaited_pickups();
+    if host.quiet > 6.0 {
+        awaited.extend(host.story.mission_collectibles());
+        awaited.sort_unstable();
+        awaited.dedup();
+    }
     // (Not in a hunt with its quarry about and the weapon for it, with
     // ammo: its ammo laid out is spare.)
     let hunt_ready = host.story.hunt_weapon().and_then(|c| hunt_class(&c)).is_some_and(|w| {
