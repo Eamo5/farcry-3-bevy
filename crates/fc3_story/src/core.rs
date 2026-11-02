@@ -228,6 +228,10 @@ pub struct Core {
     pub binds: HashMap<u64, u64>,
     /// Scripted poses for entities not currently reported by the host.
     pub poses: HashMap<u64, crate::Pose>,
+    /// Where the host last reported the spawned entities it no longer does
+    /// (a body taken away as it fell: CIT_050's ghost warriors, turned to
+    /// smoke where they died).
+    pub last_seen: HashMap<u64, [f32; 3]>,
     /// Runtime overrides of proximity-trigger use restrictions.
     pub use_rules: HashMap<u64, crate::triggers::UseRules>,
     pub vehicle_rules: HashMap<u64, crate::vehicles::Rules>,
@@ -302,6 +306,7 @@ impl Core {
             objective_markers: BTreeMap::new(),
             binds: HashMap::new(),
             poses: HashMap::new(),
+            last_seen: HashMap::new(),
             use_rules: HashMap::new(),
             vehicle_rules: HashMap::new(),
             vehicle_departures: HashMap::new(),
@@ -547,7 +552,13 @@ impl Core {
                 }
             }
         }
-        self.view.spawned.get(&id).map(|l| l.pos).or_else(|| self.poses.get(&id).map(|p| p.position)).or_else(|| self.data.position(id))
+        self.view
+            .spawned
+            .get(&id)
+            .map(|l| l.pos)
+            .or_else(|| self.poses.get(&id).map(|p| p.position))
+            .or_else(|| self.data.position(id))
+            .or_else(|| self.last_seen.get(&id).copied())
     }
 
     pub fn angles(&self, id: u64) -> [f32; 3] {

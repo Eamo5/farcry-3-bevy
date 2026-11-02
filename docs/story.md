@@ -445,6 +445,13 @@ is the story's own:
   effects by; the bone as its name's (`GetStringID`), the rigs' own. The
   converter caches the effects the scripts load
   (`ScriptPack::particle_resources`: seven of them).
+* **Effects in the world.** `CreateParticle <effect> <position> <angles>`
+  (the `PawnDeathIntoParticle` box: CIT_050's ghost warriors, each turned
+  to smoke where he falls, `ghost_impact`, his body taken away) plays the
+  effect once there (`PawnFx::placed`). The box asks where the dead man is
+  a fifth of a second on, and the host no longer reported him by then: a
+  character the host stops reporting is now where it was last seen
+  (`Core::last_seen`).
 * **Highlights.** A placed object's graphic component can carry a
   highlight (`bHighLight`): the plants to gather, loot containers,
   collectibles, a radio tower's panel, the doctor's mushrooms. It pulses

@@ -4115,6 +4115,16 @@ fn run_story(
                             shimmers.script.insert(id, on.then(|| ([f(2), f(3), f(4)], f(5))));
                         }
                     }
+                    // An effect played once where the script puts it (`id,
+                    // effect, "x y z", angles`); none where it knew no place.
+                    "CreateParticle" => {
+                        let at: Vec<f32> = a(2).split_whitespace().filter_map(|v| v.parse().ok()).collect();
+                        if let (Ok(effect), [x, y, z]) = (a(1).parse::<u64>(), at.as_slice()) {
+                            if [*x, *y, *z] != [0.0; 3] {
+                                pawn_fx.placed.push((effect, [*x, *y, *z]));
+                            }
+                        }
+                    }
                     "CAPI_Pawn.StopToDestroyParticle" | "CAPI_Pawn.DestroyParticle" => {
                         if let Ok(pawn) = a(0).parse::<u64>() {
                             pawn_fx.stops.push((pawn, a(1).parse().unwrap_or(0)));

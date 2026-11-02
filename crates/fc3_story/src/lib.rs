@@ -551,6 +551,15 @@ impl Story {
                     c.raise(&Listen::Entity(id, "OnVehicleHealthChanged".into()), args);
                 }
             }
+            // (Those it no longer reports: where it last did.)
+            let gone: Vec<(u64, [f32; 3])> = c.view.spawned.iter().filter(|(id, _)| !view.spawned.contains_key(id)).map(|(id, l)| (*id, l.pos)).collect();
+            for id in view.spawned.keys() {
+                c.last_seen.remove(id);
+            }
+            c.last_seen.extend(gone);
+            if c.last_seen.len() > 4096 {
+                c.last_seen.clear();
+            }
             c.view = view;
             for (id, was_loaded) in before {
                 let loaded = c.is_loaded(id);
@@ -2356,6 +2365,26 @@ mod tests {
 
     fn empty_story() -> Story {
         Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), StoryData::default()).unwrap()
+    }
+
+    /// A character the host stops reporting (a body taken away) is still
+    /// where it was last seen, for a script asking just after.
+    #[test]
+    fn a_character_gone_from_the_world_is_where_it_was_last_seen() {
+        let mut story = empty_story();
+        let mut view = View::default();
+        view.spawned.insert(10, Live { alive: false, pos: [1.0, 2.0, 3.0], ..Default::default() });
+        story.update(0.0, view);
+        story.update(0.0, View::default());
+        let at: [f32; 3] = story
+            .domino()
+            .lua()
+            .load(r#"local p = CAPI_Entity.GetEntityPositionVec3("10"); return {p[1], p[2], p[3]}"#)
+            .eval::<Vec<f32>>()
+            .unwrap()
+            .try_into()
+            .unwrap();
+        assert_eq!(at, [1.0, 2.0, 3.0]);
     }
 
     #[test]

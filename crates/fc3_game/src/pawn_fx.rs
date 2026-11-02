@@ -42,6 +42,10 @@ pub struct PawnFx {
     pub stops: Vec<(u64, u32)>,
     /// Every one stopped (a reload).
     pub clear: bool,
+    /// Effects played once where a script puts them (`CreateParticle`:
+    /// CIT_050's ghost warriors turned to smoke where they fall): the
+    /// effect, by its path's hash, and the place (Dunia space).
+    pub placed: Vec<(u64, [f32; 3])>,
     playing: HashMap<(u64, u32), Entity>,
 }
 
@@ -75,6 +79,12 @@ fn play_pawn_fx(
     for key in std::mem::take(&mut fx.stops) {
         if let Some(e) = fx.playing.remove(&key) {
             commands.entity(e).try_despawn();
+        }
+    }
+    for (effect, at) in std::mem::take(&mut fx.placed) {
+        match effect_name(effect) {
+            Some(name) if crate::authored_fx::play(&mut commands, name, crate::data::to_bevy(at)) => debug!("pawn fx: {name} at {at:?}"),
+            _ => debug!("pawn fx: effect {effect:016x} not cached"),
         }
     }
     let mut waiting = Vec::new();
@@ -116,6 +126,20 @@ fn play_pawn_fx(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One a script puts in the world plays there, once.
+    #[test]
+    fn a_placed_effect_plays_where_put() {
+        let effect = fc3_formats::hash::path_hash("fc3_bossfights.citra_bossfight.ghost_impact");
+        let Some(name) = effect_name(effect) else { return };
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_plugins(PawnFxPlugin);
+        app.world_mut().resource_mut::<PawnFx>().placed.push((effect, [10.0, 20.0, 30.0]));
+        app.update();
+        let world = app.world_mut();
+        let at: Vec<(&str, Vec3)> = world.query::<(&crate::authored_fx::AuthoredFx, &Transform)>().iter(world).map(|(f, t)| (f.0, t.translation)).collect();
+        assert_eq!(at, vec![(name, crate::data::to_bevy([10.0, 20.0, 30.0]))]);
+    }
 
     #[test]
     fn a_scripts_effect_plays_on_the_player_until_stopped() {
