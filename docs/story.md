@@ -221,8 +221,13 @@ is the story's own:
   * a GSF `Rumble` pulses the pad (Grant's death scene's heartbeat).
 
   What is left unsent is coop's, a photo map no single-player script
-  plugs, the shopkeepers' UI hand-off (our shop opens at shopkeepers by
-  itself), and the water listener (coop's rafting).
+  plugs, and the water listener (coop's rafting). The shopkeepers' UI
+  hand-off is told now: our shop opens at shopkeepers by itself, and a
+  keeper's script, which asks for the shop (`StartUIInteraction 0`) and
+  makes him unusable meanwhile, hears its page unload (`Pause_0_UnLoaded`
+  on the player) as the shop closes, or a second on when none opened (the
+  autopilot's use of him), and makes him usable again
+  (`story::ui_interaction_exited`).
 * **Environment overrides.** `OverrideEnvironment` boxes (62 scripts:
   Buck's caves and boat, BAM_040's temple, DOC_020's trip) put presets
   over the world's environment: `Set<Kind>Override <preset> <seconds>`

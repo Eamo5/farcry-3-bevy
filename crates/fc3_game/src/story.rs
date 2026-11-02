@@ -53,6 +53,7 @@ impl Plugin for StoryPlugin {
             .add_systems(PreUpdate, collect_shop_purchases)
             .add_systems(PreUpdate, collect_loot)
             .add_systems(Update, forward_pickups)
+            .add_systems(Update, ui_interaction_exited)
             .add_systems(Update, forward_camera)
             .add_systems(PreUpdate, collect_crafts)
             .add_systems(PreUpdate, collect_menu_events)
@@ -542,6 +543,31 @@ fn collect_shop_purchases(
     }
 }
 
+/// A shop a script opened (`StartUIInteraction`: a shopkeeper used) closed:
+/// the script hears its page unload (`Pause_0_UnLoaded` on the player) and
+/// makes the keeper usable again. The game opens the shop itself as the
+/// keeper is used; one the script asked for that never opened (the
+/// autopilot's use of the keeper) closes at once.
+fn ui_interaction_exited(
+    host: Option<NonSendMut<StoryHost>>,
+    state: Res<State<crate::menu::GameState>>,
+    time: Res<Time>,
+    mut shown: Local<bool>,
+) {
+    let Some(mut host) = host else { return };
+    let Some(asked) = host.ui_interaction else { return };
+    if *state.get() == crate::menu::GameState::Shop {
+        *shown = true;
+        return;
+    }
+    if *state.get() != crate::menu::GameState::Playing || (!*shown && time.elapsed_secs() - asked < 1.0) {
+        return;
+    }
+    host.ui_interaction = None;
+    *shown = false;
+    host.story.entity_event(fc3_story::PLAYER, "Pause_0_UnLoaded", vec![]);
+}
+
 /// Pickups picked up: the scripts waiting on them hear of it.
 fn forward_pickups(host: Option<NonSendMut<StoryHost>>, mut picked: MessageReader<crate::pickups::PickedUp>) {
     let Some(mut host) = host else {
@@ -902,6 +928,8 @@ pub struct StoryHost {
     /// step going after a vehicle (the other steps wait).
     pub autopilot_burning: bool,
     pub autopilot_wrecking: bool,
+    /// When a script opened a shop (`StartUIInteraction`), till it closes.
+    pub ui_interaction: Option<f32>,
     /// When the player last gave up a mission (its scripts' failure, heard
     /// just after, isn't shown), and whether the reload it's due goes on
     /// where he stands.
@@ -1133,6 +1161,7 @@ impl StoryHost {
             unusable: HashMap::new(),
             autopilot_burning: false,
             autopilot_wrecking: false,
+            ui_interaction: None,
             abandoned_at: None,
             reload_in_place: false,
             travel_asked: None,
@@ -3479,6 +3508,10 @@ fn run_story(
                     "HudText" => {
                         ui.hints.insert(a(0).parse().unwrap_or(0), (plain(&a(2)), plain(&a(3))));
                     }
+                    // A shop a script opens (a shopkeeper used): the game's
+                    // own, opened as he is used; its closing is told
+                    // (`ui_interaction_exited`).
+                    "StartUIInteraction" => host.ui_interaction = Some(now),
                     "MusicState" => music.request(&a(0), a(1) == "play"),
                     "CAPI_Player.StartPhoneCall" => ui.phone = Some((plain(&a(2)), a(3) == "true", 0.0)),
                     "CFCXMusicService:SetMissionMTParameters" => {
