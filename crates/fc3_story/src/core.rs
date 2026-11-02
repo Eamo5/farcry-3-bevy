@@ -118,6 +118,9 @@ pub struct Core {
     pub data: Rc<StoryData>,
     /// Base blocks' own layers, by block (`standing_layers`).
     pub standing: HashMap<u64, Vec<u64>>,
+    /// Mission zones' graphs where their own data names none, by zone
+    /// (`zone_script_fallbacks`).
+    pub zone_scripts: HashMap<u64, String>,
     pub view: View,
     /// What the host should do.
     pub out: Vec<Command>,
@@ -251,6 +254,7 @@ impl Core {
         Core {
             data,
             standing: HashMap::new(),
+            zone_scripts: HashMap::new(),
             view: View::default(),
             out: Vec::new(),
             actions: VecDeque::new(),
@@ -644,7 +648,7 @@ impl Core {
         }
         let Some(e) = self.data.entities.get(&entity) else { return false };
         let Some(c) = e.component("CDominoComponent") else { return false };
-        let Some(script) = crate::data::script_path(c) else { return false };
+        let Some(script) = crate::data::script_path(c).or_else(|| self.zone_scripts.get(&entity).cloned()) else { return false };
         let prefab = c.u64("hidParentPrefabId").filter(|&p| p != u64::MAX && p != 0);
         let inputs = crate::data::script_inputs(c);
         self.running.insert(entity);

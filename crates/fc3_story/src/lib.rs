@@ -301,6 +301,37 @@ pub enum Command {
 
 struct Pack(ScriptPack);
 
+/// The graphs of mission zones placed without one (their Domino component's
+/// script path left empty): the block's own graph where its mission keeps
+/// its blocks' (`<mission dir>/<block>/<block>.<block>.lua`, the folder its
+/// other blocks' zones name), if there is one. The Lost Expeditions'
+/// ULC_020_B08 zone, its graph patched in later, names none, and the lab
+/// stood still.
+fn zone_script_fallbacks(data: &StoryData, pack: &ScriptPack) -> HashMap<u64, String> {
+    let path_of = |zone: u64| data.entities.get(&zone).and_then(|e| e.component("CDominoComponent")).and_then(|c| crate::data::script_path(c));
+    let mut out = HashMap::new();
+    for b in data.blocks.values() {
+        let Some(zone) = b.zone.filter(|&z| path_of(z).is_none() && data.entities.get(&z).is_some_and(|e| e.component("CDominoComponent").is_some())) else { continue };
+        let name = b.name.to_ascii_lowercase();
+        let Some((mission, _)) = name.rsplit_once('_') else { continue };
+        let found = data
+            .blocks
+            .values()
+            .filter(|o| o.id != b.id && o.name.to_ascii_lowercase().starts_with(&format!("{mission}_")))
+            .filter_map(|o| path_of(o.zone?))
+            .filter_map(|p| {
+                let p = p.replace('/', "\\");
+                let dir = p.rsplit_once('\\')?.0.rsplit_once('\\')?.0.to_string();
+                Some(format!("{dir}\\{name}\\{name}.{name}.lua"))
+            })
+            .find(|candidate| pack.get(candidate).is_some());
+        if let Some(path) = found {
+            out.insert(zone, path);
+        }
+    }
+    out
+}
+
 impl ScriptSource for Pack {
     fn script(&self, path: &str) -> Option<String> {
         self.0.get(path)
@@ -334,8 +365,10 @@ impl Story {
     }
 
     pub fn new(pack: ScriptPack, data: StoryData) -> Result<Story> {
+        let zone_scripts = zone_script_fallbacks(&data, &pack);
         let domino = Domino::new(Pack(pack)).map_err(|e| anyhow::anyhow!("{e}"))?;
         let core = Rc::new(RefCell::new(Core::new(Rc::new(data))));
+        core.borrow_mut().zone_scripts = zone_scripts;
         natives::register(&domino, &core).map_err(|e| anyhow::anyhow!("{e}"))?;
         domino.lua().load(include_str!("glue.lua")).set_name("glue").exec().map_err(|e| anyhow::anyhow!("{e}"))?;
         Ok(Story { domino, core, instances: HashMap::new(), loaded_scripts: HashSet::new(), held_scripts: HashSet::new(), errors: 0 })

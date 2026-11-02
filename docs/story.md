@@ -4222,7 +4222,13 @@ Run again later in the campaign (`camp91`), the escort failed every time
 * **The Lost Expeditions.** Their labs' blocks had been left running from
   an earlier stretch, and reloading put the player back in a lab. The
   autopilot no longer steps into the DLC's triggers (`dlc_mission`;
-  `FC3_STORY_AUTOPILOT_DLC=1` lets it).
+  `FC3_STORY_AUTOPILOT_DLC=1` lets it). Played with it after the campaign,
+  ULC_030 completed, and ULC_020 stood still in its lab at B08: B08's
+  zone names no graph (its Domino component's script path is empty in the
+  world's data; the graph came later, in the patch), so nothing ran it. A
+  zone without one now runs its block's own graph where its mission keeps
+  its blocks' (`<mission dir>/<block>/<block>.<block>.lua`, by the folder
+  its other blocks' zones name; `zone_script_fallbacks`).
 * **Reinforcements that fight.** Each wave's reinforcements are sent to
   guard posts in the village (`Cautious_Guard_*`). Alerted, one's AI took
   over and the story heard his action broken off; it sent him to the next
