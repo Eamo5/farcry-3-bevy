@@ -485,13 +485,17 @@ fn burst(time: Res<Time<Real>>, mut taken: Local<usize>, mut commands: Commands)
     if *taken >= 24 {
         return;
     }
-    let Some((dir, at)) =
-        std::env::var("FC3_BURST").ok().and_then(|v| v.rsplit_once(',').and_then(|(d, t)| Some((d.to_string(), t.trim().parse::<f32>().ok()?))))
-    else {
+    // (`<dir>,<secs>[,<step>]`: 40 ms apart unless a step is given.)
+    let Some((dir, at, step)) = std::env::var("FC3_BURST").ok().and_then(|v| {
+        let mut parts = v.split(',');
+        let dir = parts.next()?.to_string();
+        let at = parts.next()?.trim().parse::<f32>().ok()?;
+        Some((dir, at, parts.next().and_then(|s| s.trim().parse::<f32>().ok()).unwrap_or(0.04)))
+    }) else {
         *taken = 24;
         return;
     };
-    if time.elapsed_secs() >= at + *taken as f32 * 0.04 {
+    if time.elapsed_secs() >= at + *taken as f32 * step {
         capture(&mut commands, format!("{dir}/burst_{}.png", *taken));
         *taken += 1;
     }

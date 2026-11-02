@@ -1460,13 +1460,15 @@ pub struct HiddenEntities(pub std::collections::HashSet<u64>);
 #[allow(clippy::type_complexity)]
 fn hide_entities(
     hidden: Res<HiddenEntities>,
+    binds: Res<crate::binds::Binds>,
     mut props: Query<(Ref<crate::objects::PlacedId>, &mut Visibility), Without<crate::story_actors::StoryActor>>,
     mut actors: Query<(Ref<crate::story_actors::StoryActor>, &mut Visibility)>,
 ) {
-    let all = hidden.is_changed();
+    let all = hidden.is_changed() || binds.is_changed();
     for (id, mut vis) in &mut props {
         if all || id.is_added() {
-            let want = if hidden.0.contains(&id.0) { Visibility::Hidden } else { Visibility::Inherited };
+            // (Nor what is in the player's hands: the arms' own shows.)
+            let want = if hidden.0.contains(&id.0) || binds.in_players_hands(id.0) { Visibility::Hidden } else { Visibility::Inherited };
             vis.set_if_neq(want);
         }
     }
@@ -1960,7 +1962,7 @@ fn run_story(
             mut chopper,
             mut car_chase,
             mut gallery,
-            (poker, minigame, mut races, mut trials, outposts, mut scripted_map),
+            (poker, minigame, mut races, mut trials, outposts, mut scripted_map, mut fp),
             detection,
             mut env_overrides,
         ),
@@ -1996,6 +1998,7 @@ fn run_story(
                 ResMut<crate::trials::Trials>,
                 Res<crate::outposts::Outposts>,
                 ResMut<crate::map::ScriptedMap>,
+                ResMut<crate::fp::FpState>,
             ),
             Res<crate::stealth::Detection>,
             ResMut<crate::sky::EnvOverrides>,
@@ -3867,6 +3870,19 @@ fn run_story(
                             pawn_anims.requests.push(crate::pawn_anims::Request::Stop { pawn });
                         }
                     }
+                    // A move the player plays by name: the arms' own, where
+                    // the first-person set has it (a mission's bomb placed
+                    // and set off: `MissionBomb`, the remote's first-person
+                    // moves; its holster before has none).
+                    "CAPI_Pawn.PlayAnimation" if a(0) == fc3_story::PLAYER.to_string() => {
+                        let gesture = [("PlaceMissionBomb", r"special\ied|place"), ("DetonateMissionBomb", r"special\ied|detonate")]
+                            .into_iter()
+                            .find(|(name, _)| fc3_domino::path_id(name) == a(1))
+                            .map(|(_, g)| g);
+                        if let Some(g) = gesture {
+                            fp.gesture = Some(g);
+                        }
+                    }
                     // The player turned to look at an entity.
                     "CAPI_Player.SetPlayerLookAngles" if a(0) == fc3_story::PLAYER.to_string() => {
                         if let Some(at) = a(1).parse::<u64>().ok().and_then(|id| data.position(id)).map(to_bevy) {
@@ -4179,13 +4195,15 @@ fn run_story(
                         }
                     }
                     // Nothing for the host to do: kept by the story itself
-                    // (who holds a character, a companion's lead, contextual
+                    // (who holds a character, a companion's orders, contextual
                     // actions' states), or already so here (a weapon a script
                     // spawned is carried as it spawns; the camera's near
                     // plane is a centimetre already for close-ups; inputs
                     // aren't held over).
                     "CAPI_AI.AcquireControl"
                     | "CAPI_Companion.CompanionSetLead"
+                    | "CAPI_Companion.CompanionSetFollow"
+                    | "CAPI_Companion.CompanionSetWait"
                     | "ToggleContextualActionState"
                     | "CAPI_Pawn.AddWeapon"
                     | "CAPI_Player.SetCloseUpCamera"

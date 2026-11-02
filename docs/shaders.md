@@ -934,8 +934,9 @@ diagnostic system added was enough to bring it on every run).
 
 `FC3_CAPTURE_NEAR=x,z,radius,path[|...]` (game, tests) saves a frame when the
 player first comes within `radius` of each point, to look at a place along a
-scripted walk. `FC3_BURST=<dir>,<seconds>` captures 24 frames 40 ms apart from
-that long after start (real time), for what lasts a moment.
+scripted walk. `FC3_BURST=<dir>,<seconds>[,<step>]` captures 24 frames 40 ms
+(or `step` seconds) apart from that long after start (real time), for what
+lasts a moment.
 
 ## Post-effects (`fc3_game/src/post_effects.rs`)
 

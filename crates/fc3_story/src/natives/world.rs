@@ -424,6 +424,32 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         }
         c.emit(Command::Teleport { entity, pose });
     })?;
+    // An entity set where a script says, or turned as it says (`{x, y, z}`
+    // tables: a mission's bomb put down where it goes, `MissionBomb`).
+    fn place(c: &mut Core, entity: u64, position: Option<[f32; 3]>, angles: Option<[f32; 3]>) {
+        let Some(mut pose) = c.pose(entity) else { return };
+        pose.position = position.unwrap_or(pose.position);
+        pose.angles = angles.unwrap_or(pose.angles);
+        c.poses.insert(entity, pose);
+        if let Some(live) = c.view.spawned.get_mut(&entity) {
+            live.pos = pose.position;
+        }
+        if entity == PLAYER {
+            c.view.player = pose.position;
+            c.view.player_yaw = pose.angles[2];
+        }
+        c.emit(Command::Teleport { entity, pose });
+    }
+    r.f("CAPI_Entity.SetEntityPositionVec3", |c, (entity, at): (Text, Value)| {
+        if let (Some(e), Value::Table(_)) = (entity.id(), &at) {
+            place(c, e, Some(read_vec3(&at)), None);
+        }
+    })?;
+    r.f("CAPI_Entity.SetEntityAngles", |c, (entity, angles): (Text, Value)| {
+        if let (Some(e), Value::Table(_)) = (entity.id(), &angles) {
+            place(c, e, None, Some(read_vec3(&angles)));
+        }
+    })?;
     r.f("CAPI_Vehicle.LockPosition", |c, (vehicle, locked): (Text, crate::values::Flag)| {
         if let Some(v) = vehicle.id() {
             c.vehicle_rules.entry(v).or_default().position_locked = locked.0;

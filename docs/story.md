@@ -3884,7 +3884,7 @@ its trigger, with DEN_020; DEN_040's briefing starts.
 From the `DEN_040_B20` checkpoint the autopilot plants the bomb, the cache
 blows (three of its parts break, the chimney's scene plays) and B20
 completes with DEN_040; JAS_110 starts. The charge, its "ghost" and the
-remote aren't drawn yet, and the planting move isn't animated.
+remote weren't drawn then, nor the planting move animated.
 Script-spawned archetypes (the bomb's spot, the charge, the remote) are now
 drawn with their archetype's model where the script puts them, under the
 story's id, so its placements, hiding and removal reach them like any placed
@@ -3893,6 +3893,15 @@ on the model's slots: the "ghost" spot is the charge's model under a
 material of its own (`MaterialOverrides`). The converter resolves each
 archetype's slots as a placement's are (`story/archetype_materials.txt`)
 and converts those materials with the rest.
+
+The planting is animated now too: the player's moves the box plays
+(`PlaceMissionBomb`, `DetonateMissionBomb`, by their path ids) are the
+first-person arms' own (`special\ied`'s `place` and `detonate`: the charge
+and the remote in hand, set down), and the charge bound to the player's hand
+meanwhile isn't drawn itself (`Binds::in_players_hands`). The box puts it
+down where it goes with `CAPI_Entity.SetEntityPositionVec3` and
+`SetEntityAngles`, now moves the host makes (and later queries see), as a
+teleport is. `FC3_FP_GESTURE=special\ied|place` plays one over and over.
 
 ## JAS_110 and JAS_130: the camp operator's key, Liza and the truck
 

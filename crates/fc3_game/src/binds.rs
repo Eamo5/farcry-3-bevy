@@ -38,6 +38,13 @@ impl Binds {
     pub fn reset(&mut self) {
         self.by_child.clear();
     }
+
+    /// Whether a thing is bound to the player: in his hands, where the
+    /// first-person arms show their own (a mission's bomb as he places it),
+    /// so it isn't shown itself meanwhile.
+    pub fn in_players_hands(&self, child: u64) -> bool {
+        self.by_child.get(&child).is_some_and(|(parent, _)| *parent == fc3_story::PLAYER)
+    }
 }
 
 /// Each bound thing where what it rides on is now (its bone's place as last

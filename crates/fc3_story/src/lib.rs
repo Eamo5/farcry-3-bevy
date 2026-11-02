@@ -3560,6 +3560,29 @@ mod tests {
         assert!(story.take_commands().is_empty());
     }
 
+    /// An entity set where a script says and turned as it says (a mission's
+    /// bomb put down at its spot), each a move the host makes.
+    #[test]
+    fn an_entity_is_set_and_turned_where_a_script_says() {
+        let mut story = empty_story();
+        let mut view = View::default();
+        view.spawned.insert(10, Live { pos: [1.0, 2.0, 3.0], alive: true, ..Default::default() });
+        view.spawned.insert(20, Live { pos: [40.0, 50.0, 60.0], alive: true, ..Default::default() });
+        story.core.borrow_mut().poses.insert(20, Pose { position: [0.0; 3], angles: [0.0, 0.0, 90.0] });
+        story.update(0.0, view);
+        let values: (Vec<f32>, Vec<f32>) = story.domino().lua().load(r#"
+            CAPI_Entity.SetEntityPositionVec3("10", CAPI_Entity.GetEntityPositionVec3("20"))
+            CAPI_Entity.SetEntityAngles("10", CAPI_Entity.GetEntityAngles("20"))
+            CAPI_Entity.SetEntityAngles("10", nil)
+            return CAPI_Entity.GetEntityPositionVec3("10"), CAPI_Entity.GetEntityAngles("10")
+        "#).eval().unwrap();
+        assert_eq!(values, (vec![40.0, 50.0, 60.0], vec![0.0, 0.0, 90.0]));
+        assert_eq!(story.take_commands(), vec![
+            Command::Teleport { entity: 10, pose: Pose { position: [40.0, 50.0, 60.0], angles: [0.0; 3] } },
+            Command::Teleport { entity: 10, pose: Pose { position: [40.0, 50.0, 60.0], angles: [0.0, 0.0, 90.0] } },
+        ]);
+    }
+
     /// A companion told to lead is reported leading along its path; at its
     /// end the box listening hears `EndOfPathReached` and it waits.
     #[test]

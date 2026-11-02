@@ -1900,10 +1900,18 @@ fn drive_arms(
     if !state.active {
         return;
     }
-    // FC3_FP_GESTURE=grenade|rock (tests): throw over and over.
+    // FC3_FP_GESTURE=grenade|rock (tests): throw over and over (or any
+    // `folder|action` the first-person set has: `special\ied|place`).
     if let Ok(g) = std::env::var("FC3_FP_GESTURE") {
         if state.throwing <= 0.0 && state.gesture.is_none() && state.drawing > 0.6 {
-            state.gesture = Some(if g == "rock" { "rock" } else { "grenade" });
+            state.gesture = Some(match g.as_str() {
+                "rock" => "rock",
+                g if g.contains('|') => {
+                    static NAMED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+                    NAMED.get_or_init(|| g.to_string()).as_str()
+                }
+                _ => "grenade",
+            });
             info!("fp: throw ({g})");
         }
     }
