@@ -129,10 +129,21 @@ pub fn carried_weapon(faction: crate::npc::Faction, role: crate::npc::Role) -> O
     CARRIED.iter().find(|(f, r, _)| *f == faction && *r == role).map(|(_, _, n)| *n)
 }
 
+/// A new id for something put down in play (a dropped gun, a spent arrow):
+/// none the editor or the story uses.
+pub fn dropped_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    DROP_IDS | NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Arrows the player shot into someone, got back when the body is
+/// searched, as the game gives them back.
+#[derive(Component, Default)]
+pub struct ArrowsIn(pub u32);
+
 /// A fallen enemy's gun, put down at `at` (his feet) turned to `yaw`.
 pub fn drop_weapon(commands: &mut Commands, weapon: &'static str, at: Vec3, yaw: f32) {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    let id = DROP_IDS | NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let id = dropped_id();
     commands.spawn((
         Transform::from_translation(at).with_rotation(Quat::from_rotation_y(yaw)),
         Visibility::Visible,
@@ -263,7 +274,7 @@ pub(crate) fn loot_bodies(
     mut players: Query<(&Transform, &Player, &mut Inventory, &Health, &mut PlayerStats)>,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     (busy, mut gestures, mut looted): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>, MessageWriter<crate::progression::ItemLooted>),
-    (crafting, kits, auto): (Option<Res<crate::crafting::CraftCatalog>>, Query<&crate::characters::KitId>, Query<(), With<AutoLoot>>),
+    (crafting, kits, auto, arrows_in): (Option<Res<crate::crafting::CraftCatalog>>, Query<&crate::characters::KitId>, Query<(), With<AutoLoot>>, Query<&ArrowsIn>),
     text: Option<Res<crate::hud::GameText>>,
 ) {
     use crate::npc::Role;
@@ -301,6 +312,14 @@ pub(crate) fn loot_bodies(
         gestures.write(if body.skin { crate::fp::FpAction::Skin { large: true } } else { crate::fp::FpAction::LootBody { crouch: player.crouching } });
     }
     *progress.stats.entry(crate::progression::stat::BODIES_LOOTED).or_insert(0) += 1;
+    // The arrows shot into him come back, as many as the quiver holds.
+    let arrows = arrows_in.get(e).map_or(0, |a| a.0);
+    let arrows = if arrows > 0 { inv.add_ammo(WeaponClass::Bow, arrows) } else { 0 };
+    let with_arrows = |note: String| match arrows {
+        0 => note,
+        _ if note.starts_with("Nothing") => format!("Found {arrows} arrows"),
+        _ => format!("{note}, {arrows} arrows"),
+    };
     // What the game gives this kind of enemy: cash, loot to sell, ammunition.
     let kit = body.rig.and_then(|r| kits.get(r).ok()).map_or(0, |k| k.0);
     // (Its own loot when its entity names some, else its kit's.)
@@ -320,7 +339,7 @@ pub(crate) fn loot_bodies(
             hud.loot_notes.push(LOOT_RUCKSACK_FULL);
         }
         // (The original HUD shows the loot and the cash its own way.)
-        hud.notify_native(note);
+        hud.notify_native(with_arrows(note));
         sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 0.6 });
         commands.entity(e).remove::<LootableBody>().insert(Searched);
         return;
@@ -353,6 +372,9 @@ pub(crate) fn loot_bodies(
         _ => None,
     };
     found.extend(extra.map(str::to_string));
+    if arrows > 0 {
+        found.push(format!("{arrows} arrows"));
+    }
     hud.notify_native(if found.is_empty() { "Nothing useful".to_string() } else { format!("Found {}", found.join(", ")) });
     sfx.write(crate::sound::PlaySfx { event: crate::sound::ev::UI_CLICK, at: None, volume: 0.6 });
     commands.entity(e).remove::<LootableBody>().insert(Searched);

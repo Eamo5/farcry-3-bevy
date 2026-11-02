@@ -124,8 +124,9 @@ No game data is included in this repository, and none is written into it.
   breath for a steady shot (five seconds, then a gasp and a pause).
 - **Combat**: 29 of the game's weapons: handguns, SMGs, assault rifles, shotguns, sniper rifles,
   LMGs, the RPG, a grenade launcher, a flamethrower and the recurve bow (silent arrows that drop
-  and stick; fire arrows that set alight where they land and explosive arrows, bought by the five
-  and nocked with the reload key), with recoil, spread, reloading, aiming down sights and suppressed variants that
+  and stick, picked up again where they stuck and got back from a body as it's searched, as
+  the game's are; fire arrows that set alight where they land and explosive arrows, bought by
+  the five and nocked with the reload key), with recoil, spread, reloading, aiming down sights and suppressed variants that
   barely alert anyone. Each weapon fires with its own sounds from the game (suppressed
   versions, empty clicks), and an automatic burst ends with its tail and echo. Shops sell the game's attachments for the guns you carry, as each weapon's shop list has them: suppressors,
   the sights (two reflex sights, optical, ACOG, illuminated iron sights; one fitted at a time, those bought kept to swap back on

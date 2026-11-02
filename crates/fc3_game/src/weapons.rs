@@ -396,6 +396,8 @@ pub const MOLOTOV_MODEL: &str = r"graphics\__fc3_graphics\_common\weapons\moloto
 const ARMING_DISTANCE: f32 = 5.0;
 /// A rocket's speed as it leaves the launcher (m/s).
 pub const ROCKET_SPEED: f32 = 70.0;
+/// How long (s) a spent arrow stays where it stuck, to be picked up.
+const ARROW_STAYS: f32 = 180.0;
 
 /// Molotovs carried at most.
 pub const MOLOTOV_CAP: u32 = 4;
@@ -2336,11 +2338,17 @@ fn update_projectiles(
                         });
                         markers.write(HitMarker { kill: false, headshot: false });
                         crate::particles::fx::blood(&mut particles, &mut rng, point, step.normalize());
+                        // (In him: got back as the body is searched.)
+                        commands.entity(target).entry::<crate::pickups::ArrowsIn>().and_modify(|mut a| a.0 += 1).or_insert(crate::pickups::ArrowsIn(1));
                         commands.entity(e).despawn();
                     } else {
-                        // Stuck where it landed, for a while.
+                        // Stuck where it landed a good while, to be picked
+                        // up again, as the game's arrows are.
                         t.translation = point - step.normalize() * 0.3;
-                        commands.entity(e).remove::<Projectile>().insert(Effect { age: 0.0, life: 30.0, grow: 0.0, light: false });
+                        commands.entity(e).remove::<Projectile>().insert((
+                            Effect { age: 0.0, life: ARROW_STAYS, grow: 0.0, light: false },
+                            crate::pickups::Pickup { kind: crate::pickups::PickupKind::Arrows(1), id: crate::pickups::dropped_id(), visual: None },
+                        ));
                     }
                     continue;
                 }
