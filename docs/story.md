@@ -4776,6 +4776,24 @@ there checkpoint after checkpoint for an hour:
   in. He comes at a door from the side standing in fewer of the triggers
   the scripts watch (set down on its front, he stood inside the hut, in the
   trigger that locks it), else from the side he is on.
+* **Played again from B35 (`full5`).** BAM_055 stood still at "Cross the
+  hot water." for half an hour: the three triggers across the pools
+  (`B30_Dialog_lowprofile`, `B2_spawnwaterwall`, `B35_End`) had been
+  learned fatal in a run weeks before (each "let the player fall"), and
+  nothing else led on. Without them it crossed, and B35 to B80, BAM_060 and
+  the seventh chapter completed. On the way, three things it did wrong:
+  * Out of a hot pool it was put back into it every frame: a step out
+    found a way past a corner, the spot a step on was in the pool again
+    on its own lower floor. Both now have to be out (`exit_point`).
+  * The tomb's geysers, dozens of them, play and pause their effects in
+    turn (`CNewParticlesComponent_PlayParticles`), each the story stirring:
+    an effect played or paused is quiet now.
+  * Dead on B50's falling bridge, the player came to across the island and
+    died again and again there: the tomb's water went on hurting him (its
+    damage volumes still had him), and each death put the checkpoint's
+    reload off by 6 s. A death no longer puts off one pending, and a
+    script's harm to the player waiting to be taken back to his checkpoint
+    is dropped.
 
 ## BNG_030 to CIT_020: the cave, the convoy's fire, Willis's tracker
 

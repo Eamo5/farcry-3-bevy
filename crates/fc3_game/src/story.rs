@@ -2033,7 +2033,10 @@ fn run_story(
         }
     }
     let dead = health.as_ref().is_some_and(|h| h.dead);
-    if dead && !host.was_dead && host.story.missions().iter().any(|m| m.1 == "Running") {
+    // (Once: a death again before then doesn't put it off. BAM_055's tomb
+    // went on hurting the player where he came to, and each death had put
+    // the reload off again, for good.)
+    if dead && !host.was_dead && host.reload_at.is_none() && host.story.missions().iter().any(|m| m.1 == "Running") {
         host.reload_at = Some(now + 6.0);
     }
     // (A fall soon after a step: the trigger stepped into, and its namesakes
@@ -2419,11 +2422,13 @@ fn run_story(
     // replays its light scenes, each start clearing arrows first, and
     // switches the same action on again and again; BAM_030's ruins play
     // and stop their particles; nor a warning on the screen coming and
-    // going: HOY_010's to stay close to Sam.)
+    // going: HOY_010's to stay close to Sam; nor an effect played or paused,
+    // whatever its entity: BAM_055's dozens of geysers, each in its turn.)
     let now = time.elapsed_secs();
     let mut stirred = None;
     for c in &commands {
         let quiet = matches!(c, Command::Layer { .. } | Command::Print(_) | Command::Dialog { .. })
+            || matches!(c, Command::EntityEvent { event, .. } if event.starts_with("CNewParticlesComponent_"))
             || matches!(c, Command::Native { name, .. }
                 if name == "SetTimeOfDay" || name == "DeleteAllArrowPickups" || name == "HudText" || name == "HudTextHidden");
         if !quiet && !host.replayed(c, now) {
@@ -4342,7 +4347,13 @@ fn exit_point(shape: &fc3_story::triggers::Shape, from: [f32; 3], ground: impl F
             (1..100).map(|i| i as f32 * 4.0).find_map(|d| {
                 let (x, y) = (from[0] + c * d, from[1] + s * d);
                 let z = ground(x, y).unwrap_or(from[2]);
-                (!shape.contains([x, y, z + 0.5])).then_some((d, [x + c * 2.0, y + s * 2.0, z]))
+                // (And the spot itself, a step on, on its own ground: a
+                // step past a corner went back into BAM_055's hot pool,
+                // whose floor is below the ledge it found, and the player
+                // was put in it again every frame.)
+                let (ex, ey) = (x + c * 2.0, y + s * 2.0);
+                let ez = ground(ex, ey).unwrap_or(z);
+                (!shape.contains([x, y, z + 0.5]) && !shape.contains([ex, ey, ez + 0.5])).then_some((d, [ex, ey, ez]))
             })
         })
         .min_by(|a, b| a.0.total_cmp(&b.0))
@@ -4521,7 +4532,14 @@ fn story_damage(
             host.damages.push((pawn, h.current + 1.0));
         }
     }
+    let reloading = host.reload_at.is_some();
     for (pawn, amount) in std::mem::take(&mut host.damages) {
+        // (Not on a player who died and is to be taken back to the last
+        // checkpoint: what hurt him there doesn't follow him to where he
+        // comes to meanwhile.)
+        if pawn == fc3_story::PLAYER && reloading {
+            continue;
+        }
         let target = if pawn == fc3_story::PLAYER { players.single().ok() } else { actors.iter().find(|(_, a)| a.id == pawn).map(|(e, _)| e) };
         let Some(target) = target else { continue };
         debug!("story: a script deals {amount} to {pawn}");
@@ -6697,6 +6715,16 @@ mod tests {
         let at = exit_point(&shape, [0.0, 0.0, 0.0], |_, _| Some(1.0)).unwrap();
         assert!(!shape.contains([at[0], at[1], 1.5]));
         assert!(at[0].abs() > 10.0 && at[0].abs() < 16.0 && at[1].abs() < 1.0 && at[2] == 1.0, "{at:?}");
+    }
+
+    /// A ledge over the region's top isn't a way out when the step past it
+    /// goes back down into the region.
+    #[test]
+    fn a_region_is_not_left_by_a_ledge_over_it() {
+        let shape = fc3_story::triggers::Shape::Box { centre: [0.0, 0.0, 0.0], half: [11.0, 50.0, 2.0], yaw: 0.0 };
+        let ground = |x: f32, _: f32| Some(if (7.0..9.0).contains(&x) { 3.0 } else { 0.0 });
+        let at = exit_point(&shape, [0.0, 0.0, 0.0], ground).unwrap();
+        assert!(!shape.contains([at[0], at[1], at[2] + 0.5]) && at[0].abs() > 11.0, "{at:?}");
     }
 
     /// A trigger that let the player fall is left alone with a numbered run
