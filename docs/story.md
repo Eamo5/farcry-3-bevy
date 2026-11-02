@@ -482,8 +482,12 @@ is the story's own:
   fight in it (`npc::Npc::combat_area`): a move out of it goes toward its
   middle instead, cover outside it isn't taken, and one out of it walks
   back; a member come into the world later gets it too. The idle region
-  moves a post outside it to its middle. (The search region is left to
-  their own search.)
+  moves a post outside it to its middle. The search region keeps a search
+  for someone out of it inside it (`npc::Npc::search_area`): from a spot in
+  it that sees the place searched (`npc::find_vantage`), else from its
+  middle, as the combat region keeps one when there's no search region. A
+  reinforcement point's battlefield, a region, is all three for the mercs
+  it calls in. `ClearBattlefields <group>` lets the group's regions go.
 * **Set alight.** `StartBurning <pawn>` (the `Burn` box: CIT_050's
   reinforcements in Vaas's dream) sets a story character alight as fire
   that catches at once would (`burning::ScriptIgnitions`): the human

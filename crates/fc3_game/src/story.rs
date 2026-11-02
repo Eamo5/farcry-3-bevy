@@ -107,17 +107,19 @@ fn apply_sides(
     // The regions scripts keep them to: to fight from (handed to one come
     // into the world since too), and to wait in (a post outside it moved to
     // its middle).
-    if !host.combat_areas.is_empty() || !host.idle_areas.is_empty() || host.areas_changed {
+    if !host.combat_areas.is_empty() || !host.idle_areas.is_empty() || !host.search_areas.is_empty() || host.areas_changed {
         let changed = std::mem::take(&mut host.areas_changed);
         let data = host.story.data();
         let shape = |region: Option<&u64>| region.and_then(|r| data.entities.get(r)).and_then(fc3_story::triggers::shape_of).map(std::sync::Arc::new);
         for (actor, mut npc) in &mut npcs {
             let wanted = host.combat_areas.get(&actor.id);
+            let searched = host.search_areas.get(&actor.id);
             // (One come into the world since, a reinforcement called to its
             // battlefield, too.)
-            let newly = wanted.is_some() && npc.combat_area.is_none();
+            let newly = (wanted.is_some() && npc.combat_area.is_none()) || (searched.is_some() && npc.search_area.is_none());
             if changed || newly {
                 npc.combat_area = shape(wanted);
+                npc.search_area = shape(searched);
             }
             if changed || newly {
                 if let Some(area) = shape(host.idle_areas.get(&actor.id)) {
@@ -932,6 +934,8 @@ pub struct StoryHost {
     /// region; and whether any changed since they were last handed out.
     pub combat_areas: HashMap<u64, u64>,
     pub idle_areas: HashMap<u64, u64>,
+    /// Where scripts keep them searching (kind 2), by id.
+    pub search_areas: HashMap<u64, u64>,
     pub areas_changed: bool,
     /// Alarm boxes scripts switched (`SetAlarmState`), for `story_alarms`.
     pub alarm_sets: Vec<(u64, u8)>,
@@ -1118,6 +1122,7 @@ impl StoryHost {
             battlefield_posts: HashMap::new(),
             combat_areas: HashMap::new(),
             idle_areas: HashMap::new(),
+            search_areas: HashMap::new(),
             areas_changed: false,
             npc_damage: HashMap::new(),
             invincible: HashMap::new(),
@@ -2099,6 +2104,7 @@ fn run_story(
             host.battlefield_posts.clear();
             host.combat_areas.clear();
             host.idle_areas.clear();
+            host.search_areas.clear();
             host.areas_changed = true;
             host.npc_damage.clear();
             host.invincible.clear();
@@ -3171,17 +3177,28 @@ fn run_story(
                     // BSRs: where they wait, and where they fight from
                     // (`npc::Npc::combat_area`). (The search region, 2, is
                     // left to their own search.)
-                    "SetBattlefields" if a(2) == "1" || a(2) == "3" => {
+                    "SetBattlefields" if a(2) == "1" || a(2) == "2" || a(2) == "3" => {
                         if let Ok(region) = a(1).parse::<u64>() {
                             for pawn in host.story.group_members(&a(0)) {
-                                if a(2) == "3" {
-                                    host.combat_areas.insert(pawn, region);
-                                } else {
-                                    host.idle_areas.insert(pawn, region);
-                                }
+                                match a(2).as_str() {
+                                    "3" => host.combat_areas.insert(pawn, region),
+                                    "2" => host.search_areas.insert(pawn, region),
+                                    _ => host.idle_areas.insert(pawn, region),
+                                };
                             }
                             host.areas_changed = true;
                         }
+                    }
+                    // (The group's areas let go: back to its own posts and
+                    // ways.)
+                    "ClearBattlefields" => {
+                        for pawn in host.story.group_members(&a(0)) {
+                            host.combat_areas.remove(&pawn);
+                            host.search_areas.remove(&pawn);
+                            host.idle_areas.remove(&pawn);
+                            host.battlefield_posts.remove(&pawn);
+                        }
+                        host.areas_changed = true;
                     }
                     "SetBattlefields" if a(2) == "0" => {
                         if let Ok(field) = a(1).parse::<u64>() {
@@ -3231,6 +3248,7 @@ fn run_story(
                         if let Some(field) = field {
                             for (id, _) in &mercs {
                                 host.combat_areas.insert(*id, field);
+                                host.search_areas.insert(*id, field);
                                 host.idle_areas.insert(*id, field);
                             }
                             host.areas_changed = true;

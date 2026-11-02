@@ -614,6 +614,10 @@ pub struct Npc {
     /// Where a script keeps him fighting (his combat BSR, `SetBattlefields
     /// <group> <region> 3`): a fight's moves and cover stay inside it.
     pub combat_area: Option<std::sync::Arc<fc3_story::triggers::Shape>>,
+    /// Where a script keeps him searching (his search BSR, `SetBattlefields
+    /// <group> <region> 2`): a search for someone out of it is made from
+    /// inside it.
+    pub search_area: Option<std::sync::Arc<fc3_story::triggers::Shape>>,
     pub marker_id: u64,
     pub accuracy: f32,
     pub damage: f32,
@@ -1739,6 +1743,7 @@ pub(crate) fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker
         reload: 0.0,
         strafe_dir: if rng.f32() < 0.5 { -1.0 } else { 1.0 },
         combat_area: None,
+        search_area: None,
         marker_id,
         accuracy: stats.accuracy,
         damage: stats.damage,
@@ -2616,8 +2621,11 @@ fn act(
                     goal = Some(lk);
                     speed = 2.8;
                     // (Kept to an area the place searched is out of: a spot
-                    // in it that sees there, rather than its edge.)
-                    if let Some(area) = npc.combat_area.clone().filter(|a| !a.holds(crate::data::to_dunia(lk), 0.0, fc3_story::triggers::BODY_HALF_HEIGHT)) {
+                    // in it that sees there, rather than its edge. The area
+                    // a script gives him to search, else the one to fight
+                    // in.)
+                    let kept = npc.search_area.clone().or_else(|| npc.combat_area.clone());
+                    if let Some(area) = kept.filter(|a| !a.holds(crate::data::to_dunia(lk), 0.0, fc3_story::triggers::BODY_HALF_HEIGHT)) {
                         npc.vantage_search -= dt;
                         if npc.vantage.is_none() && npc.vantage_search <= 0.0 && nav.ready() {
                             npc.vantage_search = rng.range(3.0, 5.0);
