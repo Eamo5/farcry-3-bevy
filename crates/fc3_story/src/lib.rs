@@ -354,6 +354,9 @@ pub struct Story {
     collectibles: Vec<u64>,
     /// The collectibles picked up since the story started.
     collected: HashSet<u64>,
+    /// The entities whose graphs start as they load (`hidStartOnLoad`,
+    /// not by an owner): found once, not every half second.
+    start_on_load: Vec<u64>,
 }
 
 impl Story {
@@ -376,12 +379,20 @@ impl Story {
             .filter(|e| e.layer != fc3_formats::world::DEFAULT_MISSION_LAYER && e.has("CPickupCollectible"))
             .map(|e| e.id)
             .collect();
+        let start_on_load = data
+            .entities
+            .values()
+            .filter(|e| {
+                e.component("CDominoComponent").is_some_and(|d| d.bool("hidStartOnLoad").unwrap_or(false) && !d.bool("hidStartByOwner").unwrap_or(false))
+            })
+            .map(|e| e.id)
+            .collect();
         let domino = Domino::new(Pack(pack)).map_err(|e| anyhow::anyhow!("{e}"))?;
         let core = Rc::new(RefCell::new(Core::new(Rc::new(data))));
         core.borrow_mut().zone_scripts = zone_scripts;
         natives::register(&domino, &core).map_err(|e| anyhow::anyhow!("{e}"))?;
         domino.lua().load(include_str!("glue.lua")).set_name("glue").exec().map_err(|e| anyhow::anyhow!("{e}"))?;
-        Ok(Story { domino, core, instances: HashMap::new(), loaded_scripts: HashSet::new(), held_scripts: HashSet::new(), errors: 0, collectibles, collected: HashSet::new() })
+        Ok(Story { domino, core, instances: HashMap::new(), loaded_scripts: HashSet::new(), held_scripts: HashSet::new(), errors: 0, collectibles, collected: HashSet::new(), start_on_load })
     }
 
     pub fn data(&self) -> Rc<StoryData> {
@@ -2268,11 +2279,7 @@ impl Story {
         let (starts, stops) = {
             let c = self.core.borrow();
             let mut starts = Vec::new();
-            for e in c.data.entities.values() {
-                let Some(d) = e.component("CDominoComponent") else { continue };
-                if !d.bool("hidStartOnLoad").unwrap_or(false) || d.bool("hidStartByOwner").unwrap_or(false) {
-                    continue;
-                }
+            for e in self.start_on_load.iter().filter_map(|id| c.data.entities.get(id)) {
                 if self.loaded_scripts.contains(&e.id) || c.running.contains(&e.id) {
                     continue;
                 }

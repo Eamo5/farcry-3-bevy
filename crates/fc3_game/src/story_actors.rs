@@ -728,7 +728,7 @@ fn spawn_actors(
     existing: Query<&StoryActor>,
     mut rng: ResMut<Rng>,
     mut commands: Commands,
-    (mut last, time, mut arrivals, mut called): (Local<f32>, Res<Time>, ResMut<Arrivals>, ResMut<CalledIn>),
+    (mut last, time, mut arrivals, mut called, mut kitted): (Local<f32>, Res<Time>, ResMut<Arrivals>, ResMut<CalledIn>, Local<(usize, Vec<u64>)>),
     faces: Option<ResMut<crate::faces::FaceLibrary>>,
     placements: Res<crate::story::EntityPlacements>,
     damage: Res<crate::combat::DamageTable>,
@@ -746,8 +746,14 @@ fn spawn_actors(
     let data = host.story.data();
     let mut budget = 3;
     let mut arrived = HashSet::new();
+    // (The story's characters, found once for its data: going through all
+    // its entities each time cost 24 ms twice a second.)
+    let key = std::rc::Rc::as_ptr(&data) as usize;
+    if kitted.0 != key {
+        *kitted = (key, data.entities.values().filter(|e| kit_of(e).is_some()).map(|e| e.id).collect());
+    }
     let called_in = arrivals.0.iter().map(|(e, field)| (e, Some(*field)));
-    for (e, field) in data.entities.values().map(|e| (e, None)).chain(called_in) {
+    for (e, field) in kitted.1.iter().filter_map(|id| data.entities.get(id)).map(|e| (e, None)).chain(called_in) {
         if budget == 0 {
             break;
         }
