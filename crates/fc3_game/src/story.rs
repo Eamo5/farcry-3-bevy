@@ -2557,7 +2557,8 @@ fn run_story(
         && !cinema.plays_player()
         && std::env::var("FC3_STORY_AUTOPILOT").is_ok()
         && !landing_awaited(&host, &p, &t, &heights)
-        && (host.quiet > autopilot_delay || scorched)
+        // (At the wheel against a clock, sooner: a supply run's 45 s.)
+        && (host.quiet > autopilot_delay || scorched || (at_wheel && !ui.timers.is_empty() && host.quiet > VEHICLE_NEAR_AFTER))
         // (Not while it's still being set down where the last step put it,
         // unless that's taking far too long: a far step's ground streams in
         // a while, and stepping on meanwhile left WIL_020's village for a

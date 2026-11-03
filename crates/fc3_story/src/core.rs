@@ -239,6 +239,11 @@ pub struct Core {
     pub use_rules: HashMap<u64, crate::triggers::UseRules>,
     pub vehicle_rules: HashMap<u64, crate::vehicles::Rules>,
     pub vehicle_departures: HashMap<u64, crate::vehicles::Occupant>,
+    /// The seat a script forced the player into (`ForceSetPlayerInVehicle`),
+    /// his until the host's next view: the engine seats him at once, and
+    /// scripts ask after his vehicle in the same breath (a supply run's,
+    /// back at its checkpoint).
+    pub vehicle_forced: Option<crate::vehicles::Occupant>,
     /// Pawns a script has made usable (`SetUsability`: an activity's keeper,
     /// a mission giver), and whether they're used whichever way the player
     /// faces.
@@ -314,6 +319,7 @@ impl Core {
             use_rules: HashMap::new(),
             vehicle_rules: HashMap::new(),
             vehicle_departures: HashMap::new(),
+            vehicle_forced: None,
             usable_pawns: HashMap::new(),
         }
     }

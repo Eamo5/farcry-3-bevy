@@ -81,8 +81,8 @@ impl Core {
     pub(crate) fn vehicle_occupant(&self, pawn: u64) -> Option<crate::vehicles::Occupant> {
         self.vehicle_departures.get(&pawn).copied().or_else(|| {
             if pawn == PLAYER {
-                self.view.player_state.vehicle.map(|vehicle| crate::vehicles::Occupant { vehicle, kind: self.view.player_state.seat,
-                    index: self.view.player_state.seat_index, vehicle_type: self.view.player_state.vehicle_type })
+                self.vehicle_forced.or_else(|| self.view.player_state.vehicle.map(|vehicle| crate::vehicles::Occupant { vehicle, kind: self.view.player_state.seat,
+                    index: self.view.player_state.seat_index, vehicle_type: self.view.player_state.vehicle_type }))
             } else { self.view.pawn_vehicles.get(&pawn).copied() }
         })
     }
@@ -246,6 +246,21 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     r.f("CAPI_Pawn.GetPawnVehicle", |c, pawn: Text| pawn.id().and_then(|id| c.vehicle_occupant(id))
         .map(|o| o.vehicle.to_string()).unwrap_or_else(|| fc3_domino::INVALID_ID.to_string()))?;
     r.f("CAPI_Pawn.GetPawnVehicleSeat", |c, pawn: Text| pawn.id().and_then(|id| c.vehicle_occupant(id)).map_or(0.0, |o| o.kind as f64))?;
+    // The player forced into a seat: his at once to the scripts, as the
+    // engine seats him (`pawn, seat type, index, vehicle`), till the host's
+    // next view has him there.
+    r.f("CAPI_Player.ForceSetPlayerInVehicle", |c, args: mlua::Variadic<Text>| {
+        let args: Vec<String> = args.into_iter().map(|t| t.0).collect();
+        let num = |i: usize| args.get(i).and_then(|a| a.parse::<f64>().ok());
+        if let (Some(PLAYER), Some(kind), Some(index), Some(vehicle)) =
+            (args.first().and_then(|a| a.parse::<u64>().ok()), num(1), num(2), args.get(3).and_then(|a| a.parse::<u64>().ok()))
+        {
+            let sea = c.data.entities.get(&vehicle).is_some_and(|e| e.name.to_ascii_lowercase().starts_with("sea/"));
+            c.vehicle_forced = Some(crate::vehicles::Occupant { vehicle, kind: kind as i32, index: index as i32, vehicle_type: i32::from(sea) });
+        }
+        c.emit(Command::Native { name: "CAPI_Player.ForceSetPlayerInVehicle".into(), args });
+        true
+    })?;
     r.f("CAPI_Pawn.GetPawnVehicleType", |c, pawn: Text| pawn.id().and_then(|id| c.vehicle_occupant(id)).map_or(7.0, |o| o.vehicle_type as f64))?;
     r.f("CAPI_Pawn.GetPawnStance", |c, _p: Text| c.view.player_state.stance as f64)?;
     r.f("CAPI_Pawn.IsPawnOnZipline", |c, _a: mlua::Variadic<Value>| c.view.player_state.on_zipline)?;

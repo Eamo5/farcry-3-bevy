@@ -5901,6 +5901,16 @@ on: follow the flares to the drop point against the clock
 * **Seen.** From D5's tower (a kept checkpoint with the player placed at
   its panel): the giver's car boarded, SQS_D5 accepted, its seven flares
   and drop point reached with time to spare, and the run complete.
+* **Back at its checkpoint.** A run failed goes back to its start, where
+  the lib forces the player into the car (`ForceSetPlayerInVehicle`) and
+  asks after his vehicle in the same breath (`GetPawnVehicleInfo`) for the
+  flares' distance checks; the host seats him a frame later, so the run
+  had no car, and failed again and again. A forced seat is the player's to
+  the scripts at once now, till the host's next view (`Core::vehicle_forced`).
+* **The drop point first.** G4's run gives 45 s. The flares only show the
+  way, so the autopilot drives to the drop point when the run listens for
+  it, and at the wheel against a clock it steps on 2 s after the story
+  stirs, not 6. SQS_G4 completed.
 
 ### Sharpshooter challenges (shooting galleries)
 

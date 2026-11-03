@@ -606,6 +606,8 @@ impl Story {
                 c.last_seen.clear();
             }
             c.view = view;
+            // (The host's view has the player's seat now, forced or not.)
+            c.vehicle_forced = None;
             for (id, was_loaded) in before {
                 let loaded = c.is_loaded(id);
                 if loaded != was_loaded {
@@ -1586,9 +1588,24 @@ impl Story {
 
     /// The same for the vehicle the player is in: places a script waits for
     /// it to come near (a supply run's flares and drop point).
+    /// (A supply run's flares only show the way: its drop point first, when
+    /// it listens for that too; the clock is short, 45 s for G4's.)
     pub fn watched_vehicle_proximity(&self, graph: Option<&str>) -> Vec<(u64, f32, [f32; 3])> {
         let vehicle = self.core.borrow().vehicle_occupant(PLAYER).map(|o| o.vehicle);
-        vehicle.map(|v| self.watched_proximity_of(v, graph)).unwrap_or_default()
+        let all = vehicle.map(|v| self.watched_proximity_of(v, graph)).unwrap_or_default();
+        let flares = self.speed_run_flares();
+        let goals: Vec<_> = all.iter().filter(|w| !flares.contains(&w.0)).copied().collect();
+        if goals.is_empty() { all } else { goals }
+    }
+
+    /// The flares of a supply run under way (`SpeedSQFlaresManager`'s).
+    fn speed_run_flares(&self) -> HashSet<u64> {
+        let c = self.core.borrow();
+        c.delays
+            .values()
+            .filter(|d| d.running && d.callback.method == "CheckDistance" && in_graph(&d.callback.target, "speedsqflaresmanager"))
+            .filter_map(|d| d.callback.target.get::<values::Text>("Entities").ok()?.id())
+            .collect()
     }
 
     fn watched_proximity_of(&self, of: u64, graph: Option<&str>) -> Vec<(u64, f32, [f32; 3])> {
@@ -3642,6 +3659,23 @@ mod tests {
         assert_eq!(story.core.borrow().pose(20), Some(pose));
         story.domino().lua().load(r#"CAPI_Entity.TeleportEntity("30", "invalid", false, false)"#).exec().unwrap();
         assert!(story.take_commands().is_empty());
+    }
+
+    /// The player forced into a seat is in it to the scripts at once (a
+    /// supply run back at its checkpoint asks after his car in the same
+    /// breath), and the host's next view has the say.
+    #[test]
+    fn a_player_forced_into_a_seat_is_in_it_at_once() {
+        let mut story = empty_story();
+        story.update(0.0, View::default());
+        let got: (String, f64) = story.domino().lua().load(r#"
+            CAPI_Player.ForceSetPlayerInVehicle("1", 1, 0, "77")
+            return CAPI_Pawn.GetPawnVehicle("1"), CAPI_Pawn.GetPawnVehicleSeat("1")
+        "#).eval().unwrap();
+        assert_eq!(got, ("77".to_string(), 1.0));
+        story.update(0.1, View::default());
+        let after: String = story.domino().lua().load(r#"return CAPI_Pawn.GetPawnVehicle("1")"#).eval().unwrap();
+        assert_eq!(after, fc3_domino::INVALID_ID);
     }
 
     /// A weapon's class by the engine's numbers, as a hunt's weapon check
