@@ -5028,6 +5028,12 @@ the game now plays (`boss_fight`) instead of ending it at once.
   (`SaveGame::backup`: `backup`, `backup_weapon` and `backup_gadget`
   lines), and a reload or a load from it puts it aside again. Seen: CIT_030
   played through from B00 with a death in it, the arsenal back for CIT_050.
+  But B10E's checkpoint is written as the block starts, the bow already in
+  hand, and loading it the block replays its own `BackupInventory`, which
+  put the bow aside over the arsenal the checkpoint kept: the machete and
+  the guns were gone for good again (the whole of the next campaign had a
+  single gun). What a checkpoint puts aside now stands against the next
+  putting aside the replay does.
 * **Its looks.** The script removes the mask placed for the cinematics
   (`Mask_0`) as the fight starts; the fight puts its own on the head bone
   (`m_bossMaskArchetype`), the broken one at `ChangeMaskNow`
@@ -5861,6 +5867,12 @@ the machete's blows now report.
   down, never shot.
 * **Seen.** D5's second outpost (ours 25, beside its safe house) taken,
   SQW_D5's poster used, its commander taken down: the quest completes.
+* **Commanders on their rounds.** G4's commanders walk theirs, and the
+  autopilot, set behind one each time he had moved on, never got its swing
+  in: within 4 m it walks up to him now. G4's second is a heavy (a
+  flamer), not to be taken down without the skill: the machete's blows
+  bring him down. SQW_G4 completed (from a save that had lost the machete,
+  see CIT_030's arsenal: put back by hand).
 
 ### Radio towers and supply runs (SQS)
 

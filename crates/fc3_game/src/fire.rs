@@ -125,6 +125,12 @@ impl Fires {
         self.burning.contains_key(&cell_of(p))
     }
 
+    /// Whether anything burns within `r` metres of a point.
+    pub fn is_burning_near(&self, p: Vec3, r: f32) -> bool {
+        let (c, n) = (cell_of(p), (r / CELL).ceil() as i32);
+        (-n..=n).any(|dx| (-n..=n).any(|dz| self.burning.contains_key(&(c.0 + dx, c.1 + dz))))
+    }
+
     fn profile(&self, b: &Burning) -> Option<&fc3_formats::fire_settings::RegionProfile> {
         b.profile.and_then(|i| self.profiles.get(i))
     }

@@ -1281,6 +1281,11 @@ pub struct ScriptedPlayer {
     pub black_for: f32,
     /// The inventory a mission put aside (`BackupInventory`).
     backup: Option<InventoryBackup>,
+    /// That one came with a checkpoint, from before it: the block the
+    /// checkpoint starts puts the inventory aside again as it replays, and
+    /// what it holds then is what the mission gave (CIT_030's bow: the
+    /// machete and the guns were lost for good).
+    backup_from_save: bool,
     /// A weapon the scripts give is drawn at once (`SetAutoDraw`: F3's
     /// trial hands the player one weapon after another), and the last they
     /// gave (drawn when they ask for that after giving it).
@@ -1375,6 +1380,7 @@ impl Default for ScriptedPlayer {
             fade: (0.0, 0.0, 0.0),
             black_for: 0.0,
             backup: None,
+            backup_from_save: false,
             auto_draw: false,
             last_granted: None,
             redraw: false,
@@ -1670,6 +1676,9 @@ impl ScriptedPlayer {
     }
 
     fn backup_inventory(&mut self, inv: &crate::weapons::Inventory) {
+        if std::mem::take(&mut self.backup_from_save) && self.backup.is_some() {
+            return;
+        }
         self.backup = Some(InventoryBackup {
             slots: inv.slots.clone(), current: inv.current,
             explosives: [inv.grenades, inv.molotovs, inv.c4, inv.mines],
@@ -1703,9 +1712,11 @@ impl ScriptedPlayer {
             let current = slots.iter().position(|s| inv.defs[s.def].name == b.current).unwrap_or(0);
             InventoryBackup { slots, current, explosives: b.explosives, gadgets: b.gadgets.iter().cloned().collect() }
         });
+        self.backup_from_save = self.backup.is_some();
     }
 
     fn restore_inventory(&mut self, inv: &mut crate::weapons::Inventory) {
+        self.backup_from_save = false;
         let Some(backup) = self.backup.take() else { return };
         inv.slots = backup.slots;
         inv.current = backup.current;
@@ -4955,6 +4966,24 @@ fn feet_near(spatial: &avian3d::prelude::SpatialQuery, heights: &crate::terrain:
     spatial.cast_ray(from, Dir3::NEG_Y, 6.0, true, &filter).map(|h| from.y - h.distance).or_else(|| heights.height_at(feet)).unwrap_or(near)
 }
 
+/// A floor to stand on near a height at a point: a surface within 2 m over
+/// or 4 m under it, wide enough for the feet (not a rail's top), or the
+/// terrain if that's near; none over a drop.
+fn floor_near(spatial: &avian3d::prelude::SpatialQuery, heights: &crate::terrain::Heightfield, me: Entity, feet: Vec3, near: f32) -> Option<f32> {
+    let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+    let floor_at = |x: f32, z: f32| {
+        let from = Vec3::new(x, near + 2.0, z);
+        spatial.cast_ray(from, Dir3::NEG_Y, 6.0, true, &filter).map(|h| from.y - h.distance)
+    };
+    if let Some(y) = floor_at(feet.x, feet.z) {
+        let wide = [(0.35, 0.0), (-0.35, 0.0), (0.0, 0.35), (0.0, -0.35)]
+            .into_iter()
+            .all(|(dx, dz)| floor_at(feet.x + dx, feet.z + dz).is_some_and(|h| (h - y).abs() < 0.3));
+        return wide.then_some(y);
+    }
+    heights.height_at(feet).filter(|g| (g - near).abs() < 2.0)
+}
+
 /// The ground under a point at a height (Dunia `x, y`, under `top`): the
 /// first surface below it (a deck, a floor), else the terrain's.
 fn ground_under(spatial: &avian3d::prelude::SpatialQuery, heights: &crate::terrain::Heightfield, x: f32, y: f32, top: f32) -> Option<f32> {
@@ -5626,10 +5655,17 @@ fn autopilot_loot(
     // the autopilot burnt to death in its own fire.
     let feet_here = at.translation - Vec3::Y * crate::player::HALF_HEIGHT;
     if fires.is_burning_at(feet_here) && !fixed && !player.swimming {
+        // (Well clear of it, where it can be: a grass fire's front kept
+        // catching up with a step of a few metres, SQW_G4's for twenty
+        // minutes.)
+        let ring = |k: i32, r: f32, n: i32| (0..n).map(move |i| (k as f32 * r, i as f32 * std::f32::consts::TAU / n as f32));
+        let at_ring = |(r, a): (f32, f32)| feet_here + Vec3::new(a.cos() * r, 0.0, a.sin() * r);
         let out = (1..=4)
-            .flat_map(|k| (0..8).map(move |i| (k as f32 * 3.0, i as f32 * std::f32::consts::TAU / 8.0)))
-            .map(|(r, a)| feet_here + Vec3::new(a.cos() * r, 0.0, a.sin() * r))
-            .find(|p| !fires.is_burning_at(*p) && harmless(*p));
+            .flat_map(|k| ring(k, 3.0, 8))
+            .chain((3..=7).flat_map(|k| ring(k, 6.0, 12)))
+            .map(at_ring)
+            .find(|p| !fires.is_burning_near(*p, 8.0) && harmless(*p))
+            .or_else(|| (1..=4).flat_map(|k| ring(k, 3.0, 8)).map(at_ring).find(|p| !fires.is_burning_at(*p) && harmless(*p)));
         if let Some(mut p) = out {
             p.y = feet_near(&spatial, &heights, me, p, feet_here.y);
             info!("story autopilot: out of the flames");
@@ -6117,18 +6153,21 @@ fn autopilot_loot(
                     let radii = if inventory.def().class == crate::weapons::WeaponClass::Flamethrower { [8.0f32, 6.0, 10.0, 5.0] } else { [2.0, 3.0, 5.0, 8.0] };
                     let clear = radii.into_iter().flat_map(|r| (0..12).map(move |i| (r, i as f32 * std::f32::consts::TAU / 12.0))).find_map(|(r, a)| {
                         let mut p = nt.translation + Quat::from_rotation_y(a) * flat * r;
-                        p.y = feet_near(&spatial, &heights, me, p, his_feet);
+                        p.y = floor_near(&spatial, &heights, me, p, his_feet)?;
                         let eye = p + Vec3::Y * crate::player::EYE_HEIGHT;
                         let to = chest - eye;
                         let open = Dir3::new(to).is_ok_and(|d| spatial.cast_ray(eye, d, to.length(), true, &filter).is_none_or(|h| h.distance > to.length() - 0.6));
                         (open && (p.y - his_feet).abs() < 2.0).then_some(p)
                     });
-                    let feet = clear.unwrap_or_else(|| {
+                    // (Else his side, on a floor there: set at his height over
+                    // nothing, ULC_010's lab dropped the player 24 m from a
+                    // catwalk, again and again.)
+                    let feet = clear.or_else(|| {
                         let mut feet = nt.translation + flat * 3.0;
-                        feet.y = feet_near(&spatial, &heights, me, feet, his_feet).max(his_feet);
-                        feet
+                        feet.y = floor_near(&spatial, &heights, me, feet, his_feet)?;
+                        Some(feet)
                     });
-                    if !fixed && !leashed(feet) && came_near.insert(actor.id) {
+                    if let Some(feet) = feet.filter(|f| !fixed && !leashed(*f) && came_near.insert(actor.id)) {
                         info!("story autopilot: {} out of reach; going up to him", actor.id);
                         teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
                         host.quiet = 0.0;
@@ -6402,7 +6441,11 @@ fn autopilot_loot(
         // Behind him (the way he faces is his -z), or beside the body.
         let behind = nt.translation + (nt.rotation * Vec3::Z).with_y(0.0).normalize_or(Vec3::Z) * if nh.dead { 0.9 } else { 1.0 };
         let delta = nt.translation - at.translation;
-        if Vec2::new(delta.x, delta.z).length() > 1.6 || delta.y.abs() > 1.5 {
+        let off = Vec2::new(delta.x, delta.z).length();
+        // (Near, walked up to rather than set behind him again: SQW_G4's
+        // commanders walk their rounds, and set behind each as he had moved
+        // on, the player never got his swing in.)
+        if off > if nh.dead { 1.6 } else { 4.0 } || delta.y.abs() > 1.5 {
             let mut feet = behind;
             feet.y = feet_near(&spatial, &heights, me, feet, nt.translation.y - crate::player::HALF_HEIGHT).max(nt.translation.y - crate::player::HALF_HEIGHT - 0.5);
             teleport(&mut at, &mut player, to_dunia(feet), 0.0);
@@ -6410,6 +6453,10 @@ fn autopilot_loot(
             return;
         }
         player.yaw = (-delta.x).atan2(-delta.z);
+        if off > 1.4 {
+            actions.movement = Vec2::Y;
+            return;
+        }
         // At his head (a seated man's is low: a level swing goes over it).
         let eye = at.translation.y + player.eye - crate::player::HALF_HEIGHT;
         player.pitch = head.filter(|_| !nh.dead).map_or(0.0, |h| (h.0.y - 0.15 - eye).atan2(Vec2::new(delta.x, delta.z).length().max(0.3)));
@@ -7389,7 +7436,14 @@ mod tests {
         assert_eq!(saved.explosives, [2, 1, 3, 2]);
         scripted = ScriptedPlayer::default();
         scripted.load_backup(&inv, Some(&saved));
+        assert_eq!(scripted.saved_backup(&inv), Some(saved.clone()));
+        // (The block the checkpoint starts puts the inventory aside again as
+        // it replays, holding what the mission gave: the checkpoint's stays.)
+        let given = inv.slots.clone();
+        inv.slots.truncate(1);
+        scripted.backup_inventory(&inv);
         assert_eq!(scripted.saved_backup(&inv), Some(saved));
+        inv.slots = given;
         scripted.gadgets.clear();
         inv.slots.clear();
         inv.current = 0;
