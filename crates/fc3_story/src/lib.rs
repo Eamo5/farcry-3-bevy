@@ -1111,6 +1111,13 @@ impl Story {
         out
     }
 
+    /// Whether a point (Dunia) is in a restricted zone now in the world (its
+    /// layer in: the outposts' come and go with them).
+    pub fn in_restricted_zone(&self, p: [f32; 3]) -> bool {
+        let c = self.core.borrow();
+        c.data.restricted_zones().iter().any(|(id, shape)| shape.contains(p) && c.is_loaded(*id))
+    }
+
     pub fn safe_house_unlocked(&self, id: u64) -> bool {
         self.core.borrow().safehouses_unlocked.contains(&id)
     }
@@ -4427,6 +4434,28 @@ mod tests {
         story.core.borrow_mut().listeners.remove(&999);
         assert!(!story.trigger_selects(100, 20));
         assert!(story.core.borrow().contacts(100).is_empty());
+    }
+
+    /// The privateers' restricted zones are their outlines, wherever they
+    /// stand in the world (any height).
+    #[test]
+    fn restricted_zones_are_their_outlines() {
+        use fc3_formats::{fcb::Object, hash::name_hash};
+        use std::sync::Arc;
+        let mut data = StoryData::default();
+        let corners: [[f32; 3]; 4] = [[0.0, 0.0, 10.0], [20.0, 0.0, 10.0], [20.0, 20.0, 10.0], [0.0, 20.0, 10.0]];
+        let mut points = 4u32.to_le_bytes().to_vec();
+        points.extend(corners.iter().flatten().flat_map(|v| v.to_le_bytes()));
+        data.entities.insert(5, data::Entry {
+            id: 5, name: "F2_North_RestrictedZone".into(), class: "CFcxAIRestrictedZone".into(), pos: [0.0, 0.0, 10.0], angles: [0.0; 3],
+            layer: fc3_formats::world::DEFAULT_MISSION_LAYER, origin: data::Origin::Global,
+            components: Arc::new(Object::default()),
+            fields: Arc::new(Object { fields: vec![(name_hash("hidShapePoints"), points), (name_hash("fHeight"), (-1.0f32).to_le_bytes().to_vec())], ..Default::default() }),
+        });
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        story.update(0.1, View::default());
+        assert!(story.in_restricted_zone([10.0, 10.0, 300.0]));
+        assert!(!story.in_restricted_zone([30.0, 10.0, 10.0]));
     }
 
     /// A volume for those in vehicles only (`selLocomotionFilter` 1: JAS_200's

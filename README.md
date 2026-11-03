@@ -205,7 +205,9 @@ No game data is included in this repository, and none is written into it.
   a guard who finds a body searches the area and calls others over. Off guard, guards take up
   the world's 2,100 guard spots: they stand easy or watchful, lean on walls, smoke (rifle put
   away), look over cover and round corners, check their gear, sit, or take a leak, on the game's
-  own clips. Anything that puts them on guard sends them back to the fight.
+  own clips. Anything that puts them on guard sends them back to the fight. In the privateer's
+  uniform (from HOY_020 on) Hoyt's men at ease take you for one of theirs, but not in their
+  restricted zones (the south island's enemy outposts, missions' grounds), and not once provoked.
 - **Progression**: XP for kills, takedowns, hunting and outposts; levels give skill points for 21
   skills in three branches (health, damage resistance, reload, recoil, stealth, swimming and more).
   Money from loot and outposts; craft carry upgrades (ammo pouch, grenade bag, syringe kit, weapon

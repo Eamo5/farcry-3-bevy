@@ -153,6 +153,9 @@ pub struct StoryData {
     /// The safe houses (`CSafeHouseComponent`), found the first time they're
     /// asked after (the map and the radar ask every second).
     safe_houses: std::cell::OnceCell<Vec<u64>>,
+    /// The AI's restricted zones (`CFcxAIRestrictedZone`) and their volumes,
+    /// found the first time they're asked after.
+    restricted_zones: std::cell::OnceCell<Vec<(u64, crate::triggers::Shape)>>,
 }
 
 /// Water levels by sector id from the cache's `world/water_planes.txt`
@@ -207,6 +210,17 @@ impl StoryData {
             let mut ids: Vec<u64> = self.entities.values().filter(|e| e.component("CSafeHouseComponent").is_some()).map(|e| e.id).collect();
             ids.sort_unstable();
             ids
+        })
+    }
+
+    /// The restricted zones (`CFcxAIRestrictedZone`: the privateers' outposts
+    /// and missions' grounds, where their uniform doesn't pass), by id.
+    pub fn restricted_zones(&self) -> &[(u64, crate::triggers::Shape)] {
+        self.restricted_zones.get_or_init(|| {
+            let mut zones: Vec<_> =
+                self.entities.values().filter(|e| e.class == "CFcxAIRestrictedZone").filter_map(|e| Some((e.id, crate::triggers::shape_of(e)?))).collect();
+            zones.sort_by_key(|z| z.0);
+            zones
         })
     }
 

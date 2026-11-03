@@ -5290,6 +5290,26 @@ way out.
   where it stands (damage over the interval between shots), of those that
   reach him.
 
+## The privateer's uniform
+
+From HOY_020 the player wears a privateer's uniform
+(`CAPI_Player.EquipCostume`, the `EquipCostume` box; HUR_050's blocks take
+it off), and the game had Hoyt's men take him for one of theirs: "Privateers
+will not attack unless provoked", except in their restricted zones ("This
+is a restricted area. Privateers will attack trespassers on sight."): the
+`CFcxAIRestrictedZone` outlines (`fcb` shapes of any height) in the
+`fc3_restrictedzones` block's layers, which its manager puts in for each
+enemy outpost of the south island and for the missions held on their
+ground (SAM_015, SQC_060, SQC_070, SQC_100, the wanted posters'). Nothing
+played the uniform but its look (`SwitchPlayerPawn`). Now it is worn
+(`Progress::costume`, kept in the save, its tutorial box once), and outside
+a restricted zone that's in the world (`Story::in_restricted_zone`) the
+privateers at ease neither see him for a foe nor hear his steps
+(`npc::Disguise`); those already on their guard (a shot heard, a comrade
+hit before them, an alarm) see him for what he is, so attacking them
+brings the fight as before, and once they settle he passes again. Going
+into a restricted zone in uniform, the game's warning shows.
+
 ## HOY_020: the VIPs
 
 HOY_020's first block has three VIPs killed and their bodies searched

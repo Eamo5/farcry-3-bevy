@@ -31,6 +31,7 @@ impl Plugin for NpcPlugin {
             .add_systems(Startup, (setup_npc_assets, load_melee_clips))
             .init_resource::<EncounterMarkers>()
             .init_resource::<EncounterSites>()
+            .init_resource::<Disguise>()
             .add_systems(OnExit(crate::menu::GameState::Loading), (load_injury_clips, load_senses, load_aim, load_encounter_markers))
             .add_systems(
                 Update,
@@ -434,6 +435,13 @@ pub struct EncounterMarkers(Option<fc3_formats::encounters::Markers>);
 /// `marker_id` is) and where it is (the radar shows it while they live).
 #[derive(Resource, Default)]
 pub struct EncounterSites(pub Vec<(u64, Vec3)>);
+
+/// The player passes for a privateer: in their uniform (from HOY_020) and
+/// outside their restricted zones (their outposts, missions' grounds). The
+/// privateers at ease take him for one of theirs; those on their guard (a
+/// shot heard, a comrade hit, an alarm) see him for what he is.
+#[derive(Resource, Default)]
+pub struct Disguise(pub bool);
 
 fn load_encounter_markers(info: Option<Res<crate::data::CacheInfo>>, mut table: ResMut<EncounterMarkers>) {
     let Some(info) = info else { return };
@@ -1911,7 +1919,7 @@ fn perceive(
     players: Query<(Entity, &Transform, &Player, &Health, Option<&crate::weapons::Inventory>)>,
     mut npcs: Query<(Entity, &Transform, &mut Npc, &Health), (Without<Corpse>, Without<Frozen>, Without<Riding>)>,
     beasts: Query<(Entity, &Transform, &Health, &crate::wildlife::WildAnimal, Has<crate::wildlife::Handled>), Without<Npc>>,
-    (cover, cinema): (Res<crate::vegetation::Concealment>, Res<crate::cinema::Cinema>),
+    (cover, cinema, disguise): (Res<crate::vegetation::Concealment>, Res<crate::cinema::Cinema>, Res<Disguise>),
 ) {
     let dt = time.delta_secs();
     let Ok((pe, pt, player, ph, inventory)) = players.single() else { return };
@@ -1954,6 +1962,9 @@ fn perceive(
         }
         let impaired = npc.impaired;
         let friendly = !npc.hostile();
+        // (A privateer at ease takes the player in their uniform for one of
+        // theirs: not seen for a foe, his steps not heard.)
+        let fooled = disguise.0 && npc.faction == Faction::Privateer && npc.state == NpcState::Idle;
         let eye = t.translation + Vec3::Y * 0.75;
         let to = chest - eye;
         let dist = to.length();
@@ -1985,7 +1996,7 @@ fn perceive(
             None => cos > fov_cos,
         };
         let mut visible = false;
-        if !friendly && impaired.sees() && !ph.dead && !unseen && dist < reach && (in_view || dist < sixth.0) {
+        if !friendly && !fooled && impaired.sees() && !ph.dead && !unseen && dist < reach && (in_view || dist < sixth.0) {
             if let Ok(dir) = Dir3::new(to) {
                 let filter = SpatialQueryFilter::from_excluded_entities([e]);
                 visible = match spatial.cast_ray(eye, dir, dist, true, &filter) {
@@ -2172,7 +2183,7 @@ fn perceive(
         }
         // Steps heard out of sight: a sprint carries farthest, a crouch
         // hardly at all (`SP_SilentRun` quietens them).
-        if !friendly && impaired.sees() && !visible && !ph.dead && !unseen && !player.driving && player.grounded && time.elapsed_secs() - player.spawned_at >= 5.0 {
+        if !friendly && !fooled && impaired.sees() && !visible && !ph.dead && !unseen && !player.driving && player.grounded && time.elapsed_secs() - player.spawned_at >= 5.0 {
             let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
             let heard = footstep_range(speed, player.crouching, player.sprinting) * perks.footstep_noise;
             if dist < heard {

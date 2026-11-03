@@ -55,6 +55,7 @@ impl Plugin for StoryPlugin {
             .add_systems(Update, forward_pickups)
             .add_systems(Update, ui_interaction_exited)
             .add_systems(Update, sweep_arrows)
+            .add_systems(Update, pass_for_privateer.run_if(in_state(GameState::Playing)))
             .add_systems(Update, forward_camera)
             .add_systems(PreUpdate, collect_crafts)
             .add_systems(PreUpdate, collect_menu_events)
@@ -568,6 +569,38 @@ fn ui_interaction_exited(
     *shown = false;
     host.story.entity_event(fc3_story::PLAYER, "Pause_0_UnLoaded", vec![]);
 }
+
+/// The privateer's uniform passes outside their restricted zones
+/// (`npc::Disguise`); going into one in it, the game says so.
+fn pass_for_privateer(
+    host: Option<NonSend<StoryHost>>,
+    progress: Res<crate::progression::Progress>,
+    players: Query<&Transform, With<Player>>,
+    mut disguise: ResMut<crate::npc::Disguise>,
+    mut hud: ResMut<crate::hud::HudState>,
+    mut inside: Local<bool>,
+) {
+    let (Some(host), Ok(t)) = (host, players.single()) else { return };
+    if !progress.costume {
+        disguise.0 = false;
+        *inside = false;
+        return;
+    }
+    let feet = to_dunia(t.translation - Vec3::Y * crate::player::HALF_HEIGHT);
+    let restricted = host.story.in_restricted_zone(feet);
+    if restricted && !*inside {
+        hud.notify(host.story.data().strings.get(RESTRICTED_AREA).unwrap_or("This is a restricted area. Privateers will attack trespassers on sight."));
+    }
+    *inside = restricted;
+    disguise.0 = !restricted;
+}
+
+/// "This is a restricted area. Privateers will attack trespassers on
+/// sight.", and the uniform's tutorial ("Privateer Uniform": "Now wearing a
+/// privateer uniform", "Privateers will not attack unless provoked").
+const RESTRICTED_AREA: u32 = 163805;
+const UNIFORM_TITLE: u32 = 127109;
+const UNIFORM_TEXT: u32 = 127110;
 
 /// The spent arrows lying about cleared, as a script asks (a scene starting).
 fn sweep_arrows(host: Option<NonSendMut<StoryHost>>, pickups: Query<(Entity, &crate::pickups::Pickup)>, mut commands: Commands) {
@@ -3038,6 +3071,27 @@ fn run_story(
             host.used.insert((0, signal.clone()));
             host.story.input_signal(&signal);
             host.quiet = 0.0;
+        } else if let Some((id, at)) = host
+            .story
+            .objective_markers()
+            .into_iter()
+            .filter(|_| mission_on && host.quiet > MARKER_WALK_AFTER)
+            // (An objective's, not a giver's, a shop's or an activity's.)
+            .filter(|(id, _)| data.markers.get(id).is_none_or(|m| !NOT_OBJECTIVES.contains(&m.kind)))
+            .map(|(id, p)| (id, to_bevy(p)))
+            .filter(|(id, at)| at.with_y(0.0).distance(t.translation.with_y(0.0)) > MARKER_WALK_NEAR && !host.used.contains(&(*id, "go to".to_string())))
+            .min_by(|a, b| a.1.distance(t.translation).total_cmp(&b.1.distance(t.translation)))
+        {
+            // Nothing else for it on a mission: on to its marker, as a player
+            // follows it (SQC_070's privateers, far off, each watched by a
+            // health listener alone, stood the autopilot still for good).
+            info!("story autopilot: go to the marker {}", data.name_of(id).unwrap_or("?"));
+            host.used.insert((id, "go to".into()));
+            let side = (t.translation - at).with_y(0.0).normalize_or(Vec3::Z);
+            let mut stand = at + side * MARKER_WALK_SHORT;
+            stand.y = heights.height_at(stand).unwrap_or(at.y);
+            teleport(&mut t, &mut p, to_dunia(stand), 0.0);
+            host.quiet = 0.0;
         }
     }
     for c in commands {
@@ -3710,6 +3764,19 @@ fn run_story(
                             .min_by(|a, b| a.1.total_cmp(&b.1))
                             .map(|z| z.0);
                         scripted_map.open = Some(true);
+                    }
+                    // The privateer's uniform on or off (HOY_020 on: Hoyt's
+                    // men take the player for one of theirs from then on,
+                    // `pass_for_privateer`), its tutorial once.
+                    "CAPI_Player.EquipCostume" if a(0) == fc3_story::PLAYER.to_string() => {
+                        let on = a(1) == "true" || a(1) == "1";
+                        let data = host.story.data();
+                        let title = data.strings.get(UNIFORM_TITLE).unwrap_or("Privateer Uniform").to_string();
+                        if on && !progress.costume && progress.tutorials.insert(title.clone()) {
+                            let body = plain(data.strings.get(UNIFORM_TEXT).unwrap_or("Privateers will not attack unless provoked"));
+                            ui.boxes.push_back(StoryBox { id: 0, title, body, choice: false, prompt: None });
+                        }
+                        progress.costume = on;
                     }
                     "CAPI_Player.SwitchPlayerPawn" if a(0) == fc3_story::PLAYER.to_string() => {
                         progress.pawn = Some(a(1)).filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("player:MainCharacter/PawnPlayer"));
@@ -4493,6 +4560,20 @@ const DESTROY_REACH: f32 = 80.0;
 const FATAL_WITHIN: f32 = 2.0;
 /// As soon after (s), a mission failing; its scripts may warn a while first.
 const FAILED_WITHIN: f32 = 6.0;
+/// How quiet (s) the story is before the autopilot, with nothing else to do
+/// on a mission, goes to an objective marker further than `MARKER_WALK_NEAR`
+/// (m), to `MARKER_WALK_SHORT` (m) short of it.
+const MARKER_WALK_AFTER: f32 = 30.0;
+const MARKER_WALK_NEAR: f32 = 30.0;
+const MARKER_WALK_SHORT: f32 = 8.0;
+/// The map markers' kinds that aren't objectives: activities, shops, the
+/// challenge boards, missions' and quests' givers.
+const NOT_OBJECTIVES: [u64; 5] = [0x058d_6bbd, 0x1350_8ab1, 0x0375_88d5, 0x82ca_abbe, 0x7d8e_4092];
+/// How quiet (s) the story is before the autopilot goes after a character
+/// only a health listener watches who has the mission's marker within this
+/// far (m) of him.
+const MARKED_FOE_AFTER: f32 = 15.0;
+const MARKED_FOE_WITHIN: f32 = 6.0;
 /// How long (s) the autopilot has gone after a vehicle before a mission
 /// failing is put down to it.
 const WRECK_BLAMED_AFTER: f32 = 3.0;
@@ -5894,7 +5975,18 @@ fn autopilot_loot(
     // (Gone after unprovoked only when a block counts its group down: one
     // a health listener watches is fought once he fights, JAS_200's
     // visitor not before the meeting is photographed.)
-    let to_kill = host.story.size_counted_members();
+    let mut to_kill = host.story.size_counted_members();
+    // (And one it watches with the mission's marker on him, once the story
+    // has gone quiet: SQC_070's privateers, "Eliminate the first
+    // privateer.", each a health listener's alone.)
+    if host.quiet > MARKED_FOE_AFTER {
+        let marks: Vec<Vec3> = host.story.objective_markers().into_iter().map(|(_, p)| to_bevy(p)).collect();
+        for q in &npcs {
+            if singly.contains(&q.4.id) && marks.iter().any(|m| m.distance(q.0.translation) < MARKED_FOE_WITHIN) {
+                to_kill.insert(q.4.id);
+            }
+        }
+    }
     // (A wanted poster's target: gone after wherever he is, and taken down
     // or cut down, never shot: its death check takes only a blade's.)
     let wanted = host.story.wanted_dead();

@@ -463,6 +463,9 @@ pub struct Progress {
     /// the privateer's uniform on Hoyt's island, the finger Hoyt cut), by its
     /// archetype; none, the player's own.
     pub pawn: Option<String>,
+    /// The privateer's uniform worn (`CAPI_Player.EquipCostume`: from
+    /// HOY_020, Hoyt's men take the player for one of theirs).
+    pub costume: bool,
     /// The tutorials shown (by their titles): each queued one comes once.
     pub tutorials: std::collections::BTreeSet<String>,
 }
@@ -503,6 +506,7 @@ impl Default for Progress {
             trials: Default::default(),
             quick_slots: Default::default(),
             pawn: None,
+            costume: false,
             tutorials: Default::default(),
         }
     }
@@ -637,6 +641,9 @@ impl Progress {
         if let Some(pawn) = &self.pawn {
             s += &format!("pawn {pawn}\n");
         }
+        if self.costume {
+            s += "costume\n";
+        }
         for title in &self.tutorials {
             s += &format!("tutorial {title}\n");
         }
@@ -726,6 +733,7 @@ impl Progress {
                 self.met.insert(rest.trim().to_string());
             }
             "wholetattoo" => self.whole_tattoo = true,
+            "costume" => self.costume = true,
             "pawn" => self.pawn = Some(rest.trim().to_string()).filter(|p| !p.is_empty()),
             "tutorial" => {
                 self.tutorials.insert(rest.trim().to_string());
