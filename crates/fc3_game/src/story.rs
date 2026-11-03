@@ -2875,6 +2875,10 @@ fn run_story(
                     .story
                     .objective_markers()
                     .into_iter()
+                    // (An objective's: not an activity's, a giver's or a
+                    // shop's, toured from one to the next after a supply
+                    // run.)
+                    .filter(|(id, _)| data.markers.get(id).is_none_or(|m| !NOT_OBJECTIVES.contains(&m.kind)))
                     .map(|(id, p)| (id, to_bevy(p)))
                     .filter(|(id, at)| {
                         (MARKER_DRIVE_NEAR..MARKER_DRIVE_FAR).contains(&at.with_y(0.0).distance(here.with_y(0.0)))

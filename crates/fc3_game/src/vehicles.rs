@@ -1905,6 +1905,10 @@ fn autopilot_exit(
     // (Off a gun with foes about once a while has shown it isn't reaching
     // them.)
     let gunning = on_gun && fight && host.quiet() < GUN_PATIENCE;
+    // (An entry awaited holds it only a while: the supply runs' givers wait
+    // for the player in any vehicle, theirs once he's in it, and kept the
+    // autopilot in the last run's quad for good.)
+    let entry = entry && host.quiet() < ENTRY_HOLDS;
     if following || locked || gunning || (!on_gun && !fight && !to_use && (watched || entry)) {
         debug!("story autopilot: staying in vehicle {id} (listened to {watched}, on a path {following}, exit disabled {locked}, entry awaited {entry})");
         return;
@@ -1924,6 +1928,9 @@ fn autopilot_exit(
 /// How near foes a block counts down must be for the autopilot to get out
 /// of the vehicle it drives to fight them.
 const FIGHT_FROM_VEHICLE: f32 = 150.0;
+/// How long (s) the story is quiet before an entry a script awaits no
+/// longer keeps the autopilot in its vehicle.
+const ENTRY_HOLDS: f32 = 60.0;
 /// How near something to use must be for it to get out to use it.
 const ON_FOOT_REACH: f32 = 150.0;
 /// How near foes must be for the autopilot to stay on a vehicle's gun, and
