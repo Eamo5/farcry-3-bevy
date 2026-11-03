@@ -4249,7 +4249,11 @@ Run again later in the campaign (`camp91`), the escort failed every time
   anything up to a metre over the eye is in reach (`USE_REACH_UP`), and the
   autopilot stands on the floor under a thing to take, not at its height
   (it fell to the floor and was set up there again and again). Collectibles
-  already taken aren't gone after again.
+  already taken aren't gone after again. And back at a checkpoint, what
+  the mission's layers lay out and the player took since is laid out again
+  with them: the fragments taken before a death were gone for good, the
+  count back at 0 and the block never to end (the world's own pickups stay
+  taken, as the save keeps them).
 * **Reinforcements that fight.** Each wave's reinforcements are sent to
   guard posts in the village (`Cautious_Guard_*`). Alerted, one's AI took
   over and the story heard his action broken off; it sent him to the next

@@ -2008,7 +2008,7 @@ fn run_story(
             mut chopper,
             mut car_chase,
             mut gallery,
-            (poker, minigame, mut races, mut trials, outposts, mut scripted_map, mut fp, mut glows, startled, mut metas),
+            (poker, minigame, mut races, mut trials, outposts, mut scripted_map, mut fp, mut glows, startled, mut metas, mut world_state),
             detection,
             mut env_overrides,
         ),
@@ -2048,6 +2048,7 @@ fn run_story(
                 ResMut<crate::unlit_effects::GlowBlends>,
                 Res<crate::story_actors::Startled>,
                 ResMut<crate::story_actors::MetaCharacters>,
+                ResMut<crate::pickups::WorldState>,
             ),
             Res<crate::stealth::Detection>,
             ResMut<crate::sky::EnvOverrides>,
@@ -2140,6 +2141,16 @@ fn run_story(
                 progress.tutorials.extend(seen);
                 if let Some(h) = health.as_mut() { **h = crate::combat::Health::new(h.max); }
                 info!("story checkpoint: restored {} carried weapons, {} medkits, ${}", save.weapons.len(), save.medkits, save.progress.money);
+                // (What the mission's layers lay out, taken since, is back:
+                // the layers lay it out afresh. ULC_010's lab fragments, taken
+                // before a death, were gone for good, the count back at 0.)
+                let data = host.story.data();
+                let kept: std::collections::HashSet<u64> = save.removed.iter().copied().collect();
+                let before = world_state.removed.len();
+                world_state.removed.retain(|id| kept.contains(id) || data.entities.get(id).is_none_or(|e| e.layer == fc3_formats::world::DEFAULT_MISSION_LAYER));
+                if world_state.removed.len() != before {
+                    info!("story checkpoint: {} of the missions' pickups back", before - world_state.removed.len());
+                }
             }
             *vehicle_paths = Default::default();
             if let Some(test) = rock_test.as_mut() { test.0 = None; }
