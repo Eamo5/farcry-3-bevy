@@ -5793,7 +5793,11 @@ to SQC_080, each a brief at its giver then its blocks):
   diamond stashes at its end, and the autopilot, which uses a thing once
   until the story has long been quiet, never went back (the givers' idle
   actions stir the story every 20 s). The people it used are to be used
-  again once a block is done.
+  again once a block is done. Then Nina's pimp husband, Roel, is set
+  against the player (`PawnRelationshipModifier`), and the block asks after
+  him (`IsPawnAlive`) on a timer until he's dead, listening for nothing; a
+  quest giver, he doesn't fight. The autopilot shoots one who doesn't fight
+  a script has set against the player's army; SQC_060 completed.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

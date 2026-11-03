@@ -6539,6 +6539,51 @@ fn autopilot_loot(
             return;
         }
     }
+    // One who doesn't fight a script has set against the player (SQC_060's
+    // Roel, Nina's pimp husband: its block asks after him till he's dead,
+    // listening for nothing): shot from a few metres off.
+    if host.quiet > 8.0 {
+        let player_army = crate::npc::army::bit(crate::npc::army::GREY);
+        let fighters: std::collections::HashSet<u64> = npcs.iter().map(|q| q.4.id).collect();
+        let foe = story_actors
+            .iter()
+            .filter(|(_, a, creature)| {
+                !creature && !a.dead && !fighters.contains(&a.id) && host.relations.get(&a.id).is_some_and(|r| r.hostile_on & player_army != 0)
+            })
+            .min_by(|a, b| a.0.translation.distance(at.translation).total_cmp(&b.0.translation.distance(at.translation)));
+        if let Some((ht, him, _)) = foe {
+            if *last != Some((him.id, "shoot one set against")) {
+                info!("story autopilot: shoot {}, set against the player", host.story.data().name_of(him.id).unwrap_or("?"));
+                *last = Some((him.id, "shoot one set against"));
+            }
+            let away = (at.translation - ht.translation).with_y(0.0);
+            if !(2.0..=12.0).contains(&away.length()) || (at.translation.y - ht.translation.y).abs() > 2.0 {
+                let mut stand = ht.translation + away.normalize_or(Vec3::Z) * 5.0;
+                let his_feet = ht.translation.y - crate::player::HALF_HEIGHT;
+                stand.y = floor_near(&spatial, &heights, me, stand, his_feet).unwrap_or(his_feet);
+                teleport(&mut at, &mut player, to_dunia(stand), 0.0);
+                return;
+            }
+            let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
+            let aim = ht.translation + Vec3::Y * 0.4 - eye;
+            player.yaw = (-aim.x).atan2(-aim.z);
+            player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
+            let now_s = time.elapsed_secs();
+            if now_s >= *next_press && !player.spawning {
+                *next_press = now_s + 0.3;
+                use crate::controls::Action;
+                if inventory.def().class == crate::weapons::WeaponClass::Melee && inventory.slots.len() > 1 {
+                    actions.cycle = 1;
+                } else if inventory.slot().mag == 0 && inventory.slot().reserve > 0 {
+                    actions.press(Action::Reload);
+                } else {
+                    actions.hold(Action::Aim);
+                    actions.press(Action::Fire);
+                }
+            }
+            return;
+        }
+    }
     // A pickup a script waits on (a mission's diamonds): gone to and taken
     // (from wherever a high trigger held him up). And, a script counting
     // the player's collectibles, the ones a mission lays out (ULC_010's
