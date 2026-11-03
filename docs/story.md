@@ -5839,6 +5839,14 @@ to SQC_080, each a brief at its giver then its blocks):
   him (`IsPawnAlive`) on a timer until he's dead, listening for nothing; a
   quest giver, he doesn't fight. The autopilot shoots one who doesn't fight
   a script has set against the player's army; SQC_060 completed.
+* **Far targets.** SQC_070 has three privateers eliminated across the
+  south island, each watched by a health listener alone, with the
+  mission's marker on him. The autopilot goes after one a health listener
+  alone watches only once he fights (JAS_200's visitor), and had no step
+  that walks to a far objective. With nothing else to do on a mission it
+  now goes to its objective marker (8 m short of it, each once,
+  `MARKER_WALK_AFTER`), and once the story has been quiet 15 s it goes
+  after such a character with the mission's marker within 6 m of him.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.
