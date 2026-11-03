@@ -822,6 +822,8 @@ pub struct StoryHost {
     /// The last block that completed, and whether it was a cinematic one
     /// (its end spawn is where the cinematic left the player).
     last_completed: Option<String>,
+    /// The block done when the things used were last let go of.
+    used_since: Option<String>,
     /// The autopilot's: the missions running and the last block completed,
     /// and since when they've been so.
     focus_since: Option<((Vec<String>, Option<String>, usize), f32)>,
@@ -1121,6 +1123,7 @@ impl StoryHost {
             story,
             due: Vec::new(),
             last_completed: None,
+        used_since: None,
             focus_since: None,
             scene_in_block: false,
             scene_in_last: false,
@@ -2660,6 +2663,12 @@ fn run_story(
             }
         }
         let awaiting_rock = host.story.watched_signals().iter().any(|s| s == "throw_rock");
+        // (A block done, the people used are to be used again: SQC_060's
+        // Nina, used for its brief, takes the diamonds at its end.)
+        if host.used_since != host.last_completed {
+            host.used.retain(|u| u.1 != "Use");
+            host.used_since = host.last_completed.clone();
+        }
         // Stuck: triggers stepped into before they were armed go again.
         if host.quiet > 25.0 {
             host.used.retain(|u| !focused.iter().chain(watched.iter()).any(|w| w.0 == u.0 && w.1 == u.1));
@@ -4305,6 +4314,9 @@ fn run_story(
                     | "CAPI_Pawn.AddWeapon"
                     | "CAPI_Player.SetCloseUpCamera"
                     | "CAPI_Player.ResetInputs" => {}
+                    // (A pawn made usable or not: kept by the story, its
+                    // `use_target`s.)
+                    "SendCommandEventToEntity" if a(1) == "SetUsability" => {}
                     // (Told once a run, for finding what scripts ask that
                     // nothing plays: RUST_LOG=story_unplayed=debug.)
                     other => {

@@ -5789,6 +5789,14 @@ to SQC_080, each a brief at its giver then its blocks):
   as the engine's are. The autopilot scares one a script waits to see in
   combat (`Story::awaited_in_combat`) with a shot into the ground 2 m before
   him, from a gun that puts its round where it's aimed. SQC_010 completed.
+* **Back to the giver.** SQC_060's Nina, used for her brief, takes the
+  diamond stashes at its end, and the autopilot, which uses a thing once
+  until the story has long been quiet, never went back (the givers' idle
+  actions stir the story every 20 s). The people it used are to be used
+  again once a block is done.
+* **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
+  end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
+  SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.
 
 ### Kinds of character
 
