@@ -3185,6 +3185,29 @@ fn shop_buttons(
     }
 }
 
+/// Sells a line of loot (or all of it), what a mission needs kept aside:
+/// what it fetched and what the wallet took, if anything sold.
+pub(crate) fn sell(item: ShopItem, progress: &mut Progress, crafting: &crate::crafting::CraftCatalog, perks: &Perks) -> Option<(u32, u32)> {
+    let value = sale_value(item, progress, crafting, perks);
+    let sold: Vec<u32> = match item {
+        ShopItem::Sell(id) => vec![id],
+        _ => progress.loot.keys().copied().filter(|&id| crafting.sale_price(id, perks) > 0).collect(),
+    };
+    if sold.is_empty() || value == 0 {
+        return None;
+    }
+    // (What a mission needs kept stays.)
+    for id in sold {
+        let kept = progress.protected_loot.get(&id).copied().unwrap_or(0).min(progress.loot.get(&id).copied().unwrap_or(0));
+        if kept > 0 {
+            progress.loot.insert(id, kept);
+        } else {
+            progress.loot.remove(&id);
+        }
+    }
+    Some((value, progress.add_money(value)))
+}
+
 /// Buys a line, or sells one: pays for it and gives it, or says why not (on
 /// the HUD). What's bought is the story's to hear of.
 #[allow(clippy::too_many_arguments)]
@@ -3199,26 +3222,10 @@ pub(crate) fn trade(
     hud: &mut HudState,
 ) -> Option<ItemBought> {
     if matches!(item, ShopItem::SellAll | ShopItem::Sell(_)) {
-        let value = sale_value(item, progress, crafting, perks);
-        let sold: Vec<u32> = match item {
-            ShopItem::Sell(id) => vec![id],
-            _ => progress.loot.keys().copied().filter(|&id| crafting.sale_price(id, perks) > 0).collect(),
-        };
-        if sold.is_empty() || value == 0 {
-            hud.notify("Nothing to sell");
-            return None;
+        match sell(item, progress, crafting, perks) {
+            None => hud.notify("Nothing to sell"),
+            Some((value, paid)) => hud.notify(&if paid < value { format!("Sold for ${value} (wallet full: ${paid} kept)") } else { format!("Sold for ${value}") }),
         }
-        // (What a mission needs kept stays.)
-        for id in sold {
-            let kept = progress.protected_loot.get(&id).copied().unwrap_or(0).min(progress.loot.get(&id).copied().unwrap_or(0));
-            if kept > 0 {
-                progress.loot.insert(id, kept);
-            } else {
-                progress.loot.remove(&id);
-            }
-        }
-        let paid = progress.add_money(value);
-        hud.notify(&if paid < value { format!("Sold for ${value} (wallet full: ${paid} kept)") } else { format!("Sold for ${value}") });
         return None;
     }
     let price = item.price(inv, progress.towers.len(), catalog);

@@ -2826,6 +2826,21 @@ fn main() -> Result<()> {
                 }
             }
         }
+        "story-field" => {
+            // A component's field across the story's entities, by value, with
+            // a few names each: story-field <Component> <field>
+            let (comp, field) = (args.get(1).context("usage: story-field <Component> <field>")?, args.get(2).context("usage: story-field <Component> <field>")?);
+            let data = fc3_story::data::StoryData::load(&fc3_formats::cache::default_cache_root())?;
+            let mut by: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+            for e in data.entities.values() {
+                let Some(c) = e.component(comp) else { continue };
+                let v = c.u32(field).map(|v| v.to_string()).or_else(|| c.str(field)).unwrap_or_else(|| "-".into());
+                by.entry(v).or_default().push(e.name.clone());
+            }
+            for (v, names) in by {
+                println!("{v}: {} ({})", names.len(), names.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
+            }
+        }
         "story-armies" => {
             // The story's pawns by the armies their AI is hostile to and
             // allied with, and those hostile to red but not grey (the

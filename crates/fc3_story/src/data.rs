@@ -150,6 +150,9 @@ pub struct StoryData {
     /// (what `CDominoWaterLevelManager:GetWaterLevel` gives before a script
     /// moves one).
     pub water: HashMap<u32, f64>,
+    /// The safe houses (`CSafeHouseComponent`), found the first time they're
+    /// asked after (the map and the radar ask every second).
+    safe_houses: std::cell::OnceCell<Vec<u64>>,
 }
 
 /// Water levels by sector id from the cache's `world/water_planes.txt`
@@ -198,6 +201,15 @@ fn none_if_invalid(id: Option<u64>) -> Option<u64> {
 }
 
 impl StoryData {
+    /// The entities with a safe house, by id.
+    pub fn safe_houses(&self) -> &[u64] {
+        self.safe_houses.get_or_init(|| {
+            let mut ids: Vec<u64> = self.entities.values().filter(|e| e.component("CSafeHouseComponent").is_some()).map(|e| e.id).collect();
+            ids.sort_unstable();
+            ids
+        })
+    }
+
     /// Loads everything from the cache's `story/` files.
     pub fn load(root: &Path) -> Result<StoryData> {
         let mut d = StoryData::default();

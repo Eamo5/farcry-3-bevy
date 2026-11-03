@@ -23,7 +23,7 @@ impl Story {
 
     pub fn travel_destinations(&self) -> Vec<Destination> {
         let c = self.core.borrow();
-        let mut destinations: Vec<_> = c.data.entities.values().filter_map(|e| {
+        let mut destinations: Vec<_> = c.data.safe_houses().iter().filter_map(|id| c.data.entities.get(id)).filter_map(|e| {
             let safehouse = e.component("CSafeHouseComponent")?;
             if !c.is_loaded(e.id) { return None; }
             let marker = c.data.markers.get(&safehouse.u64("entMarkerEntity")?)?;

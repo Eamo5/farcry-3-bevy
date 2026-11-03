@@ -2136,6 +2136,15 @@ NPC filtering and PlayerOnly regions. Removing the listener revokes that
 exception. The regression covers selection, unrelated NPC exclusion, physical
 departure and listener removal.
 
+A proximity volume's `selLocomotionFilter` was ignored: 1 takes only those
+in a vehicle (35 volumes: the convoy chases', JAS_200's
+`VIP_VehicleEscapeTrigger`), 2 only those on foot (4: CIT_020's
+`PlayerEscapingOnFoot`, JAS_200's `VIP_OnFootEscapeTrigger`), 0 anyone
+(`fc3tool story-field CProximityTriggerComponent selLocomotionFilter` lists
+them). JAS_200's boss, fighting on foot on the road his 4x4 escapes by, had
+"escaped" before he got in it. The player and the characters now count by
+the vehicle they're in (`Core::contacts`).
+
 With that correction, `fc3-rock-filter.err.log` records an ordinary physical
 throw/impact, followed by the objective changing from the first rock task to
 "Follow Grant" and then "Lure the guards away from the exit." Its inspected
@@ -5310,7 +5319,10 @@ of Sam's, 28 m near and 32 m far, that warns on the screen).
   near throughout, and the fights draw him off. It now goes again, 20 s
   on, to one the player has left (`NEAR_AGAIN`). A warning coming and
   going on the screen (`HudText`) no longer counts as the story stirring,
-  which kept the autopilot waiting.
+  which kept the autopilot waiting. "Left" was 2 m past the radius, from
+  the player's middle: B35's "Talk to Sam." waits for him within 5 m of
+  the spot Sam stops at, and after following Sam there he stood 6.8 m off,
+  neither near nor gone; it's now anywhere past the radius, by the feet.
 
 * **Burning.** HOY_010 also listens for its weed fields catching fire (a
   buzz for burning them, not the mission). The autopilot's burn step went
@@ -5397,6 +5409,15 @@ start, its crew seated, then driven along its way), and being seen fails it.
   canyon: for a thing, it now takes the photo from where it stands if it
   can see it from there, else from the nearest spot with a floor under it
   that can.
+
+* **Not the visitor's jeep.** Since the autopilot learned to wreck the
+  4x4 the boss flees in later (a vehicle carrying a foe a script waits to
+  see dead), it shot up the visitor's jeep as it arrived (a health
+  listener watches him through the meeting too), and the meeting failed
+  ("Detected!") on every reload. A mission failing while the autopilot
+  goes after a vehicle, or within 6 s of it, now has it leave that vehicle
+  alone under the objective then up (`StoryHost::last_wreck`, kept with
+  the triggers left alone).
 
 * **The role sheet.** The next block waits for the boss's role sheet to be
   looted. The autopilot's carrier check compared a loot group's items (the
@@ -6030,7 +6051,13 @@ table's own movie (`ACTI_Poker.feu`, `docs/ui.md`).
   for them; under the autopilot (and `FC3_POKER_TEST=<row>`, which also
   sits at a bar's table and leaves after `FC3_POKER_HANDS`) the player's
   hands play themselves. SQC_100's is a bar's game: its script hears the
-  player clean the table (`JasonWinsGame`) and leave.
+  player clean the table (`JasonWinsGame`) and leave. The autopilot never
+  sat at a bar's table, so it went about the town while the gambler's game
+  waited: a bar's game whose win a script waits on is now sat at once no
+  scene plays (from afar, held at the chair till its floor streams in),
+  bought into at the first row it can pay for, played, bought into again
+  after a bust while the script still waits, and left once cleaned (or
+  when it can't pay).
 * **Seen.** C3's bar (a kept checkpoint with C3's outpost taken, the
   player placed in the bar): the table's gameplay started, the player sat
   in the fourth seat, paid $100 and played six hands (blinds, calls,

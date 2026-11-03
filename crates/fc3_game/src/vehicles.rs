@@ -1515,7 +1515,9 @@ fn autopilot_wreck(
     }
     let target = vehicles
         .iter()
-        .filter(|(_, _, v, h, _)| !h.dead && watched.contains(&v.story_id()) && !given_up.contains_key(&v.story_id()) && hostile_crew(v))
+        .filter(|(_, _, v, h, _)| {
+            !h.dead && watched.contains(&v.story_id()) && !given_up.contains_key(&v.story_id()) && hostile_crew(v) && !host.left_alone(v.story_id(), "wreck")
+        })
         .min_by(|a, b| a.1.translation.distance(t.translation).total_cmp(&b.1.translation.distance(t.translation)));
     let Some((ve, vt, v, health, velocity)) = target else {
         // (Done with, alight or wrecked: back out of the blast's way, to where
@@ -1562,6 +1564,8 @@ fn autopilot_wreck(
         info!("story autopilot: wreck {} ({})", host.story.data().name_of(id).unwrap_or("?"), id);
     }
     host.autopilot_wrecking = true;
+    let since = host.last_wreck.filter(|w| w.0 == id && now - w.2 < 1.0).map_or(now, |w| w.1);
+    host.last_wreck = Some((id, since, now));
     host.reset_quiet();
     let centre = vt.translation + Vec3::Y * 0.8;
     let state = at.get_or_insert((id, health.current, now, 0));

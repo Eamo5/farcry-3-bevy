@@ -553,6 +553,7 @@ fn play_poker(
     (mut progress, mut hud, mut limits): (ResMut<crate::progression::Progress>, ResMut<crate::hud::HudState>, ResMut<ViewLimits>),
     mut players: Query<(&mut Transform, &mut Player)>,
     mut commands: Commands,
+    (crafting, perks): (Option<Res<crate::crafting::CraftCatalog>>, Res<crate::progression::Perks>),
 ) {
     let Some(mut host) = host else { return };
     let events = std::mem::take(&mut host.gsf_events);
@@ -653,6 +654,9 @@ fn play_poker(
             }
         }
     }
+    // (Under the story's autopilot, a bar's game whose win a script waits on
+    // is sat at and played to the end: SQC_100's gambler's money.)
+    let wanted = auto && test.is_none() && !game.story() && host.story.mission_messages().iter().any(|m| m == "JasonWinsGame");
     let Ok((mut t, mut p)) = players.single_mut() else { return };
     let player_at = t.translation;
     let seat_at = game.place.map(|pl| {
@@ -679,7 +683,7 @@ fn play_poker(
                     game.speech.push((Some(i), "NPC_EnticeHero", 1.0));
                 }
             }
-            near && (actions.used() || (test.is_some() && !game.left))
+            (near && (actions.used() || (test.is_some() && !game.left))) || (wanted && !game.left && cinema.view.is_none() && game.place.is_some())
         };
         if sit {
             game.seated = true;
@@ -689,8 +693,15 @@ fn play_poker(
             if let Some((at, centre)) = seat_at {
                 let to = (centre - at).with_y(0.0);
                 let yaw = (-to.x).atan2(-to.z);
-                let ground = at.y.min(player_at.y - HALF_HEIGHT);
+                // (From afar, the autopilot's, on the chair's floor.)
+                let far = at.distance(player_at) > 8.0;
+                let ground = if far { at.y } else { at.y.min(player_at.y - HALF_HEIGHT) };
                 t.translation = Vec3::new(at.x, ground + HALF_HEIGHT, at.z);
+                // (Held there till the floor streams in.)
+                if far {
+                    p.spawning = true;
+                    p.keep_height = true;
+                }
                 p.yaw = yaw;
                 p.pitch = SEAT_PITCH.to_radians();
                 p.velocity = Vec3::ZERO;
@@ -708,6 +719,7 @@ fn play_poker(
                 start_game(game, PRACTICE_CHIPS, 0);
             } else {
                 game.stage = Stage::Choosing;
+                game.think = 0.0;
             }
             info!("poker: the player sits at {} (seat {})", game.name, game.player_seat + 1);
         }
@@ -764,10 +776,17 @@ fn play_poker(
             if let Some(r) = test {
                 game.row = if enabled[r.min(3)] { r.min(3) } else { game.row };
             }
+            // (The autopilot short of the buy-in sells its loot first, as a
+            // player would at the bar's shop: SQC_100's $500 from $380.)
+            if wanted && progress.money < wagers[game.row] {
+                if let Some((value, _)) = crafting.as_ref().and_then(|c| crate::progression::sell(crate::progression::ShopItem::SellAll, &mut progress, c, &perks)) {
+                    info!("poker: the autopilot sells its loot for ${value} to buy in");
+                }
+            }
             let short = progress.money < wagers[game.row];
             // (A test takes its row after a moment.)
             game.think += dt;
-            if (confirm || (click && row_hover.is_some()) || (test.is_some() && game.think > 1.5)) && enabled[game.row] && !short {
+            if (confirm || (click && row_hover.is_some()) || ((test.is_some() || wanted) && game.think > 1.5)) && enabled[game.row] && !short {
                 let buy_in = wagers[game.row];
                 if buy_in > 0 {
                     progress.spend(buy_in);
@@ -781,7 +800,9 @@ fn play_poker(
                 start_game(game, buy_in, buy_in);
                 crate::statistics::add(&mut progress, crate::statistics::stat::POKER_PLAYED, 1);
                 info!("poker: row {} (buy-in {buy_in})", game.row);
-            } else if cancel {
+            } else if cancel || (auto && test.is_none() && game.think > 3.0) {
+                // (The autopilot up again when it can't pay, or no script
+                // waits on the game any more.)
                 stand = true;
             }
             if let Ok(dir) = std::env::var("FC3_POKER_SHOTS") {
@@ -807,7 +828,7 @@ fn play_poker(
             }
         }
         Stage::Quit => {
-            if confirm || test.is_some() {
+            if confirm || auto {
                 let chips = game.table.as_ref().map_or(0, |t| t.seats[game.player_seat].chips);
                 if game.buy_in > 0 && chips > 0 {
                     progress.add_money(chips);
@@ -821,11 +842,13 @@ fn play_poker(
             }
         }
         Stage::Busted => {
-            if confirm && !game.story() {
+            // (The autopilot buys in again while a script waits on the win.)
+            if (confirm || wanted) && !game.story() {
                 crate::statistics::poker_game(&mut progress, false, 0);
                 game.stage = Stage::Choosing;
+                game.think = 0.0;
                 game.table = None;
-            } else if cancel || test.is_some() || game.story() {
+            } else if cancel || auto || game.story() {
                 crate::statistics::poker_game(&mut progress, false, 0);
                 tell.push("JasonLeavesPoker");
                 stand = true;
@@ -834,7 +857,7 @@ fn play_poker(
         Stage::Cleaned => {
             // Up from a cleaned table: its chips paid out (a game bought
             // into), and the game counted won.
-            let leaving = confirm || cancel || test.is_some();
+            let leaving = confirm || cancel || auto;
             if leaving {
                 let chips = game.table.as_ref().map_or(0, |t| t.seats[game.player_seat].chips);
                 if game.buy_in > 0 && chips > 0 {

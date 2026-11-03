@@ -944,6 +944,11 @@ pub struct StoryHost {
     /// step going after a vehicle (the other steps wait).
     pub autopilot_burning: bool,
     pub autopilot_wrecking: bool,
+    /// The vehicle the autopilot last went after, since when and till when:
+    /// a mission failing then (JAS_200's meeting, its visitor's jeep shot at:
+    /// `Detected!`) has it left alone under that objective from then on;
+    /// not one failing as it began (the boss's 4x4 got away first).
+    pub last_wreck: Option<(u64, f32, f32)>,
     /// When a script opened a shop (`StartUIInteraction`), till it closes.
     pub ui_interaction: Option<f32>,
     /// Spent arrows lying about to be cleared (`DeleteAllArrowPickups`).
@@ -1036,6 +1041,12 @@ impl StoryHost {
     /// Something happened (a test's step).
     pub fn reset_quiet(&mut self) {
         self.quiet = 0.0;
+    }
+
+    /// Whether a step of the autopilot's on a thing failed the mission before
+    /// (under the objective now up, or any).
+    pub(crate) fn left_alone(&self, id: u64, event: &str) -> bool {
+        self.fatal.contains(&(id, event.to_string()))
     }
 
     /// A library weapon's def (`weapon_def`), else the def drawing the model
@@ -1180,6 +1191,7 @@ impl StoryHost {
             unusable: HashMap::new(),
             autopilot_burning: false,
             autopilot_wrecking: false,
+            last_wreck: None,
             ui_interaction: None,
             sweep_arrows: false,
             abandoned_at: None,
@@ -2913,13 +2925,17 @@ fn run_story(
             // the player at its sniper rifle, left him held 1.5 km from it.)
             .filter(|w| !mission_on || in_focus.contains(&w.0))
             // (Again a while later, gone out of its radius since: HOY_010's
-            // Sam, defusing a bomb with the player kept near him.)
+            // Sam, defusing a bomb with the player kept near him; by the
+            // feet, as the scripts measure: after following Sam to the end,
+            // the player stood 6.8 m from the 5 m spot he was to talk to him
+            // at, never near enough for either.)
             .find(|w| {
                 // (Not one that failed the mission: DEN_040's camp is a
                 // failing zone round HUR_020's briefing spot.)
+                let feet = t.translation - Vec3::Y * crate::player::HALF_HEIGHT;
                 !host.fatal.contains(&(w.0, format!("near {}", w.1)))
                     && (!host.used.contains(&(w.0, format!("near {}", w.1)))
-                        || (to_bevy(w.2).distance(t.translation) > w.1 + 2.0 && now - host.near_at.get(&w.0).copied().unwrap_or(f32::MIN) > NEAR_AGAIN))
+                        || (to_bevy(w.2).distance(feet) > w.1 && now - host.near_at.get(&w.0).copied().unwrap_or(f32::MIN) > NEAR_AGAIN))
             })
             .filter(|_| tails.is_empty())
             .filter(|_| {
@@ -3080,6 +3096,10 @@ fn run_story(
                 if let Some((id, event, _)) = host.last_step.take_if(|s| now - s.2 < FAILED_WITHIN) {
                     info!("story autopilot: {event} {} failed the mission; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
                     learn_fatal(&mut host.fatal, id, event, host.objective_before);
+                }
+                if let Some((id, ..)) = host.last_wreck.take_if(|w| now - w.2 < FAILED_WITHIN && now - w.1 > WRECK_BLAMED_AFTER) {
+                    info!("story autopilot: going after {} failed the mission; left alone under it from now", host.story.data().name_of(id).unwrap_or("?"));
+                    learn_fatal(&mut host.fatal, id, "wreck".into(), host.objective_before);
                 }
                 let text = text.map(|t| plain(&t)).unwrap_or_default();
                 ui.banner = Some((format!("Mission failed\n{text}"), 5.0));
@@ -4473,6 +4493,9 @@ const DESTROY_REACH: f32 = 80.0;
 const FATAL_WITHIN: f32 = 2.0;
 /// As soon after (s), a mission failing; its scripts may warn a while first.
 const FAILED_WITHIN: f32 = 6.0;
+/// How long (s) the autopilot has gone after a vehicle before a mission
+/// failing is put down to it.
+const WRECK_BLAMED_AFTER: f32 = 3.0;
 /// How long the story is quiet before the autopilot leaves a region a
 /// mission waits for the player to leave (short of the 25 s after which
 /// it steps into triggers it used again).

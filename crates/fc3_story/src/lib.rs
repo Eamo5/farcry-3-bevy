@@ -1102,9 +1102,9 @@ impl Story {
         let c = self.core.borrow();
         let mut out: Vec<(u64, [f32; 3], bool)> = c
             .data
-            .entities
-            .values()
-            .filter(|e| e.component("CSafeHouseComponent").is_some())
+            .safe_houses()
+            .iter()
+            .filter_map(|id| c.data.entities.get(id))
             .map(|e| (e.id, e.pos, c.safehouses_unlocked.contains(&e.id)))
             .collect();
         out.sort_by_key(|s| s.0);
@@ -4427,5 +4427,42 @@ mod tests {
         story.core.borrow_mut().listeners.remove(&999);
         assert!(!story.trigger_selects(100, 20));
         assert!(story.core.borrow().contacts(100).is_empty());
+    }
+
+    /// A volume for those in vehicles only (`selLocomotionFilter` 1: JAS_200's
+    /// boss escaping in his 4x4) isn't entered on foot, and one for those on
+    /// foot only (2) isn't entered in a vehicle.
+    #[test]
+    fn locomotion_filters_take_riders_or_walkers() {
+        use fc3_formats::{fcb::Object, hash::name_hash};
+        use std::sync::Arc;
+        let mut data = StoryData::default();
+        for (id, filter) in [(100u64, 1u32), (200, 2)] {
+            let prox = Arc::new(Object {
+                name_hash: name_hash("CProximityTriggerComponent"),
+                fields: vec![
+                    (name_hash("bAllowTriggerByNonPlayers"), vec![1]),
+                    (name_hash("selLocomotionFilter"), filter.to_le_bytes().to_vec()),
+                    (name_hash("vectorSize"), [10.0f32; 3].into_iter().flat_map(f32::to_le_bytes).collect()),
+                ],
+                children: vec![],
+            });
+            data.entities.insert(id, data::Entry {
+                id, name: "Test proximity".into(), class: "CEntity".into(), pos: [0.0; 3], angles: [0.0; 3],
+                layer: fc3_formats::world::DEFAULT_MISSION_LAYER, origin: data::Origin::Global,
+                components: Arc::new(Object { children: vec![prox], ..Default::default() }), fields: Arc::new(Object::default()),
+            });
+        }
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), data).unwrap();
+        let mut view = View::default();
+        view.spawned.insert(20, Live { pos: [0.0; 3], alive: true, ..Default::default() });
+        story.update(0.1, view.clone());
+        assert!(story.core.borrow().contacts(100).is_empty());
+        assert_eq!(story.core.borrow().contacts(200), vec![PLAYER, 20]);
+        view.pawn_vehicles.insert(20, crate::vehicles::Occupant { vehicle: 7, kind: 1, index: 0, vehicle_type: 0 });
+        view.player_state.vehicle = Some(7);
+        story.update(0.1, view);
+        assert_eq!(story.core.borrow().contacts(100), vec![PLAYER, 20]);
+        assert!(story.core.borrow().contacts(200).is_empty());
     }
 }

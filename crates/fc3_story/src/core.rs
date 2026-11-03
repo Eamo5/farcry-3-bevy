@@ -689,7 +689,17 @@ impl Core {
         let selected: Vec<u64> = if entry.is_some_and(|e| e.component("CProximityTriggerComponent").is_some() && e.component("CTrigger2DComponent").is_none()) {
             self.selected_trigger_pawns(trigger)
         } else { Vec::new() };
-        let allows = |id: u64| selected.contains(&id) || entry.is_none_or(|e| crate::triggers::allows_entity(e, id));
+        // (A volume for those in vehicles only, or on foot only
+        // (`selLocomotionFilter` 1, 2): JAS_200's boss escapes by the road
+        // in his 4x4, not standing on it as he fights.)
+        let locomotion = entry.and_then(|e| e.component("CProximityTriggerComponent")).and_then(|c| c.u32("selLocomotionFilter")).unwrap_or(0);
+        let riding = |id: u64| if id == crate::PLAYER { self.view.player_state.vehicle.is_some() || self.vehicle_forced.is_some() } else { self.view.pawn_vehicles.contains_key(&id) };
+        let moving_right = |id: u64| match locomotion {
+            1 if id == crate::PLAYER || self.view.spawned.contains_key(&id) => riding(id),
+            2 if id == crate::PLAYER || self.view.spawned.contains_key(&id) => !riding(id),
+            _ => true,
+        };
+        let allows = |id: u64| (selected.contains(&id) || entry.is_none_or(|e| crate::triggers::allows_entity(e, id))) && moving_right(id);
         let mut out: Vec<u64> = self.view.contacts.get(&trigger).into_iter().flatten().copied().filter(|id| allows(*id)).collect();
         let Some(shape) = entry.and_then(crate::triggers::shape_of) else { return out };
         // Bodies, not points; the player's since last frame (thin triggers
@@ -698,7 +708,7 @@ impl Core {
         let p = self.view.player;
         // (A jump of more than a few metres is a teleport: only where it lands.)
         let from = self.last_player.filter(|l| (0..3).map(|i| (l[i] - p[i]).powi(2)).sum::<f32>() < 9.0).unwrap_or(p);
-        if !out.contains(&crate::PLAYER) && shape.holds_along(from, self.view.player, R, H) {
+        if !out.contains(&crate::PLAYER) && moving_right(crate::PLAYER) && shape.holds_along(from, self.view.player, R, H) {
             out.push(crate::PLAYER);
         }
         // The characters the host has in the world, by where they are now

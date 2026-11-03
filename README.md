@@ -431,7 +431,8 @@ stalls measured so far came with other programs loading the machine, when system
 take well under a millisecond (transform propagation, atmosphere uniforms, SMAA bind groups) each
 showed 15 to 30 ms runs, so they are not yet pinned on this game. With the story on, two systems
 that look the story's characters and its streamed graphs up twice a second went through all of
-its entities each time (some 20 ms a time); each now keeps its list.
+its entities each time (some 20 ms a time); each now keeps its list, as do the safe houses the
+radar and maps look up every second (a 39 ms frame each time).
 `--tour` with `FC3_TOUR_SPEED=25` drives the route. `FC3_PERF`, `FC3_GPU_TIMING`, `FC3_MESH_DEBUG` and `--features profile` (below) measure all this.
 
 ## Debug and test flags
