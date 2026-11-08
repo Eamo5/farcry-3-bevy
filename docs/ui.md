@@ -596,8 +596,23 @@ only what changed (and everything again until the movies have loaded):
   ours (`story::BoxMovie`). Ours still shows outside play (the main menu,
   the pause menu) and under the loading screen the box waits.
   `FC3_BOX_TEST=<title>|<text>[|choice[|<reward>:<amount>:<amount>]]`
-  pushes a box 8 s in (`FC3_BOX_TIMES`), `FC3_BOX_CLICK=ok|cancel` presses
-  its button.
+  pushes a box 8 s in (`FC3_BOX_TIMES`; `#<id>` for the text takes the
+  game's string, with the story on; a `hint:<title>` goes in the hint box
+  instead), `FC3_BOX_CLICK=ok|cancel` presses its button.
+* **Their text and videos.** A box's text goes in as the game's string
+  has it (`StoryBox::html`): HTML with bullets and icons (`<img
+  src="MC_TX_Bullet_List">`, which Ruffle draws from the movie's library)
+  and words in colour, its `[Action]` placeholders our keys; ours keeps the
+  plain text. The mission hints in `H_TutorialBox` go in the same way. A
+  tutorial's box plays its video: the HUD's properties
+  (`hudproperties_default.obj`'s `TutorialPaths`) pair 20 tutorials'
+  texts with Bink files (`UI\Singleplayer\Video\Tutorial\01_Alarm_Disabling.bik`,
+  320x240), kept as `ui/tutorial_videos.txt` (`<string id> <path>`). The
+  box keeps its large form with its loader shown
+  (`PopupTextMC.mc_bink_loader`, 320x240 on the stage under the title) and
+  the video plays looped over the canvas where the loader is
+  (`video::VideoRequest::inset`, placed each frame from its bounds,
+  `MessageBoxBinkLoader`), till the box is answered.
 * **Tutorials once.** A queued tutorial (`PushTutorialBox`, the
   `CreateTutorialMsgBox` box: nothing waits for its answer) shows once:
   the titles shown are kept with the progress (`tutorial` lines, saved,

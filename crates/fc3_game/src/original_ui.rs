@@ -4683,6 +4683,9 @@ struct BoxShown {
     closing: Option<f32>,
     since: f32,
     clicked: bool,
+    /// The tutorials' videos by their text, and whether one plays.
+    tutorials: Option<std::collections::HashMap<String, String>>,
+    video: bool,
     /// The cursor freed for the box's buttons.
     freed: bool,
     mouse: Vec2,
@@ -4699,13 +4702,32 @@ fn drive_boxes(
     (mut moves, mut buttons): (MessageReader<CursorMoved>, MessageReader<bevy::input::mouse::MouseButtonInput>),
     mut windows: Query<(&mut Window, &mut bevy::window::CursorOptions), With<PrimaryWindow>>,
     mut shown: Local<BoxShown>,
-    loading: Res<LoadingUp>,
+    (loading, info, mut videos): (Res<LoadingUp>, Res<crate::data::CacheInfo>, ResMut<crate::video::Videos>),
 ) {
     use fc3_ui::input::{MouseButton, PlayerEvent};
     use fc3_ui::ExternalValue as V;
     let Interface::Running(host) = &*state else {
         movie.shown = false;
         return;
+    };
+    // The tutorials' videos by their text (`fc3_formats::feu::tutorial_videos`).
+    if shown.tutorials.is_none() {
+        let text = std::fs::read_to_string(info.root.join(fc3_formats::feu::TUTORIAL_VIDEOS_REL)).unwrap_or_default();
+        shown.tutorials = Some(fc3_formats::feu::parse_tutorial_videos(&text).into_iter().map(|(id, path)| (host.text(id), path)).filter(|(t, _)| !t.is_empty()).collect());
+    }
+    // A video plays in its box's loader, followed as the box moves in.
+    if shown.video {
+        videos.inset = host.dps_bounds("MessageBoxBinkLoader").zip(windows.single().ok()).map(|([x0, y0, x1, y1], (w, _))| {
+            let scale = (w.width() / fc3_ui::STAGE.0 as f32).min(w.height() / fc3_ui::STAGE.1 as f32);
+            let origin = (Vec2::new(w.width(), w.height()) - Vec2::new(fc3_ui::STAGE.0 as f32, fc3_ui::STAGE.1 as f32) * scale) * 0.5;
+            Rect::from_corners(origin + Vec2::new(x0 as f32, y0 as f32) * scale, origin + Vec2::new(x1 as f32, y1 as f32) * scale)
+        });
+    }
+    let stop_video = |shown: &mut BoxShown, videos: &mut crate::video::Videos| {
+        if std::mem::take(&mut shown.video) {
+            videos.stop_inset();
+            videos.inset = None;
+        }
     };
     let clip = |k: usize| format!("_level{}.{}", BOX_KINDS[k].level, BOX_KINDS[k].clip);
     for (k, kind) in BOX_KINDS.iter().enumerate() {
@@ -4729,6 +4751,7 @@ fn drive_boxes(
         }
         shown.closing = None;
         shown.freed = false;
+        stop_video(&mut shown, &mut videos);
         return;
     }
     let scale = windows.single().map_or(1.0, |(w, _)| w.scale_factor()) as f64;
@@ -4740,6 +4763,7 @@ fn drive_boxes(
             // (Its outro played already: the next a moment after ours
             // hears the answer.)
             shown.closing = Some(now - BOX_OUTRO + 0.1);
+            stop_video(&mut shown, &mut videos);
         } else if shown.closing.is_some() {
             // (The outro is over.)
             shown.closing = Some(f32::MIN);
@@ -4750,6 +4774,7 @@ fn drive_boxes(
     if let (Some(yes), Some(k), None) = (answered, shown.up, shown.closing) {
         host.call_function(&format!("{}.{}", clip(k), if yes { "Accept" } else { "Cancel" }), vec![]);
         shown.closing = Some(now);
+        stop_video(&mut shown, &mut videos);
     }
     if shown.closing.is_some_and(|at| now - at > BOX_OUTRO) {
         shown.closing = None;
@@ -4830,21 +4855,41 @@ fn drive_boxes(
     };
     let ok = format!("{ok}{}", host.text(if b.choice { BOX_ACCEPT } else { BOX_CONTINUE }));
     let cancel = if b.choice { format!("{cancel}{}", host.text(BOX_CANCEL)) } else { String::new() };
-    let body = crate::story::prompt_text(&b.body, &actions, &settings);
-    let body = body.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('\n', "<br>");
+    // (The game's text as it has it, its bullets and icons and words in
+    // colour; else ours, escaped.)
+    let body = match b.html.is_empty() {
+        true => b.body.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('\n', "<br>"),
+        false => b.html.clone(),
+    };
+    let body = crate::story::prompt_text(&body, &actions, &settings);
     // (Blanks go as null, which the shim makes blank: Ruffle reads a blank
     // from the host as "null".)
     let value = |s: &str| if s.is_empty() { V::Null } else { fc3_ui::text_value(s) };
     host.event("OnDisplayMessage", &[]);
     host.call_function(&format!("{at}.initialize"), vec![value(&b.title), value(&body), V::Null, value(&ok), V::Null, value(&cancel), V::Null]);
-    match &b.reward {
-        Some(r) => {
+    let video = shown.tutorials.as_ref().and_then(|t| t.get(&b.html)).filter(|_| k == 0 && !b.html.is_empty()).cloned();
+    match (&b.reward, video) {
+        (Some(r), _) => {
             host.set_path(&format!("{at}.rewardTitleMC.text"), V::String(r.title.clone()));
             host.set_path(&format!("{at}.param1MC.text"), V::String(r.amounts[0].clone()));
             host.set_path(&format!("{at}.param2MC.text"), V::String(r.amounts[1].clone()));
         }
+        // A tutorial's video in its loader (the box at its large size).
+        (None, Some(path)) => {
+            host.set_path(&format!("{at}.PopupTextMC.mc_bink_loader._visible"), V::Bool(true));
+            videos.requests.push(crate::video::VideoRequest {
+                path,
+                fullscreen: false,
+                looped: true,
+                volume: 1.0,
+                screen: None,
+                backdrop: false,
+                inset: true,
+            });
+            shown.video = true;
+        }
         // (No video in it: its small form for a short text.)
-        None => {
+        (None, None) => {
             host.set_path(&format!("{at}.PopupTextMC.mc_bink_loader._visible"), V::Bool(false));
         }
     }

@@ -3127,6 +3127,14 @@ fn convert_movies(job: &Job) -> Result<()> {
         let text: String = sounds.iter().map(|(name, event)| format!("{name} {event:08x}\n")).collect();
         write_atomic(job.root(), feu::SOUNDS_REL, text.as_bytes(), job.ctx)?;
     }
+    // The tutorials' videos, by their message.
+    if refresh || job.should_write(feu::TUTORIAL_VIDEOS_REL) {
+        let bytes = job.vfs.read(feu::HUD_PROPERTIES)?;
+        let start = bytes.windows(4).position(|w| w == b"nbCF").context("HUD properties: no FCB header")?;
+        let properties = fc3_formats::fcb::parse(&bytes[start..])?;
+        let text: String = feu::tutorial_videos(&properties).iter().map(|(id, path)| format!("{id} {path}\n")).collect();
+        write_atomic(job.root(), feu::TUTORIAL_VIDEOS_REL, text.as_bytes(), job.ctx)?;
+    }
     write_atomic(
         job.root(),
         feu::MOVIES_STAMP_REL,

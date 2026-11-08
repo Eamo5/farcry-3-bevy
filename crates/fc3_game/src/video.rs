@@ -41,6 +41,10 @@ pub struct VideoRequest {
     pub screen: Option<(u64, String)>,
     /// Under the interface, filling the window (the main menu's).
     pub backdrop: bool,
+    /// Over the interface in a box of it (a tutorial's message box: its
+    /// video loader), where `Videos::inset` puts it; the story doesn't hear
+    /// of it.
+    pub inset: bool,
 }
 
 #[derive(Resource, Default)]
@@ -48,6 +52,9 @@ pub struct Videos {
     pub requests: Vec<VideoRequest>,
     /// Stop the full-screen video (`true`) or the screens' (`false`).
     pub stops: Vec<bool>,
+    /// Where the inset videos show (the window's logical pixels), if
+    /// anywhere.
+    pub inset: Option<Rect>,
     playing: Vec<Playing>,
 }
 
@@ -55,6 +62,14 @@ impl Videos {
     /// A full-screen video holds the screen (no HUD, the player still).
     pub fn fullscreen(&self) -> bool {
         self.playing.iter().any(|p| p.fullscreen)
+    }
+
+    /// Ends the inset videos.
+    pub fn stop_inset(&mut self) {
+        for p in self.playing.iter_mut().filter(|p| p.inset) {
+            p.looped = false;
+            p.t = f32::MAX;
+        }
     }
 
     /// Ends the backdrop.
@@ -77,6 +92,7 @@ struct Playing {
     path: String,
     fullscreen: bool,
     backdrop: bool,
+    inset: bool,
     looped: bool,
     bink: fc3_bink::Bink,
     image: Handle<Image>,
@@ -94,6 +110,10 @@ struct Playing {
 
 #[derive(Component)]
 struct VideoPanel;
+
+/// An inset video's picture, placed where `Videos::inset` says.
+#[derive(Component)]
+struct InsetPanel;
 
 /// The file in the cache for a script's path (or the path's id).
 fn video_file(root: &std::path::Path, path: &str) -> std::path::PathBuf {
@@ -157,6 +177,7 @@ fn play_videos(
     gamepads: Query<&Gamepad>,
     mut hold: ResMut<crate::fp::Cinematic>,
     mut commands: Commands,
+    mut insets: Query<(&mut Node, &mut Visibility), With<InsetPanel>>,
 ) {
     // (The story hears each start and end, while there is one.)
     let mut host = host;
@@ -167,7 +188,8 @@ fn play_videos(
     };
     let videos = &mut *videos;
     for r in std::mem::take(&mut videos.requests) {
-        if !r.backdrop {
+        let heard = !r.backdrop && !r.inset;
+        if heard {
             event(&r.path, false, r.fullscreen);
         }
         let file = video_file(&info.root, &r.path);
@@ -177,7 +199,7 @@ fn play_videos(
             Err(e) => {
                 // Not converted (or unreadable): it ends at once.
                 warn!("video {}: {e:#}", r.path);
-                if !r.backdrop {
+                if heard {
                     event(&r.path, true, r.fullscreen);
                 }
                 continue;
@@ -199,7 +221,10 @@ fn play_videos(
             RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
         ));
         let aspect = w as f32 / h.max(1) as f32;
-        let ui = if r.backdrop {
+        let ui = if r.inset {
+            // (Over the interface's canvas, in its box.)
+            commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, GlobalZIndex(51), VideoPanel, InsetPanel, ImageNode::new(image.clone()), Visibility::Hidden)).id()
+        } else if r.backdrop {
             // (Filling the window, cut to fit, under the interface's canvas.)
             commands
                 .spawn((
@@ -275,6 +300,7 @@ fn play_videos(
             path: r.path,
             fullscreen: r.fullscreen,
             backdrop: r.backdrop,
+            inset: r.inset,
             looped: r.looped,
             bink,
             image,
@@ -338,8 +364,19 @@ fn play_videos(
             commands.entity(s).try_despawn();
         }
         images.remove(&p.image);
-        if !p.backdrop {
+        if !p.backdrop && !p.inset {
             event(&p.path, true, p.fullscreen);
+        }
+    }
+    // The inset videos where their box is.
+    for (mut node, mut shown) in &mut insets {
+        match videos.inset {
+            Some(at) => {
+                (node.left, node.top) = (Val::Px(at.min.x), Val::Px(at.min.y));
+                (node.width, node.height) = (Val::Px(at.width()), Val::Px(at.height()));
+                *shown = Visibility::Visible;
+            }
+            None => *shown = Visibility::Hidden,
         }
     }
 }
@@ -473,7 +510,7 @@ fn screen_test(
         Some((d, id, name)) => {
             *done = true;
             info!("screen-test: playing on {id} ({name}) {d:.1} m away");
-            videos.requests.push(VideoRequest { path: video, fullscreen: false, looped: true, volume: 1.0, screen: Some((id, name)), backdrop: false });
+            videos.requests.push(VideoRequest { path: video, fullscreen: false, looped: true, volume: 1.0, screen: Some((id, name)), backdrop: false, inset: false });
         }
         None if time.elapsed_secs() > 60.0 => {
             *done = true;

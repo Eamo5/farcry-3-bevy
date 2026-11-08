@@ -103,6 +103,7 @@ fn backdrop(videos: &mut crate::video::Videos) {
         volume: 1.0,
         screen: None,
         backdrop: true,
+        inset: false,
     });
 }
 

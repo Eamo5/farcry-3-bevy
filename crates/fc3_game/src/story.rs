@@ -609,7 +609,7 @@ const UNIFORM_TEXT: u32 = 127110;
 /// (tests): that box (a side quest giver's with a reward), 8 s after the
 /// player is set down, and again each time it's answered (`FC3_BOX_TIMES`,
 /// 2 in all by default).
-fn box_test(time: Res<Time<Real>>, mut ui: ResMut<StoryUi>, players: Query<&Player>, mut due: Local<(Option<f32>, u32)>) {
+fn box_test(time: Res<Time<Real>>, mut ui: ResMut<StoryUi>, players: Query<&Player>, mut due: Local<(Option<f32>, u32)>, host: Option<NonSend<StoryHost>>) {
     let Ok(spec) = std::env::var("FC3_BOX_TEST") else { return };
     let Ok(p) = players.single() else { return };
     if p.spawning || !ui.boxes.is_empty() {
@@ -634,8 +634,18 @@ fn box_test(time: Res<Time<Real>>, mut ui: ResMut<StoryUi>, players: Query<&Play
         let mut r = r.split(':').map(str::to_string);
         BoxReward { title: r.next().unwrap_or_default(), amounts: [r.next().unwrap_or_default(), r.next().unwrap_or_default()] }
     });
+    // (A string of the game's for the text, `#<id>`, with the story on.)
+    let html = body.strip_prefix('#').and_then(|id| id.parse().ok()).and_then(|id| host.as_ref()?.story.data().strings.get(id).map(str::to_string)).unwrap_or_default();
+    let body = if html.is_empty() { body } else { plain(&html) };
+    // (`hint:<title>`: a mission's hint instead, in the tutorial box.)
+    if let Some(title) = title.strip_prefix("hint:") {
+        info!("FC3_BOX_TEST: hint ({title})");
+        ui.hints.insert(0xB0C5, (title.to_string(), if html.is_empty() { body } else { html }));
+        due.1 = u32::MAX;
+        return;
+    }
     info!("FC3_BOX_TEST: box {} ({title})", due.1 + 1);
-    ui.boxes.push_back(StoryBox { id: 0xB0C5, title, body, choice, prompt: None, reward });
+    ui.boxes.push_back(StoryBox { id: 0xB0C5, title, body, choice, prompt: None, reward, html });
     due.1 += 1;
     due.0 = None;
 }
@@ -1329,7 +1339,8 @@ pub struct StoryUi {
     pub banner: Option<(String, f32)>,
     /// A checkpoint the story has just reached (the game is saved with it).
     pub checkpoint_reached: bool,
-    /// Hint texts by id (tutorial boxes): title and text.
+    /// Hint texts by id (tutorial boxes): title and text, as the game's strings
+    /// have them (HTML).
     pub hints: HashMap<u64, (String, String)>,
     /// Authored checklist rows, updated and hidden individually by missions.
     pub checklist: std::collections::BTreeMap<u32, String>,
@@ -1354,6 +1365,9 @@ pub struct StoryBox {
     pub prompt: Option<String>,
     /// A side quest giver's (`SideQuestBox.feu`), with its reward line.
     pub reward: Option<BoxReward>,
+    /// The text as the game's strings have it (HTML: its bullets and icons,
+    /// words in colour), for the original interface; blank for ours.
+    pub html: String,
 }
 
 /// A side quest's reward under its description: the line's title
@@ -3554,6 +3568,7 @@ fn run_story(
                         // The screen it plays on: an entity and its material.
                         screen: a(1).parse::<u64>().ok().filter(|&id| id != fc3_story::PLAYER).map(|id| (id, a(2))),
                         backdrop: false,
+                        inset: false,
                     }),
                     // Specific gameplays own their playback and completion.
                     // (A gameplay of its own name playing a QTE move is one
@@ -3695,8 +3710,10 @@ fn run_story(
                         }
                         host.due.push((now + 2.0, Due::Sound(a(0).parse().unwrap_or(0))));
                     }
+                    // (As the game's strings have them, HTML: the original
+                    // HUD's box shows their bullets, icons and colours.)
                     "HudText" => {
-                        ui.hints.insert(a(0).parse().unwrap_or(0), (plain(&a(2)), plain(&a(3))));
+                        ui.hints.insert(a(0).parse().unwrap_or(0), (a(2), a(3)));
                     }
                     // A shop a script opens (a shopkeeper used): the game's
                     // own, opened as he is used; its closing is told
@@ -3725,7 +3742,7 @@ fn run_story(
                     // leaves it): the game's string by its id in the hint
                     // box, until hidden (-1) or its timer (s) runs out.
                     "DisplayCustomUIMsg" => {
-                        let text = a(0).parse::<u32>().ok().and_then(|id| host.story.data().strings.get(id).map(plain));
+                        let text = a(0).parse::<u32>().ok().and_then(|id| host.story.data().strings.get(id).map(str::to_string));
                         match text.filter(|_| a(1) == "true" || a(1) == "1") {
                             Some(text) => {
                                 ui.hints.insert(POPUP_HINT, (String::new(), text));
@@ -3761,6 +3778,7 @@ fn run_story(
                             id: a(0).parse().unwrap_or(0), title: plain(&a(1)), body: plain(&a(2)), choice: a(3) == "true",
                             prompt: Some(plain(&a(4))).filter(|p| !dialog && !p.is_empty()),
                             reward,
+                            html: a(2),
                         };
                         // A high-priority tutorial goes immediately after the
                         // current box, keeping that box's answer target intact.
@@ -5382,7 +5400,7 @@ fn show_story_ui(
         .iter()
         .map(|id| {
             let (title, text) = &ui.hints[id];
-            [title, text].iter().filter(|s| !s.is_empty()).map(|s| s.as_str()).collect::<Vec<_>>().join("\n")
+            [plain(title), plain(text)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n")
         })
         .collect();
     let hints = joined.iter().chain(ui.checklist.values()).map(|text| prompt_text(text, &actions, &settings)).collect::<Vec<_>>().join("\n\n");

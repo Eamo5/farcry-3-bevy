@@ -102,6 +102,28 @@ pub fn parse_sounds(text: &str) -> std::collections::HashMap<String, u32> {
     text.lines().filter_map(|l| l.split_once(' ')).filter_map(|(n, e)| Some((n.to_string(), u32::from_str_radix(e.trim(), 16).ok()?))).collect()
 }
 
+/// The HUD's properties (`hudproperties_default.obj`), whose `TutorialPaths`
+/// give the video a tutorial's message box plays (its message's string id
+/// and the Bink file, `UI\Singleplayer\Video\Tutorial\01_Alarm_Disabling.bik`).
+pub const HUD_PROPERTIES: &str = r"generated\databases\generic\hudproperties_default.obj";
+pub const TUTORIAL_VIDEOS_REL: &str = "ui/tutorial_videos.txt";
+
+/// The tutorials' videos in the HUD's properties: (message id, video path).
+pub fn tutorial_videos(properties: &crate::fcb::Object) -> Vec<(u32, String)> {
+    let mut out = Vec::new();
+    properties.walk(&mut |o, _| {
+        if let (Some(path), Some(id)) = (o.str("sTutorialPath"), o.u32("locidTutorial")) {
+            out.push((id, path.replace("\\\\", "\\")));
+        }
+    });
+    out
+}
+
+/// As the cache keeps them: `<message id> <path>` a line.
+pub fn parse_tutorial_videos(text: &str) -> std::collections::HashMap<u32, String> {
+    text.lines().filter_map(|l| l.split_once(' ')).filter_map(|(id, p)| Some((id.parse().ok()?, p.trim().to_string()))).collect()
+}
+
 /// Where a movie lives in the cache as standard SWF (`ui/.../name.swf`), by
 /// its archive path or by the path another movie imports it by (which may be
 /// in any case, with either slash, doubled).
