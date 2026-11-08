@@ -247,6 +247,7 @@ fn run_interface(
     queue: Res<RenderQueue>,
     adapter: Res<RenderAdapter>,
     (mut sfx, mut sounds): (MessageWriter<crate::sound::PlaySfx>, Local<Option<std::collections::HashMap<String, u32>>>),
+    mut profiled: Local<(f32, u32)>,
 ) {
     let state = &mut *state;
     if let Interface::Waiting = state {
@@ -299,6 +300,19 @@ fn run_interface(
         host.render();
     } else {
         host.render_if_changed();
+    }
+    // FC3_UI_PROFILE: where the interface's time goes, every five seconds
+    // (ms a frame: the movies' frames, drawing them, each kind of call).
+    if std::env::var_os("FC3_UI_PROFILE").is_some() {
+        let (since, frames) = &mut *profiled;
+        *since += time.delta_secs();
+        *frames += 1;
+        if *since >= 5.0 {
+            let per = |d: std::time::Duration| d.as_secs_f32() * 1000.0 / *frames as f32;
+            let parts: Vec<String> = host.take_profile().iter().take(14).map(|(k, d, n)| format!("{k} {:.2} ({n})", per(*d))).collect();
+            info!("original UI: ms a frame over {frames} frames: {}", parts.join(", "));
+            (*since, *frames) = (0.0, 0);
+        }
     }
 }
 

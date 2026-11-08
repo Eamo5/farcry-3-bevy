@@ -153,7 +153,13 @@ The game draws the movies only when something in them changed since they
 were last drawn (a frame of a movie run, an event handled: Ruffle's
 `needs_render`), as they run at their own rate, slower than the game's
 frames; drawing them every frame took about 4 ms of the main thread's time.
-`FC3_UI_RENDER_ALWAYS` draws them every frame.
+`FC3_UI_RENDER_ALWAYS` draws them every frame. `FC3_UI_PROFILE` logs where
+the interface's time goes every five seconds, in ms a frame: the movies'
+frames, drawing them, and each kind of call the game makes into them. In
+play at the start (2000x1125), drawing takes about 2 ms (the HUD changes on
+most frames), the movies' frames under half a millisecond and the drivers'
+calls next to nothing; with and without the original interface a frame
+took the same 30 ms there.
 
 **Warnings that are the movies' own.** Each movie that brings the shared
 classes logs `Avm1::pop: Stack underflow` as it loads: their class set-ups

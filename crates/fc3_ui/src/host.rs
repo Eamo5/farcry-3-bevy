@@ -205,6 +205,9 @@ pub struct Host {
     player: Arc<Mutex<Player>>,
     bridge: Rc<Bridge>,
     executor: NullExecutor,
+    /// Time spent (`FC3_UI_PROFILE`): in each call into the movies by its
+    /// name, in their frames and in drawing them, with counts.
+    profile: std::cell::RefCell<std::collections::BTreeMap<String, (std::time::Duration, u32)>>,
 }
 
 impl Host {
@@ -241,7 +244,7 @@ impl Host {
             .build();
         // (Drawn over the game: what the movies leave is see-through.)
         player.lock().unwrap().set_window_mode("transparent");
-        Ok(Self { player, bridge, executor })
+        Ok(Self { player, bridge, executor, profile: Default::default() })
     }
 
     /// Answers the engine gives to the movies' `Get`s (`IsHighDefinition`,
@@ -404,7 +407,28 @@ impl Host {
     }
 
     fn call(&self, name: &str, args: Vec<ExternalValue>) -> ExternalValue {
-        self.player.lock().unwrap().call_internal_interface(name, args)
+        let start = std::time::Instant::now();
+        let out = self.player.lock().unwrap().call_internal_interface(name, args);
+        self.spent(name, start);
+        out
+    }
+
+    fn spent(&self, name: &str, start: std::time::Instant) {
+        static ON: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("FC3_UI_PROFILE").is_some());
+        if *ON {
+            let mut p = self.profile.borrow_mut();
+            let e = p.entry(name.to_string()).or_default();
+            e.0 += start.elapsed();
+            e.1 += 1;
+        }
+    }
+
+    /// The time spent since the last time (`FC3_UI_PROFILE`): by what, its
+    /// total and how many times.
+    pub fn take_profile(&self) -> Vec<(String, std::time::Duration, u32)> {
+        let mut out: Vec<_> = std::mem::take(&mut *self.profile.borrow_mut()).into_iter().map(|(k, (d, n))| (k, d, n)).collect();
+        out.sort_by(|a, b| b.1.cmp(&a.1));
+        out
     }
 
     /// What the movies asked of the engine since the last time.
@@ -421,12 +445,14 @@ impl Host {
 
     /// Runs the movies on by `dt` seconds (their frames, scripts and loads).
     pub fn run(&mut self, dt: f64) {
+        let start = std::time::Instant::now();
         {
             let mut player = self.player.lock().unwrap();
             player.preload(&mut ExecutionLimit::none());
             player.tick(ruffle_core::FloatDuration::from_secs(dt));
         }
         self.executor.run();
+        self.spent("(frames)", start);
     }
 
     /// One frame of each movie, at once (tools: no wait for the clock).
@@ -452,7 +478,10 @@ impl Host {
         let mut player = self.player.lock().unwrap();
         let changed = player.needs_render();
         if changed {
+            let start = std::time::Instant::now();
             player.render();
+            drop(player);
+            self.spent("(render)", start);
         }
         changed
     }
