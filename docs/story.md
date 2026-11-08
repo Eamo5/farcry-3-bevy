@@ -5909,6 +5909,14 @@ to SQC_080, each a brief at its giver then its blocks):
   a vehicle made from its kind now has the fallback health. The gun is
   taken from up to 2 m below its seat (the barge lists in the shallows).
   HUR_040 completed.
+* **Spent weapons.** SQA_D6's hunt asks for a bow, and with its arrows
+  spent the autopilot reloaded it for good: each step to the spare arrows
+  laid out, the hunt took the player back. With the weapon asked for
+  carried but empty, the hunt now waits (the arrows taken first), and the
+  resupply at a shop goes on a hunt too; SQA_D6 completed. HUR_050's
+  counted dog, which any weapon will do for, was reloaded at with an empty
+  LMG till the sub pen's clock ran out: a spent weapon is swapped for one
+  with rounds, else the machete, up close.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

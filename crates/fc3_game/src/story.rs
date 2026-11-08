@@ -5541,7 +5541,7 @@ const HUNT_TRY: f32 = 12.0;
 const HUNT_NEAREST: f32 = 6.0;
 
 /// Our weapon class for a hunt's (`WeaponClass`).
-fn hunt_class(class: &str) -> Option<crate::weapons::WeaponClass> {
+pub(crate) fn hunt_class(class: &str) -> Option<crate::weapons::WeaponClass> {
     use crate::weapons::WeaponClass as W;
     Some(match class.to_ascii_lowercase().as_str() {
         "bow" => W::Bow,
@@ -7122,7 +7122,11 @@ fn autopilot_loot(
                 *last = Some((id, "hunt"));
             }
             let want = hunt_class(&class);
-            let melee = want == Some(crate::weapons::WeaponClass::Melee);
+            // (Any weapon, and none with rounds left: up close, with the
+            // machete.)
+            let nothing = want.is_none()
+                && !inventory.slots.iter().any(|s| s.mag + s.reserve > 0 && inventory.defs[s.def].class != crate::weapons::WeaponClass::Melee);
+            let melee = want == Some(crate::weapons::WeaponClass::Melee) || nothing;
             if std::env::var("FC3_STORY_WAIT_DEBUG").is_ok() && (now - time.delta_secs()) as u32 / 5 != now as u32 / 5 {
                 let have = want.is_some_and(|w| inventory.slots.iter().any(|s| inventory.defs[s.def].class == w));
                 info!(
@@ -7163,6 +7167,17 @@ fn autopilot_loot(
                 }
                 return;
             }
+            // (The weapon asked for carried but empty, nothing to shoot with:
+            // the hunt waits while arrows are taken or bought. SQA_D6's bow,
+            // its arrows spent, was reloaded for good, the spare arrows laid
+            // out never reached: each step to them, the hunt took it back.)
+            let empty = want.is_some_and(|w| !melee && carried(w) && inventory.slots.iter().filter(|s| inventory.defs[s.def].class == w).all(|s| s.mag + s.reserve == 0));
+            if empty {
+                if (now - time.delta_secs()) as u32 / 10 != now as u32 / 10 {
+                    info!("story autopilot: the {class} for the hunt has nothing to shoot; arrows first");
+                }
+                return;
+            } else {
             let target = qt.translation + Vec3::Y * 0.3;
             // Not down after a while from one side (a rock in the way): from
             // another, a quarter round and nearer.
@@ -7193,8 +7208,15 @@ fn autopilot_loot(
                 use crate::controls::Action;
                 let held = inventory.def().class;
                 let has = |c| inventory.slots.iter().any(|s| inventory.defs[s.def].class == c);
-                if want.is_some_and(|w| w != held && has(w)) {
+                // (Any weapon will do, and this one's spent: another with
+                // rounds, or the machete. HUR_050's counted dog was reloaded
+                // at with an empty LMG till the sub pen's clock ran out.)
+                let spent = inventory.slot().mag + inventory.slot().reserve == 0 && held != crate::weapons::WeaponClass::Melee;
+                let other = inventory.slots.iter().any(|s| s.mag + s.reserve > 0 || inventory.defs[s.def].class == crate::weapons::WeaponClass::Melee);
+                if want.is_some_and(|w| w != held && has(w)) || (want.is_none() && spent && other) {
                     actions.cycle = 1;
+                } else if want.is_none() && spent {
+                    actions.press(Action::Melee);
                 } else if inventory.slot().mag == 0 && !melee {
                     actions.press(Action::Reload);
                 } else {
@@ -7205,6 +7227,7 @@ fn autopilot_loot(
                 }
             }
             return;
+            }
         }
         // The quarry down, skinned (its looting awaited).
         let skin = story_actors

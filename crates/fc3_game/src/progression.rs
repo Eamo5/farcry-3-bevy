@@ -3069,7 +3069,12 @@ fn autopilot_resupply(
     }
     let guns: Vec<&crate::weapons::WeaponSlot> =
         inv.slots.iter().filter(|s| !matches!(inv.defs[s.def].class, crate::weapons::WeaponClass::Melee | crate::weapons::WeaponClass::Flamethrower)).collect();
-    if guns.is_empty() || guns.iter().any(|s| s.mag + s.reserve >= inv.defs[s.def].magazine.max(1)) || host.story.mission_in_progress().is_some() {
+    // (Or, on a hunt, its weapon carried with nothing to shoot: SQA_D6's bow,
+    // its arrows spent, the hunt asking for it alone.)
+    let hunt = host.story.hunt_weapon().and_then(|c| crate::story::hunt_class(&c)).filter(|w| *w != crate::weapons::WeaponClass::Melee);
+    let of_hunt = |s: &crate::weapons::WeaponSlot| hunt.is_some_and(|w| inv.defs[s.def].class == w);
+    let hunt_empty = guns.iter().any(|s| of_hunt(s)) && guns.iter().filter(|s| of_hunt(s)).all(|s| s.mag + s.reserve == 0);
+    if !hunt_empty && (guns.is_empty() || guns.iter().any(|s| s.mag + s.reserve >= inv.defs[s.def].magazine.max(1)) || host.story.mission_in_progress().is_some()) {
         return;
     }
     let item = ShopItem::AmmoRefill;
