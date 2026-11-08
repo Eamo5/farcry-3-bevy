@@ -5888,6 +5888,27 @@ to SQC_080, each a brief at its giver then its blocks):
   was learned under its objective. That entry is gone from the test
   harness's file (the spot isn't gone to while another mission runs);
   HUR_020 completed, then HUR_040's barge defence ran.
+* **HUR_040's barge.** B40 ("Use that turret and protect the barge") failed
+  on every reload: the walk to the objective marker went to the block's
+  mission zone marker and left its area. A marker walk that fails the
+  mission is now learned like any step (left alone under its objective),
+  and a reload starts the gone-nowhere clock afresh. Then the barge was
+  nowhere: a reload makes the layers' vehicles afresh at their start, and
+  the barge's start is 500 m up the river, out of the streamed sectors. Its
+  checkpoint scene (`SAM010_Checkpoint_B04`) sets it down by the beach with
+  a movement track, which was taken in the barge's own frame (as the
+  greenhouse's doors want), so it stayed where it stood; a track that puts
+  its prop over 40 m from where it stands now takes the scene's frame
+  (`MOVEMENT_FRAME_REACH`), and a prop the scene moves that isn't in the
+  world comes in where the scene leaves it. A mission vehicle put somewhere
+  away from its sector now comes in from its own sector, as its layer
+  makes it (`mission_layers`: its sector loaded for it; `story_rides`
+  leaves such ones be), and one made afresh by a reload comes back the same
+  way wherever the player is: made from its kind alone, the barge came in
+  dead (no armour figure of ours: health 0) and went up, then capsized;
+  a vehicle made from its kind now has the fallback health. The gun is
+  taken from up to 2 m below its seat (the barge lists in the shallows).
+  HUR_040 completed.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

@@ -1177,6 +1177,15 @@ fn main() -> Result<()> {
                 println!("tex param {h:08X} x{c} e.g. {ex}");
             }
         }
+        "seq-dump" => {
+            // A sequence as the cache keeps it, by its Domino or archive
+            // path: seq-dump <Sequences/x/y.seq>
+            let path = args.get(1).context("usage: seq-dump <sequence path>")?;
+            let archive = if path.to_ascii_lowercase().ends_with(".cseq") { path.to_ascii_lowercase() } else { fc3_formats::cinema::archive_path(path) };
+            let rel = fc3_formats::cinema::sequence_rel(&archive);
+            println!("{archive} -> {rel}");
+            print!("{}", std::fs::read_to_string(fc3_formats::cache::default_cache_root().join(&rel))?);
+        }
         "scene-bindings" => {
             // A sequence's groups and what its scene entities bind them to:
             // scene-bindings <sequence path part>

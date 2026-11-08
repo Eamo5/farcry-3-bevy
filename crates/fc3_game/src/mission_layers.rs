@@ -36,6 +36,11 @@ pub struct MissionLayers {
 #[derive(Component, Default)]
 struct SpawnedLayers(HashMap<u64, Entity>);
 
+/// Where a mission vehicle came from: its sector and layer (laid out again
+/// there after a checkpoint's reload, however far the player is).
+#[derive(Component)]
+struct VehicleSource(Handle<Fc3Sector>, u64);
+
 /// A layer's share of a sector, spawned.
 #[derive(Component)]
 pub struct LayerObjects {
@@ -53,13 +58,16 @@ fn stream_layers(
     dressed: Res<crate::story_actors::DressedEntities>,
     world: Res<crate::pickups::WorldState>,
     host: Option<NonSend<crate::story::StoryHost>>,
-    vehicles: Query<(Entity, &crate::vehicles::Vehicle, Has<crate::vehicles::MissionVehicle>)>,
+    vehicles: Query<(Entity, &crate::vehicles::Vehicle, Has<crate::vehicles::MissionVehicle>, Option<&VehicleSource>)>,
     inventories: Query<&crate::weapons::Inventory, With<crate::player::Player>>,
+    mut returning: Local<Vec<(Handle<Fc3Sector>, u64, u64)>>,
+    (placements, mut asked): (Option<Res<crate::story::EntityPlacements>>, Local<HashSet<u64>>),
 ) {
     let data = host.as_ref().map(|h| h.story.data());
     let weapons = inventories.single().map(|i| i.defs.as_slice()).unwrap_or(&[]);
     let reset = std::mem::take(&mut layers.reset);
     if reset {
+        asked.clear();
         for (_, _, spawned) in &mut roots {
             if let Some(mut spawned) = spawned {
                 for (_, e) in spawned.0.drain() {
@@ -67,8 +75,14 @@ fn stream_layers(
                 }
             }
         }
-        for (e, _, mission) in &vehicles {
+        for (e, v, mission, source) in &vehicles {
             if mission {
+                // (Laid out again at its start, its sector streamed in or not:
+                // HUR_040's barge, moved off down the river, was 500 m from
+                // the player put back by it, out of the world for good.)
+                if let Some(VehicleSource(sector, layer)) = source {
+                    returning.push((sector.clone(), *layer, v.story_id()));
+                }
                 commands.entity(e).despawn();
             }
         }
@@ -86,7 +100,7 @@ fn stream_layers(
             }
         }
     }
-    let mut live_vehicles: HashSet<u64> = vehicles.iter().filter(|(_, _, mission)| !(reset && *mission)).map(|(_, v, _)| v.story_id()).collect();
+    let mut live_vehicles: HashSet<u64> = vehicles.iter().filter(|(_, _, mission, _)| !(reset && *mission)).map(|(_, v, _, _)| v.story_id()).collect();
     let mut budget = 2;
     for (root, so, spawned) in &mut roots {
         let Some(sector) = sectors.get(&so.sector) else { continue };
@@ -152,7 +166,7 @@ fn stream_layers(
                     let (layout, health) = layout;
                     if let Some(vehicle) = crate::vehicles::build_placed_vehicle(&mut commands, sector, p, model, e.id, &layout, health) {
                         live_vehicles.insert(e.id);
-                        commands.entity(vehicle).insert(crate::vehicles::MissionVehicle(*layer));
+                        commands.entity(vehicle).insert((crate::vehicles::MissionVehicle(*layer), VehicleSource(so.sector.clone(), *layer)));
                         vehicle
                     } else {
                         spawn_placement(&mut commands, lroot, sector, p, handle, model)
@@ -182,6 +196,61 @@ fn stream_layers(
             have.insert(*layer, lroot);
         }
     }
+    // (And one a script or a scene has put somewhere, its sector not in: it
+    // comes into the world from its own sector, as its layer makes it, and
+    // the move takes it on (as the original's entities are there whatever
+    // streams; one made from its kind alone, HUR_040's barge, capsized).)
+    if let (Some(placements), Some(data)) = (placements.as_ref(), data.as_ref()) {
+        for (id, _) in placements.moved() {
+            if live_vehicles.contains(&id) || asked.contains(&id) {
+                continue;
+            }
+            let Some(e) = data.entities.get(&id) else { continue };
+            let fc3_story::data::Origin::Sector(s) = e.origin else { continue };
+            if !own_vehicle(e, &layers.present) {
+                continue;
+            }
+            asked.insert(id);
+            returning.push((server.load(cache_path(&fc3_formats::cache::sector_rel(s))), e.layer, id));
+        }
+    }
+    // Mission vehicles back at their start after a reload, where their
+    // sectors aren't in (the streamed ones come back with their layers).
+    returning.retain(|(source, layer, id)| {
+        if live_vehicles.contains(id) || !layers.present.contains(layer) {
+            return false;
+        }
+        let Some(sector) = sectors.get(source) else { return true };
+        let Some(content) = sector.layers.get(layer) else { return false };
+        let Some(i) = content.entities.iter().position(|e| e.id == *id) else { return false };
+        let Some(p) = content.placements.iter().find(|p| p.entity as usize == i) else { return false };
+        let path = sector.model_paths.get(p.model as usize).cloned().unwrap_or_default();
+        let model = match sector.models.get(p.model as usize) {
+            Some(h) if *h != Handle::default() => h.clone(),
+            _ => cache.entry(path.clone()).or_insert_with(|| server.load(cache_path(&path))).clone(),
+        };
+        // (Its model still loading: later.)
+        let Some(model) = models.get(&model) else { return !crate::cache_assets::done(&server, &model) };
+        let Some((layout, health)) = data
+            .as_ref()
+            .and_then(|d| d.entities.get(id))
+            .and_then(|entry| Some((fc3_story::vehicles::Layout::from_entry(entry)?, fc3_story::vehicles::max_health(entry))))
+        else {
+            return false;
+        };
+        if let Some(vehicle) = crate::vehicles::build_placed_vehicle(&mut commands, sector, p, model, *id, &layout, health) {
+            debug!("layer {layer:#x}: vehicle {id} back at its start");
+            live_vehicles.insert(*id);
+            commands.entity(vehicle).insert((crate::vehicles::MissionVehicle(*layer), VehicleSource(source.clone(), *layer), crate::objects::PlacedId(*id)));
+        }
+        false
+    });
+}
+
+/// A vehicle of a mission's layer that's present: its layer makes it (from
+/// its own sector, wherever it's been moved: `story_rides` leaves it be).
+pub(crate) fn own_vehicle(e: &fc3_story::data::Entry, present: &HashSet<u64>) -> bool {
+    e.layer != fc3_formats::world::DEFAULT_MISSION_LAYER && present.contains(&e.layer) && fc3_story::vehicles::Layout::from_entry(e).is_some()
 }
 
 fn layer_pickup(

@@ -2292,6 +2292,8 @@ fn run_story(
             // failed the mission: JAS_020 B15's guard, lured off before the
             // reload, was never lured again.)
             host.used.clear();
+            // (Back at the checkpoint, nowhere has been gone yet.)
+            host.focus_since = None;
             host.near_at.clear();
             host.impaired.clear();
             host.relations.clear();
@@ -2834,7 +2836,7 @@ fn run_story(
             // (An objective's, not a giver's, a shop's or an activity's.)
             .filter(|(id, _)| data.markers.get(id).is_none_or(|m| !NOT_OBJECTIVES.contains(&m.kind)))
             .map(|(id, p)| (id, to_bevy(p)))
-            .filter(|(id, at)| at.with_y(0.0).distance(t.translation.with_y(0.0)) > MARKER_WALK_NEAR && !host.used.contains(&(*id, "go to".to_string())))
+            .filter(|(id, at)| at.with_y(0.0).distance(t.translation.with_y(0.0)) > MARKER_WALK_NEAR && !host.used.contains(&(*id, "go to".to_string())) && !host.fatal.contains(&(*id, "go to".to_string())))
             .min_by(|a, b| a.1.distance(t.translation).total_cmp(&b.1.distance(t.translation)));
         if marker_walk.is_some() {
             watched.clear();
@@ -3159,6 +3161,10 @@ fn run_story(
         } else if let Some((id, at)) = marker_walk {
             info!("story autopilot: go to the marker {}", data.name_of(id).unwrap_or("?"));
             host.used.insert((id, "go to".into()));
+            // (One that fails the mission is left alone under its objective:
+            // HUR_040's zone marker, gone to, failed its barge's defence on
+            // every reload.)
+            host.last_step = Some((id, "go to".into(), now));
             let side = (t.translation - at).with_y(0.0).normalize_or(Vec3::Z);
             let mut stand = at + side * MARKER_WALK_SHORT;
             stand.y = heights.height_at(stand).unwrap_or(at.y);

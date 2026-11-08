@@ -164,6 +164,7 @@ fn place_moved_vehicles(
     loaded: Query<&crate::objects::SectorObjects>,
     players: Query<&Transform, With<Player>>,
     mut commands: Commands,
+    layers: Res<crate::mission_layers::MissionLayers>,
 ) {
     let (Some(host), Some(assets)) = (host, assets) else { return };
     let Ok(pt) = players.single() else { return };
@@ -173,6 +174,10 @@ fn place_moved_vehicles(
             continue;
         }
         let Some(entry) = data.entities.get(&id).filter(|e| e.component("CFCXVehicle").is_some()) else { continue };
+        // (One of a present layer's is made from its own sector: `mission_layers`.)
+        if crate::mission_layers::own_vehicle(entry, &layers.present) {
+            continue;
+        }
         // (With its own sector in the world, its layer makes it there and
         // the move takes it on.)
         let fc3_story::data::Origin::Sector(sector) = entry.origin else { continue };
@@ -190,6 +195,10 @@ fn place_moved_vehicles(
         let layout = layout_of(&data, entry);
         let root = crate::vehicles::build_story_vehicle(&mut commands, def, model, pose.translation, pose.rotation, id, &layout);
         commands.entity(root).insert((crate::vehicles::MissionVehicle(entry.layer), crate::objects::PlacedId(id)));
+        // (Its own health, as its layer would have made it.)
+        if let Some(h) = fc3_story::vehicles::max_health(entry).filter(|_| crate::vehicles::armourless(def)) {
+            commands.entity(root).insert(crate::combat::Health::new(h));
+        }
         info!("story: vehicle {id} made where a script moved it, {:.1}", pose.translation);
     }
 }

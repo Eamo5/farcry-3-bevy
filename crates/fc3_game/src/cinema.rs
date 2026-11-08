@@ -42,6 +42,11 @@ impl Plugin for CinemaPlugin {
 const MASTER_SKELETON: &str = r"graphics\actors_\_skeleton_master\hips_ref.skeleton";
 const NARRATIVE_SKELETON: &str = r"graphics\actors_\_skeleton_master\narrative_hips_ref.skeleton";
 
+/// How far (m) from where a scene's prop stands its movement may put it
+/// and still be taken in the prop's own frame (a greenhouse's doors, 8 m
+/// off the scene's); farther, the scene's place is the frame.
+const MOVEMENT_FRAME_REACH: f32 = 40.0;
+
 /// The longest a scene waits for the vehicles it drives, and their crews.
 const SEATED_WAIT: f32 = 30.0;
 
@@ -688,14 +693,19 @@ fn play_scenes(
             let Some((local, gas, steering)) = recorded_pose(g, p.t) else { continue };
             let Some(&id) = p.bindings.get(&g.uid) else { continue };
             let Some((_, mut at, vehicle)) = props.iter_mut().find(|(pid, _, _)| pid.0 == id) else { continue };
+            let origin = p.origin;
             let frame = if p.scene != 0 && g.kind == GroupKind::Generic {
                 g.clips.iter().find_map(|c| match &c.kind {
                     ClipKind::Movement { keys } => movement_pose(keys, 0.0),
                     _ => None,
                 }).map(|first| *p.movement_frames.entry(g.uid).or_insert_with(|| {
-                    Transform::from_matrix(at.to_matrix() * first.to_matrix().inverse())
-                })).unwrap_or(p.origin)
-            } else { p.origin };
+                    // (Unless the scene puts it far from where it stands: a
+                    // checkpoint's scene setting HUR_040's barge down where
+                    // the defence goes on, 500 m down the river from its start.)
+                    let relative = Transform::from_matrix(at.to_matrix() * first.to_matrix().inverse());
+                    if (origin * first).translation.distance(at.translation) > MOVEMENT_FRAME_REACH { origin } else { relative }
+                })).unwrap_or(origin)
+            } else { origin };
             *at = frame * local;
             if matches!(g.clips.first().map(|c| &c.kind), Some(ClipKind::Movement { .. }))
                 && (p.t * 2.0) as u32 != (prev * 2.0) as u32 {
@@ -902,6 +912,18 @@ fn play_scenes(
                 let origin = if anchored_at(&g.clips, end) { anchor.unwrap_or(p.origin) } else { p.origin };
                 if let Some(clip) = p.clips.get(source).and_then(|h| clips.get(h)) {
                     placements.place(id, origin * clip_root(&clip.0, ct));
+                }
+            }
+            // (And a prop it moves, not in the world now, comes in where
+            // it's left: HUR_040's barge, laid out again at its start after
+            // a reload.)
+            for g in p.seq.groups.iter().filter(|g| g.kind == GroupKind::Generic) {
+                let Some(&id) = p.bindings.get(&g.uid) else { continue };
+                let Some((local, _, _)) = recorded_pose(g, end) else { continue };
+                if !props.iter().any(|(pid, _, _)| pid.0 == id) {
+                    let frame = p.movement_frames.get(&g.uid).copied().unwrap_or(p.origin);
+                    debug!("cinema {}: {id} not in the world; it comes in at {:.1?}", p.seq.name, (frame * local).translation);
+                    placements.place(id, frame * local);
                 }
             }
         }

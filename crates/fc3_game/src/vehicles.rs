@@ -716,6 +716,11 @@ const DEFS: &[Def] = &[
     },
 ];
 
+/// A definition with no armour figure of ours (its health is its data's).
+pub(crate) fn armourless(def: usize) -> bool {
+    DEFS[def].armour == 0.0
+}
+
 /// A definition whose gun stands on a tripod (the barge).
 fn has_tripod(def: usize) -> bool {
     DEFS[def].model.ends_with(r"\barge_02.xbg")
@@ -1734,7 +1739,10 @@ fn autopilot_board(
     if let Some(g) = gun(ve).filter(|_| has_tripod(v.def)) {
         let (spot, feet) = (g.gunner(), pt.translation - Vec3::Y * HALF_HEIGHT);
         let name = host.story.data().name_of(v.spawn_id).unwrap_or("?").to_string();
-        if Vec2::new(feet.x - spot.x, feet.z - spot.z).length() < 1.0 && (feet.y - spot.y).abs() < 1.2 {
+        // (Up to 2 m below it: HUR_040's barge, aground in the mangroves
+        // after a reload, lists, and the player set at its gun slides 1.3 m
+        // down its deck, the gun still in reach.)
+        if Vec2::new(feet.x - spot.x, feet.z - spot.z).length() < 1.0 && (-2.0..1.2).contains(&(feet.y - spot.y)) {
             info!("story autopilot: onto the gun of {name}");
             actions.press(Action::Interact);
         } else {
@@ -2274,6 +2282,11 @@ pub(crate) fn build_story_vehicle(
     layout: &fc3_story::vehicles::Layout,
 ) -> Entity {
     let root = build_vehicle_inner(commands, def, model, at, rotation, id, None);
+    // (One with no figure of ours, as a placed one: else it's made dead and
+    // goes up at once, HUR_040's barge made where its checkpoint put it.)
+    if DEFS[def].armour == 0.0 {
+        commands.entity(root).insert(Health::new(FALLBACK_ARMOUR));
+    }
     author_seats(commands, root, model, layout);
     root
 }
