@@ -13,7 +13,9 @@ use anyhow::{bail, Result};
 use crate::fcb::Object;
 
 pub const ANIMALS_REL: &str = "characters/animals.txt";
-const MAGIC: &str = "fc3-animals 2";
+const MAGIC: &str = "fc3-animals 3";
+/// The form before the bite struggles (read the same, without them).
+const MAGIC_2: &str = "fc3-animals 2";
 
 /// Whether a cached table is in this version's form.
 pub fn is_current(text: &str) -> bool {
@@ -81,6 +83,14 @@ pub struct Personality {
     pub walk: f32,
     pub run: f32,
     pub sprint: f32,
+    /// Its struggles (`QTE`): the chance (0 to 1) a strike that lands on
+    /// the player becomes a bite he struggles out of, how long (s) before
+    /// another can, and what failing costs him (a share of his health, at
+    /// most so much).
+    pub qte_chance: f32,
+    pub qte_cooldown: f32,
+    pub qte_damage_share: f32,
+    pub qte_max_damage: f32,
 }
 
 impl Personality {
@@ -139,6 +149,7 @@ fn personality(t: &Object) -> Personality {
     let aggressive = group("AgressiveBehavior");
     let damage = aggressive.and_then(|a| a.child("AttackDamage"));
     let ranges = aggressive.and_then(|a| a.child("AttackRanges"));
+    let qte = group("QTE");
     let i = |g: Option<&std::sync::Arc<Object>>, n: &str| g.and_then(|g| int(g, n)).unwrap_or(0);
     Personality {
         temper: i(base, "selTemperType") as u8,
@@ -167,6 +178,10 @@ fn personality(t: &Object) -> Personality {
         attacks_before_pause: (i(ranges, "iMinAttackTimesBeforeDelay"), i(ranges, "iMaxAttackTimesBeforeDelay")),
         attack_reach: f(ranges, "fOnSpotAttackDistance"),
         attack_height: f(damage, "fMinVerticalAttackDistance"),
+        qte_chance: f(qte, "fQTEAttackPossibility") / 100.0,
+        qte_cooldown: f(qte, "fQTECooldownTime"),
+        qte_damage_share: f(qte, "fQTEDamagePercent") / 100.0,
+        qte_max_damage: f(qte, "fMaxQTEDamage"),
         ..Default::default()
     }
 }
@@ -256,6 +271,7 @@ pub fn to_text(all: &[Personality]) -> String {
         n.extend([p.attack_reach, p.attack_height, p.walk, p.run, p.sprint].map(|v| v.to_string()));
         // (Last, so a table cached before it reads as fearful.)
         n.push(u8::from(p.ignore_fear).to_string());
+        n.extend([p.qte_chance, p.qte_cooldown, p.qte_damage_share, p.qte_max_damage].map(|v| v.to_string()));
         s += &format!("{}\t{}\t{}\n", p.name, p.senses.as_deref().unwrap_or("-"), n.join(","));
     }
     s
@@ -263,7 +279,7 @@ pub fn to_text(all: &[Personality]) -> String {
 
 pub fn from_text(text: &str) -> Result<Vec<Personality>> {
     let mut lines = text.lines();
-    if lines.next().map(str::trim) != Some(MAGIC) {
+    if !matches!(lines.next().map(str::trim), Some(MAGIC | MAGIC_2)) {
         bail!("not an animals table");
     }
     let mut out = Vec::new();
@@ -308,6 +324,10 @@ pub fn from_text(text: &str) -> Result<Vec<Personality>> {
             run: v[31],
             sprint: v[32],
             ignore_fear: v.get(33).is_some_and(|x| *x != 0.0),
+            qte_chance: v.get(34).copied().unwrap_or(0.0),
+            qte_cooldown: v.get(35).copied().unwrap_or(0.0),
+            qte_damage_share: v.get(36).copied().unwrap_or(0.0),
+            qte_max_damage: v.get(37).copied().unwrap_or(0.0),
         });
     }
     Ok(out)
@@ -331,6 +351,10 @@ mod tests {
             attacks_before_pause: (2, 3),
             attack_reach: 2.5,
             ignore_fear: true,
+            qte_chance: 0.5,
+            qte_cooldown: 8.0,
+            qte_damage_share: 0.3,
+            qte_max_damage: 50.0,
             ..Default::default()
         };
         let boar = Personality { name: "Boar".into(), temper: 2, defensive: true, stealth_smell: -1.0, smell: 25.0, ..Default::default() };

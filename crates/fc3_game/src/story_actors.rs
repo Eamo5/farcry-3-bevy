@@ -770,7 +770,20 @@ fn spawn_actors(
         } else {
             // (A story shark has an animal's counters but no network
             // component: it is an animal all the same.)
-            e.component("CAnimalNetworkComponent").or_else(|| e.component("CFCXCountersComponentAnimal")).and_then(|_| crate::wildlife::story_species(&e.name))
+            e.component("CAnimalNetworkComponent").or_else(|| e.component("CFCXCountersComponentAnimal")).and_then(|_| {
+                // (Else by its model: a hunt's rare quarry is named for its
+                // quest, SQA_G4's albino crocodile "SQA_G4_OptionalTarget_1",
+                // and stood where it was put, never coming at the player.)
+                crate::wildlife::story_species(&e.name).or_else(|| {
+                    let mut model = None;
+                    e.component("CGraphicComponent")?.walk(&mut |o, _| {
+                        if model.is_none() {
+                            model = o.str_h(0x3182_766C);
+                        }
+                    });
+                    crate::wildlife::species_by_model(&model?)
+                })
+            })
         };
         if let Some(species) = animal {
             if animals.as_ref().is_none_or(|a| !a.ready_for_story(species, &server)) {

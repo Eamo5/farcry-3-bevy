@@ -1044,6 +1044,8 @@ pub struct StoryHost {
     pub travel_due: Option<crate::map::TravelTo>,
     /// The autopilot's: the body it is searching, and since when.
     autopilot_search: Option<(u64, f32)>,
+    /// When the autopilot last went after a hunt's quarry.
+    hunted_at: f32,
     /// The autopilot's: when it may next reach for a medkit.
     autopilot_heal_at: f32,
     /// Saving turned off by a script (`SetEnableSaveGame 0`: BAM_020's
@@ -1279,6 +1281,7 @@ impl StoryHost {
             travel_asked: None,
             travel_due: None,
             autopilot_search: None,
+            hunted_at: f32::MIN,
             autopilot_heal_at: 0.0,
             save_disabled: false,
             hurt_at: f32::MIN,
@@ -2827,7 +2830,10 @@ fn run_story(
         let own_left = focused.iter().any(|w| w.3 && !host.fatal.contains(&(w.0, w.1.clone())) && !host.used.contains(&(w.0, w.1.clone())))
             // (Nor while it goes for a pickup a script waits on: SQH_020's
             // dog tags, each left as it was reached for the markers.)
-            || host.autopilot_search.is_some_and(|(_, since)| now - since < SEARCH_FOR * 2.0);
+            || host.autopilot_search.is_some_and(|(_, since)| now - since < SEARCH_FOR * 2.0)
+            // (Nor during a hunt: SQA_G4's crocodile, left for the markers,
+            // went out of the world.)
+            || now - host.hunted_at < 10.0;
         let marker_walk = host
             .story
             .objective_markers()
@@ -5601,6 +5607,9 @@ const DEFEND_WITHIN: f32 = 20.0;
 const HEAL_BELOW: f32 = 0.5;
 /// Tests: how long (s) the autopilot tries to search one body.
 const SEARCH_FOR: f32 = 12.0;
+/// How long (s) with no quarry of a hunt in the world before the autopilot
+/// goes where the story has it.
+const HUNT_FAR_AFTER: f32 = 15.0;
 
 /// CIT_030's fight with the Ink Monster: played (`boss_fight`), not ended.
 const BOSS_FIGHT: &str = "CCitraBossFight";
@@ -5971,10 +5980,21 @@ fn autopilot_loot(
     let animal_id = |e: Entity, actor: Option<&crate::story_actors::StoryActor>| actor.map_or(e.to_bits(), |a| a.id);
     let now_t = time.elapsed_secs();
     skipped.retain(|_, until| *until > now_t);
+    // (Not a hunt's quarry: the hunt goes after it with the weapon it asks
+    // for. SQA_G4's albino crocodile, shot as it came at the player, failed
+    // the machete hunt on every reload.)
+    let hunted: std::collections::HashSet<u64> = match host.story.hunt_weapon() {
+        Some(_) => host.story.counted_members().into_iter().chain(host.story.watched_singly()).collect(),
+        None => Default::default(),
+    };
     let threat = animals
         .iter()
         .filter(|(e, t, a, h, _, actor)| {
-            !h.dead && a.after(at.translation) && t.translation.distance(at.translation) < DEFEND_WITHIN && !skipped.contains_key(&animal_id(*e, *actor))
+            !h.dead
+                && a.after(at.translation)
+                && t.translation.distance(at.translation) < DEFEND_WITHIN
+                && !skipped.contains_key(&animal_id(*e, *actor))
+                && actor.is_none_or(|a| !hunted.contains(&a.id))
         })
         .min_by(|a, b| a.1.translation.distance(at.translation).total_cmp(&b.1.translation.distance(at.translation)));
     if let Some((e, t, _, h, _, actor)) = threat.filter(|_| !scripted.camera_drawn && !fixed) {
@@ -7189,10 +7209,24 @@ fn autopilot_loot(
                 }
             };
             let tries = ((now - since) / HUNT_TRY) as u32;
+            host.hunted_at = now;
             let reach = if melee { HUNT_MELEE } else { (HUNT_FROM / (1.0 + tries as f32 * 0.5)).max(HUNT_NEAREST) };
             let side = Quat::from_rotation_y(tries as f32 * std::f32::consts::FRAC_PI_2) * Vec3::Z;
             let mut stand = qt.translation + side * reach;
             stand.y = heights.height_at(stand).unwrap_or(qt.translation.y);
+            // (Up close, on dry ground by it where there's some: SQA_G4's
+            // albino crocodile, at the surface, was gone after from the
+            // river bed under it, the machete swung under water.)
+            if melee && stand.y < qt.translation.y - 1.0 {
+                let ground = |p: Vec3| heights.height_at(p).map(|y| p.with_y(y));
+                let near = (1..=3)
+                    .flat_map(|k| (0..8).map(move |i| (k, i)))
+                    .filter_map(|(k, i)| ground(qt.translation + Quat::from_rotation_y(i as f32 * std::f32::consts::FRAC_PI_4) * Vec3::Z * reach * k as f32))
+                    .find(|p| p.y >= qt.translation.y - 1.0);
+                if let Some(p) = near {
+                    stand = p;
+                }
+            }
             let feet = at.translation - Vec3::Y * crate::player::HALF_HEIGHT;
             if Vec2::new(stand.x - feet.x, stand.z - feet.z).length() > if melee { 1.0 } else { 3.0 } {
                 teleport(&mut at, &mut player, to_dunia(stand), 0.0);
@@ -7227,6 +7261,25 @@ fn autopilot_loot(
                 }
             }
             return;
+            }
+        } else if host.story.hunt_weapon().is_some() && now - host.hunted_at > HUNT_FAR_AFTER {
+            // The quarry out of the world (left far off): near where the
+            // story has it, so that it comes in.
+            let far = counted
+                .iter()
+                .chain(to_kill.iter())
+                .filter_map(|id| host.story.entity_position(*id).map(|p| (*id, to_bevy(p))))
+                .filter(|(_, p)| p.distance(at.translation) > HUNT_FROM * 3.0)
+                .min_by(|a, b| a.1.distance(at.translation).total_cmp(&b.1.distance(at.translation)));
+            if let Some((id, p)) = far {
+                info!("story autopilot: to the hunt's quarry {id}, out of the world at {:.0?}", to_dunia(p));
+                let side = (at.translation - p).with_y(0.0).normalize_or(Vec3::Z);
+                let mut stand = p + side * HUNT_FROM * 2.0;
+                stand.y = heights.height_at(stand).unwrap_or(p.y);
+                teleport(&mut at, &mut player, to_dunia(stand), 0.0);
+                host.hunted_at = now;
+                host.quiet = 0.0;
+                return;
             }
         }
         // The quarry down, skinned (its looting awaited).

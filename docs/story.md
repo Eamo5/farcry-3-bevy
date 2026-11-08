@@ -5917,6 +5917,24 @@ to SQC_080, each a brief at its giver then its blocks):
   counted dog, which any weapon will do for, was reloaded at with an empty
   LMG till the sub pen's clock ran out: a spent weapon is swapped for one
   with rounds, else the machete, up close.
+* **The machete hunt.** SQA_G4 asks for the rare albino crocodile killed
+  with a machete. Its quarry, named for the quest
+  (`SQA_G4_OptionalTarget_1`), was no species we knew, so it stood where
+  it was put; story animals now take their species by their model too
+  (`wildlife::species_by_model`) and behave as the wildlife do. Swinging a
+  machete at a crocodile in the water never killed it: the game's way is
+  the bite struggle. A predator's strike on the player may become a bite
+  by its personality's QTE (`fQTEAttackPossibility`, its cooldown, the
+  damage share and cap: kept in the animals table, `fc3-animals 3`), its
+  struggle moves run as a QTE (`jason_croc_qte_bite` with the animal's
+  `croc_jason_qte_bite`, the animal held), and won the animal dies by the
+  player's melee; lost, the player takes the share. The scripts hear
+  nothing of it. And the autopilot's defence shot the crocodile coming at
+  the player, failing the hunt ("You did not use a machete."): a hunt's
+  quarry is left to the hunt. Going after a hunt's quarry the walk to
+  markers waits, and with the quarry out of the world a while it goes
+  where the story has it (`Story::entity_position`). Standing up close it
+  takes dry ground by the quarry where there is some. SQA_G4 completed.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

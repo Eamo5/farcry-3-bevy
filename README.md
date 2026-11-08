@@ -106,7 +106,11 @@ No game data is included in this repository, and none is written into it.
   each kind, stops and watches while aware, and then acts: prey keep off or bolt, boar and
   buffalo charge whoever comes too near or hurts them, and predators (cassowaries among them)
   hunt whoever is nearest, pirates and rebels included, striking in bursts with a pause to look
-  between, and soldiers shoot back. Kills can be skinned. Animals are heard as well: each species
+  between, and soldiers shoot back. A crocodile's, leopard's, tiger's, bear's, bull shark's or
+  moray's strike on the player may be a bite he struggles out of, by its personality's chance
+  and pause (`QTE`): the game's struggle moves play (`jason_croc_qte_bite` and the animal's), the
+  prompt asks its key, and won the animal dies by the machete, lost it takes its share of his
+  health. Kills can be skinned. Animals are heard as well: each species
   calls now and then, gives its alarm as it bolts or charges, and cries out when hurt or
   killed, on its own sound events. Overhead, vultures and black eagles circle on
   thermals over the land and gulls wheel along the shore, on the game's bird models and flight

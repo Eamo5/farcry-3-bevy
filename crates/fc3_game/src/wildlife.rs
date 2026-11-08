@@ -35,6 +35,7 @@ impl Plugin for WildlifePlugin {
             .add_systems(PostUpdate, pose_barks.after(crate::characters::animate_characters).before(bevy::transform::TransformSystems::Propagate))
             .add_systems(OnExit(crate::menu::GameState::Loading), (load_animals, load_animal_table, load_wildlife_regions))
             .add_message::<PlaceAnimal>()
+            .add_message::<AnimalBite>()
             .add_systems(Update, place_animals.run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(
                 Update,
@@ -947,6 +948,43 @@ pub(crate) fn story_species(name: &str) -> Option<usize> {
         _ => None,
     };
     SPECIES.iter().position(|s| s.animal == animal && model.is_none_or(|m| s.model.contains(m)))
+}
+
+/// A predator's bite the player struggles out of (`qte`: the moves
+/// `jason_<prefix>_qte_bite` and `<prefix>_jason_qte_bite`), and what
+/// failing it costs him. The animal is held till it's over.
+#[derive(Message, Clone, Copy)]
+pub struct AnimalBite {
+    pub animal: Entity,
+    pub prefix: &'static str,
+    pub damage: f32,
+}
+
+/// The species whose bites are struggles, by their moves' prefix.
+fn bite_prefix(a: Animal) -> Option<&'static str> {
+    match a {
+        Animal::Crocodile => Some("croc"),
+        Animal::Leopard => Some("leopard"),
+        Animal::Tiger => Some("tiger"),
+        Animal::Bear => Some("bear"),
+        Animal::Shark => Some("bullshark"),
+        Animal::Moray => Some("moray"),
+        _ => None,
+    }
+}
+
+impl WildAnimal {
+    /// Let go after a struggle (or the animal's held pose).
+    pub(crate) fn release(&mut self) {
+        self.frozen = None;
+        self.attack_cooldown = self.attack_cooldown.max(2.0);
+    }
+}
+
+/// A species by its model's path (`...\animals\crocodile\crocodile.xbg`).
+pub(crate) fn species_by_model(path: &str) -> Option<usize> {
+    let path = path.to_ascii_lowercase();
+    SPECIES.iter().position(|s| path.ends_with(&s.model.to_ascii_lowercase()))
 }
 
 impl AnimalAssets {
@@ -1919,6 +1957,7 @@ fn animal_ai(
         Res<Assets<crate::cache_assets::Fc3Clip>>,
     ),
     (fires, aflame, mut barks): (Option<Res<crate::fire::Fires>>, Query<(), With<crate::burning::Aflame>>, Option<ResMut<Barks>>),
+    (mut bites, mut next_bite, qtes): (MessageWriter<AnimalBite>, Local<f32>, Option<Res<crate::qte::Qtes>>),
 ) {
     let dt = time.delta_secs();
     let Ok((pe, pt, player, ph, inventory)) = players.single() else { return };
@@ -2191,6 +2230,18 @@ fn animal_ai(
                     }
                     // The game's attack: a share of the player's health (less
                     // for each health bar gained), else within its range.
+                    // (Or, now and then, a bite the player struggles out of:
+                    // the game's QTE, its chance and pause the animal's.)
+                    let now = time.elapsed_secs();
+                    let free = !player.driving && !player.noclip && qtes.as_ref().is_none_or(|q| !q.active()) && cinema.as_ref().is_none_or(|c| !c.plays_player());
+                    if let Some(prefix) = bite_prefix(s.animal).filter(|_| is_player && free && now >= *next_bite && rng.f32() < p.qte_chance) {
+                        *next_bite = now + p.qte_cooldown.max(4.0);
+                        let damage = (ph.max * p.qte_damage_share).min(if p.qte_max_damage > 0.0 { p.qte_max_damage } else { f32::MAX });
+                        info!("animal: {} bites the player: a struggle ({prefix})", s.animal.name());
+                        bites.write(AnimalBite { animal: e, prefix, damage });
+                        a.frozen = Some(AnimKind::Idle);
+                        continue;
+                    }
                     let amount = match counters.and_then(|c| c.v.attack) {
                         Some(attack) => attack
                             .to_player(ph.max, ph.max / crate::combat::HEALTH_SEGMENT - BASE_HEALTH_BARS)
@@ -2631,7 +2682,7 @@ mod tests {
         .add_message::<crate::progression::XpGain>()
         .add_message::<crate::sound::PlaySfx>()
         .add_message::<crate::npc::Noise>()
-        .add_message::<DamageEvent>()
+        .add_message::<DamageEvent>().add_message::<AnimalBite>()
         .add_systems(Update, (bind, animal_ai, animal_deaths, skin_animals, despawn_animals).chain());
         let player = app.world_mut().spawn((player(), Transform::from_xyz(0.0, crate::player::HALF_HEIGHT, 0.0), Health::new(100.0))).id();
         let position = Transform::from_xyz(1.0, crate::player::HALF_HEIGHT, 0.0);

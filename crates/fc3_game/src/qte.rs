@@ -193,6 +193,10 @@ struct Qte {
     ended: bool,
     /// The move killed the player (its `PlayerDeath` event).
     died: bool,
+    /// A wild animal's bite (`wildlife::AnimalBite`): the animal, and what
+    /// failing costs the player. Its outcome is the animal's death or the
+    /// player's harm, not the scripts'.
+    wild: Option<(Entity, f32)>,
 }
 
 impl Qte {
@@ -203,7 +207,9 @@ impl Qte {
             return false;
         }
         self.results[id] = r;
-        host.story.message(&format!("QTE{id}_{}", if won { "Success" } else { "Fail" }));
+        if self.wild.is_none() {
+            host.story.message(&format!("QTE{id}_{}", if won { "Success" } else { "Fail" }));
+        }
         info!("qte: QTE{id} {}", if won { "succeeded" } else { "failed" });
         true
     }
@@ -254,7 +260,12 @@ fn run_qtes(
     mut meters: Query<&mut Node, With<QteMeter>>,
     mut shown: Local<String>,
     mut commands: Commands,
-    players: Query<(&Transform, &crate::player::Player)>,
+    players: Query<(Entity, &Transform, &crate::player::Player)>,
+    (mut bites, mut wilds, mut damage): (
+        MessageReader<crate::wildlife::AnimalBite>,
+        Query<(&Transform, &mut crate::wildlife::WildAnimal, Option<&crate::story_actors::StoryActor>), Without<crate::player::Player>>,
+        MessageWriter<crate::combat::DamageEvent>,
+    ),
 ) {
     // Tutorial modals pause virtual time while remaining in Playing. Their
     // inputs must not also answer a QTE in the paused world.
@@ -283,7 +294,7 @@ fn run_qtes(
         let anchor = anchor
             .map(|e| Transform { translation: to_bevy(e.pos), rotation: Quat::from_array(fc3_formats::world::angles_to_bevy_quat(e.angles)), scale: Vec3::ONE })
             .or_else(|| {
-                let (t, p) = players.single().ok()?;
+                let (_, t, p) = players.single().ok()?;
                 Some(Transform::from_translation(t.translation - Vec3::Y * crate::player::HALF_HEIGHT).with_rotation(Quat::from_rotation_y(p.yaw + std::f32::consts::PI)))
             })
             .unwrap_or_default();
@@ -310,6 +321,53 @@ fn run_qtes(
             age: 0.0,
             ended: false,
             died: false,
+            wild: None,
+        });
+    }
+    // A predator's bite: the struggle its moves play (the player's, the
+    // animal's), the animal held meanwhile. (Not over another QTE.)
+    for bite in bites.read() {
+        let Ok((at, mut animal, story)) = wilds.get_mut(bite.animal) else { continue };
+        let player = format!("jason_{}_qte_bite", bite.prefix);
+        let npc = format!("{}_jason_qte_bite", bite.prefix);
+        let (Some(states), Ok((_, pt, _))) = (moves.moves.get(&player).filter(|s| !s.is_empty()), players.single()) else {
+            animal.release();
+            continue;
+        };
+        if qtes.active.is_some() || !qtes.pending.is_empty() {
+            animal.release();
+            continue;
+        }
+        let npc = moves.moves.contains_key(&npc).then_some(npc);
+        let paths: Vec<&String> = states.iter().chain(npc.iter().flat_map(|m| &moves.moves[m])).filter_map(|s| s.clip.as_ref()).collect();
+        let handles = paths.into_iter().map(|c| (c.clone(), server.load(cache_path(&fc3_formats::cache::anim_rel(c))))).collect();
+        // (Where the player stands, facing the animal.)
+        let to = (at.translation - pt.translation).with_y(0.0);
+        let yaw = (-to.x).atan2(-to.z);
+        let anchor = Transform::from_translation(pt.translation - Vec3::Y * crate::player::HALF_HEIGHT).with_rotation(Quat::from_rotation_y(yaw + std::f32::consts::PI));
+        info!("qte: {player} (a wild animal's bite, {npc:?})");
+        qtes.active = Some(Qte {
+            id: 0,
+            player,
+            npc,
+            opponent: story.map(|s| s.id),
+            anchor,
+            results: [q::NONE; SLOTS],
+            progress: [0.0; SLOTS],
+            asked: std::array::from_fn(|_| None),
+            handles,
+            loading: 0.0,
+            state: None,
+            t: 0.0,
+            fired: -1.0,
+            length: 0.0,
+            playing: None,
+            origin: anchor,
+            plays: 0,
+            age: 0.0,
+            ended: false,
+            died: false,
+            wild: Some((bite.animal, bite.damage)),
         });
     }
     for id in std::mem::take(&mut qtes.cancelled) {
@@ -393,7 +451,9 @@ fn run_qtes(
                         last: -1.0,
                     });
                     qt.results[id] = q::IN_PROGRESS;
-                    host.story.message(&format!("QTE{id}_InProgress"));
+                    if qt.wild.is_none() {
+                        host.story.message(&format!("QTE{id}_InProgress"));
+                    }
                 }
                 Kind::End if id < SLOTS => qt.asked[id] = None,
                 Kind::Reset | Kind::Set if id < SLOTS => {
@@ -409,9 +469,11 @@ fn run_qtes(
                 Kind::EndSequence => qt.ended = true,
                 Kind::PlayerDeath => {
                     qt.died = true;
-                    host.story.message("PlayerDie");
+                    if qt.wild.is_none() {
+                        host.story.message("PlayerDie");
+                    }
                 }
-                Kind::Message if !e.text.is_empty() => host.story.message(&e.text),
+                Kind::Message if !e.text.is_empty() && qt.wild.is_none() => host.story.message(&e.text),
                 _ => {}
             }
         }
@@ -489,6 +551,27 @@ fn run_qtes(
         // the move killed the player.
         let won = !qt.died && !qt.results.contains(&q::FAILED);
         info!("qte: {} ended, {}", qt.player, if won { "won" } else { "lost" });
+        // A bite struggled out of: the animal killed with the machete (as
+        // the game's struggle ends: a hunt asking for a blade takes it), or
+        // the player hurt (his share of health the animal's), and let go.
+        if let Some((animal, harm)) = qt.wild {
+            let player = players.single().ok().map(|(e, _, _)| e);
+            if let Ok((at, mut a, _)) = wilds.get_mut(animal) {
+                a.release();
+                let (target, amount, instigator) = if won { (animal, 1.0e6, player) } else { (player.unwrap_or(animal), harm, Some(animal)) };
+                damage.write(crate::combat::DamageEvent {
+                    target,
+                    amount,
+                    kind: crate::combat::DamageKind::Melee,
+                    source: Some(at.translation),
+                    instigator,
+                    headshot: false,
+                    hit: crate::combat::Hit::Whole,
+                });
+            }
+            qtes.active = None;
+            return;
+        }
         qtes.active = None;
         host.story.message(if won { "QTE_Success" } else { "QTE_Failure" });
         host.story.message("ExoticQteGSFEnded");

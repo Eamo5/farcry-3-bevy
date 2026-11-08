@@ -1733,6 +1733,12 @@ impl Story {
         self.core.borrow().pose(id)
     }
 
+    /// Where the story has an entity now (Dunia space): where it was last
+    /// put or heard of, else its place in the world's data.
+    pub fn entity_position(&self, id: u64) -> Option<[f32; 3]> {
+        self.core.borrow().position(id)
+    }
+
     /// The things scripts wait to see destroyed (`CDestroyEvent`), and where
     /// they are.
     pub fn watched_destructibles(&self) -> Vec<(u64, [f32; 3])> {
