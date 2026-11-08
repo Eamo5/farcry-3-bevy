@@ -828,8 +828,10 @@ pub const HANDBOOK_REL: &str = "progression/handbook.txt";
 pub const WIKI_ITEMS: &str = r"generated\databases\generic\wikiitems.lib";
 pub const WIKI_CATEGORIES: &str = r"generated\databases\generic\encyclopediacategory.lib";
 pub const WIKI_SUBCATEGORIES: &str = r"generated\databases\generic\encyclopediasubcategory.lib";
-const HANDBOOK_MAGIC: &str = "fc3-handbook 2";
-/// The form before the manual (read the same, without it).
+const HANDBOOK_MAGIC: &str = "fc3-handbook 3";
+/// The forms before the pages' pictures and before the manual (read the
+/// same, without them).
+const HANDBOOK_MAGIC_2: &str = "fc3-handbook 2";
 const HANDBOOK_MAGIC_1: &str = "fc3-handbook 1";
 
 /// A handbook category and the subcategories under it.
@@ -858,6 +860,10 @@ pub struct HandbookEntry {
     pub key: String,
     pub name: String,
     pub description: String,
+    /// Its picture (`sIconName`): a movie of the handbook's assets
+    /// (`Animals/M_Boar`, `UI\Singleplayer\Menu\Handbook\Assets\<it>.feu`), or
+    /// a tutorial's Bink video.
+    pub image: String,
 }
 
 /// One of the manual's sections (a page with `bIsEmanual`): its header (a
@@ -962,6 +968,7 @@ pub fn handbook(items: &Object, categories: &Object, subcategories: &Object, str
             key,
             name,
             description: located(strings, u32f(e, "locidDescriptionId")),
+            image: text(e, "sIconName").replace("\\\\", "\\"),
         });
     }
     out.entries.sort_by(|a, b| (a.category, a.subcategory, a.sort, &a.name).cmp(&(b.category, b.subcategory, b.sort, &b.name)));
@@ -981,7 +988,7 @@ impl Handbook {
         }
         for e in &self.entries {
             s += &format!(
-                "entry\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "entry\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 e.id,
                 e.category,
                 e.subcategory,
@@ -991,7 +998,8 @@ impl Handbook {
                 esc(&e.unlock_group),
                 esc(&e.key),
                 esc(&e.name),
-                esc(&e.description)
+                esc(&e.description),
+                esc(&e.image)
             );
         }
         for m in &self.manual {
@@ -1011,7 +1019,7 @@ impl Handbook {
 
     pub fn from_text(text: &str) -> Result<Handbook> {
         let mut lines = text.lines();
-        if !matches!(lines.next().map(str::trim), Some(HANDBOOK_MAGIC | HANDBOOK_MAGIC_1)) {
+        if !matches!(lines.next().map(str::trim), Some(HANDBOOK_MAGIC | HANDBOOK_MAGIC_2 | HANDBOOK_MAGIC_1)) {
             bail!("not a handbook table");
         }
         let mut h = Handbook::default();
@@ -1038,6 +1046,7 @@ impl Handbook {
                     key: unesc(f[8]),
                     name: unesc(f[9]),
                     description: unesc(f[10]),
+                    image: f.get(11).map(|v| unesc(v)).unwrap_or_default(),
                 }),
                 "manual" if f.len() >= 5 => {
                     h.manual.push(ManualSection { id: n(1), sort: n(2), header: unesc(f[3]), section: unesc(f[4]), entries: Vec::new() })
@@ -1818,6 +1827,7 @@ end;
                 key: "Characters/X".into(),
                 name: "X".into(),
                 description: "Line one\nline\ttwo".into(),
+                image: "Characters/M_X".into(),
             }],
             manual: vec![ManualSection {
                 id: 1318,

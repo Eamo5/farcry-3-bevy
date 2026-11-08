@@ -931,6 +931,21 @@ them). The handbook's request for `Emanual` gets the sections (`iObjectID`,
 (`OnEmanualSectionChanged <id>`) and gets its entries, one
 `SetupEmanualContent <title> <text>` each.
 
+Each page's picture (`sImage`) went blank: the pages' `sIconName` is kept
+now (`fc3-handbook 3`; 2 and 1 still read, without it). The survival
+guide, wildlife, plant and collectibles pages name a movie of the
+handbook's assets (`Animals/M_Boar`, which the page loads as
+`UI\Singleplayer\Menu\Handbook\Assets\<it>.feu`, 178 of them: the
+characters, factions, animals, plants and relics drawn), and the quick
+start guide's tutorials their Bink video, which the tutorials tab loads
+into its segment's `mcVideo` under the text and the game plays there
+(`drive_movie_videos`, as the skills page's). A page's text has its
+`[Action]` placeholders made our keys. Where a menu's clip is on the stage
+is now worked out through each clip's place and scale up to its level
+(`Host::path_bounds`, `video_bounds`): Ruffle's `localToGlobal` and
+`getBounds(_root)` put a level's clips five sixths of the way there in a
+window bigger than the stage, and the videos came up over the text.
+
 The statistics tab lists its own eight categories and asks for one's rows
 at a time, `OnEncyclopediaRequest <category> StatsCategory` (0, the
 progress page, as the tab opens; its legend button flips to the lists).

@@ -177,7 +177,7 @@ fn play_videos(
     gamepads: Query<&Gamepad>,
     mut hold: ResMut<crate::fp::Cinematic>,
     mut commands: Commands,
-    mut insets: Query<(&mut Node, &mut Visibility), With<InsetPanel>>,
+    (mut insets, ui_scale): (Query<(&mut Node, &mut Visibility), With<InsetPanel>>, Res<UiScale>),
 ) {
     // (The story hears each start and end, while there is one.)
     let mut host = host;
@@ -368,12 +368,13 @@ fn play_videos(
             event(&p.path, true, p.fullscreen);
         }
     }
-    // The inset videos where their box is.
+    // The inset videos where their box is (in the UI's own pixels).
     for (mut node, mut shown) in &mut insets {
         match videos.inset {
             Some(at) => {
-                (node.left, node.top) = (Val::Px(at.min.x), Val::Px(at.min.y));
-                (node.width, node.height) = (Val::Px(at.width()), Val::Px(at.height()));
+                let (min, size) = (crate::ui_nav::viewport_to_ui(at.min, ui_scale.0), crate::ui_nav::viewport_to_ui(at.size(), ui_scale.0));
+                (node.left, node.top) = (Val::Px(min.x), Val::Px(min.y));
+                (node.width, node.height) = (Val::Px(size.x), Val::Px(size.y));
                 *shown = Visibility::Visible;
             }
             None => *shown = Visibility::Hidden,

@@ -332,6 +332,14 @@ impl Host {
         (v.len() == 4).then(|| [v[0], v[1], v[2], v[3]])
     }
 
+    /// A clip's bounds on the stage by its path (`_level8.popup_mc.x`), as
+    /// it's drawn: x and y min, x and y max.
+    pub fn path_bounds(&self, path: &str) -> Option<[f64; 4]> {
+        let ExternalValue::List(l) = self.call("pathBounds", vec![ExternalValue::String(path.to_string())]) else { return None };
+        let v: Vec<f64> = l.iter().filter_map(|x| if let ExternalValue::Number(n) = x { Some(*n) } else { None }).collect();
+        (v.len() == 4).then(|| [v[0], v[1], v[2], v[3]])
+    }
+
     /// Where the Bink video a movie loaded into a clip shows (the `Video`
     /// call told of it), on the stage: its rectangle and its alpha, while it
     /// and the clips holding it are shown.

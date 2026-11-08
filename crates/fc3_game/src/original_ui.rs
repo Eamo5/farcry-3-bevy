@@ -530,7 +530,7 @@ fn drive_pause(
                         recipes: crafting.as_ref().map_or(0, |c| c.recipes.iter().filter(|r| c.available(&progress, r)).count()),
                         outposts: outposts.liberated_count(),
                     };
-                    send_handbook(host, book, &progress, extra, arg(1).parse().unwrap_or(0), arg(2));
+                    send_handbook(host, book, &progress, extra, arg(1).parse().unwrap_or(0), arg(2), &|s| crate::story::prompt_text(s, &actions, &settings));
                 }
             }
             // The manual's section chosen: its entries, each a title and
@@ -1690,6 +1690,7 @@ fn send_handbook(
     extra: crate::statistics::Extra,
     id: u32,
     list: &str,
+    keys: &dyn Fn(&str) -> String,
 ) {
     use fc3_ui::ExternalValue as V;
     let item = |fields: Vec<(&str, V)>| fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect::<std::collections::BTreeMap<String, V>>();
@@ -1724,10 +1725,13 @@ fn send_handbook(
                     item(vec![
                         ("iObjectID", V::Number(e.id as f64)),
                         ("sName", V::String(e.name.clone())),
-                        ("sDescription", V::String(e.description.clone())),
+                        // (Its `[Action]` placeholders our keys.)
+                        ("sDescription", V::String(keys(&e.description))),
                         ("bUnlocked", V::Bool(crate::progression::handbook_open(e, progress))),
                         ("bNew", V::Bool(false)),
-                        ("sImage", V::String(String::new())),
+                        // (Its picture, a movie of the handbook's assets; a
+                        // tutorial's video.)
+                        ("sImage", V::String(e.image.clone())),
                     ])
                 })
                 .collect()
@@ -4790,7 +4794,8 @@ fn drive_boxes(
     }
     // A video plays in its box's loader, followed as the box moves in.
     if shown.video {
-        videos.inset = host.dps_bounds("MessageBoxBinkLoader").zip(windows.single().ok()).map(|(at, (w, _))| stage_rect(w, at));
+        let loader = format!("_level{}.{}.PopupTextMC.mc_bink_loader", BOX_KINDS[0].level, BOX_KINDS[0].clip);
+        videos.inset = host.path_bounds(&loader).zip(windows.single().ok()).map(|(at, (w, _))| stage_rect(w, at));
     }
     let stop_video = |shown: &mut BoxShown, videos: &mut crate::video::Videos| {
         if std::mem::take(&mut shown.video) {

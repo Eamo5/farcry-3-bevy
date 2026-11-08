@@ -613,11 +613,38 @@ api.addCallback("videoBounds", null, function() {
     if (alpha <= 0.01) {
         return undefined;
     }
-    var a = {x: r.xMin, y: r.yMin};
-    var b = {x: r.xMax, y: r.yMax};
-    c.localToGlobal(a);
-    c.localToGlobal(b);
-    return [a.x, a.y, b.x, b.y, alpha];
+    var b = _global.__fireStageRect(c, r);
+    b.push(alpha);
+    return b;
+});
+// A rectangle in a clip's own space on the stage, through each clip's place
+// and scale up to its level, as it's drawn (`localToGlobal` and
+// `getBounds(_root)` put a level's clips five sixths of the way there in a
+// window bigger than the stage).
+_global.__fireStageRect = function(c, r) {
+    var x0 = r.xMin;
+    var y0 = r.yMin;
+    var x1 = r.xMax;
+    var y1 = r.yMax;
+    var p = c;
+    while (p != undefined) {
+        var sx = p._xscale / 100;
+        var sy = p._yscale / 100;
+        x0 = p._x + x0 * sx;
+        x1 = p._x + x1 * sx;
+        y0 = p._y + y0 * sy;
+        y1 = p._y + y1 * sy;
+        p = p._parent;
+    }
+    return [x0, y0, x1, y1];
+};
+// A clip's own bounds on the stage, by path (the same way).
+api.addCallback("pathBounds", null, function(path) {
+    var c = _global.__fireAt(path);
+    if (c == undefined || c.getBounds == undefined) {
+        return undefined;
+    }
+    return _global.__fireStageRect(c, c.getBounds(c));
 });
 // A clip's bounds on the stage: [xMin, yMin, xMax, yMax].
 api.addCallback("dpsBounds", null, function(id) {
