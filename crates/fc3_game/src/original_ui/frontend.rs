@@ -51,7 +51,7 @@ const PRESS_ANY_KEY: u32 = 159971;
 const LOGO_MOST: f32 = 8.0;
 const PRESS_OUT_MOST: f32 = 0.8;
 /// The loop it plays behind (it loads it into a clip; the engine drew it).
-const FRONTEND_VIDEO: &str = r"UI\Singleplayer\Video\Swan_30_Sec_loop.bik";
+pub(super) const FRONTEND_VIDEO: &str = r"UI\Singleplayer\Video\Swan_30_Sec_loop.bik";
 const FRONTEND_LEVEL: u32 = 20;
 
 /// The home list's entries: their names (string ids) and actions.

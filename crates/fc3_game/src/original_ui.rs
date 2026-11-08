@@ -57,7 +57,7 @@ impl Plugin for OriginalUiPlugin {
                 (
                     drive_hud,
                     (drive_story, drive_objective),
-                    (drive_tutorial, drive_boxes),
+                    (drive_tutorial, drive_boxes, drive_movie_videos),
                     drive_timer,
                     drive_xp,
                     (drive_loot, drive_saving),
@@ -353,12 +353,13 @@ fn drive_pause(
         Local<CraftPage>,
         Option<ResMut<crate::syringes::Boosts>>,
     ),
-    (mut map_page, outposts, mut trials, mut shop_page, mut key_edit): (
+    (mut map_page, outposts, mut trials, mut shop_page, mut key_edit, actions): (
         ResMut<MapPage>,
         Res<crate::outposts::Outposts>,
         ResMut<crate::trials::Trials>,
         ResMut<shop::ShopPage>,
         ResMut<KeyEdit>,
+        Res<crate::controls::ActionState>,
     ),
 ) {
     use crate::menu::GameState;
@@ -627,16 +628,27 @@ fn drive_pause(
             }
             "PlayerSkillsLoaded" => {
                 if let Some(skills) = skills.as_deref() {
-                    send_skills(host, &progress, skills, true);
+                    send_skills(host, &progress, skills, true, &|s| crate::story::prompt_text(s, &actions, &settings));
+                    // FC3_SKILL_TUTORIAL=<ability> (tests): its tutorial
+                    // shown, as if just bought.
+                    let wanted = std::env::var("FC3_SKILL_TUTORIAL").ok();
+                    if let Some(t) = skills.0.abilities.iter().find(|a| wanted.as_deref() == Some(a.id.as_str())).and_then(|a| a.tutorial.as_ref()) {
+                        let text = crate::story::prompt_text(&t.text, &actions, &settings);
+                        host.event("DisplaySkillTutorial", &["1", &t.title, &text, &t.video]);
+                    }
                 }
             }
             // A skill bought (tree, index in it): learned if it can be, and
-            // the page told (`DisplaySkillTutorial`, 1 or 0) and refreshed.
+            // the page told (`DisplaySkillTutorial`, 1 or 0, with the skill's
+            // tutorial if it has one: its title, text and video, which the
+            // page shows in its popup) and refreshed.
             "BuyAbility" => {
                 if let Some(skills) = skills.as_deref() {
                     let learned = buy_skill(&mut progress, skills, arg(1).parse().unwrap_or(usize::MAX), arg(2).parse().unwrap_or(usize::MAX));
-                    host.event("DisplaySkillTutorial", &[if learned { "1" } else { "0" }, "", "", ""]);
-                    send_skills(host, &progress, skills, false);
+                    let tutorial = learned.and_then(|a| a.tutorial.clone()).unwrap_or_default();
+                    let text = crate::story::prompt_text(&tutorial.text, &actions, &settings);
+                    host.event("DisplaySkillTutorial", &[if learned.is_some() { "1" } else { "0" }, &tutorial.title, &text, &tutorial.video]);
+                    send_skills(host, &progress, skills, false, &|s| crate::story::prompt_text(s, &actions, &settings));
                 }
             }
             "PlayerInventoryLoaded" => send_rucksack(host, &progress, crafting.as_deref(), loot.as_deref(), &perks),
@@ -1589,7 +1601,7 @@ fn rucksack_icon(kind: crate::progression::LootKind, item: &fc3_formats::progres
 /// (`C_STATE_BUY` 2); the page itself greys one whose parent isn't learned
 /// or whose statistic isn't met (`sfulfilledPreReq`). `first` false sends
 /// the points and the list again only (after a purchase).
-fn send_skills(host: &fc3_ui::Host, progress: &crate::progression::Progress, skills: &crate::progression::Skills, first: bool) {
+fn send_skills(host: &fc3_ui::Host, progress: &crate::progression::Progress, skills: &crate::progression::Skills, first: bool, keys: &dyn Fn(&str) -> String) {
     use crate::progression::{skill_state, SkillLock, SkillState};
     use fc3_ui::ExternalValue as V;
     let tree = &skills.0;
@@ -1631,10 +1643,11 @@ fn send_skills(host: &fc3_ui::Host, progress: &crate::progression::Progress, ski
                 ("sDependancy", V::String(parent.to_string())),
                 ("sfulfilledPreReq", V::String(if stat_met { "1" } else { "0" }.into())),
                 ("sPreReqString", V::String(a.stat_text.clone())),
-                ("sHasTutorial", V::String("0".into())),
-                ("sTutorialHeader", V::String(String::new())),
-                ("sTutorialBodyString", V::String(String::new())),
-                ("sTutorialVideoString", V::String(String::new())),
+                // (Its tutorial, shown again from the page.)
+                ("sHasTutorial", V::String(if a.tutorial.is_some() { "1" } else { "0" }.into())),
+                ("sTutorialHeader", V::String(a.tutorial.as_ref().map(|t| t.title.clone()).unwrap_or_default())),
+                ("sTutorialBodyString", V::String(a.tutorial.as_ref().map(|t| keys(&t.text)).unwrap_or_default())),
+                ("sTutorialVideoString", V::String(a.tutorial.as_ref().map(|t| t.video.clone()).unwrap_or_default())),
             ]
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
@@ -2339,16 +2352,16 @@ fn send_craft_ingredients(
 
 /// Learns the skill at `index` of tree `tree` (as `send_skills` lists them)
 /// if it can be learned now.
-fn buy_skill(progress: &mut crate::progression::Progress, skills: &crate::progression::Skills, tree: usize, index: usize) -> bool {
+fn buy_skill<'a>(progress: &mut crate::progression::Progress, skills: &'a crate::progression::Skills, tree: usize, index: usize) -> Option<&'a fc3_formats::progression::Ability> {
     use crate::progression::{skill_state, SkillState};
-    let Some(branch) = skills.0.branches.iter().take(3).nth(tree) else { return false };
-    let Some(a) = skills.0.abilities.iter().filter(|a| a.branch == branch.number).nth(index) else { return false };
+    let branch = skills.0.branches.iter().take(3).nth(tree)?;
+    let a = skills.0.abilities.iter().filter(|a| a.branch == branch.number).nth(index)?;
     if skill_state(progress, a) != SkillState::Ready {
-        return false;
+        return None;
     }
     progress.skill_points -= a.cost;
     progress.skills.insert(a.id.clone());
-    true
+    Some(a)
 }
 
 /// One of a thing (by its item) out of the rucksack.
@@ -4647,6 +4660,66 @@ fn drive_tutorial(
     *shown = Some(now);
 }
 
+/// A rectangle on the stage in the window's logical pixels (the stage shown
+/// whole, in the middle).
+fn stage_rect(window: &Window, [x0, y0, x1, y1]: [f64; 4]) -> Rect {
+    let stage = Vec2::new(fc3_ui::STAGE.0 as f32, fc3_ui::STAGE.1 as f32);
+    let size = Vec2::new(window.width(), window.height());
+    let scale = (size / stage).min_element();
+    let origin = (size - stage * scale) * 0.5;
+    Rect::from_corners(origin + Vec2::new(x0 as f32, y0 as f32) * scale, origin + Vec2::new(x1 as f32, y1 as f32) * scale)
+}
+
+/// A Bink video a movie loads into a clip itself (the skills page's
+/// popup's `mcVideo`, a skill's tutorial: `loadVideo`), as the shim tells
+/// of it (`Video <url>`, `VideoStopped`): played looped where the clip is
+/// (`Host::video_bounds`, an inset video), till it's unloaded or its page
+/// goes. (The main menu's backdrop is the frontend's.)
+fn drive_movie_videos(
+    state: NonSend<Interface>,
+    calls: Res<UiCalls>,
+    game: Res<State<crate::menu::GameState>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut videos: ResMut<crate::video::Videos>,
+    mut playing: Local<Option<(String, crate::menu::GameState)>>,
+) {
+    let Interface::Running(host) = &*state else { return };
+    let mut stop = |videos: &mut crate::video::Videos, playing: &mut Option<(String, crate::menu::GameState)>| {
+        if playing.take().is_some() {
+            videos.stop_inset();
+            videos.inset = None;
+        }
+    };
+    for call in calls.0.iter() {
+        let url = call.args.first().cloned().unwrap_or_default();
+        match call.command.as_str() {
+            "Video" if !url.to_ascii_lowercase().ends_with(&frontend::FRONTEND_VIDEO.rsplit('\\').next().unwrap_or_default().to_ascii_lowercase()) => {
+                stop(&mut videos, &mut playing);
+                info!("original UI: a movie plays {url}");
+                videos.requests.push(crate::video::VideoRequest {
+                    path: url.clone(),
+                    fullscreen: false,
+                    looped: true,
+                    volume: 1.0,
+                    screen: None,
+                    backdrop: false,
+                    inset: true,
+                });
+                *playing = Some((url, *game.get()));
+            }
+            "VideoStopped" => stop(&mut videos, &mut playing),
+            _ => {}
+        }
+    }
+    // (Its page gone with the screen it was on.)
+    if playing.as_ref().is_some_and(|(_, on)| on != game.get()) {
+        stop(&mut videos, &mut playing);
+    }
+    if playing.is_some() {
+        videos.inset = host.video_bounds().zip(windows.single().ok()).map(|((at, _), w)| stage_rect(w, at));
+    }
+}
+
 /// The story's boxes (tutorials, questions: `story::StoryBox`) on the game's
 /// own, in the movie a box's package names (`Hud\Message\MessageBox.feu`; a
 /// side quest giver's `SideQuestBox.feu`, its reward line under its text),
@@ -4717,11 +4790,7 @@ fn drive_boxes(
     }
     // A video plays in its box's loader, followed as the box moves in.
     if shown.video {
-        videos.inset = host.dps_bounds("MessageBoxBinkLoader").zip(windows.single().ok()).map(|([x0, y0, x1, y1], (w, _))| {
-            let scale = (w.width() / fc3_ui::STAGE.0 as f32).min(w.height() / fc3_ui::STAGE.1 as f32);
-            let origin = (Vec2::new(w.width(), w.height()) - Vec2::new(fc3_ui::STAGE.0 as f32, fc3_ui::STAGE.1 as f32) * scale) * 0.5;
-            Rect::from_corners(origin + Vec2::new(x0 as f32, y0 as f32) * scale, origin + Vec2::new(x1 as f32, y1 as f32) * scale)
-        });
+        videos.inset = host.dps_bounds("MessageBoxBinkLoader").zip(windows.single().ok()).map(|(at, (w, _))| stage_rect(w, at));
     }
     let stop_video = |shown: &mut BoxShown, videos: &mut crate::video::Videos| {
         if std::mem::take(&mut shown.video) {

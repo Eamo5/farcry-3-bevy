@@ -826,11 +826,26 @@ story, else 2: the map greys one whose parent, `sDependancy`, its index,
 isn't learned, or whose statistic isn't met, `sfulfilledPreReq` 0),
 `iMatrixRowIndex`/`iMatrixColumnIndex`, `iMaxSkillPoint` (its cost),
 `sSkillnName` (so spelled), `sSkillDescription`, `sPreReqString`, the
-tutorial fields (none yet), and `itattooPartName`, the CRC-32 of its
+tutorial fields (`sHasTutorial`, `sTutorialHeader`, `sTutorialBodyString`,
+`sTutorialVideoString`), and `itattooPartName`, the CRC-32 of its
 tattoo part's name as a decimal string (the page maps 12 of them to the
 tattoo's segments). `BuyAbility <tree> <index>` learns it if it can be
 learned (`progression::skill_state`) and is answered
-`DisplaySkillTutorial` 1 or 0, then the points and the list again.
+`DisplaySkillTutorial` 1 or 0, with the skill's tutorial if it has one,
+then the points and the list again. The takedown skills' tutorials (the
+skill tree's `bHasTutorial`, `sTutorialVideoPath`, header and body ids,
+kept as the skills table's `tutorial` lines) were left out: the page
+shows a bought one's in its popup (`M_PopupBox.feu`'s large form, the
+text as the game's HTML) and plays its video into the popup's `mcVideo`
+(`loadVideo`). The shim now catches a Bink file loaded into a clip
+(`MovieClipLoader.loadClip`; the load itself an empty movie): the host
+hears `Video <url>` (and `VideoStopped` as it's unloaded), and the game
+plays it looped over the canvas where the clip is
+(`Host::video_bounds`: the clip's stand-in rectangle where it is now, while
+it and those holding it are shown), till it's unloaded or the page goes
+(`drive_movie_videos`). The title can run under the video where it takes
+two lines. `FC3_SKILL_TUTORIAL=<ability>` (tests) shows one as the skills
+page loads (`--pause`, `FC3_PAUSE_PAGE=3`).
 
 **Crafting** (`M_Crafting.feu`, quick launch 8) drills down, the page
 asking each level as the player moves: on `CraftingPageLoaded` the game

@@ -91,6 +91,33 @@ Sound.prototype.start = function() {
     }
 };
 
+// A Bink video a movie loads into a clip (a popup's `mcVideo`: the skills
+// page's tutorial): the engine played it there. The clip is kept and the
+// host told (`Video <url>`, `VideoStopped <url>` as it's unloaded), which
+// plays it where the clip is (`videoBounds`); the load itself gets an empty
+// movie (the host's navigator).
+ASSetPropFlags(MovieClipLoader.prototype, ["loadClip", "unloadClip"], 0, 4);
+MovieClipLoader.prototype.__fireLoadClip = MovieClipLoader.prototype.loadClip;
+MovieClipLoader.prototype.loadClip = function(url, target) {
+    if (String(url).toLowerCase().indexOf(".bik") >= 0) {
+        _global.__fireVideoClip = (typeof(target) == "movieclip") ? target : eval(target);
+        _global.__fireVideoUrl = String(url);
+        // (Its stand-in's rectangle, as the load empties it.)
+        _global.__fireVideoRect = _global.__fireVideoClip.getBounds(_global.__fireVideoClip);
+        flash.external.ExternalInterface.call("engineCall", "Video", [String(url)]);
+    }
+    return this.__fireLoadClip(url, target);
+};
+MovieClipLoader.prototype.__fireUnloadClip = MovieClipLoader.prototype.unloadClip;
+MovieClipLoader.prototype.unloadClip = function(target) {
+    var t = (typeof(target) == "movieclip") ? target : eval(target);
+    if (_global.__fireVideoClip != undefined && t == _global.__fireVideoClip) {
+        _global.__fireVideoClip = undefined;
+        flash.external.ExternalInterface.call("engineCall", "VideoStopped", [_global.__fireVideoUrl]);
+    }
+    return this.__fireUnloadClip(target);
+};
+
 // The engine's string table: fire.utils.Localizer.getText(id) gives the
 // text of a string id (the movies have no Localizer of their own).
 if (_global.fire == undefined) {
@@ -565,6 +592,32 @@ api.addCallback("listPath", null, function(path) {
         out.push(k + ":" + typeof(o[k]));
     }
     return out;
+});
+// Where the video a movie loaded shows on the stage: [xMin, yMin, xMax,
+// yMax, alpha], while its clip and those holding it are shown.
+api.addCallback("videoBounds", null, function() {
+    var c = _global.__fireVideoClip;
+    var r = _global.__fireVideoRect;
+    if (c == undefined || r == undefined) {
+        return undefined;
+    }
+    var alpha = 1;
+    var p = c;
+    while (p != undefined) {
+        if (!p._visible) {
+            return undefined;
+        }
+        alpha = alpha * p._alpha / 100;
+        p = p._parent;
+    }
+    if (alpha <= 0.01) {
+        return undefined;
+    }
+    var a = {x: r.xMin, y: r.yMin};
+    var b = {x: r.xMax, y: r.yMax};
+    c.localToGlobal(a);
+    c.localToGlobal(b);
+    return [a.x, a.y, b.x, b.y, alpha];
 });
 // A clip's bounds on the stage: [xMin, yMin, xMax, yMax].
 api.addCallback("dpsBounds", null, function(id) {

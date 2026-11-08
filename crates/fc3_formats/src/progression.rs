@@ -163,6 +163,18 @@ pub struct Ability {
     pub bonuses: Vec<Bonus>,
     /// The tattoo part learning it adds to (empty: none).
     pub tattoo_part: String,
+    /// Its tutorial on the skills page (`bHasTutorial`): its video, title
+    /// and text (HTML, as the game's strings have it).
+    pub tutorial: Option<SkillTutorial>,
+}
+
+/// A skill's tutorial: the Bink video (`UI\Singleplayer\Video\Tutorial\...`),
+/// its title and text.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SkillTutorial {
+    pub video: String,
+    pub title: String,
+    pub text: String,
 }
 
 /// A part of the player's tattoo: the mask ids it covers, in the order they
@@ -514,6 +526,11 @@ pub fn skill_tree(templates: &Object, strings: &dyn Fn(u32) -> String) -> Result
                 bonuses: plan_bonuses(&plans, &p.plans),
                 // (The part's name as text; field D1340889.)
                 tattoo_part: if s.bool("bIsAddedToTattoo").unwrap_or(false) { s.str_h(0xD134_0889).unwrap_or_default() } else { String::new() },
+                tutorial: s.bool("bHasTutorial").unwrap_or(false).then(|| SkillTutorial {
+                    video: text(s, "sTutorialVideoPath").replace("\\\\", "\\"),
+                    title: located(strings, u32f(s, "locidTutorialHeaderStringId")),
+                    text: located(strings, u32f(s, "locidTutorialBodyStringId")),
+                }),
             });
         }
     }
@@ -1115,6 +1132,9 @@ impl SkillTree {
             if !a.tattoo_part.is_empty() {
                 s += &format!("tattoopart\t{}\t{}\n", esc(&a.id), esc(&a.tattoo_part));
             }
+            if let Some(tu) = &a.tutorial {
+                s += &format!("tutorial\t{}\t{}\t{}\t{}\n", esc(&a.id), esc(&tu.video), esc(&tu.title), esc(&tu.text));
+            }
             for b in &a.bonuses {
                 s += &bonus_line(&a.id, b);
             }
@@ -1168,6 +1188,7 @@ impl SkillTree {
                         description: unesc(f[16]),
                         bonuses: Vec::new(),
                         tattoo_part: String::new(),
+                        tutorial: None,
                     };
                     index.insert(a.id.clone(), t.abilities.len());
                     t.abilities.push(a);
@@ -1182,6 +1203,11 @@ impl SkillTree {
                 "tattoopart" if f.len() >= 3 => {
                     if let Some(&i) = index.get(&unesc(f[1])) {
                         t.abilities[i].tattoo_part = unesc(f[2]);
+                    }
+                }
+                "tutorial" if f.len() >= 5 => {
+                    if let Some(&i) = index.get(&unesc(f[1])) {
+                        t.abilities[i].tutorial = Some(SkillTutorial { video: unesc(f[2]), title: unesc(f[3]), text: unesc(f[4]) });
                     }
                 }
                 "tattoo" if f.len() >= 3 => {
@@ -1817,6 +1843,7 @@ end;
                 requires: vec!["Y".into(), "Z".into()],
                 description: "50%%\n[Run]".into(),
                 tattoo_part: "Heron1".into(),
+                tutorial: Some(SkillTutorial { video: "UI\\Video\\03_Takedown.bik".into(), title: "Takedowns".into(), text: "<font color=\"#67afbb\">a</font>\tb".into() }),
                 ..Default::default()
             }],
             xp_levels: vec![1, 2, 3],

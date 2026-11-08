@@ -1458,7 +1458,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     // when an older table lacks them), and the tattoo's design and mask
     if opts.only_sectors.is_none() {
         let current = std::fs::read_to_string(job.root().join(fc3_formats::progression::SKILLS_REL))
-            .is_ok_and(|t| t.contains("\ntattoo\t") && t.contains("\nxpreward\tOutpost/"));
+            .is_ok_and(|t| t.contains("\ntattoo\t") && t.contains("\nxpreward\tOutpost/") && t.contains("\ntutorial\t"));
         if job.should_write(fc3_formats::progression::SKILLS_REL) || !current {
             if let Err(e) = convert_skills(&job) {
                 job.error(format!("skill tree: {e:#}"));

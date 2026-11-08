@@ -332,6 +332,15 @@ impl Host {
         (v.len() == 4).then(|| [v[0], v[1], v[2], v[3]])
     }
 
+    /// Where the Bink video a movie loaded into a clip shows (the `Video`
+    /// call told of it), on the stage: its rectangle and its alpha, while it
+    /// and the clips holding it are shown.
+    pub fn video_bounds(&self) -> Option<([f64; 4], f64)> {
+        let ExternalValue::List(l) = self.call("videoBounds", vec![]) else { return None };
+        let v: Vec<f64> = l.iter().filter_map(|x| if let ExternalValue::Number(n) = x { Some(*n) } else { None }).collect();
+        (v.len() == 5).then(|| ([v[0], v[1], v[2], v[3]], v[4]))
+    }
+
     /// Whether a clip's page shows it (its parents are all shown; its own
     /// visibility aside).
     pub fn dps_shown(&self, id: &str) -> bool {
