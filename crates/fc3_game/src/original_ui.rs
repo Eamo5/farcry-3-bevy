@@ -61,7 +61,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_timer,
                     drive_xp,
                     (drive_loot, drive_saving),
-                    (drive_stealth, drive_indicators, drive_wheel, drive_reload),
+                    (drive_stealth, drive_indicators, drive_wheel, drive_reload, drive_weapon_swap),
                     drive_hits,
                     drive_grenades,
                     drive_radar,
@@ -2893,6 +2893,7 @@ fn drive_story(
     mut last: Local<Option<(Option<String>, Option<String>)>>,
     (mut commands, time, mut card_shot, mut last_event): (Commands, Res<Time<Real>>, Local<(Option<f32>, u32)>, Local<Option<f32>>),
     mut fade_due: Local<Vec<(&'static str, f32)>>,
+    offer: Res<crate::pickups::WeaponOffer>,
 ) {
     let Interface::Running(host) = &*state else { return };
     // A card held a while, then faded as the engine faded it: the same call
@@ -2951,7 +2952,8 @@ fn drive_story(
         }
     }
     let subtitle = ui.subtitle.as_ref().filter(|_| settings.subtitles).map(|s| s.0.clone());
-    let now = (subtitle, hud.shown_prompt.clone());
+    // (Not over a gun offered: its swap box says it, `drive_weapon_swap`.)
+    let now = (subtitle, hud.shown_prompt.clone().filter(|_| offer.0.is_none()));
     let first = last.is_none();
     let old = last.clone().unwrap_or_default();
     if !first && old == now {
@@ -3242,6 +3244,48 @@ fn drive_indicators(
 /// hand (2).
 const WHEEL_IN: u32 = 2;
 const WHEEL_OUT: u32 = 12;
+
+/// The gun lying where the player looks, offered (`H_WeaponSwapping.feu`,
+/// the HUD's `WeaponSwapping_MC`; nothing drove it): its box
+/// (`PickupWeaponContainer`) in by `PickupFadeIn` when a holster is free,
+/// the new gun (`PickupWeapon2`) alone, an arrow to it; by `SwapFadeIn`
+/// when it replaces one, the gun given up on the left (`PickupWeapon1`),
+/// arrows both ways; out by the same mode's `...FadeOut`. "HOLD" over the
+/// use's key (`SetSwapButtonText`).
+fn drive_weapon_swap(
+    state: NonSend<Interface>,
+    offer: Res<crate::pickups::WeaponOffer>,
+    players: Query<&crate::weapons::Inventory, With<crate::player::Player>>,
+    catalog: Res<crate::progression::ShopCatalog>,
+    (actions, settings): (Res<crate::controls::ActionState>, Res<crate::settings::Settings>),
+    mut shown: Local<Option<(usize, Option<usize>)>>,
+) {
+    let Interface::Running(host) = &*state else { return };
+    if *shown == offer.0 {
+        return;
+    }
+    let Ok(inv) = players.single() else { return };
+    let mode = |o: &(usize, Option<usize>)| if o.1.is_some() { "Swap" } else { "Pickup" };
+    match (*shown, offer.0) {
+        (Some(old), None) => {
+            host.dps_play("PickupWeaponContainer", fc3_ui::ExternalValue::String(format!("{}FadeOut", mode(&old))));
+        }
+        (old, Some(new)) => {
+            host.dps_visible("PickupWeaponContainer", true);
+            host.dps_frame("PickupWeapon2", fc3_ui::ExternalValue::String(weapon_icon(inv, new.0, &catalog)));
+            host.dps_visible("PickupWeapon1", new.1.is_some());
+            if let Some(given) = new.1 {
+                host.dps_frame("PickupWeapon1", fc3_ui::ExternalValue::String(weapon_icon(inv, given, &catalog)));
+            }
+            if old.is_none_or(|o| mode(&o) != mode(&new)) {
+                host.event("SetSwapButtonText", &[&actions.label(crate::controls::Action::Interact, &settings)]);
+                host.dps_play("PickupWeaponContainer", fc3_ui::ExternalValue::String(format!("{}FadeIn", mode(&new))));
+            }
+        }
+        (None, None) => {}
+    }
+    *shown = offer.0;
+}
 
 /// A weapon's icon label in the game's weapon icons.
 fn weapon_icon(inv: &crate::weapons::Inventory, def: usize, catalog: &crate::progression::ShopCatalog) -> String {

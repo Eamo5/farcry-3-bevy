@@ -465,6 +465,16 @@ only what changed (and everything again until the movies have loaded):
   frame 1, its art pointing up); `PlayerMarkerIndicator` is the waypoint
   ("Inside" 1, "Outside" 2). The movie shows no distances; our diamonds
   and distances stand down.
+* **Weapon swap box**: `H_WeaponSwapping.feu` (the HUD's
+  `WeaponSwapping_MC`) was never driven. Over a gun lying there that the
+  player doesn't carry (`pickups::WeaponOffer`), its box
+  (`PickupWeaponContainer`) comes in: by `PickupFadeIn` with a holster
+  free, the new gun alone (`PickupWeapon2`, an arrow to it), else by
+  `SwapFadeIn` with the gun given up on the left (`PickupWeapon1`), arrows
+  both ways; each at its icon label, as the wheel's; out by the mode's
+  `...FadeOut`. "HOLD" sits over the use's key (`SetSwapButtonText`), and
+  a swap now takes the use held half a second (`SWAP_HOLD`), as the game's
+  did; the plain interaction prompt stands down while the box is up.
 * **Weapon wheel**: `H_Inventory.feu`'s `Wheel` while ours is open (in from
   frame 2, out from 12): its four places (top, right, bottom, left:
   `weapon_wheel::wheel_slots`, the guns first, the machete in a place

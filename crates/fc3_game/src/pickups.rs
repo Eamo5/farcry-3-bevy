@@ -20,7 +20,7 @@ pub struct PickupsPlugin;
 
 impl Plugin for PickupsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WorldState>().add_message::<PickedUp>().add_systems(
+        app.init_resource::<WorldState>().init_resource::<WeaponOffer>().add_message::<PickedUp>().add_systems(
             Update,
             (
                 attach_pickup_models,
@@ -107,6 +107,32 @@ const DROP_IDS: u64 = 0x7FFD_0000_0000_0000;
 pub fn is_dropped(id: u64) -> bool {
     id & 0xFFFF_0000_0000_0000 == DROP_IDS
 }
+
+/// A gun on the ground the player faces, offered (the original HUD's swap
+/// box, `H_WeaponSwapping`): its def, and the def it would replace with
+/// every holster full.
+#[derive(Resource, Default, Clone, Copy, PartialEq, Debug)]
+pub struct WeaponOffer(pub Option<(usize, Option<usize>)>);
+
+/// A gun lying there as the player would take it: none carried already
+/// (its rounds are taken walking over it), else the gun it replaces once the
+/// holsters are full (the one in hand, or the first with the machete out).
+fn weapon_offer(inv: &Inventory, name: &str, max_guns: usize) -> Option<(usize, Option<usize>)> {
+    let def = inv.defs.iter().position(|d| d.name == name)?;
+    if inv.slots.iter().any(|s| s.def == def) {
+        return None;
+    }
+    let gun = |i: usize| inv.defs[inv.slots[i].def].class != crate::weapons::WeaponClass::Melee;
+    let guns = (0..inv.slots.len()).filter(|&i| gun(i)).count();
+    if inv.defs[def].class == crate::weapons::WeaponClass::Melee || guns < max_guns.max(1) {
+        return Some((def, None));
+    }
+    let replaced = if gun(inv.current) { Some(inv.current) } else { (0..inv.slots.len()).find(|&i| gun(i)) };
+    Some((def, replaced.map(|i| inv.slots[i].def)))
+}
+
+/// How long (s) the use is held to swap a gun for one lying there.
+const SWAP_HOLD: f32 = 0.5;
 
 /// How far (m) over the eye a thing is still in reach to take.
 const USE_REACH_UP: f32 = 1.0;
@@ -748,7 +774,10 @@ fn interact(
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     (busy, mut gestures, mut xp, mut looted, scripted): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>, MessageWriter<crate::progression::XpGain>, MessageWriter<crate::progression::ItemLooted>, Res<crate::story::ScriptedPlayer>),
     (crafting, sources, owns, mut picked): (Option<Res<crate::crafting::CraftCatalog>>, Query<&LootSource>, Query<&OwnLoot>, MessageWriter<PickedUp>),
+    (mut offer, mut held, time): (ResMut<WeaponOffer>, Local<f32>, Res<Time>),
 ) {
+    let was = offer.0;
+    offer.0 = None;
     let Ok((pt, player, mut inv, health, mut stats)) = players.single_mut() else { return };
     if health.dead || player.noclip || player.driving || busy.busy() {
         return;
@@ -802,11 +831,29 @@ fn interact(
     let said = text.as_deref().and_then(|t| t.prompt(game, &actions, &settings)).filter(|_| p.kind != PickupKind::Opening);
     let verb = if p.kind == PickupKind::Opening { "use the" } else { "pick up" };
     hud.prompt = Some(said.unwrap_or_else(|| format!("{}  {verb} {}", actions.label(crate::controls::Action::Interact, &settings), p.kind.label())));
+    // A gun not carried: offered (the original HUD's swap box), and, every
+    // holster full, swapped for the one it replaces only with the use held,
+    // as the game has it ("HOLD").
+    let swap = match p.kind {
+        PickupKind::Weapon(name) => weapon_offer(&inv, name, perks.weapon_slots),
+        _ => None,
+    };
+    offer.0 = swap;
+    if let Some((_, Some(old))) = swap {
+        hud.prompt = Some(format!("Hold {}  swap the {} for the {}", actions.label(crate::controls::Action::Interact, &settings), inv.defs[old].name, p.kind.label()));
+    }
     // FC3_PICKUP_TEST (tests): the one in reach taken.
-    if std::env::var("FC3_PICKUP_TEST").is_ok() {
+    let scripted_use = std::env::var("FC3_PICKUP_TEST").is_ok();
+    if scripted_use {
         actions.press(crate::controls::Action::Interact);
     }
-    if !actions.used() {
+    if matches!(swap, Some((_, Some(_)))) && !scripted_use && std::env::var_os("FC3_STORY_AUTOPILOT").is_none() {
+        *held = if actions.pressed(crate::controls::Action::Interact) && was == swap { *held + time.delta_secs() } else { 0.0 };
+        if *held < SWAP_HOLD {
+            return;
+        }
+        *held = 0.0;
+    } else if !actions.used() {
         return;
     }
     // Plants are picked by hand.
@@ -1062,6 +1109,32 @@ mod tests {
         assert!(app.world().get_entity(rpg).is_ok());
     }
 
+    /// A gun lying there is offered into a free holster, or for the gun in
+    /// hand with the holsters full; one carried isn't offered (its rounds are
+    /// taken walking over it).
+    #[test]
+    fn a_gun_lying_there_is_offered_for_a_free_holster_or_the_one_in_hand() {
+        let defs = crate::weapons::weapon_defs();
+        let def = |name: &str| defs.iter().position(|d| d.name == name).unwrap();
+        let (machete, rifle, shotgun) = (def("Machete"), def("AK-74M Rifle"), def("870 Shotgun"));
+        let slot = |def: usize| crate::weapons::WeaponSlot { def, mag: 0, reserve: 0 };
+        let mut inv = Inventory {
+            defs: defs.clone(), models: Vec::new(), slots: vec![slot(machete), slot(rifle)], current: 1,
+            grenades: 0, molotovs: 0, c4: 0, mines: 0,
+            cooldown: 0.0, reloading: 0.0, switching: 0.0, aiming: false,
+            aim_blend: 0.0, recoil_kick: 0.0, spread_bloom: 0.0, shots_fired: 0,
+            recoil_offset: 0.0, since_shot: 0.0, reserve_scale: 1.0,
+            attachments: Vec::new(), attachment_models: Vec::new(), mounted_from: None,
+            auto_tail: 0, arrow_kind: 0, special_arrows: [0; 2], paints: Vec::new(), paint_options: Vec::new(),
+        };
+        assert_eq!(weapon_offer(&inv, "870 Shotgun", 2), Some((shotgun, None)));
+        assert_eq!(weapon_offer(&inv, "870 Shotgun", 1), Some((shotgun, Some(rifle))));
+        assert_eq!(weapon_offer(&inv, "AK-74M Rifle", 1), None);
+        // (The machete out: the first gun given up.)
+        inv.current = 0;
+        assert_eq!(weapon_offer(&inv, "870 Shotgun", 1), Some((shotgun, Some(rifle))));
+    }
+
     #[test]
     fn weapon_pickups_name_the_games_weapons() {
         assert_eq!(game_weapon("kw1911_11"), "kw1911");
@@ -1081,7 +1154,7 @@ mod tests {
             .init_resource::<crate::story::ScriptedPlayer>().insert_resource(Rng::seeded(1))
             .add_message::<ItemLooted>().add_message::<crate::fp::FpAction>()
             .add_message::<crate::progression::XpGain>().add_message::<crate::sound::PlaySfx>()
-            .add_message::<PickedUp>()
+            .add_message::<PickedUp>().init_resource::<WeaponOffer>()
             .add_systems(Update, interact);
         let defs = crate::weapons::weapon_defs();
         let unarmed = defs.iter().position(|d| d.name == crate::weapons::UNARMED).unwrap();
