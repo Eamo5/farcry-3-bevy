@@ -22,7 +22,7 @@ pub struct BreakablesSet;
 
 impl Plugin for BreakablesPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Breaks>().add_systems(Update, (break_test, blasts, break_objects, clear_pieces).chain().in_set(BreakablesSet));
+        app.init_resource::<Breaks>().add_systems(Update, (restore_broken, break_test, blasts, break_objects, clear_pieces).chain().in_set(BreakablesSet));
     }
 }
 
@@ -39,6 +39,10 @@ pub struct Breaks {
     /// Placed entities scripts keep whole (`MetaBreakableModifier`): blasts
     /// pass them by. (A script can still break one outright.)
     immune: HashSet<u64>,
+    /// Those broken as the last checkpoint was kept, and those to be whole
+    /// again (broken since, the checkpoint reloaded).
+    at_checkpoint: Option<HashSet<u64>>,
+    restore: Vec<u64>,
 }
 
 impl Breaks {
@@ -75,6 +79,21 @@ impl Breaks {
         self.objects.push(e);
     }
 
+    /// What was broken as the story's checkpoint was kept.
+    pub fn mark_checkpoint(&mut self) {
+        self.at_checkpoint = Some(self.broken.clone());
+    }
+
+    /// Back to the checkpoint (a reload): what was broken since is whole
+    /// again, its sector's objects laid out afresh (`restore_broken`).
+    pub fn back_to_checkpoint(&mut self) {
+        let Some(kept) = self.at_checkpoint.clone() else { return };
+        let since: Vec<u64> = self.broken.difference(&kept).copied().collect();
+        self.broken = kept;
+        self.fresh.retain(|id| self.broken.contains(id));
+        self.restore.extend(since);
+    }
+
     pub fn reset(&mut self) {
         self.broken.clear();
         self.fresh.clear();
@@ -82,6 +101,31 @@ impl Breaks {
         self.objects.clear();
         self.immune.clear();
     }
+}
+
+/// Placed things broken since a reloaded checkpoint, whole again: their
+/// sectors' objects laid out afresh (the streamer spawns them again).
+fn restore_broken(
+    mut breaks: ResMut<Breaks>,
+    objects: Query<(&PlacedId, &ChildOf), With<Broken>>,
+    sectors: Query<&crate::objects::SectorObjects>,
+    mut streamer: ResMut<crate::objects::ObjectStreamer>,
+    mut commands: Commands,
+) {
+    if breaks.restore.is_empty() {
+        return;
+    }
+    let ids: HashSet<u64> = std::mem::take(&mut breaks.restore).into_iter().collect();
+    let mut roots = HashSet::new();
+    for (id, parent) in &objects {
+        if ids.contains(&id.0) && roots.insert(parent.parent()) {
+            if let Ok(s) = sectors.get(parent.parent()) {
+                streamer.respawn(s.coord);
+                commands.entity(parent.parent()).despawn();
+            }
+        }
+    }
+    info!("broken: {} whole again with the checkpoint ({} sectors laid out afresh)", ids.len(), roots.len());
 }
 
 /// Whether a model has a broken state to show.

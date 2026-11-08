@@ -414,6 +414,10 @@ fn keep_story_checkpoint(world: &mut World) {
         host.checkpoint_game = Some(save.clone());
         host.checkpoint_game_pending = false;
     }
+    // (What's broken now is as the checkpoint has it.)
+    if let Some(mut breaks) = world.get_resource_mut::<crate::breakables::Breaks>() {
+        breaks.mark_checkpoint();
+    }
     let text = save.to_text();
     for path in paths {
         if let Err(e) = std::fs::write(&path, &text) {

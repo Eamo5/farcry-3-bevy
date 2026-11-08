@@ -4262,7 +4262,17 @@ Run again later in the campaign (`camp91`), the escort failed every time
   the mission's layers lay out and the player took since is laid out again
   with them: the fragments taken before a death were gone for good, the
   count back at 0 and the block never to end (the world's own pickups stay
-  taken, as the save keeps them).
+  taken, as the save keeps them). ULC_030's B20 is a lab of breakable gas
+  containers (`Prefab_BreakableGasContainer`) whose toxic gas spreads room
+  by room as the player walks in (`ULC_030_B20_ToxicGas`'s triggers); one
+  container broken enables the exit (`ULC_030_Trigger_EndDoor`). The
+  autopilot broke them, then stepped into the gas's triggers one by one and
+  died in the gas; and back at the checkpoint the containers stayed broken
+  (what was broken outlived a reload), so the exit never opened again. The
+  gas's triggers are a hazard's now, not stepped into (as the hot pools'),
+  and a checkpoint keeps what was broken as it was made
+  (`Breaks::mark_checkpoint`): reloaded, what was broken since is whole
+  again, its sector's objects laid out afresh (`restore_broken`).
 * **Reinforcements that fight.** Each wave's reinforcements are sent to
   guard posts in the village (`Cautious_Guard_*`). Alerted, one's AI took
   over and the story heard his action broken off; it sent him to the next
@@ -5847,6 +5857,12 @@ to SQC_080, each a brief at its giver then its blocks):
   now goes to its objective marker (8 m short of it, each once,
   `MARKER_WALK_AFTER`), and once the story has been quiet 15 s it goes
   after such a character with the mission's marker within 6 m of him.
+  The walk came last of its steps, after other missions' triggers and
+  following someone, which each reset the quiet: it went back and forth
+  between Amanaki's shop and its villagers' trigger, and followed a
+  villager, for good. Now, on a mission with none of its own triggers
+  left and gone nowhere 30 s (or quiet that long), it goes to the marker
+  before those, and other missions' triggers wait.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

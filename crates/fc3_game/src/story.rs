@@ -2360,6 +2360,11 @@ fn run_story(
             trials.reset();
             postfx.reset();
             breaks.release_all();
+            // (What was broken since the checkpoint is whole again, as the
+            // game kept it: ULC_030's gas containers, broken before a
+            // death, stayed broken, and the gas that opens the lab's last
+            // door never came again.)
+            breaks.back_to_checkpoint();
             ui.subtitle = None;
             // Rebuild mission actors and discard transient wildlife together.
             // Leaving an ambient predator at its post-death position makes
@@ -2790,6 +2795,27 @@ fn run_story(
         if host.quiet > 25.0 {
             host.used.retain(|u| !focused.iter().chain(watched.iter()).any(|w| w.0 == u.0 && w.1 == u.1));
         }
+        // On a mission with nothing of its own left to step into, gone
+        // nowhere a while: on to its objective's marker, as a player follows
+        // it, before other missions' triggers and before following anyone
+        // (SQC_070's privateers, far off, each watched by a health listener
+        // alone: the autopilot went back and forth between Amanaki's shop and
+        // its villagers' trigger, and followed a villager, for good).
+        let focus_stuck = host.focus_since.as_ref().is_some_and(|(_, since)| now - since > MARKER_WALK_AFTER);
+        let own_left = focused.iter().any(|w| w.3 && !host.fatal.contains(&(w.0, w.1.clone())) && !host.used.contains(&(w.0, w.1.clone())));
+        let marker_walk = host
+            .story
+            .objective_markers()
+            .into_iter()
+            .filter(|_| mission_on && !own_left && (host.quiet > MARKER_WALK_AFTER || focus_stuck))
+            // (An objective's, not a giver's, a shop's or an activity's.)
+            .filter(|(id, _)| data.markers.get(id).is_none_or(|m| !NOT_OBJECTIVES.contains(&m.kind)))
+            .map(|(id, p)| (id, to_bevy(p)))
+            .filter(|(id, at)| at.with_y(0.0).distance(t.translation.with_y(0.0)) > MARKER_WALK_NEAR && !host.used.contains(&(*id, "go to".to_string())))
+            .min_by(|a, b| a.1.distance(t.translation).total_cmp(&b.1.distance(t.translation)));
+        if marker_walk.is_some() {
+            watched.clear();
+        }
         let tails: Vec<u64> = host.story.tail_targets().into_iter().map(|t| t.0).collect();
         // (Not while a companion leads: going on ahead leaves it behind.)
         // (While a companion leads, none; while one follows, only those
@@ -3093,6 +3119,14 @@ fn run_story(
             info!("story autopilot: end gameplay {name}");
             host.story.gameplay_ended(id);
             host.quiet = 0.0;
+        } else if let Some((id, at)) = marker_walk {
+            info!("story autopilot: go to the marker {}", data.name_of(id).unwrap_or("?"));
+            host.used.insert((id, "go to".into()));
+            let side = (t.translation - at).with_y(0.0).normalize_or(Vec3::Z);
+            let mut stand = at + side * MARKER_WALK_SHORT;
+            stand.y = heights.height_at(stand).unwrap_or(at.y);
+            teleport(&mut t, &mut p, to_dunia(stand), 0.0);
+            host.quiet = 0.0;
         } else if let Some(at) = host
             .last_ordered
             // (Not with the camera a script drew, an action map holding the
@@ -3146,27 +3180,6 @@ fn run_story(
             info!("story autopilot: input {signal}");
             host.used.insert((0, signal.clone()));
             host.story.input_signal(&signal);
-            host.quiet = 0.0;
-        } else if let Some((id, at)) = host
-            .story
-            .objective_markers()
-            .into_iter()
-            .filter(|_| mission_on && host.quiet > MARKER_WALK_AFTER)
-            // (An objective's, not a giver's, a shop's or an activity's.)
-            .filter(|(id, _)| data.markers.get(id).is_none_or(|m| !NOT_OBJECTIVES.contains(&m.kind)))
-            .map(|(id, p)| (id, to_bevy(p)))
-            .filter(|(id, at)| at.with_y(0.0).distance(t.translation.with_y(0.0)) > MARKER_WALK_NEAR && !host.used.contains(&(*id, "go to".to_string())))
-            .min_by(|a, b| a.1.distance(t.translation).total_cmp(&b.1.distance(t.translation)))
-        {
-            // Nothing else for it on a mission: on to its marker, as a player
-            // follows it (SQC_070's privateers, far off, each watched by a
-            // health listener alone, stood the autopilot still for good).
-            info!("story autopilot: go to the marker {}", data.name_of(id).unwrap_or("?"));
-            host.used.insert((id, "go to".into()));
-            let side = (t.translation - at).with_y(0.0).normalize_or(Vec3::Z);
-            let mut stand = at + side * MARKER_WALK_SHORT;
-            stand.y = heights.height_at(stand).unwrap_or(at.y);
-            teleport(&mut t, &mut p, to_dunia(stand), 0.0);
             host.quiet = 0.0;
         }
     }

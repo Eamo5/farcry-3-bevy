@@ -123,6 +123,13 @@ pub struct ObjectStreamer {
 }
 
 impl ObjectStreamer {
+    /// Lays a sector's objects out afresh (its root gone: the caller's).
+    pub fn respawn(&mut self, c: SectorCoord) {
+        if let Some(s) = self.slots.get_mut(&c) {
+            s.root = None;
+        }
+    }
+
     pub fn pending_count(&self) -> usize {
         self.slots.values().filter(|s| s.root.is_none()).count()
     }
