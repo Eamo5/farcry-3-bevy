@@ -433,9 +433,15 @@ only what changed (and everything again until the movies have loaded):
   string for a failure (155587); the table has none for a mission
   complete, so it is the handbook's "Complete" (158104) in capitals. A
   mission ending without a title of its own (the scripts' text, else the
-  one it started with) shows that alone: the movie fades a card with no
-  text. `FC3_CARD_SHOT=<prefix>` (tests) captures each card 1.5 s in, to
-  `<prefix>_<n>.png`.
+  one it started with) shows that alone. The movie plays a card's outro
+  only for the same call with no text (its `SetMissionTitle`/
+  `SetMissionStart`: `FadeOut`, `Outro`), which the engine sent once the
+  card had been up a while; we never did, and every card stayed on screen
+  for good. Each now goes 5 s on (`CARD_SECS`), the latest card's clock
+  restarted by the next. `FC3_CARD_SHOT=<prefix>` (tests) captures each
+  card 1.5 s in, to `<prefix>_<n>.png`; `fc3ui hud <movie> <png> <frames>
+  event <channel> <args>` renders a movie after events (a card, then its
+  empty call, gone).
   (`fc3tool oasis grep <text>` lists the strings containing a text.) A
   liberated outpost and a radio tower take the same card
   (`MissionCard::Event`), all the game's strings: the outpost's by how it

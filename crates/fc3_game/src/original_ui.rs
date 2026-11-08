@@ -2876,6 +2876,8 @@ const MISSION_FAILED: u32 = 155587;
 /// How long (s) after an event's card a script's success screen is taken
 /// for the same news.
 const SUCCESS_AFTER_EVENT: f32 = 20.0;
+/// How long (s) a mission's card stays up before it fades.
+const CARD_SECS: f32 = 5.0;
 const MISSION_COMPLETE: u32 = 158104;
 
 /// The story's texts on the HUD: subtitles, the interaction prompt, and the
@@ -2890,8 +2892,21 @@ fn drive_story(
     hud: Res<crate::hud::HudState>,
     mut last: Local<Option<(Option<String>, Option<String>)>>,
     (mut commands, time, mut card_shot, mut last_event): (Commands, Res<Time<Real>>, Local<(Option<f32>, u32)>, Local<Option<f32>>),
+    mut fade_due: Local<(Option<f32>, Option<f32>)>,
 ) {
     let Interface::Running(host) = &*state else { return };
+    // A card held a while, then faded as the engine faded it: the same call
+    // with no text (the movie's `SetMissionStart`/`SetMissionTitle` play
+    // their outro for an empty one). Held for good otherwise.
+    let now_secs = time.elapsed_secs();
+    if fade_due.0.is_some_and(|at| now_secs >= at) {
+        fade_due.0 = None;
+        host.event("SetMissionStart", &[""]);
+    }
+    if fade_due.1.is_some_and(|at| now_secs >= at) {
+        fade_due.1 = None;
+        host.event("SetMissionTitle", &["", "", "1"]);
+    }
     // FC3_CARD_SHOT=<prefix> (tests): each card captured a moment in, to
     // <prefix>_<n>.png.
     if let (Some(at), Ok(prefix)) = (card_shot.0, std::env::var("FC3_CARD_SHOT")) {
@@ -2906,6 +2921,10 @@ fn drive_story(
     }
     for card in std::mem::take(&mut ui.cards) {
         debug!("original UI: mission card {card:?}");
+        match &card {
+            crate::story::MissionCard::Start { .. } => fade_due.0 = Some(now_secs + CARD_SECS),
+            _ => fade_due.1 = Some(now_secs + CARD_SECS),
+        }
         match card {
             crate::story::MissionCard::Start { title } => host.event("SetMissionStart", &[&title]),
             // (Without a title, the status alone: the movie shows nothing
