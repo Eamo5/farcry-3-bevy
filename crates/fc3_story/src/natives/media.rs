@@ -335,7 +335,9 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     // ---- message and tutorial boxes (answered by the host)
     // (package, title, message, message params 1-3, footer, param 1-2,
     // target, method, param 1-2 formats, accept/cancel): the footer is
-    // followed by each param in its format ("$ %ls").
+    // followed by each param in its format ("$ %ls"). The host has the id,
+    // title, message, whether it asks, the package (the movie: a side
+    // quest giver's `SideQuestBox.feu`), the footer and each param shown.
     r.f("ShowDialogBox", |c, args: mlua::Variadic<Value>| {
         let a: Vec<Value> = args.into_iter().collect();
         let text = |i: usize| a.get(i).and_then(oasis_id).filter(|&id| id != u32::MAX).and_then(|id| c.data.strings.get(id)).map(str::to_string);
@@ -353,15 +355,12 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
                 message = fill(&message, &param);
             }
         }
-        let mut footer = text(6).unwrap_or_default();
-        for (value, format) in [(plain(7), 11), (plain(8), 12)] {
-            if value.is_empty() {
-                continue;
-            }
-            let shown = text(format).map(|f| fill(&f, &value)).unwrap_or(value);
-            footer = if footer.is_empty() { shown } else { format!("{footer}  {shown}") };
-        }
-        let body = if footer.is_empty() { message } else { format!("{message}\n\n{footer}") };
+        let footer = text(6).unwrap_or_default();
+        let shown = [(plain(7), 11), (plain(8), 12)].map(|(value, format)| match value.is_empty() {
+            true => value,
+            false => text(format).map(|f| fill(&f, &value)).unwrap_or(value),
+        });
+        let package = plain(0);
         let choice = !matches!(a.get(13), Some(Value::Boolean(false)));
         let cb = a.iter().position(|v| matches!(v, Value::Table(_))).and_then(|i| {
             let method = a.get(i + 1).and_then(|m| m.as_string().map(|s| s.to_string_lossy()));
@@ -371,7 +370,8 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         if let Some(cb) = cb {
             c.media.boxes.insert(id, cb);
         }
-        c.emit(Command::Native { name: "ShowDialogBox".into(), args: vec![id.to_string(), title, body, choice.to_string()] });
+        let [one, two] = shown;
+        c.emit(Command::Native { name: "ShowDialogBox".into(), args: vec![id.to_string(), title, message, choice.to_string(), package, footer, one, two] });
         id.to_string()
     })?;
     r.f("ShowTutorialBox", |c, (_package, title, message, target, method): (Text, Value, Value, Value, Option<String>)| {

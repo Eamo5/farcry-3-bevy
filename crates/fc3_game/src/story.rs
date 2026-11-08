@@ -28,6 +28,7 @@ pub struct StoryPlugin;
 impl Plugin for StoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<StoryUi>()
+            .init_resource::<BoxMovie>()
             .init_resource::<ScriptedPlayer>()
             .init_resource::<MissionArea>()
             .init_resource::<ObjectiveMarkers>()
@@ -55,6 +56,7 @@ impl Plugin for StoryPlugin {
             .add_systems(Update, forward_pickups)
             .add_systems(Update, ui_interaction_exited)
             .add_systems(Update, sweep_arrows)
+            .add_systems(Update, box_test.run_if(in_state(GameState::Playing)))
             .add_systems(Update, pass_for_privateer.run_if(in_state(GameState::Playing)))
             .add_systems(Update, forward_camera)
             .add_systems(PreUpdate, collect_crafts)
@@ -603,6 +605,41 @@ const UNIFORM_TITLE: u32 = 127109;
 const UNIFORM_TEXT: u32 = 127110;
 
 /// The spent arrows lying about cleared, as a script asks (a scene starting).
+/// `FC3_BOX_TEST=<title>|<text>[|choice[|<reward>:<amount>:<amount>]]`
+/// (tests): that box (a side quest giver's with a reward), 8 s after the
+/// player is set down, and again each time it's answered (`FC3_BOX_TIMES`,
+/// 2 in all by default).
+fn box_test(time: Res<Time<Real>>, mut ui: ResMut<StoryUi>, players: Query<&Player>, mut due: Local<(Option<f32>, u32)>) {
+    let Ok(spec) = std::env::var("FC3_BOX_TEST") else { return };
+    let Ok(p) = players.single() else { return };
+    if p.spawning || !ui.boxes.is_empty() {
+        due.0 = None;
+        return;
+    }
+    let times = std::env::var("FC3_BOX_TIMES").ok().and_then(|s| s.parse().ok()).unwrap_or(2);
+    if due.1 >= times {
+        return;
+    }
+    let wait = if due.1 == 0 { 8.0 } else { 1.5 };
+    let at = *due.0.get_or_insert(time.elapsed_secs() + wait);
+    if time.elapsed_secs() < at {
+        return;
+    }
+    let mut parts = spec.split('|');
+    let title = parts.next().unwrap_or_default().to_string();
+    let body = parts.next().unwrap_or_default().replace("\\n", "\n");
+    let choice = parts.next() == Some("choice");
+    // (A reward line, "<title>:<amount>:<amount>": a side quest giver's.)
+    let reward = parts.next().map(|r| {
+        let mut r = r.split(':').map(str::to_string);
+        BoxReward { title: r.next().unwrap_or_default(), amounts: [r.next().unwrap_or_default(), r.next().unwrap_or_default()] }
+    });
+    info!("FC3_BOX_TEST: box {} ({title})", due.1 + 1);
+    ui.boxes.push_back(StoryBox { id: 0xB0C5, title, body, choice, prompt: None, reward });
+    due.1 += 1;
+    due.0 = None;
+}
+
 fn sweep_arrows(host: Option<NonSendMut<StoryHost>>, pickups: Query<(Entity, &crate::pickups::Pickup)>, mut commands: Commands) {
     let Some(mut host) = host else { return };
     if !std::mem::take(&mut host.sweep_arrows) {
@@ -1298,12 +1335,15 @@ pub struct StoryUi {
     pub checklist: std::collections::BTreeMap<u32, String>,
     /// Message and tutorial boxes waiting, the first one shown.
     pub boxes: std::collections::VecDeque<StoryBox>,
+    /// How the last box closed: accepted, or cancelled (`false`).
+    pub answered: Option<bool>,
     /// A phone call: who, incoming, and how long it has gone on.
     pub phone: Option<(String, bool, f32)>,
     pub timers: Vec<fc3_story::Timer>,
 }
 
 /// A box the game stops for until the player closes it.
+#[derive(Default)]
 pub struct StoryBox {
     pub id: u64,
     pub title: String,
@@ -1312,6 +1352,23 @@ pub struct StoryBox {
     pub choice: bool,
     /// A localized footer supplied by a queued tutorial.
     pub prompt: Option<String>,
+    /// A side quest giver's (`SideQuestBox.feu`), with its reward line.
+    pub reward: Option<BoxReward>,
+}
+
+/// A side quest's reward under its description: the line's title
+/// ("Reward") and the amounts as shown ("$500", "250 XP").
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BoxReward {
+    pub title: String,
+    pub amounts: [String; 2],
+}
+
+impl BoxReward {
+    /// The line as one text (ours).
+    pub fn line(&self) -> String {
+        std::iter::once(self.title.as_str()).chain(self.amounts.iter().map(String::as_str)).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("  ")
+    }
 }
 
 /// What missions set on the player: signals ignored (jumping, sprinting
@@ -3695,13 +3752,19 @@ fn run_story(
                     // checkpoint's reload starts it again.)
                     "ShowTutorialBox" if args.len() >= 6 && !progress.tutorials.insert(plain(&a(1)).replace('\n', " ")) => {}
                     "ShowDialogBox" | "ShowTutorialBox" => {
+                        let dialog = name == "ShowDialogBox";
+                        // (A dialog's package, footer and amounts; a queued
+                        // tutorial's prompt and priority.)
+                        let reward = (dialog && a(4).to_ascii_lowercase().contains("sidequestbox"))
+                            .then(|| BoxReward { title: plain(&a(5)), amounts: [plain(&a(6)), plain(&a(7))] });
                         let box_ = StoryBox {
                             id: a(0).parse().unwrap_or(0), title: plain(&a(1)), body: plain(&a(2)), choice: a(3) == "true",
-                            prompt: Some(plain(&a(4))).filter(|p| !p.is_empty()),
+                            prompt: Some(plain(&a(4))).filter(|p| !dialog && !p.is_empty()),
+                            reward,
                         };
                         // A high-priority tutorial goes immediately after the
                         // current box, keeping that box's answer target intact.
-                        if a(5) == "true" && !ui.boxes.is_empty() {
+                        if !dialog && a(5) == "true" && !ui.boxes.is_empty() {
                             ui.boxes.insert(1, box_);
                         } else {
                             ui.boxes.push_back(box_);
@@ -3779,7 +3842,7 @@ fn run_story(
                         let title = data.strings.get(UNIFORM_TITLE).unwrap_or("Privateer Uniform").to_string();
                         if on && !progress.costume && progress.tutorials.insert(title.clone()) {
                             let body = plain(data.strings.get(UNIFORM_TEXT).unwrap_or("Privateers will not attack unless provoked"));
-                            ui.boxes.push_back(StoryBox { id: 0, title, body, choice: false, prompt: None });
+                            ui.boxes.push_back(StoryBox { id: 0, title, body, choice: false, prompt: None, ..Default::default() });
                         }
                         progress.costume = on;
                     }
@@ -4443,6 +4506,15 @@ fn run_story(
 #[derive(Component)]
 struct BoxPanel(u64);
 
+/// The story's boxes on the original interface (`original_ui`'s
+/// `MessageBox.feu`): whether it shows them now (ours stands down), and an
+/// answer given there (its buttons clicked: true to accept).
+#[derive(Resource, Default)]
+pub struct BoxMovie {
+    pub shown: bool,
+    pub answer: Option<bool>,
+}
+
 const USE_HOLD_SECONDS: f32 = 0.5;
 
 #[derive(Default)]
@@ -4852,7 +4924,7 @@ fn story_boxes(
     mut actions: ResMut<crate::controls::ActionState>,
     settings: Res<crate::settings::Settings>,
     state: Res<State<GameState>>,
-    keys: Res<ButtonInput<KeyCode>>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     gamepads: Query<&Gamepad>,
     mut time: ResMut<Time<Virtual>>,
@@ -4860,11 +4932,14 @@ fn story_boxes(
     panels: Query<(Entity, &BoxPanel)>,
     mut commands: Commands,
     mut accepted: Local<HashMap<String, u32>>,
+    mut movie: ResMut<BoxMovie>,
 ) {
     let _slow = crate::story::Slow::new("story_boxes");
     let shown = ui.boxes.front().map(|b| b.id);
+    // (Ours stands down while the original interface shows the box.)
+    let elsewhere = movie.shown && *state.get() == GameState::Playing;
     for (e, panel) in &panels {
-        if Some(panel.0) != shown {
+        if Some(panel.0) != shown || elsewhere {
             commands.entity(e).despawn();
         }
     }
@@ -4895,7 +4970,20 @@ fn story_boxes(
         || std::env::var("FC3_STORY_RETRY_TEST").is_ok()
         || std::env::var("FC3_TRIAL_TEST").is_ok()
         || std::env::var("FC3_OUTPOST_FIRE_TEST").is_ok();
-    let mut cancel = b.choice && (keys.any_just_pressed([KeyCode::Backspace, KeyCode::KeyQ]) || pad_pressed(GamepadButton::East));
+    // (Escape backs out of a question, and closes a box that asks nothing:
+    // it doesn't pause the game under one, `menu`.)
+    let escape = keys.just_pressed(KeyCode::Escape) && *state.get() == GameState::Playing;
+    if escape {
+        keys.clear_just_pressed(KeyCode::Escape);
+    }
+    let accept = accept || (escape && !b.choice);
+    let mut cancel = b.choice && (keys.any_just_pressed([KeyCode::Backspace, KeyCode::KeyQ]) || escape || pad_pressed(GamepadButton::East));
+    // (Its buttons clicked on the original interface.)
+    let (accept, cancel_clicked) = match movie.answer.take() {
+        Some(yes) => (yes, !yes),
+        None => (accept, false),
+    };
+    cancel |= cancel_clicked;
     // (The autopilot, asked the same thing twice already, declines it the
     // third time: a supply run's `Do you want to retry?` after it can't
     // make the drop in time, which only ever reloaded it.)
@@ -4912,9 +5000,9 @@ fn story_boxes(
         }
     }
     actions.clear();
-    if !panels.iter().any(|(_, p)| p.0 == b.id) {
+    if !elsewhere && !panels.iter().any(|(_, p)| p.0 == b.id) {
         let fallback = match (b.choice, pad) {
-            (true, false) => "[Enter]  Accept        [Backspace]  Cancel",
+            (true, false) => "[Enter]  Accept        [Esc]  Cancel",
             (true, true) => "A  Accept        B  Cancel",
             (false, false) => "[Enter]  Continue",
             (false, true) => "A  Continue",
@@ -4953,7 +5041,11 @@ fn story_boxes(
                         TextFont { font_size: bevy::text::FontSize::Px(28.0), ..default() },
                         TextColor(Color::srgb(1.0, 0.82, 0.35))
                     ),
-                    (Text::new(prompt_text(&b.body, &actions, &settings)), TextFont { font_size: bevy::text::FontSize::Px(19.0), ..default() }, TextColor(Color::srgb(0.93, 0.93, 0.9))),
+                    (
+                        Text::new(prompt_text(&b.reward.as_ref().map_or_else(|| b.body.clone(), |r| format!("{}\n\n{}", b.body, r.line())), &actions, &settings)),
+                        TextFont { font_size: bevy::text::FontSize::Px(19.0), ..default() },
+                        TextColor(Color::srgb(0.93, 0.93, 0.9)),
+                    ),
                     (Text::new(prompt), TextFont { font_size: bevy::text::FontSize::Px(16.0), ..default() }, TextColor(Color::srgba(0.85, 0.85, 0.8, 0.85))),
                 ],
             )],
@@ -4964,6 +5056,7 @@ fn story_boxes(
     }
     let id = b.id;
     ui.boxes.pop_front();
+    ui.answered = Some(accept);
     if let Some(mut host) = host {
         // (The pause menu's own question: the mission given up, if he's
         // sure.)
@@ -5003,7 +5096,7 @@ pub fn ask_travel(ui: &mut StoryUi, host: &mut StoryHost, to: crate::map::Travel
     let title = text(93093, "Fast Travel");
     let on = host.story.mission_in_progress();
     if on.is_some() && host.story.abandonable().is_none() {
-        ui.boxes.push_back(StoryBox { id: TRAVEL_BOX, title, body: text(155592, "Cannot abandon the mission at this time."), choice: false, prompt: None });
+        ui.boxes.push_back(StoryBox { id: TRAVEL_BOX, title, body: text(155592, "Cannot abandon the mission at this time."), choice: false, prompt: None, ..Default::default() });
         host.travel_asked = None;
         return;
     }
@@ -5012,7 +5105,7 @@ pub fn ask_travel(ui: &mut StoryUi, host: &mut StoryHost, to: crate::map::Travel
         Some(_) => text(152874, "Fast travel to this location? (This will abandon the current mission.)"),
         None => text(93272, "Fast travel to this location?"),
     };
-    ui.boxes.push_back(StoryBox { id: TRAVEL_BOX, title, body, choice: true, prompt: None });
+    ui.boxes.push_back(StoryBox { id: TRAVEL_BOX, title, body, choice: true, prompt: None, ..Default::default() });
     host.travel_asked = Some(to);
 }
 
@@ -5025,7 +5118,7 @@ pub fn ask_abandon(ui: &mut StoryUi, story: &fc3_story::Story) {
         title: text(119083, "Abandon mission"),
         body: text(119085, "Abandon the mission? All unsaved progress will be lost."),
         choice: true,
-        prompt: None,
+        ..Default::default()
     });
 }
 
@@ -7645,11 +7738,11 @@ mod tests {
         app.init_resource::<StoryUi>().init_resource::<ActionState>()
             .init_resource::<Settings>().init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
-            .init_resource::<Time<Virtual>>()
+            .init_resource::<Time<Virtual>>().init_resource::<BoxMovie>()
             .insert_resource(State::new(GameState::Playing))
             .add_systems(Update, story_boxes);
         app.world_mut().resource_mut::<StoryUi>().boxes.push_back(StoryBox {
-            id: 1, title: "Tutorial".into(), body: "[Interact] Continue".into(), choice: false, prompt: None,
+            id: 1, title: "Tutorial".into(), body: "[Interact] Continue".into(), choice: false, prompt: None, ..Default::default()
         });
         app
     }
@@ -7679,11 +7772,42 @@ mod tests {
         assert!(!app.world().resource::<Time<Virtual>>().is_paused());
     }
 
+    /// Escape closes a box that asks nothing, and backs out of a question,
+    /// without reaching the pause menu; a click on the original box's
+    /// buttons answers too.
+    #[test]
+    fn escape_and_the_movies_buttons_answer_boxes() {
+        let mut app = modal_app();
+        app.world_mut().resource_mut::<StoryUi>().boxes.push_back(StoryBox {
+            id: 2, title: "Retry".into(), body: "Do you want to retry?".into(), choice: true, prompt: None, ..Default::default()
+        });
+        app.world_mut().resource_mut::<StoryUi>().boxes.push_back(StoryBox {
+            id: 3, title: "Travel".into(), body: "Fast travel?".into(), choice: true, prompt: None, ..Default::default()
+        });
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.update();
+        assert!(!app.world().resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::Escape));
+        assert_eq!(app.world().resource::<StoryUi>().boxes.front().unwrap().id, 2);
+        assert_eq!(app.world().resource::<StoryUi>().answered, Some(true));
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::Escape);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.update();
+        assert_eq!(app.world().resource::<StoryUi>().boxes.front().unwrap().id, 3);
+        assert_eq!(app.world().resource::<StoryUi>().answered, Some(false));
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut().resource_mut::<BoxMovie>().answer = Some(true);
+        app.update();
+        assert!(app.world().resource::<StoryUi>().boxes.is_empty());
+        assert_eq!(app.world().resource::<StoryUi>().answered, Some(true));
+    }
+
     #[test]
     fn holding_interact_does_not_dismiss_the_next_tutorial() {
         let mut app = modal_app();
         app.world_mut().resource_mut::<StoryUi>().boxes.push_back(StoryBox {
-            id: 2, title: "Next".into(), body: "Release and press again".into(), choice: false, prompt: None,
+            id: 2, title: "Next".into(), body: "Release and press again".into(), choice: false, prompt: None, ..Default::default()
         });
         app.update();
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyE);

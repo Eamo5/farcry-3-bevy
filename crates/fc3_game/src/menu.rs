@@ -237,6 +237,7 @@ fn pause_toggle(
         Option<Res<crate::races::Races>>,
         Option<Res<crate::drinking::Drinking>>,
     ),
+    story_ui: Option<Res<crate::story::StoryUi>>,
 ) {
     use bevy::input::gamepad::GamepadButton as B;
     // (Esc and Start skip the end credits instead.)
@@ -252,7 +253,9 @@ fn pause_toggle(
         && !(poker.is_some_and(|p| p.claims_escape()) && *state.get() == GameState::Playing)
         && !(minigame.is_some_and(|m| m.holds_player()) && *state.get() == GameState::Playing)
         && !(races.is_some_and(|r| r.claims_escape()) && *state.get() == GameState::Playing)
-        && !(drinking.is_some_and(|d| d.claims_escape()) && *state.get() == GameState::Playing);
+        && !(drinking.is_some_and(|d| d.claims_escape()) && *state.get() == GameState::Playing)
+        // (A story's box takes it: `story::story_boxes`.)
+        && !(story_ui.is_some_and(|u| !u.boxes.is_empty()) && *state.get() == GameState::Playing);
     if options.0 {
         if (esc && !crate::options::binding_key(&rebinding)) || pad(B::East) || pad(B::Start) {
             options.0 = false;

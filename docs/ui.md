@@ -569,6 +569,35 @@ only what changed (and everything again until the movies have loaded):
   hints, until it is hidden or its seconds run out. The shim's `call` turns null arguments into empty strings
   (the host can only send a blank string as null). Checklists stay in the
   game's own text for now.
+* **Message boxes**: the boxes the game stops for (`story::StoryBox`: a
+  blocking tutorial, a script's question, fast travel and abandoning a
+  mission) were ours alone. The scripts name each one's movie (their
+  `packageName`): `UI\Singleplayer\Hud\Message\MessageBox.feu` by default,
+  `SideQuestBox.feu` for the hunting, supply-run and wanted-poster givers
+  (their description with a reward line: `ShowDialogBox`'s footer and its
+  two amounts in their formats, "$300", "250 XP", now handed over apart
+  from the text). Both are loaded with the HUD (levels 8 and 7, hidden
+  till a box comes) and driven through their class `CMessageBox` by path
+  (`_level8.popup_mc`, `_level7.small_popup_mc`; their DPS ids are shared
+  with the pause menu's `M_PopupBox`): `initialize(title, text, size, ok,
+  ok icon, cancel, cancel icon)` (the title in the game's stencil face, the
+  text as HTML), the side box's `rewardTitleMC`, `param1MC`, `param2MC`,
+  then `fadeIn()`. Its first frame takes the small form for a text under
+  140 px with the video loader hidden (`PopupTextMC.mc_bink_loader`). The
+  buttons read "[Enter] Continue", "[Enter] Accept" and "[Esc] Cancel"
+  (the pad's A and B with a pad; a side box's are its words alone, as the
+  game's, its fields too narrow for more). Answered with our keys (Enter,
+  E or Space; Escape now backs out of a question and closes a box that
+  asks nothing, and no longer pauses under one), the movie's own
+  `Accept()`/`Cancel()` plays its sound and outro; the next box comes
+  0.5 s later. The cursor is freed while a box is up, its movie drawing
+  its own from the screen's middle, and a click on a button (`OnPress`)
+  fades it out and sends `MessageBoxResult Accept|Cancel`, which answers
+  ours (`story::BoxMovie`). Ours still shows outside play (the main menu,
+  the pause menu) and under the loading screen the box waits.
+  `FC3_BOX_TEST=<title>|<text>[|choice[|<reward>:<amount>:<amount>]]`
+  pushes a box 8 s in (`FC3_BOX_TIMES`), `FC3_BOX_CLICK=ok|cancel` presses
+  its button.
 * **Tutorials once.** A queued tutorial (`PushTutorialBox`, the
   `CreateTutorialMsgBox` box: nothing waits for its answer) shows once:
   the titles shown are kept with the progress (`tutorial` lines, saved,

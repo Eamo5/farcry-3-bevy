@@ -2076,6 +2076,22 @@ fn main() -> Result<()> {
             std::fs::write(out, &text)?;
             println!("{} rooms", text.lines().filter(|l| l.starts_with("room ")).count());
         }
+        "text-find" => {
+            // Files (by path filter) holding a text, case aside (as bytes, or
+            // UTF-16): text-find <path filter> <text>
+            let filter = args.get(1).context("usage: text-find <path filter> <text>")?.to_ascii_lowercase();
+            let needle = args.get(2).context("usage: text-find <path filter> <text>")?.to_ascii_lowercase().into_bytes();
+            let wide: Vec<u8> = needle.iter().flat_map(|&b| [b, 0]).collect();
+            let mut hits = 0;
+            for (h, name) in &vfs.names {
+                if !name.to_ascii_lowercase().contains(&filter) { continue; }
+                let Ok(bytes) = vfs.read_hash(*h) else { continue };
+                let lower = bytes.to_ascii_lowercase();
+                let count = lower.windows(needle.len()).filter(|w| *w == needle.as_slice()).count() + lower.windows(wide.len()).filter(|w| *w == wide.as_slice()).count();
+                if count > 0 { println!("x{count} {name}"); hits += 1; }
+            }
+            println!("{hits} files");
+        }
         "bytes-find" => {
             // Files (by path filter) holding any of the given little-endian u64s (hex): bytes-find <filter> <hex>...
             let filter = args.get(1).context("usage: bytes-find <path filter> <hex u64>...")?.to_ascii_lowercase();

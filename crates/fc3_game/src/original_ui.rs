@@ -57,7 +57,7 @@ impl Plugin for OriginalUiPlugin {
                 (
                     drive_hud,
                     (drive_story, drive_objective),
-                    drive_tutorial,
+                    (drive_tutorial, drive_boxes),
                     drive_timer,
                     drive_xp,
                     (drive_loot, drive_saving),
@@ -2465,6 +2465,9 @@ fn start_hud(host: &mut fc3_ui::Host, (_w, h): (u32, u32)) {
     host.event("EnableHud", &["1"]);
     host.event("SetVisible", &["1"]);
     host.load(TUTORIAL_MOVIE, TUTORIAL_LEVEL);
+    for kind in &BOX_KINDS {
+        host.load(kind.movie, kind.level);
+    }
 }
 
 /// What the HUD shows now, as last sent (only changes are sent).
@@ -4642,6 +4645,216 @@ fn drive_tutorial(
         }
     }
     *shown = Some(now);
+}
+
+/// The story's boxes (tutorials, questions: `story::StoryBox`) on the game's
+/// own, in the movie a box's package names (`Hud\Message\MessageBox.feu`; a
+/// side quest giver's `SideQuestBox.feu`, its reward line under its text),
+/// each at its own level over the HUD's (ours stands down,
+/// `story::BoxMovie`): the movie's `CMessageBox` told `initialize(title,
+/// text, size, ok, ok icon, cancel, cancel icon)` then `fadeIn()` (a short
+/// text with no video takes its small form); closed as ours was answered,
+/// by its `Accept()` or `Cancel()` (their sound, the outro, then
+/// `MessageBoxResult`), the next box in after the outro. Its buttons take
+/// the mouse: the cursor is freed while a box is up (the movie draws its
+/// own), and a click answers (`BoxMovie::answer`).
+struct BoxKind {
+    movie: &'static str,
+    level: u32,
+    clip: &'static str,
+}
+const BOX_KINDS: [BoxKind; 2] = [
+    BoxKind { movie: r"UI\Singleplayer\Hud\Message\MessageBox.feu", level: 8, clip: "popup_mc" },
+    BoxKind { movie: r"UI\Singleplayer\Hud\Message\SideQuestBox.feu", level: 7, clip: "small_popup_mc" },
+];
+/// How long (s) a closing box's outro has before the next comes in.
+const BOX_OUTRO: f32 = 0.5;
+/// "Continue", "Accept", "Cancel".
+const BOX_CONTINUE: u32 = 92598;
+const BOX_ACCEPT: u32 = 93254;
+const BOX_CANCEL: u32 = 93261;
+
+#[derive(Default)]
+struct BoxShown {
+    /// Each movie is in (its class's functions there).
+    ready: [bool; 2],
+    /// The movie a box is up in, and since when it has been closing.
+    up: Option<usize>,
+    closing: Option<f32>,
+    since: f32,
+    clicked: bool,
+    /// The cursor freed for the box's buttons.
+    freed: bool,
+    mouse: Vec2,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drive_boxes(
+    state: NonSend<Interface>,
+    game: Res<State<crate::menu::GameState>>,
+    mut ui: ResMut<crate::story::StoryUi>,
+    mut movie: ResMut<crate::story::BoxMovie>,
+    calls: Res<UiCalls>,
+    (settings, actions, captured, time): (Res<crate::settings::Settings>, Res<crate::controls::ActionState>, Res<crate::player::InputCaptured>, Res<Time<Real>>),
+    (mut moves, mut buttons): (MessageReader<CursorMoved>, MessageReader<bevy::input::mouse::MouseButtonInput>),
+    mut windows: Query<(&mut Window, &mut bevy::window::CursorOptions), With<PrimaryWindow>>,
+    mut shown: Local<BoxShown>,
+    loading: Res<LoadingUp>,
+) {
+    use fc3_ui::input::{MouseButton, PlayerEvent};
+    use fc3_ui::ExternalValue as V;
+    let Interface::Running(host) = &*state else {
+        movie.shown = false;
+        return;
+    };
+    let clip = |k: usize| format!("_level{}.{}", BOX_KINDS[k].level, BOX_KINDS[k].clip);
+    for (k, kind) in BOX_KINDS.iter().enumerate() {
+        if !shown.ready[k] && host.path_info(&format!("{}.initialize", clip(k))) != "undefined" {
+            shown.ready[k] = true;
+            host.level_visible(kind.level, false);
+        }
+    }
+    if !shown.ready.iter().all(|r| *r) {
+        movie.shown = false;
+        return;
+    }
+    let now = time.elapsed_secs();
+    let playing = *game.get() == crate::menu::GameState::Playing;
+    movie.shown = playing;
+    let answered = ui.answered.take();
+    // (Under another screen, it goes, and comes back afresh after.)
+    if !playing {
+        if let Some(k) = shown.up.take() {
+            host.level_visible(BOX_KINDS[k].level, false);
+        }
+        shown.closing = None;
+        shown.freed = false;
+        return;
+    }
+    let scale = windows.single().map_or(1.0, |(w, _)| w.scale_factor()) as f64;
+    // A click on its buttons: the movie fades out and says which.
+    for call in calls.0.iter().filter(|c| c.command == "Send" && c.args.first().is_some_and(|a| a == "MessageBoxResult")) {
+        if shown.up.is_some() && shown.closing.is_none() {
+            movie.answer = Some(call.args.get(1).is_none_or(|r| r != "Cancel"));
+            info!("original UI: box answered on its buttons: {:?}", call.args.get(1));
+            // (Its outro played already: the next a moment after ours
+            // hears the answer.)
+            shown.closing = Some(now - BOX_OUTRO + 0.1);
+        } else if shown.closing.is_some() {
+            // (The outro is over.)
+            shown.closing = Some(f32::MIN);
+        }
+    }
+    // Answered here (a key, the autopilot): the movie's own answer, its
+    // sound and outro.
+    if let (Some(yes), Some(k), None) = (answered, shown.up, shown.closing) {
+        host.call_function(&format!("{}.{}", clip(k), if yes { "Accept" } else { "Cancel" }), vec![]);
+        shown.closing = Some(now);
+    }
+    if shown.closing.is_some_and(|at| now - at > BOX_OUTRO) {
+        shown.closing = None;
+        if let Some(k) = shown.up.take() {
+            host.level_visible(BOX_KINDS[k].level, false);
+        }
+    }
+    let waiting = !ui.boxes.is_empty() && !loading.0;
+    let free = |windows: &mut Query<(&mut Window, &mut bevy::window::CursorOptions), With<PrimaryWindow>>, free: bool| {
+        if let Ok((_, mut c)) = windows.single_mut() {
+            c.grab_mode = if free { bevy::window::CursorGrabMode::None } else { bevy::window::CursorGrabMode::Locked };
+            c.visible = false;
+        }
+    };
+    // The cursor freed while a box is up or due (from the screen's middle),
+    // locked again after.
+    if waiting && !shown.freed {
+        if let Ok((mut w, _)) = windows.single_mut() {
+            let centre = Vec2::new(w.width(), w.height()) * 0.5;
+            w.set_cursor_position(Some(centre));
+            shown.mouse = centre;
+        }
+        free(&mut windows, true);
+        shown.freed = true;
+        host.input(PlayerEvent::MouseMove { x: shown.mouse.x as f64 * scale, y: shown.mouse.y as f64 * scale });
+    } else if !waiting && shown.freed {
+        if captured.0 {
+            free(&mut windows, false);
+        } else if let Ok((_, mut c)) = windows.single_mut() {
+            c.visible = true;
+        }
+        shown.freed = false;
+    }
+    if shown.freed {
+        for m in moves.read() {
+            shown.mouse = m.position;
+            host.input(PlayerEvent::MouseMove { x: m.position.x as f64 * scale, y: m.position.y as f64 * scale });
+        }
+        for b in buttons.read() {
+            let button = match b.button {
+                bevy::input::mouse::MouseButton::Left => MouseButton::Left,
+                bevy::input::mouse::MouseButton::Right => MouseButton::Right,
+                _ => continue,
+            };
+            let (x, y) = (shown.mouse.x as f64 * scale, shown.mouse.y as f64 * scale);
+            host.input(if b.state.is_pressed() { PlayerEvent::MouseDown { x, y, button, index: None } } else { PlayerEvent::MouseUp { x, y, button } });
+        }
+    } else {
+        moves.clear();
+        buttons.clear();
+    }
+    // FC3_BOX_CLICK=ok|cancel (tests): its button pressed, as the mouse
+    // presses it (`OnPress`), 1.5 s after it's up.
+    if let (Some(k), None, Ok(which)) = (shown.up, shown.closing, std::env::var("FC3_BOX_CLICK")) {
+        if now - shown.since > 1.5 && !shown.clicked {
+            shown.clicked = true;
+            info!("FC3_BOX_CLICK: {which}; the cursor {} (the mouse at {:?})", host.path_info(&format!("_level{}.Cursor_mc", BOX_KINDS[k].level)), shown.mouse);
+            let button = if which == "cancel" { 2.0 } else { 1.0 };
+            host.call_function(&format!("{}.OnPress", clip(k)), vec![V::Number(button), V::Number(0.0), V::Number(0.0)]);
+        }
+    }
+    if shown.up.is_some() || shown.closing.is_some() {
+        return;
+    }
+    // (Not under the loading screen: once it's down.)
+    if loading.0 {
+        return;
+    }
+    let Some(b) = ui.boxes.front() else { return };
+    let k = usize::from(b.reward.is_some());
+    let at = clip(k);
+    // The keys it takes on its buttons (the pad's with a pad), where they
+    // fit: a side quest's buttons are its words alone, as the game's.
+    let (ok, cancel) = match (k, actions.gamepad_active) {
+        (1, _) => ("", ""),
+        (_, true) => ("A  ", "B  "),
+        (_, false) => ("[Enter]  ", "[Esc]  "),
+    };
+    let ok = format!("{ok}{}", host.text(if b.choice { BOX_ACCEPT } else { BOX_CONTINUE }));
+    let cancel = if b.choice { format!("{cancel}{}", host.text(BOX_CANCEL)) } else { String::new() };
+    let body = crate::story::prompt_text(&b.body, &actions, &settings);
+    let body = body.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('\n', "<br>");
+    // (Blanks go as null, which the shim makes blank: Ruffle reads a blank
+    // from the host as "null".)
+    let value = |s: &str| if s.is_empty() { V::Null } else { fc3_ui::text_value(s) };
+    host.event("OnDisplayMessage", &[]);
+    host.call_function(&format!("{at}.initialize"), vec![value(&b.title), value(&body), V::Null, value(&ok), V::Null, value(&cancel), V::Null]);
+    match &b.reward {
+        Some(r) => {
+            host.set_path(&format!("{at}.rewardTitleMC.text"), V::String(r.title.clone()));
+            host.set_path(&format!("{at}.param1MC.text"), V::String(r.amounts[0].clone()));
+            host.set_path(&format!("{at}.param2MC.text"), V::String(r.amounts[1].clone()));
+        }
+        // (No video in it: its small form for a short text.)
+        None => {
+            host.set_path(&format!("{at}.PopupTextMC.mc_bink_loader._visible"), V::Bool(false));
+        }
+    }
+    host.call_function(&format!("{at}.fadeIn"), vec![]);
+    host.set_path(&format!("_level{}.Cursor_mc._visible", BOX_KINDS[k].level), V::Bool(!actions.gamepad_active));
+    host.level_visible(BOX_KINDS[k].level, true);
+    debug!("original UI: box {:?} in {}", b.title, BOX_KINDS[k].movie);
+    shown.up = Some(k);
+    shown.since = now;
+    shown.clicked = false;
 }
 
 /// The hit indicators (`HitIndicator_<n>`, six arrows round the screen's
