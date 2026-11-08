@@ -58,7 +58,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_hud,
                     (drive_story, drive_objective),
                     (drive_tutorial, drive_boxes, drive_movie_videos),
-                    drive_timer,
+                    (drive_timer, drive_minimap_distance, drive_crouch),
                     drive_xp,
                     (drive_loot, drive_saving),
                     (drive_stealth, drive_indicators, drive_wheel, drive_reload, drive_weapon_swap),
@@ -3011,8 +3011,10 @@ const SKILL_POINT_AVAILABLE: u32 = 149414;
 const SKILL_POINTS_AVAILABLE: u32 = 149413;
 
 /// XP gains on the HUD: the kicker plays the tier the amount earns, with
-/// the amount and what it was for, holds, then goes. A level gained shows
-/// the level-up line a while.
+/// the amount and what it was for, holds, then goes, and under it the bar to
+/// the next level (`XPBar`: in by `guns_in`, out by `guns_out`; its
+/// `XPUIBar` a frame a percent; nothing drove it). A level gained shows the
+/// level-up line a while.
 #[allow(clippy::type_complexity)]
 fn drive_xp(
     state: NonSend<Interface>,
@@ -3021,6 +3023,7 @@ fn drive_xp(
     mut gains: MessageReader<crate::progression::XpGain>,
     mut showing: Local<Option<(f32, u32)>>,
     mut level: Local<(Option<u32>, Option<f32>)>,
+    skills: Option<Res<crate::progression::Skills>>,
 ) {
     let Interface::Running(host) = &*state else {
         gains.clear();
@@ -3052,11 +3055,21 @@ fn drive_xp(
         let line = crate::progression::kicker_line(reason).map(|id| host.text(id)).unwrap_or_default();
         host.dps_text("XPBonusKickerText", &line);
         host.dps_play("XPKicker", fc3_ui::ExternalValue::Number(start as f64));
+        // (The way to the next level, as the pause menu counts it.)
+        let part = skills.as_deref().map_or(1.0, |s| {
+            let (from, to) = (crate::progression::xp_needed(progress.level, s), crate::progression::xp_needed(progress.level + 1, s));
+            if to == u32::MAX || to <= from { 1.0 } else { progress.xp.saturating_sub(from) as f32 / (to - from) as f32 }
+        });
+        host.dps_frame("XPUIBar", fc3_ui::ExternalValue::Number((1.0 + (part.clamp(0.0, 1.0) * 99.0).round()) as f64));
+        if showing.is_none() {
+            host.dps_play("XPBar", fc3_ui::ExternalValue::String("guns_in".into()));
+        }
         *showing = Some((time.elapsed_secs() + XP_HOLD, hold));
     }
     if let Some((until, hold)) = *showing {
         if time.elapsed_secs() >= until {
             host.dps_play("XPKicker", fc3_ui::ExternalValue::Number((hold + 1) as f64));
+            host.dps_play("XPBar", fc3_ui::ExternalValue::String("guns_out".into()));
             *showing = None;
         }
     }
@@ -4999,6 +5012,64 @@ fn drive_hits(state: NonSend<Interface>, players: Query<(&crate::combat::PlayerS
         *next = (*next + 1) % HIT_SLOTS;
     }
     *last = strength;
+}
+
+/// The crouching figure by the ammo (`CrouchIconMC`; nothing drove it): in
+/// by its `Crouch` label as the player crouches, out by `Stand` as he
+/// rises (on foot only).
+fn drive_crouch(state: NonSend<Interface>, players: Query<&crate::player::Player>, mut shown: Local<Option<bool>>) {
+    let Interface::Running(host) = &*state else { return };
+    let Ok(p) = players.single() else { return };
+    let now = p.crouching && !p.driving && !p.swimming;
+    if *shown == Some(now) || (shown.is_none() && !now) {
+        *shown = Some(now);
+        return;
+    }
+    host.dps_visible("CrouchIconMC", true);
+    if host.dps_play("CrouchIconMC", fc3_ui::ExternalValue::String(if now { "Crouch" } else { "Stand" }.into())) {
+        *shown = Some(now);
+    }
+}
+
+/// The way to go under the radar (`ObjectiveDistanceTextMC`, its right
+/// below the circle, and `ObjectiveDistanceArrowMC` before it; nothing
+/// drove them): how far the waypoint is, else the nearest objective
+/// ("325m", "1.2km"), and an arrow up or down when it's well above or below
+/// the player (the arrow's frames: 1 none, 2-16 up, 17-31 down).
+const DISTANCE_ARROW: [u32; 3] = [1, 8, 24];
+/// How far (m) above or below the player a goal is before the arrow shows.
+const DISTANCE_RISE: f32 = 10.0;
+
+fn drive_minimap_distance(
+    state: NonSend<Interface>,
+    markers: Res<crate::story::ObjectiveMarkers>,
+    waypoint: Res<crate::map::Waypoint>,
+    players: Query<&Transform, With<crate::player::Player>>,
+    mut shown: Local<Option<Option<(String, u32)>>>,
+) {
+    let Interface::Running(host) = &*state else { return };
+    let Ok(t) = players.single() else { return };
+    let feet = t.translation - Vec3::Y * crate::player::HALF_HEIGHT;
+    let flat = |p: Vec3| p.with_y(0.0).distance(feet.with_y(0.0));
+    let goal = waypoint.0.or_else(|| markers.0.iter().copied().min_by(|a, b| flat(*a).total_cmp(&flat(*b))));
+    let now = goal.map(|g| {
+        let d = flat(g);
+        let text = if d >= 1000.0 { format!("{:.1}km", d / 1000.0) } else { format!("{:.0}m", d) };
+        let rise = g.y - feet.y;
+        let arrow = if rise > DISTANCE_RISE { DISTANCE_ARROW[1] } else if rise < -DISTANCE_RISE { DISTANCE_ARROW[2] } else { DISTANCE_ARROW[0] };
+        (text, arrow)
+    });
+    if shown.as_ref() == Some(&now) {
+        return;
+    }
+    let mut ok = host.dps_visible("ObjectiveDistanceTextMC", now.is_some()) & host.dps_visible("ObjectiveDistanceArrowMC", now.is_some());
+    if let Some((text, arrow)) = &now {
+        ok &= host.dps_text("ObjectiveDistanceTextMC", text);
+        ok &= host.dps_frame("ObjectiveDistanceArrowMC", fc3_ui::ExternalValue::Number(*arrow as f64));
+    }
+    if ok {
+        *shown = Some(now);
+    }
 }
 
 /// A mission's timer (`ObjectiveTimer`, top centre, with its

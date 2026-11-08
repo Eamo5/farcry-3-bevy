@@ -465,6 +465,17 @@ only what changed (and everything again until the movies have loaded):
   frame 1, its art pointing up); `PlayerMarkerIndicator` is the waypoint
   ("Inside" 1, "Outside" 2). The movie shows no distances; our diamonds
   and distances stand down.
+* **The way to go, the XP bar, crouching**: three of the HUD's pieces that
+  nothing drove. Under the radar on its right, `ObjectiveDistanceTextMC`
+  shows how far the map's waypoint is, else the nearest objective ("325m",
+  "1.2km", flat), and `ObjectiveDistanceArrowMC` before it an arrow up or
+  down when it's over 10 m above or below the player (its frames: 1 none,
+  2-16 up, 17-31 down; `drive_minimap_distance`). Over the radar, the bar to
+  the next level comes in with an XP kicker (`XPBar`: `guns_in`, out by
+  `guns_out` as the kicker goes) at the share of the way made
+  (`XPUIBar`, a frame a percent, as the pause menu counts the levels). By
+  the ammo, `CrouchIconMC`'s kneeling figure comes in by its `Crouch` label
+  as the player crouches on foot and goes by `Stand`.
 * **Weapon swap box**: `H_WeaponSwapping.feu` (the HUD's
   `WeaponSwapping_MC`) was never driven. Over a gun lying there that the
   player doesn't carry (`pickups::WeaponOffer`), its box
