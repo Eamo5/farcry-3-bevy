@@ -87,6 +87,14 @@ pub struct Mission {
     pub fast_travel: bool,
 }
 
+impl Mission {
+    /// A side quest (its type `behaviourquest`, `speedquest`, `wantedquest`,
+    /// `huntingquest`): its end shows on the quest card.
+    pub fn quest(&self) -> bool {
+        self.type_name.to_ascii_lowercase().ends_with("quest")
+    }
+}
+
 /// Saved mission progress, by mission name (or block id).
 #[derive(Debug, Clone, Default)]
 pub struct Saved {
@@ -381,7 +389,8 @@ impl Core {
     /// `MissionBlockFail(owner, reload, reason)`.
     pub fn block_fail(&mut self, owner: u64, reload: bool, reason: Option<u32>) {
         let text = reason.and_then(|r| self.data.strings.get(r)).map(str::to_string);
-        self.emit(Command::MissionFailed { text, reload });
+        let quest = self.missions.main_of(owner).is_some_and(Mission::quest);
+        self.emit(Command::MissionFailed { text, reload, quest });
         if let Some(m) = self.missions.by_owner(owner).cloned() {
             if !reload {
                 self.finish_mission(&m.id, State::Failed);
@@ -404,6 +413,7 @@ impl Core {
             xp: reward.xp,
             money: reward.money,
             screen: m.end_screen,
+            quest: m.quest(),
         });
         self.finish_mission(&m.id, State::Completed);
         self.emit(Command::Checkpoint);
@@ -413,7 +423,7 @@ impl Core {
     pub fn mission_fail(&mut self, owner: u64, text: Option<u32>) {
         let Some(m) = self.missions.main_of(owner).cloned() else { return };
         let text = text.and_then(|t| self.data.strings.get(t)).map(str::to_string);
-        self.emit(Command::MissionFailed { text, reload: false });
+        self.emit(Command::MissionFailed { text, reload: false, quest: m.quest() });
         self.finish_mission(&m.id, State::Failed);
     }
 

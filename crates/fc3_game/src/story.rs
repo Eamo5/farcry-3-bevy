@@ -1260,8 +1260,9 @@ const POPUP_HINT: u64 = u64::MAX;
 #[derive(Clone, Debug, PartialEq)]
 pub enum MissionCard {
     Start { title: String },
-    Complete { title: String },
-    Failed { text: String },
+    /// (A side quest's on the quest card.)
+    Complete { title: String, quest: bool },
+    Failed { text: String, quest: bool },
     /// A world event's (an outpost liberated, a radio tower taken), by the
     /// game's strings: its text, and under it a count (`%d` in the string).
     Event {
@@ -3129,12 +3130,12 @@ fn run_story(
                     ui.cards.push(MissionCard::Start { title: plain(&t) });
                 }
             }
-            Command::MissionComplete { title, xp, money, .. } => {
+            Command::MissionComplete { title, xp, money, quest, .. } => {
                 // (A mission without its own text for it is named as it
                 // started.)
                 let name = title.map(|t| plain(&t)).filter(|t| !t.is_empty()).or_else(|| ui.mission.clone()).unwrap_or_default();
                 ui.banner = Some((format!("{name}\nMission complete"), 6.0));
-                ui.cards.push(MissionCard::Complete { title: name.clone() });
+                ui.cards.push(MissionCard::Complete { title: name.clone(), quest });
                 if xp > 0 {
                     xp_gain.write(crate::progression::XpGain { amount: xp, reason: "Mission complete" });
                 }
@@ -3143,7 +3144,7 @@ fn run_story(
                     hud.notify_native(format!("+${got}"));
                 }
             }
-            Command::MissionFailed { text, reload } => {
+            Command::MissionFailed { text, reload, quest } => {
                 info!("story: mission failed ({:?}), reload {reload}", text.as_deref().map(plain));
                 // (The mission's own scripts failing it as it's given up.)
                 if !reload && host.abandoned_at.is_some_and(|at| now - at < 2.0) {
@@ -3161,7 +3162,7 @@ fn run_story(
                 }
                 let text = text.map(|t| plain(&t)).unwrap_or_default();
                 ui.banner = Some((format!("Mission failed\n{text}"), 5.0));
-                ui.cards.push(MissionCard::Failed { text });
+                ui.cards.push(MissionCard::Failed { text, quest });
                 if reload && host.reload_at.is_none() {
                     host.reload_at = Some(now + 4.0);
                 }

@@ -2892,20 +2892,19 @@ fn drive_story(
     hud: Res<crate::hud::HudState>,
     mut last: Local<Option<(Option<String>, Option<String>)>>,
     (mut commands, time, mut card_shot, mut last_event): (Commands, Res<Time<Real>>, Local<(Option<f32>, u32)>, Local<Option<f32>>),
-    mut fade_due: Local<(Option<f32>, Option<f32>)>,
+    mut fade_due: Local<Vec<(&'static str, f32)>>,
 ) {
     let Interface::Running(host) = &*state else { return };
     // A card held a while, then faded as the engine faded it: the same call
-    // with no text (the movie's `SetMissionStart`/`SetMissionTitle` play
-    // their outro for an empty one). Held for good otherwise.
+    // with no text (the movie's `SetMissionStart`, `SetMissionTitle` and
+    // `SetQuestTitle` play their outro for an empty one). Held for good
+    // otherwise.
     let now_secs = time.elapsed_secs();
-    if fade_due.0.is_some_and(|at| now_secs >= at) {
-        fade_due.0 = None;
-        host.event("SetMissionStart", &[""]);
-    }
-    if fade_due.1.is_some_and(|at| now_secs >= at) {
-        fade_due.1 = None;
-        host.event("SetMissionTitle", &["", "", "1"]);
+    for (channel, _) in fade_due.extract_if(.., |(_, at)| now_secs >= *at) {
+        match channel {
+            "SetMissionStart" => host.event(channel, &[""]),
+            _ => host.event(channel, &["", "", "1"]),
+        }
     }
     // FC3_CARD_SHOT=<prefix> (tests): each card captured a moment in, to
     // <prefix>_<n>.png.
@@ -2921,19 +2920,24 @@ fn drive_story(
     }
     for card in std::mem::take(&mut ui.cards) {
         debug!("original UI: mission card {card:?}");
-        match &card {
-            crate::story::MissionCard::Start { .. } => fade_due.0 = Some(now_secs + CARD_SECS),
-            _ => fade_due.1 = Some(now_secs + CARD_SECS),
-        }
+        // (A side quest's end on the quest card: blue, without the mission
+        // card's ink blot.)
+        let channel = match &card {
+            crate::story::MissionCard::Start { .. } => "SetMissionStart",
+            crate::story::MissionCard::Complete { quest: true, .. } | crate::story::MissionCard::Failed { quest: true, .. } => "SetQuestTitle",
+            _ => "SetMissionTitle",
+        };
+        fade_due.retain(|(c, _)| *c != channel);
+        fade_due.push((channel, now_secs + CARD_SECS));
         match card {
-            crate::story::MissionCard::Start { title } => host.event("SetMissionStart", &[&title]),
+            crate::story::MissionCard::Start { title } => host.event(channel, &[&title]),
             // (Without a title, the status alone: the movie shows nothing
             // with no text.)
-            crate::story::MissionCard::Complete { title } if title.is_empty() => {
-                host.event("SetMissionTitle", &[&host.text(MISSION_COMPLETE).to_uppercase(), "", "1"])
+            crate::story::MissionCard::Complete { title, .. } if title.is_empty() => {
+                host.event(channel, &[&host.text(MISSION_COMPLETE).to_uppercase(), "", "1"])
             }
-            crate::story::MissionCard::Complete { title } => host.event("SetMissionTitle", &[&title, &host.text(MISSION_COMPLETE).to_uppercase(), "1"]),
-            crate::story::MissionCard::Failed { text } => host.event("SetMissionTitle", &[&text, &host.text(MISSION_FAILED), "0"]),
+            crate::story::MissionCard::Complete { title, .. } => host.event(channel, &[&title, &host.text(MISSION_COMPLETE).to_uppercase(), "1"]),
+            crate::story::MissionCard::Failed { text, .. } => host.event(channel, &[&text, &host.text(MISSION_FAILED), "0"]),
             crate::story::MissionCard::Event { text, count } => {
                 let status = count.map(|(id, n)| host.text(id).replace("%d", &n.to_string())).unwrap_or_default();
                 host.event("SetMissionTitle", &[&host.text(text), &status, "1"]);

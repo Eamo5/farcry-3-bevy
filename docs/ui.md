@@ -438,7 +438,10 @@ only what changed (and everything again until the movies have loaded):
   `SetMissionStart`: `FadeOut`, `Outro`), which the engine sent once the
   card had been up a while; we never did, and every card stayed on screen
   for good. Each now goes 5 s on (`CARD_SECS`), the latest card's clock
-  restarted by the next. `FC3_CARD_SHOT=<prefix>` (tests) captures each
+  restarted by the next. A side quest's end (a mission registered as a
+  `behaviourquest`, `speedquest`, `wantedquest` or `huntingquest`) goes on
+  the movie's quest card (`SetQuestTitle`: a blue band, no ink blot),
+  which nothing used. `FC3_CARD_SHOT=<prefix>` (tests) captures each
   card 1.5 s in, to `<prefix>_<n>.png`; `fc3ui hud <movie> <png> <frames>
   event <channel> <args>` renders a movie after events (a card, then its
   empty call, gone).

@@ -228,11 +228,14 @@ pub enum Command {
         xp: u32,
         money: u32,
         screen: bool,
+        /// A quest's (a side quest's: its type `...quest`), shown as one.
+        quest: bool,
     },
     /// A failed mission; with `reload`, back to the last checkpoint.
     MissionFailed {
         text: Option<String>,
         reload: bool,
+        quest: bool,
     },
     /// The mission the player was on, given up (`AbandonMission`, the
     /// pause menu's Abandon mission), and the story to go on from: as it is
