@@ -27,6 +27,9 @@ pub struct MissionLayers {
     /// visitor's jeep had driven off along its way, and its crew, asked to
     /// board again, waited at its start for nothing).
     pub reset: bool,
+    /// Entities whose layer is to be laid out again where it's in (a pickup
+    /// a script still waits on, wrongly taken: `story`).
+    pub relay: Vec<u64>,
 }
 
 /// A loaded sector's spawned layer contents (layer -> root).
@@ -67,6 +70,19 @@ fn stream_layers(
         for (e, _, mission) in &vehicles {
             if mission {
                 commands.entity(e).despawn();
+            }
+        }
+    }
+    let relay: HashSet<u64> = std::mem::take(&mut layers.relay).into_iter().collect();
+    if !relay.is_empty() {
+        for (_, so, spawned) in &mut roots {
+            let (Some(mut spawned), Some(sector)) = (spawned, sectors.get(&so.sector)) else { continue };
+            for (layer, content) in &sector.layers {
+                if content.entities.iter().any(|e| relay.contains(&e.id)) {
+                    if let Some(e) = spawned.0.remove(layer) {
+                        crate::retire::retire(&mut commands, e);
+                    }
+                }
             }
         }
     }
@@ -182,7 +198,20 @@ fn layer_pickup(
         return None;
     }
     let weapon = has("CPickupWeapon");
+    use crate::pickups::PickupKind as K;
     match crate::pickups::classify(&entity.name) {
+        // (Named as a collectible but of no collectible kind, a mission's
+        // own: SQH_020's dog tags, "JapCorpses_DogTag_0", counted as lost
+        // letters.)
+        Some(crate::pickups::Classified::Pickup(K::Letter | K::Relic | K::MemoryCard))
+            if data
+                .and_then(|d| d.entities.get(&entity.id))
+                .and_then(|e| e.component("CPickupCollectible"))
+                .and_then(|c| c.u32("selCollectibleType"))
+                .is_some_and(|t| t == u32::MAX) =>
+        {
+            Some(K::Mission)
+        }
         Some(crate::pickups::Classified::Pickup(kind)) => Some(kind),
         Some(crate::pickups::Classified::Explosive) => None,
         // A panel a mission has opened (ULC_010's power panel): used where

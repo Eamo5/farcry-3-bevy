@@ -2623,6 +2623,26 @@ fn run_story(
             host.story.gameplay_ended(id);
         }
     }
+    // A mission's pickup a script still waits to see taken is in the world,
+    // whatever the save says (once a second): SQH_020's dog tags were taken
+    // in a save its checkpoint's story never heard of, and the quest asked
+    // for them for good.
+    if (time.elapsed_secs() as u32) != ((time.elapsed_secs() - dt) as u32) {
+        let data = host.story.data();
+        let stale: Vec<u64> = host
+            .story
+            .awaited_pickups()
+            .into_iter()
+            .filter(|id| world_state.removed.contains(id) && data.entities.get(id).is_some_and(|e| e.layer != fc3_formats::world::DEFAULT_MISSION_LAYER))
+            .collect();
+        if !stale.is_empty() {
+            info!("story: {} awaited pickups taken already put back ({stale:?})", stale.len());
+            for id in &stale {
+                world_state.removed.remove(id);
+            }
+            layers.relay.extend(stale);
+        }
+    }
     // Tests: when nothing has happened for a while, step into a trigger a
     // script waits on.
     host.quiet += dt;
@@ -2802,7 +2822,10 @@ fn run_story(
         // alone: the autopilot went back and forth between Amanaki's shop and
         // its villagers' trigger, and followed a villager, for good).
         let focus_stuck = host.focus_since.as_ref().is_some_and(|(_, since)| now - since > MARKER_WALK_AFTER);
-        let own_left = focused.iter().any(|w| w.3 && !host.fatal.contains(&(w.0, w.1.clone())) && !host.used.contains(&(w.0, w.1.clone())));
+        let own_left = focused.iter().any(|w| w.3 && !host.fatal.contains(&(w.0, w.1.clone())) && !host.used.contains(&(w.0, w.1.clone())))
+            // (Nor while it goes for a pickup a script waits on: SQH_020's
+            // dog tags, each left as it was reached for the markers.)
+            || host.autopilot_search.is_some_and(|(_, since)| now - since < SEARCH_FOR * 2.0);
         let marker_walk = host
             .story
             .objective_markers()
@@ -2925,6 +2948,20 @@ fn run_story(
                     host.used.contains(&(w.0, w.1.clone())),
                     host.fatal.contains(&(w.0, w.1.clone())),
                     tails.contains(&w.0)
+                );
+            }
+            let feet = t.translation - Vec3::Y * crate::player::HALF_HEIGHT;
+            for w in host.story.watched_proximity_in_graph(graph.as_deref()) {
+                let step = format!("near {}", w.1);
+                info!(
+                    "story autopilot: near candidate {} ({} m, {:.0} m off): in focus {}, used {}, fatal {}, tails {}",
+                    data.name_of(w.0).unwrap_or("?"),
+                    w.1,
+                    to_bevy(w.2).distance(feet),
+                    !mission_on || in_focus.contains(&w.0),
+                    host.used.contains(&(w.0, step.clone())),
+                    host.fatal.contains(&(w.0, step)),
+                    tails.len()
                 );
             }
         }
@@ -4679,9 +4716,10 @@ const MARKER_WALK_SHORT: f32 = 8.0;
 const NOT_OBJECTIVES: [u64; 5] = [0x058d_6bbd, 0x1350_8ab1, 0x0375_88d5, 0x82ca_abbe, 0x7d8e_4092];
 /// How quiet (s) the story is before the autopilot goes after a character
 /// only a health listener watches who has the mission's marker within this
-/// far (m) of him.
+/// far (m) of him, across the ground (SQC_070's first privateer stands
+/// 6.2 m off his marker's foot).
 const MARKED_FOE_AFTER: f32 = 15.0;
-const MARKED_FOE_WITHIN: f32 = 6.0;
+const MARKED_FOE_WITHIN: f32 = 12.0;
 /// How long (s) the autopilot has gone after a vehicle before a mission
 /// failing is put down to it.
 const WRECK_BLAMED_AFTER: f32 = 3.0;
@@ -6111,8 +6149,15 @@ fn autopilot_loot(
     if host.quiet > MARKED_FOE_AFTER {
         let marks: Vec<Vec3> = host.story.objective_markers().into_iter().map(|(_, p)| to_bevy(p)).collect();
         for q in &npcs {
-            if singly.contains(&q.4.id) && marks.iter().any(|m| m.distance(q.0.translation) < MARKED_FOE_WITHIN) {
+            // (Across the ground: SQC_070's first privateer stands 6 m
+            // under his marker, 4 m to the side; a counter on him alone
+            // watches him, `CCounterEvent`.)
+            let watched = singly.contains(&q.4.id) || counted.contains(&q.4.id);
+            if watched && marks.iter().any(|m| m.with_y(0.0).distance(q.0.translation.with_y(0.0)) < MARKED_FOE_WITHIN) {
                 to_kill.insert(q.4.id);
+                if report {
+                    info!("story autopilot: marked foe {} (hostile {}, {:?}, seated {}, dead {})", q.4.id, q.5.hostile(), q.5.state, q.4.seated, q.1.dead);
+                }
             }
         }
     }
@@ -6854,7 +6899,7 @@ fn autopilot_loot(
             .min_by(|a, b| a.1.distance(at.translation).total_cmp(&b.1.distance(at.translation)));
         if let Some((id, spot)) = near {
             if *last != Some((id, "pick up")) {
-                info!("story autopilot: pick up {}", host.story.data().name_of(id).unwrap_or("?"));
+                info!("story autopilot: pick up {} at {spot:?} (the player at {:?})", host.story.data().name_of(id).unwrap_or("?"), at.translation);
                 *last = Some((id, "pick up"));
             }
             match host.autopilot_search {

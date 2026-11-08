@@ -4272,7 +4272,9 @@ Run again later in the campaign (`camp91`), the escort failed every time
   gas's triggers are a hazard's now, not stepped into (as the hot pools'),
   and a checkpoint keeps what was broken as it was made
   (`Breaks::mark_checkpoint`): reloaded, what was broken since is whole
-  again, its sector's objects laid out afresh (`restore_broken`).
+  again, its sector's objects laid out afresh (`restore_broken`). Played on
+  from there, all three Lost Expeditions completed (ULC_030, ULC_020,
+  ULC_010).
 * **Reinforcements that fight.** Each wave's reinforcements are sent to
   guard posts in the village (`Cautious_Guard_*`). Alerted, one's AI took
   over and the story heard his action broken off; it sent him to the next
@@ -5862,7 +5864,30 @@ to SQC_080, each a brief at its giver then its blocks):
   between Amanaki's shop and its villagers' trigger, and followed a
   villager, for good. Now, on a mission with none of its own triggers
   left and gone nowhere 30 s (or quiet that long), it goes to the marker
-  before those, and other missions' triggers wait.
+  before those, and other missions' triggers wait. The first privateer then
+  stood idle 14 m off: a counter on him alone watches him
+  (`CCounterEvent`, not a health listener), and he stands 6.2 m from his
+  marker's foot. The marked foe is now one either watches, within 12 m of
+  the marker across the ground; SQC_070 completed.
+* **Dog tags.** SQH_020 has three Japanese soldiers' dog tags found on
+  their bodies (`Pickups/Collectibles/JapCorpses_DogTag_<n>`, its B10
+  layer's). Two had been taken in a run whose checkpoint's story never
+  heard of it, and its save kept them taken, so the quest asked for them
+  for good. A mission's pickup a script still waits to see taken is now in
+  the world whatever the save says: once a second those taken already are
+  put back and their layer laid out again where it's in
+  (`MissionLayers::relay`). And named like the lost letters, they counted as
+  lost letters ($150, the letters' count); a collectible's pickup of no
+  collectible kind (`selCollectibleType` none) is a mission's own item
+  now. The walk to the markers had also come between the autopilot and a
+  tag it was reaching for: not while it goes for a pickup a script waits
+  on. SQH_020 completed.
+* **HUR_020.** Hurk's first mission never came after the campaign: its
+  briefing spot had been learned fatal for good (DEN_040's camp, a mission
+  area that fails on leaving, surrounds it), before what fails a mission
+  was learned under its objective. That entry is gone from the test
+  harness's file (the spot isn't gone to while another mission runs);
+  HUR_020 completed, then HUR_040's barge defence ran.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

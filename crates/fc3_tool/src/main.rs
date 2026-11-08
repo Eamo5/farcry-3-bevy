@@ -500,14 +500,29 @@ fn main() -> Result<()> {
         "sector-pickups" => {
             // The cached sectors' pickups (collectibles, plants, loot) by
             // name, counted: sector-pickups [name filter]
+            // (`--where`: each one's sector file, layer, place and whether a
+            // model is placed for it.)
             let filter = args.get(1).map(|s| s.to_ascii_lowercase()).unwrap_or_else(|| "pickups/".into());
+            let at = args.iter().any(|a| a == "--where");
             let dir = fc3_formats::cache::default_cache_root().join("sectors");
             let mut counts: BTreeMap<String, usize> = BTreeMap::new();
             for entry in std::fs::read_dir(&dir)? {
-                let Ok(bytes) = std::fs::read(entry?.path()) else { continue };
+                let path = entry?.path();
+                let Ok(bytes) = std::fs::read(&path) else { continue };
                 let Ok(sector) = fc3_formats::cache::CachedSector::from_bytes(&bytes) else { continue };
-                for e in sector.entities.iter().filter(|e| e.name.to_ascii_lowercase().contains(&filter)) {
+                for (i, e) in sector.entities.iter().enumerate().filter(|(_, e)| e.name.to_ascii_lowercase().contains(&filter)) {
                     *counts.entry(e.name.clone()).or_default() += 1;
+                    if at {
+                        let placed = sector.placements.iter().filter(|p| p.entity as usize == i).count();
+                        println!(
+                            "{} in {} (sector {}) layer {:#x} at {:?}, {placed} placed",
+                            e.name,
+                            path.file_name().unwrap_or_default().to_string_lossy(),
+                            sector.sector_id,
+                            e.mission_layer,
+                            e.translation
+                        );
+                    }
                 }
             }
             for (name, n) in counts {
