@@ -5089,20 +5089,49 @@ fn drive_minimap_distance(
 /// A mission's timer (`ObjectiveTimer`, top centre, with its
 /// `ObjectiveTimerText`): the first of the story's timers, as the game's own
 /// HUD writes it; hidden without one.
-fn drive_timer(state: NonSend<Interface>, ui: Res<crate::story::StoryUi>, mut shown: Local<Option<Option<String>>>) {
+fn drive_timer(
+    state: NonSend<Interface>,
+    ui: Res<crate::story::StoryUi>,
+    time: Res<Time<Real>>,
+    mut shown: Local<Option<Option<String>>>,
+    mut hide_at: Local<Option<f32>>,
+) {
+    use fc3_ui::ExternalValue as V;
     let Interface::Running(host) = &*state else { return };
+    // (Gone once its fade out has played.)
+    if hide_at.is_some_and(|at| time.elapsed_secs() >= at) {
+        *hide_at = None;
+        host.dps_visible("ObjectiveTimer", false);
+    }
     let now = ui.timers.first().map(crate::story::timer_text);
     if shown.as_ref() == Some(&now) {
         return;
     }
-    let mut ok = host.dps_visible("ObjectiveTimer", now.is_some());
-    if let Some(text) = &now {
-        ok &= host.dps_text("ObjectiveTimerText", text);
+    let was = shown.as_ref().is_some_and(|s| s.is_some());
+    let mut ok = true;
+    match &now {
+        // (In by its fade, `ObjectiveTimerAnimation`'s, as it starts.)
+        Some(text) => {
+            *hide_at = None;
+            ok &= host.dps_visible("ObjectiveTimer", true);
+            ok &= host.dps_text("ObjectiveTimerText", text);
+            if !was {
+                host.dps_play("ObjectiveTimerAnimation", V::String("FadeIn".into()));
+            }
+        }
+        None if was => {
+            host.dps_play("ObjectiveTimerAnimation", V::String("FadeOut".into()));
+            *hide_at = Some(time.elapsed_secs() + TIMER_FADE_OUT);
+        }
+        None => ok &= host.dps_visible("ObjectiveTimer", false),
     }
     if ok {
         *shown = Some(now);
     }
 }
+
+/// How long (s) the timer's fade out plays before it goes.
+const TIMER_FADE_OUT: f32 = 0.35;
 
 /// The grenade indicators (`GrenadeIndicator_<n>`, three, round the screen's
 /// centre): the nearest live grenades within `hud::GRENADE_WARN`, each

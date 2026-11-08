@@ -510,7 +510,10 @@ only what changed (and everything again until the movies have loaded):
   timers in `ObjectiveTimerText` (as the game's own HUD writes it), hidden
   without one: a mission's objective timer or gauge
   (`ShowObjectiveTimer`, `ShowObjectiveGageTimer`) ahead of its named
-  ones.
+  ones. It comes in and goes by its box's fades (`ObjectiveTimerAnimation`,
+  `FadeIn` and `FadeOut`, hidden once that has played). `ObjectiveTimer`'s
+  own two frames (`High`, `Low`) are two places for it, the lower one
+  under the objective's box.
 * **A mission's loading screen**: the dream missions (BAM_020 to BAM_060)
   put the white one up (`SetFlashLoadingScreen`,
   `Loading\GameModes\Singleplayer_white.feu`: its words and tips on
