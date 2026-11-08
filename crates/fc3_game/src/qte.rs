@@ -272,7 +272,25 @@ fn run_qtes(
     if time.delta_secs() <= 0.0 {
         return;
     }
-    let Some(mut host) = host else { return };
+    let Some(mut host) = host else {
+        // (No story, no struggle: the bite is a strike.)
+        let player = players.single().ok().map(|(e, _, _)| e);
+        for bite in bites.read() {
+            if let (Ok((at, mut a, _)), Some(player)) = (wilds.get_mut(bite.animal), player) {
+                a.release();
+                damage.write(crate::combat::DamageEvent {
+                    target: player,
+                    amount: bite.damage,
+                    kind: crate::combat::DamageKind::Melee,
+                    source: Some(at.translation),
+                    instigator: Some(bite.animal),
+                    headshot: false,
+                    hit: crate::combat::Hit::Whole,
+                });
+            }
+        }
+        return;
+    };
     let qtes = &mut *qtes;
     let moves = &table.0;
     for start in std::mem::take(&mut qtes.pending) {

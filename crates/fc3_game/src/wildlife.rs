@@ -1006,7 +1006,7 @@ impl AnimalAssets {
         commands.entity(root).insert((WildAnimal {
             species, mood: Mood::Graze, call_in: rng.range(CALL_EVERY.0, CALL_EVERY.1),
             health_seen: f32::MAX, timer: rng.range(2.0, 8.0), goal: at, yaw,
-            velocity: Vec3::ZERO, rig, attack_cooldown: 0.0, frozen: None,
+            velocity: Vec3::ZERO, rig, attack_cooldown: 0.0, frozen: None, bitten: None,
             body_lift: crate::player::HALF_HEIGHT, sense: Sensing::default(),
         }, Health::new(s.health), Collider::capsule(s.size.0, s.size.1 * 2.0)));
         if s.swims() {
@@ -1371,6 +1371,8 @@ pub struct WildAnimal {
     attack_cooldown: f32,
     /// Posed for a test: no AI.
     frozen: Option<AnimKind>,
+    /// Held for a bite since (`AnimalBite`).
+    bitten: Option<f32>,
     /// Story roots share the story host's capsule offset; ordinary wildlife
     /// uses the species' own offset. Keep both feet and graphic kits grounded.
     body_lift: f32,
@@ -1784,6 +1786,7 @@ fn spawn_animal(
                 rig: None,
                 attack_cooldown: 0.0,
                 frozen: None,
+            bitten: None,
                 body_lift: radius + 0.25,
                 sense: Sensing::default(),
             },
@@ -1980,6 +1983,11 @@ fn animal_ai(
     for (e, mut t, mut a, h, story, counters, handled) in &mut animals {
         if h.dead || story.is_some_and(|s| s.script_driven()) {
             continue;
+        }
+        // (Held for a bite no struggle took up a moment on: let go.)
+        if a.bitten.is_some_and(|at| time.elapsed_secs() - at > 1.0) && qtes.as_ref().is_none_or(|q| !q.active()) {
+            a.bitten = None;
+            a.release();
         }
         if let Some(kind) = a.frozen {
             if let Some(mut req) = a.rig.and_then(|r| anims.get_mut(r).ok()) {
@@ -2233,13 +2241,14 @@ fn animal_ai(
                     // (Or, now and then, a bite the player struggles out of:
                     // the game's QTE, its chance and pause the animal's.)
                     let now = time.elapsed_secs();
-                    let free = !player.driving && !player.noclip && qtes.as_ref().is_none_or(|q| !q.active()) && cinema.as_ref().is_none_or(|c| !c.plays_player());
+                    let free = !player.driving && !player.noclip && !player.spawning && qtes.as_ref().is_none_or(|q| !q.active()) && cinema.as_ref().is_none_or(|c| !c.plays_player());
                     if let Some(prefix) = bite_prefix(s.animal).filter(|_| is_player && free && now >= *next_bite && rng.f32() < p.qte_chance) {
                         *next_bite = now + p.qte_cooldown.max(4.0);
                         let damage = (ph.max * p.qte_damage_share).min(if p.qte_max_damage > 0.0 { p.qte_max_damage } else { f32::MAX });
                         info!("animal: {} bites the player: a struggle ({prefix})", s.animal.name());
                         bites.write(AnimalBite { animal: e, prefix, damage });
                         a.frozen = Some(AnimKind::Idle);
+                        a.bitten = Some(now);
                         continue;
                     }
                     let amount = match counters.and_then(|c| c.v.attack) {
@@ -2915,6 +2924,7 @@ fn animal_test(
                     rig: None,
                     attack_cooldown: 0.0,
                     frozen: (!hunt && !herd).then_some(kind),
+            bitten: None,
                     body_lift: radius + 0.25,
                     sense: Sensing::default(),
                 },
