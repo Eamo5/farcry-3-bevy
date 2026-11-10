@@ -20,7 +20,7 @@ pub struct PickupsPlugin;
 
 impl Plugin for PickupsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WorldState>().init_resource::<WeaponOffer>().add_message::<PickedUp>().add_systems(
+        app.init_resource::<WorldState>().init_resource::<WeaponOffer>().init_resource::<AutopilotSwap>().add_message::<PickedUp>().add_systems(
             Update,
             (
                 attach_pickup_models,
@@ -113,6 +113,13 @@ pub fn is_dropped(id: u64) -> bool {
 /// every holster full.
 #[derive(Resource, Default, Clone, Copy, PartialEq, Debug)]
 pub struct WeaponOffer(pub Option<(usize, Option<usize>)>);
+
+/// The story's autopilot (tests): the gun lying there it means to swap one
+/// it carries for (a hunt's weapon, by its pickup's id). Its use near any
+/// other gun takes none: reaching for a hunt's ammo by a dropped rifle, it
+/// swapped SQA_G2's pistol for the rifle, and the hunt failed.
+#[derive(Resource, Default)]
+pub struct AutopilotSwap(pub Option<u64>);
 
 /// A gun lying there as the player would take it: none carried already
 /// (its rounds are taken walking over it), else the gun it replaces once the
@@ -774,7 +781,7 @@ fn interact(
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     (busy, mut gestures, mut xp, mut looted, scripted): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>, MessageWriter<crate::progression::XpGain>, MessageWriter<crate::progression::ItemLooted>, Res<crate::story::ScriptedPlayer>),
     (crafting, sources, owns, mut picked): (Option<Res<crate::crafting::CraftCatalog>>, Query<&LootSource>, Query<&OwnLoot>, MessageWriter<PickedUp>),
-    (mut offer, mut held, time): (ResMut<WeaponOffer>, Local<f32>, Res<Time>),
+    (mut offer, mut held, time, autopilot_swap): (ResMut<WeaponOffer>, Local<f32>, Res<Time>, Res<AutopilotSwap>),
 ) {
     let was = offer.0;
     offer.0 = None;
@@ -846,6 +853,11 @@ fn interact(
     let scripted_use = std::env::var("FC3_PICKUP_TEST").is_ok();
     if scripted_use {
         actions.press(crate::controls::Action::Interact);
+    }
+    // (The autopilot swaps only for the gun it means to.)
+    if matches!(swap, Some((_, Some(_)))) && std::env::var_os("FC3_STORY_AUTOPILOT").is_some() && autopilot_swap.0 != Some(p.id) && actions.used() {
+        actions.consume(crate::controls::Action::Interact);
+        return;
     }
     if matches!(swap, Some((_, Some(_)))) && !scripted_use && std::env::var_os("FC3_STORY_AUTOPILOT").is_none() {
         *held = if actions.pressed(crate::controls::Action::Interact) && was == swap { *held + time.delta_secs() } else { 0.0 };
@@ -1154,7 +1166,7 @@ mod tests {
             .init_resource::<crate::story::ScriptedPlayer>().insert_resource(Rng::seeded(1))
             .add_message::<ItemLooted>().add_message::<crate::fp::FpAction>()
             .add_message::<crate::progression::XpGain>().add_message::<crate::sound::PlaySfx>()
-            .add_message::<PickedUp>().init_resource::<WeaponOffer>()
+            .add_message::<PickedUp>().init_resource::<WeaponOffer>().init_resource::<AutopilotSwap>()
             .add_systems(Update, interact);
         let defs = crate::weapons::weapon_defs();
         let unarmed = defs.iter().position(|d| d.name == crate::weapons::UNARMED).unwrap();

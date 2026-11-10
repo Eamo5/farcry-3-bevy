@@ -514,6 +514,16 @@ impl Story {
         let mut tags: Vec<String> = c.unlocked_tags.iter().cloned().collect();
         tags.sort();
         let persistent = self.domino.lua().globals().get::<Table>("PersistentGlobals").map(|t| save::dump_table(&t)).unwrap_or_default();
+        // (Not the dead of a block running now: back here the block starts
+        // again, its layers' characters with it. SQA_G2's first quarry,
+        // killed before another quest's checkpoint, was dead as the hunt
+        // started again, and the hunt failed on every reload.)
+        let running: HashSet<u64> =
+            c.missions.by_id.values().filter(|m| m.state == missions::State::Running).filter_map(|m| m.block.as_ref().map(|b| b.block)).collect();
+        let dead: Vec<u64> = sorted(&c.dead)
+            .into_iter()
+            .filter(|id| c.data.layer_of(*id).and_then(|l| c.data.layers.get(&l)).is_none_or(|l| !running.contains(&l.block)))
+            .collect();
         save::StorySave {
             missions,
             layers,
@@ -522,7 +532,7 @@ impl Story {
             radio_towers: sorted(&c.radio_towers_unlocked),
             tags,
             removed: sorted(&c.removed),
-            dead: sorted(&c.dead),
+            dead,
             chapter: c.missions.chapter,
             respawn: c.respawn,
             current: c.in_progress().map(|m| m.name.clone()),

@@ -5935,6 +5935,29 @@ to SQC_080, each a brief at its giver then its blocks):
   markers waits, and with the quarry out of the world a while it goes
   where the story has it (`Story::entity_position`). Standing up close it
   takes dry ground by the quarry where there is some. SQA_G4 completed.
+* **The pistol hunt.** SQA_G2 asks for a pistol, its 1911 laid out at the
+  gear-up spot. Reaching for the ammunition beside it, the autopilot's use
+  swapped the pistol for a dead pirate's rifle lying there, and the hunt
+  failed; it now swaps a gun only for the one it means to take
+  (`pickups::AutopilotSwap`: a hunt's weapon, a pickup a script awaits).
+  Its bear waits in a mine 56 m under a hill: stood on the terrain over it,
+  the player fell through a hole into the mine and died. Under the ground
+  the stand is a floor about the quarry's height with it in sight, nearer
+  and nearer, else beside it. Then the hunt failed on every reload as it
+  began (`AnimalSideQuestB20Lib`'s dead listener on its targets' group):
+  another quest's checkpoint, taken mid-hunt, had saved the first quarry
+  dead, and back there the hunt starts again with it dead. A save no longer
+  keeps the dead of a block running then (back at it the block starts
+  again, its layers' characters with it). SQA_G2 completed. The animal
+  quests share one targets' group (`#AF431E13`), to which each adds its
+  own; SQA_G2's quarry, dead, stayed in it, and SQA_G3's hunt failed as it
+  began: the dead a block's scripts put in groups leave them as a block
+  ends. SQA_G3's flamethrower hunt went on with the pistol, back at the
+  checkpoint, before the flamethrower laid out had come in: without the
+  weapon asked for the hunt waits. And its leopards, biting, died by the
+  machete as the struggle was won ("You did not use a flamethrower."): the
+  autopilot takes a hunt's quarry's bite when the hunt asks for another
+  weapon than a blade. SQA_G3 completed.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

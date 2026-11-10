@@ -366,6 +366,16 @@ impl Core {
     /// The end of a mission or block, with its listeners told.
     pub fn finish_mission(&mut self, id: &str, state: State) {
         self.set_mission_state(id, state);
+        // (The dead a block's scripts put in groups leave them as it ends:
+        // the animal quests share one group of targets, which kept SQA_G2's
+        // quarry, dead, and SQA_G3's hunt failed as it began, its group
+        // with a member dead.)
+        if self.missions.by_id.get(id).is_some_and(|m| m.block.is_some()) {
+            let gone: Vec<(String, u64)> = self.group_added.iter().filter(|(_, e)| self.is_dead(*e)).cloned().collect();
+            for g in gone {
+                self.group_added.remove(&g);
+            }
+        }
         let event = if state == State::Completed { "Completed" } else { "Failed" };
         self.raise(&Listen::Mission(id.to_string(), event.to_string()), vec![]);
     }

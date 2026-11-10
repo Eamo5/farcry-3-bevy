@@ -5813,7 +5813,7 @@ fn autopilot_loot(
     (heights, stims, fires, startled): (Res<crate::terrain::Heightfield>, Res<crate::stims::Stims>, Res<crate::fire::Fires>, Res<crate::story_actors::Startled>),
     mut players: Query<(Entity, &mut Transform, &mut Player, &crate::combat::Health, &crate::weapons::Inventory, Option<&crate::combat::PlayerStats>)>,
     animals: Query<(Entity, &Transform, &crate::wildlife::WildAnimal, &crate::combat::Health, Option<&crate::wildlife::Carcass>, Option<&crate::story_actors::StoryActor>), Without<Player>>,
-    plants: Query<(&crate::pickups::Pickup, &GlobalTransform)>,
+    (plants, mut swap): (Query<(&crate::pickups::Pickup, &GlobalTransform)>, ResMut<crate::pickups::AutopilotSwap>),
     mut actions: ResMut<crate::controls::ActionState>,
     mut last: Local<Option<(u64, &'static str)>>,
     (
@@ -6924,6 +6924,7 @@ fn autopilot_loot(
             .map(|(p, t)| (p.id, t.translation()))
             .min_by(|a, b| a.1.distance(at.translation).total_cmp(&b.1.distance(at.translation)));
         if let Some((id, spot)) = near {
+            swap.0 = Some(id);
             if *last != Some((id, "pick up")) {
                 info!("story autopilot: pick up {} at {spot:?} (the player at {:?})", host.story.data().name_of(id).unwrap_or("?"), at.translation);
                 *last = Some((id, "pick up"));
@@ -7170,6 +7171,7 @@ fn autopilot_loot(
                     .min_by(|a, b| a.1.translation().distance(at.translation).total_cmp(&b.1.translation().distance(at.translation)))
             });
             if let Some((pickup, pt)) = to_take {
+                swap.0 = Some(pickup.id);
                 let spot = pt.translation();
                 let feet = at.translation - Vec3::Y * crate::player::HALF_HEIGHT;
                 if Vec2::new(spot.x - feet.x, spot.z - feet.z).length() > 1.5 || (spot.y - feet.y).abs() > 1.5 {
@@ -7184,6 +7186,15 @@ fn autopilot_loot(
                     player.yaw = (-aim.x).atan2(-aim.z);
                     player.pitch = aim.y.atan2(Vec2::new(aim.x, aim.z).length().max(0.3));
                     actions.press(crate::controls::Action::Interact);
+                }
+                return;
+            }
+            // (Nor without it, its pickup not in the world yet: back at the
+            // checkpoint SQA_G3's flamethrower hunt went on with the pistol,
+            // failing it, before the flamethrower laid out had come in.)
+            if want.is_some_and(|w| w != crate::weapons::WeaponClass::Melee && !carried(w)) {
+                if (now - time.delta_secs()) as u32 / 10 != now as u32 / 10 {
+                    info!("story autopilot: no {class} for the hunt yet");
                 }
                 return;
             }
@@ -7212,13 +7223,37 @@ fn autopilot_loot(
             host.hunted_at = now;
             let reach = if melee { HUNT_MELEE } else { (HUNT_FROM / (1.0 + tries as f32 * 0.5)).max(HUNT_NEAREST) };
             let side = Quat::from_rotation_y(tries as f32 * std::f32::consts::FRAC_PI_2) * Vec3::Z;
+            // (The floor by it at its height, not the terrain over it:
+            // SQA_G2's bear waits in a mine, 56 m under the hill the
+            // autopilot was set on.)
+            let floor = |p: Vec3| feet_near(&spatial, &heights, me, p, qt.translation.y);
             let mut stand = qt.translation + side * reach;
-            stand.y = heights.height_at(stand).unwrap_or(qt.translation.y);
+            stand.y = floor(stand);
+            // (Under the ground, a floor about its height with it in sight,
+            // nearer and nearer, else by it: set on the terrain over the mine
+            // he fell through a hole into it.)
+            if heights.height_at(qt.translation).is_some_and(|g| g > qt.translation.y + 3.0) && (stand.y - qt.translation.y).abs() > 2.0 {
+                let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+                let sight = |p: Vec3| {
+                    let eye = p + Vec3::Y * 1.6;
+                    let to = target - eye;
+                    Dir3::new(to).ok().is_none_or(|d| spatial.cast_ray(eye, d, to.length(), true, &filter).is_none_or(|h| h.distance > to.length() - 1.0))
+                };
+                let found = [reach, reach * 0.6, reach * 0.35, 2.5]
+                    .into_iter()
+                    .flat_map(|r| (0..8).map(move |i| (r, i)))
+                    .filter_map(|(r, i)| {
+                        let p = qt.translation + Quat::from_rotation_y(i as f32 * std::f32::consts::FRAC_PI_4) * side * r;
+                        floor_near(&spatial, &heights, me, p, qt.translation.y).map(|y| p.with_y(y))
+                    })
+                    .find(|p| sight(*p));
+                stand = found.unwrap_or(qt.translation + side * 1.5);
+            }
             // (Up close, on dry ground by it where there's some: SQA_G4's
             // albino crocodile, at the surface, was gone after from the
             // river bed under it, the machete swung under water.)
             if melee && stand.y < qt.translation.y - 1.0 {
-                let ground = |p: Vec3| heights.height_at(p).map(|y| p.with_y(y));
+                let ground = |p: Vec3| Some(p.with_y(floor(p)));
                 let near = (1..=3)
                     .flat_map(|k| (0..8).map(move |i| (k, i)))
                     .filter_map(|(k, i)| ground(qt.translation + Quat::from_rotation_y(i as f32 * std::f32::consts::FRAC_PI_4) * Vec3::Z * reach * k as f32))

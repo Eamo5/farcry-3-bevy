@@ -423,7 +423,14 @@ fn run_qtes(
         }
         decisive |= qt.decide(&mut host, id as usize, won);
     }
-    let autopilot = std::env::var_os("FC3_STORY_AUTOPILOT").is_some();
+    // (Not the bite of a hunt's quarry when the hunt asks for another weapon
+    // than a blade: won, it dies by the machete and the hunt fails, as
+    // SQA_G3's leopards did the flamethrower's. The autopilot takes the
+    // bite.)
+    let quarry_bite = qt.wild.is_some()
+        && host.story.hunt_weapon().and_then(|c| crate::story::hunt_class(&c)).is_some_and(|w| w != crate::weapons::WeaponClass::Melee)
+        && qt.opponent.is_some_and(|o| host.story.counted_members().contains(&o) || host.story.watched_singly().contains(&o));
+    let autopilot = std::env::var_os("FC3_STORY_AUTOPILOT").is_some() && !quarry_bite;
     for id in 0..SLOTS {
         let Some(a) = qt.asked[id].as_mut() else { continue };
         let acts = answers(a.input);
