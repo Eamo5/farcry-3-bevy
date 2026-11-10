@@ -376,6 +376,14 @@ impl Core {
                 self.group_added.remove(&g);
             }
         }
+        // (And the markers it showed for itself with it.)
+        if let Some(owner) = self.missions.by_id.get(id).map(|m| m.owner) {
+            let gone: Vec<u64> = self.marker_owners.iter().filter(|(_, o)| **o == owner).map(|(m, _)| *m).collect();
+            for m in gone {
+                self.marker_owners.remove(&m);
+                self.objective_markers.remove(&m);
+            }
+        }
         let event = if state == State::Completed { "Completed" } else { "Failed" };
         self.raise(&Listen::Mission(id.to_string(), event.to_string()), vec![]);
     }

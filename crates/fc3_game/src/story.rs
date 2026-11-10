@@ -4841,6 +4841,9 @@ const MARKER_WALK_SHORT: f32 = 8.0;
 /// The map markers' kinds that aren't objectives: activities, shops, the
 /// challenge boards, missions' and quests' givers.
 const NOT_OBJECTIVES: [u64; 5] = [0x058d_6bbd, 0x1350_8ab1, 0x0375_88d5, 0x82ca_abbe, 0x7d8e_4092];
+/// How long (s) the autopilot stands by a man to take down before it is
+/// set behind him again.
+const TAKEDOWN_AGAIN: f32 = 5.0;
 /// The givers' kinds among those: a mission's brief, a quest's giver.
 const GIVERS: [u64; 2] = [0x82ca_abbe, 0x7d8e_4092];
 /// How long (s) the autopilot has gone nowhere, nothing to do and no
@@ -6894,7 +6897,14 @@ fn autopilot_loot(
         // (Near, walked up to rather than set behind him again: SQW_G4's
         // commanders walk their rounds, and set behind each as he had moved
         // on, the player never got his swing in.)
-        if off > if nh.dead { 1.6 } else { 4.0 } || delta.y.abs() > 1.5 {
+        // (Near him a while and no takedown, set behind him again: SQW_G2's
+        // commander walks his rounds, turned on the player as he came up,
+        // or a crate between them held the walk up.)
+        let stuck = !nh.dead && shooting.is_some_and(|(id, _, since)| id == actor.id && now - since > TAKEDOWN_AGAIN);
+        if stuck {
+            *shooting = Some((actor.id, nh.current, now));
+        }
+        if off > if nh.dead { 1.6 } else { 4.0 } || delta.y.abs() > 1.5 || stuck {
             let mut feet = behind;
             feet.y = feet_near(&spatial, &heights, me, feet, nt.translation.y - crate::player::HALF_HEIGHT).max(nt.translation.y - crate::player::HALF_HEIGHT - 0.5);
             teleport(&mut at, &mut player, to_dunia(feet), 0.0);
@@ -7357,7 +7367,10 @@ fn autopilot_loot(
             // (Under the ground, a floor about its height with it in sight,
             // nearer and nearer, else by it: set on the terrain over the mine
             // he fell through a hole into it.)
-            if heights.height_at(qt.translation).is_some_and(|g| g > qt.translation.y + 3.0) && (stand.y - qt.translation.y).abs() > 2.0 {
+            // (Or a stand far above or below it: SQA_F3's tigers in a ravine,
+            // gone after from the hill over it, the player sent off its edge.)
+            let under_ground = heights.height_at(qt.translation).is_some_and(|g| g > qt.translation.y + 3.0);
+            if (under_ground && (stand.y - qt.translation.y).abs() > 2.0) || (stand.y - qt.translation.y).abs() > 6.0 {
                 let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
                 let sight = |p: Vec3| {
                     let eye = p + Vec3::Y * 1.6;

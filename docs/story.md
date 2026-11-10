@@ -5981,7 +5981,27 @@ to SQC_080, each a brief at its giver then its blocks):
   skinned swimming now, and the autopilot swims down to it (a move sets
   the player on the ground under him). SQA_D7 completed, and on through
   the island's posters: SQA_F4, SQA_F5, SQA_E6, SQA_D6B, SQW_F4, SQW_E6,
-  SQW_C7, SQW_C6, SQS_F4.
+  SQW_C7, SQW_C6, SQS_F4. SQW_D3's commander stood 1.42 m below a ledge the
+  player couldn't walk off, and the autopilot, walking up to 1.4 m before
+  taking him down, walked on for good: it takes a wanted man down from 2 m,
+  inside the takedown's own reach. SQA_F3's tigers keep to a ravine, and
+  the stand 18 m off was on the hill over it, 25 m up: the player was sent
+  off its edge and fell. A stand more than 6 m above or below the quarry is
+  now sought as one under the ground is (a floor about its height with it
+  in sight). On through SQW_D3, SQW_C3, SQW_C3B, SQS_D3, SQA_C3, SQA_C4B,
+  SQA_D4, SQW_C4B, SQA_D3, SQW_F2, SQA_F3 and SQA_F2.
+* **A mission's own markers.** `ObjectiveMarkerAuto_v2` shows its block's
+  area with `MissionSetObjectiveMarker(1, owner, marker, oasis)`, the
+  graph's owner second; we had taken the owner (the block's zone entity,
+  `MZoneEntity_...`) for the marker, so every block's zone showed as an
+  objective marker in the world and on the radar and stayed once the block
+  was over, and the area marker it named (`sqw_g2_areamarker`) never
+  showed; the walk to markers went to old quests' zones. The marker is the
+  third now, kept with its owner, and goes as the owner's mission or block
+  ends, as the engine clears them. SQW_G2's commander, walking his rounds,
+  was stood by for good, no takedown coming: near him 5 s without one
+  (`TAKEDOWN_AGAIN`), the autopilot is set behind him again. SQW_G2 and
+  SQS_F3 completed.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

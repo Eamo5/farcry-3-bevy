@@ -227,6 +227,9 @@ pub struct Core {
     pub respawn: Option<u64>,
     /// Objective markers shown (marker entity -> sub type).
     pub objective_markers: BTreeMap<u64, String>,
+    /// The graph's owner each marker a mission showed for itself belongs to
+    /// (`MissionSetObjectiveMarker`): gone as that mission or block ends.
+    pub marker_owners: HashMap<u64, u64>,
     /// Entities bound to others (`CAPI_Entity.Bind`): child -> parent.
     pub binds: HashMap<u64, u64>,
     /// Scripted poses for entities not currently reported by the host.
@@ -313,6 +316,7 @@ impl Core {
             companions: HashMap::new(),
             respawn: None,
             objective_markers: BTreeMap::new(),
+            marker_owners: HashMap::new(),
             binds: HashMap::new(),
             poses: HashMap::new(),
             last_seen: HashMap::new(),

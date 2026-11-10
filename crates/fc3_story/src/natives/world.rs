@@ -386,12 +386,20 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
             c.objective_markers.remove(&m);
         }
     })?;
-    r.f("MissionSetObjectiveMarker", |c, (on, marker, _oasis): (crate::values::Flag, Text, Num)| {
+    // (A mission's own: `MissionSetObjectiveMarker(1, owner, marker, oasis)`,
+    // its graph's owner second. Taken for the marker, the mission's zone
+    // entity had shown, and stayed, as every mission's marker; the area
+    // marker it named never had.)
+    r.f("MissionSetObjectiveMarker", |c, (on, owner, marker, _oasis): (crate::values::Flag, Text, Text, Num)| {
         let Some(m) = marker.id() else { return };
         if on.0 {
             c.objective_markers.insert(m, String::new());
+            if let Some(o) = owner.id() {
+                c.marker_owners.insert(m, o);
+            }
         } else {
             c.objective_markers.remove(&m);
+            c.marker_owners.remove(&m);
         }
     })?;
     r.f("CAPI_Entity.Bind", |c, (a, b, bone, _offset): (Text, Text, Text, Value)| {
