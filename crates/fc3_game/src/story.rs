@@ -3376,6 +3376,11 @@ fn run_story(
                 // (A mission without its own text for it is named as it
                 // started.)
                 let name = title.map(|t| plain(&t)).filter(|t| !t.is_empty()).or_else(|| ui.mission.clone()).unwrap_or_default();
+                // (Its name off the objective box with it: the next one's
+                // objectives went under the last mission's name.)
+                if !quest || ui.mission.as_deref() == Some(name.as_str()) {
+                    ui.mission = None;
+                }
                 ui.banner = Some((format!("{name}\nMission complete"), 6.0));
                 ui.cards.push(MissionCard::Complete { title: name.clone(), quest });
                 if xp > 0 {
@@ -3419,6 +3424,7 @@ fn run_story(
                 host.abandoned_at = Some(now);
                 ui.banner = Some(("Mission abandoned".to_string(), 4.0));
                 ui.objective = None;
+                ui.mission = None;
                 ui.timers.clear();
                 host.reload_at = None;
                 if let Some(save) = save {

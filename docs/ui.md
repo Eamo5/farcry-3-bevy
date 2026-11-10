@@ -422,7 +422,9 @@ only what changed (and everything again until the movies have loaded):
   be; `reticuleHitEnemy` is the hit marker.
 * **Objective** (`original_ui::drive_objective`): `ObjContainer` fades in
   from frame 2 (it stops open at 9) and out from 10, `ObjText` takes the
-  objective and `MissionName` the mission's title, and `ObjTextBox` plays
+  objective and `MissionName` the mission's title (until it's completed or
+  given up: the next one's objectives had gone under the last title), and
+  `ObjTextBox` plays
   the text in from frame 2 (it comes in with its sound and stops at 90;
   from 91 it ticks off and stops at 154 sending `ObjectiveIsValidated`,
   from 155 it fades and sends `ObjectiveHasFaded`). As in the game, it
