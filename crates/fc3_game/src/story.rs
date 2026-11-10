@@ -928,6 +928,8 @@ pub struct StoryHost {
     replay_metas: std::collections::HashMap<String, String>,
     /// When each command (as it reads) last came.
     recent: std::collections::HashMap<String, f32>,
+    /// When each pawn was last put to an action (`replayed`).
+    pawn_actions: std::collections::HashMap<u64, f32>,
     used: std::collections::HashSet<(u64, String)>,
     /// The trigger last stepped into and when; those that failed a mission
     /// at once (CIT_020 B30's escaping-on-foot box), left alone since, over
@@ -1224,6 +1226,17 @@ impl StoryHost {
         if self.recent.len() > 1024 {
             self.recent.retain(|_, at| now - *at < WITHIN);
         }
+        // (A pawn put to one action after another is on its rounds: HUR_030's
+        // privateers at the temple, each taking up one post after another,
+        // kept the story from ever going quiet, and the diamonds it waited
+        // for were never gone to.)
+        if let Command::Action { pawn, .. } = c {
+            let before = self.pawn_actions.insert(*pawn, now);
+            if self.pawn_actions.len() > 512 {
+                self.pawn_actions.retain(|_, at| now - *at < ROUNDS_WITHIN);
+            }
+            return same || before.is_some_and(|at| now - at < ROUNDS_WITHIN);
+        }
         let Command::Native { name, args } = c else { return same };
         let a = |i: usize| args.get(i).map(String::as_str).unwrap_or("");
         let again = |r: Option<&(f32, u32)>| r.is_some_and(|&(at, n)| n > 1 && now - at < WITHIN);
@@ -1260,6 +1273,7 @@ impl StoryHost {
             replays: Default::default(),
             replay_metas: Default::default(),
             recent: Default::default(),
+            pawn_actions: Default::default(),
             used: Default::default(),
             last_step: None,
             prev_step: None,
@@ -3546,6 +3560,14 @@ fn run_story(
                     host.scene_in_last = std::mem::take(&mut host.scene_in_block);
                 }
             }
+            // A pickup a script makes not to be taken for now, and takeable
+            // again (`PickupState`).
+            Command::EntityEvent { entity, event } if event == "CPickup_SetAsNotPickable" => {
+                world_state.unpickable.insert(entity);
+            }
+            Command::EntityEvent { entity, event } if event == "CPickup_SetAsPickable" => {
+                world_state.unpickable.remove(&entity);
+            }
             // A script's `Door` box locks a swing door, and unlocks it.
             Command::EntityEvent { entity, event } if event == "CDoor_Disable" => {
                 doors.locked.insert(entity);
@@ -4931,6 +4953,9 @@ const CULPRIT_AT_ONCE: f32 = 0.25;
 const SCRIPT_KILL_WITHIN: f32 = 5.0;
 /// How near (m) the autopilot swings the machete from (its reach is 2.4).
 const MACHETE_REACH: f32 = 1.8;
+/// A pawn put to another action within this (s) of its last is on its
+/// rounds: the story isn't stirred by it.
+const ROUNDS_WITHIN: f32 = 180.0;
 /// How near (m) a trigger no mission owns must be for the autopilot, on a
 /// mission, to step into it.
 const UNOWNED_REACH: f32 = 150.0;
@@ -6042,7 +6067,7 @@ fn autopilot_loot(
     (heights, stims, fires, startled): (Res<crate::terrain::Heightfield>, Res<crate::stims::Stims>, Res<crate::fire::Fires>, Res<crate::story_actors::Startled>),
     mut players: Query<(Entity, &mut Transform, &mut Player, &crate::combat::Health, &crate::weapons::Inventory, Option<&crate::combat::PlayerStats>)>,
     animals: Query<(Entity, &Transform, &crate::wildlife::WildAnimal, &crate::combat::Health, Option<&crate::wildlife::Carcass>, Option<&crate::story_actors::StoryActor>), Without<Player>>,
-    (plants, mut swap): (Query<(&crate::pickups::Pickup, &GlobalTransform)>, ResMut<crate::pickups::AutopilotSwap>),
+    (plants, mut swap, world): (Query<(&crate::pickups::Pickup, &GlobalTransform)>, ResMut<crate::pickups::AutopilotSwap>, Res<crate::pickups::WorldState>),
     mut actions: ResMut<crate::controls::ActionState>,
     mut last: Local<Option<(u64, &'static str)>>,
     (
@@ -7194,7 +7219,7 @@ fn autopilot_loot(
         // (One it can't take, out of reach on a shelf, is left a while.)
         let near = plants
             .iter()
-            .filter(|(p, _)| awaited.contains(&p.id) && !skipped.get(&p.id).is_some_and(|until| *until > now))
+            .filter(|(p, _)| awaited.contains(&p.id) && !world.unpickable.contains(&p.id) && !skipped.get(&p.id).is_some_and(|until| *until > now))
             .map(|(p, t)| (p.id, t.translation()))
             .min_by(|a, b| a.1.distance(at.translation).total_cmp(&b.1.distance(at.translation)));
         if let Some((id, spot)) = near {

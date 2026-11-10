@@ -469,6 +469,10 @@ fn take_loot(
 pub struct WorldState {
     /// Entity ids of collected pickups and destroyed props.
     pub removed: HashSet<u64>,
+    /// Pickups a script has made not to be taken for now
+    /// (`CPickup_SetAsNotPickable`: HUR_030's stash, until the diamonds
+    /// are brought to it). Not saved: the scripts set it again.
+    pub unpickable: HashSet<u64>,
     /// Herbs gathered toward the next medkit.
     pub herbs: u32,
 }
@@ -798,7 +802,7 @@ fn interact(
     let feet = pt.translation - Vec3::Y * crate::player::HALF_HEIGHT;
     let mut best: Option<(f32, Entity)> = None;
     for (e, pickup, gt) in &pickups {
-        if matches!(pickup.kind, PickupKind::Plant(_)) && !scripted.plant_looting {
+        if (matches!(pickup.kind, PickupKind::Plant(_)) && !scripted.plant_looting) || world.unpickable.contains(&pickup.id) {
             continue;
         }
         let to = gt.translation() - feet;

@@ -6051,6 +6051,19 @@ to SQC_080, each a brief at its giver then its blocks):
   (SAM_020's helicopter: "[Shoot] Detonate") holds its line in the
   interaction prompt until it is taken down (`ScriptedPlayer::message`,
   `script_message`), unless something nearer to hand has the prompt.
+* **Guards on their rounds.** HUR_030 stood still under the temple: its
+  privateers take up one post after another (a script putting each to a
+  contextual action), one every few seconds, and each counted as the story
+  stirring, so it never went quiet long enough for the autopilot to go for
+  the diamonds it waited on. A pawn put to another action within three
+  minutes of its last is now on its rounds and doesn't stir it
+  (`StoryHost::replayed`, `ROUNDS_WITHIN`). The diamonds were taken.
+* **Not to be taken yet.** `PickupState`'s `CPickup_SetAsNotPickable` and
+  `CPickup_SetAsPickable` had gone unheard: HUR_030's stash, not to be
+  opened until the diamonds are brought, was looted on the way and gone
+  when they were. Such a pickup offers nothing until a script makes it
+  takeable again (`WorldState::unpickable`), and the autopilot leaves it.
+  HUR_030 completed, on into HUR_020.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.
