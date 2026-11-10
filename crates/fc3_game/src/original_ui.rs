@@ -3573,11 +3573,23 @@ fn drive_camera(
     mut saw: MessageReader<crate::stealth::CameraSaw>,
     mut shown: Local<Option<Viewfinder>>,
     mut shutter: Local<f32>,
+    (calls, actions, settings): (Res<UiCalls>, Res<crate::controls::ActionState>, Res<crate::settings::Settings>),
 ) {
     let Interface::Running(host) = &*state else {
         saw.clear();
         return;
     };
+    // Loaded, its legend's keys (`InitCameraButtons`: zoom in, zoom out,
+    // take a picture, put it away), as the game gave them; else it's blank.
+    if calls.0.iter().any(|c| c.command == "Send" && c.args.first().is_some_and(|a| a == "CameraLoaded")) {
+        use crate::controls::Action;
+        let key = |a: Action| format!("[{}]", actions.label(a, &settings));
+        let (zoom_in, zoom_out) = match actions.gamepad_active {
+            true => (key(Action::NextWeapon), key(Action::PrevWeapon)),
+            false => ("[Wheel Up]".to_string(), "[Wheel Down]".to_string()),
+        };
+        host.event("InitCameraButtons", &[&zoom_in, &zoom_out, &key(Action::Fire), &key(Action::Tag)]);
+    }
     if saw.read().count() > 0 {
         *shutter = SHUTTER_SECS;
     }

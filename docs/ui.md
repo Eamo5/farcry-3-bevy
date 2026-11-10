@@ -651,7 +651,13 @@ only what changed (and everything again until the movies have loaded):
   them, `stealth::CAMERA_ZOOM`), `CameraCursor` turns from 1 to 2 when
   something to tag or take in is under it, and `ShutterAnim` goes to frame
   2 (the view blacked out) a moment as the camera takes in a story
-  character. Its button bar (`InitCameraButtons`) isn't shown on PC.
+  character. Its button bar (`NavigationBarText`, filled by
+  `InitCameraButtons <zoom in> <zoom out> <take picture> <holster>`, each
+  key before the game's word) was left blank: the movie checks no platform
+  for it, so the game sends it as the movie says it's loaded
+  (`CameraLoaded`), our keys in brackets ("[Wheel Up]", "[Wheel Down]",
+  the fire and tag keys; with a pad, its weapon cycling buttons for the
+  zoom).
 * **Shown at all**: `SetVisible` follows the game's own HUD (not in menus,
   scenes, missions' no-HUD stretches or death).
 
