@@ -318,7 +318,7 @@ pub(crate) fn loot_bodies(
     // A takedown's victim is searched as he falls, with no prompt.
     let taken = bodies.iter().find(|(e, _, _, _)| auto.contains(*e));
     // Another interaction is on offer (a pickup is nearer).
-    if taken.is_none() && (hud.prompt.is_some() || health.dead || player.noclip || player.driving || player.swimming || busy.busy()) {
+    if taken.is_none() && (hud.prompt.is_some() || health.dead || player.noclip || player.driving || busy.busy()) {
         return;
     }
     // (Bodies, like the player, are placed by their capsule's centre.)
@@ -335,6 +335,11 @@ pub(crate) fn loot_bodies(
     }) else {
         return;
     };
+    // (Swimming, only an animal to skin: a shark, as the game's own prompt
+    // has it. SQA_D7's maneater, dead in the sea, couldn't be skinned.)
+    if taken.is_none() && player.swimming && !body.skin {
+        return;
+    }
     if taken.is_none() {
         let (what, game) = if body.skin { ("skin the animal", crate::hud::prompt::SKIN_ANIMAL) } else { ("search the body", crate::hud::prompt::LOOT_BODY) };
         hud.prompt = Some(

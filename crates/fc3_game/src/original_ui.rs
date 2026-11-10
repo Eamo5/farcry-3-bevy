@@ -3038,6 +3038,7 @@ fn drive_xp(
     mut showing: Local<Option<(f32, u32)>>,
     mut level: Local<(Option<u32>, Option<f32>)>,
     skills: Option<Res<crate::progression::Skills>>,
+    mut bar_gone: Local<Option<f32>>,
 ) {
     let Interface::Running(host) = &*state else {
         gains.clear();
@@ -3076,6 +3077,8 @@ fn drive_xp(
         });
         host.dps_frame("XPUIBar", fc3_ui::ExternalValue::Number((1.0 + (part.clamp(0.0, 1.0) * 99.0).round()) as f64));
         if showing.is_none() {
+            *bar_gone = None;
+            host.dps_visible("XPBar", true);
             host.dps_play("XPBar", fc3_ui::ExternalValue::String("guns_in".into()));
         }
         *showing = Some((time.elapsed_secs() + XP_HOLD, hold));
@@ -3084,10 +3087,20 @@ fn drive_xp(
         if time.elapsed_secs() >= until {
             host.dps_play("XPKicker", fc3_ui::ExternalValue::Number((hold + 1) as f64));
             host.dps_play("XPBar", fc3_ui::ExternalValue::String("guns_out".into()));
+            *bar_gone = Some(time.elapsed_secs() + XP_BAR_OUT);
             *showing = None;
         }
     }
+    // (Hidden once out: its `off` frame still draws the bar, full once a
+    // gain has filled it, and it stayed over the radar for good.)
+    if bar_gone.is_some_and(|t| time.elapsed_secs() >= t) {
+        host.dps_visible("XPBar", false);
+        *bar_gone = None;
+    }
 }
+
+/// How long (s) the XP bar's way out (`guns_out`, frames 9 to 13) plays.
+const XP_BAR_OUT: f32 = 0.3;
 
 /// The saving spinner (`SaveGame.feu`, which the HUD and the pause menu
 /// each load): `ShowSaving 1 <text>` as a save is written, the game's
@@ -3192,12 +3205,14 @@ fn drive_loot(
 /// objective is on the stage ("ObjectiveMarker", frame 2), or, off screen,
 /// on a frame round the middle toward it, turned that way
 /// ("ObjectiveArrow", frame 1); the waypoint is `PlayerMarkerIndicator`
-/// ("Inside" 1, "Outside" 2). No distances: the movie has none.
+/// ("Inside" 1, "Outside" 2). No distances: the movie has none. A giver's
+/// or a place's marker plays its kind's own frame (`HuntingIndicator`,
+/// `PokerIndicator`, `MissionGiverIndicator`, ...: `story::HudMarkers`).
 const INDICATORS: usize = 10;
-const INDICATOR_ARROW: u32 = 1;
-const INDICATOR_MARKER: u32 = 2;
-const WAYPOINT_INSIDE: u32 = 1;
-const WAYPOINT_OUTSIDE: u32 = 2;
+const INDICATOR_ARROW: &str = "ObjectiveArrow";
+const INDICATOR_OBJECTIVE: &str = "ObjectiveMarker";
+const WAYPOINT_INSIDE: &str = "Inside";
+const WAYPOINT_OUTSIDE: &str = "Outside";
 /// The frame (stage pixels in from each edge) the off-screen arrows sit
 /// on, and the way the arrow's art points (degrees, clockwise from right).
 const INDICATOR_INSET: f32 = 70.0;
@@ -3206,19 +3221,30 @@ const ARROW_ART: f32 = -90.0;
 #[allow(clippy::type_complexity)]
 fn drive_indicators(
     state: NonSend<Interface>,
-    markers: Res<crate::story::ObjectiveMarkers>,
+    markers: Option<Res<crate::story::HudMarkers>>,
     waypoint: Res<crate::map::Waypoint>,
     cameras: Query<(&Camera, &GlobalTransform), With<crate::player::PlayerCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     (minigame, races, trials): (Option<Res<crate::hud::Minigame>>, Option<Res<crate::races::Races>>, Option<Res<crate::trials::Trials>>),
-    mut last: Local<Vec<Option<(i32, i32, i32, u32)>>>,
+    mut last: Local<Vec<Option<(i32, i32, i32, String)>>>,
 ) {
     let Interface::Running(host) = &*state else { return };
     let (Ok((cam, cam_t)), Ok(window)) = (cameras.single(), windows.single()) else { return };
     // (A race's next gate with them; while a race or a trial holds the
-    // player, the gate alone; while a minigame does, none.)
+    // player, the gate alone; while a minigame does, none.) Each as near as
+    // its kind shows, playing its kind's clip: a hunt's giver its bow, a
+    // poker table its cards.
     let racing = races.as_ref().is_some_and(|r| r.holds_player()) || trials.is_some_and(|t| t.holds_player());
-    let mut goals: Vec<Vec3> = markers.0.iter().copied().filter(|_| !racing).chain(races.and_then(|r| r.marker)).collect();
+    let here = cam_t.translation();
+    let mut goals: Vec<(Vec3, &str)> = markers
+        .as_deref()
+        .map(|m| m.0.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .filter(|m| !racing && (m.within <= 0.0 || m.at.distance(here) <= m.within))
+        .map(|m| (m.at, m.label.as_str()))
+        .chain(races.and_then(|r| r.marker).map(|m| (m, INDICATOR_OBJECTIVE)))
+        .collect();
     if minigame.is_some_and(|m| m.holds_player()) {
         goals.clear();
     }
@@ -3246,16 +3272,19 @@ fn drive_indicators(
         let k = (half.x / d.x.abs().max(1e-6)).min(half.y / d.y.abs().max(1e-6));
         (mid + d * k, Some(d.y.atan2(d.x).to_degrees() - ARROW_ART))
     };
-    let mut now: Vec<Option<(i32, i32, i32, u32)>> = Vec::with_capacity(INDICATORS + 1);
+    // (Off the screen only an objective's, as an arrow on the frame: a
+    // giver's or a place's icon shows only where it is.)
+    let shown: Vec<(Vec2, Option<f32>, &str)> =
+        goals.iter().map(|(g, label)| { let (p, turn) = place(*g); (p, turn, *label) }).filter(|(_, turn, label)| turn.is_none() || *label == INDICATOR_OBJECTIVE).collect();
+    let mut now: Vec<Option<(i32, i32, i32, String)>> = Vec::with_capacity(INDICATORS + 1);
     for i in 0..INDICATORS {
-        now.push(goals.get(i).map(|g| {
-            let (p, turn) = place(*g);
-            (p.x.round() as i32, p.y.round() as i32, turn.map_or(0, |t| t.round() as i32), if turn.is_some() { INDICATOR_ARROW } else { INDICATOR_MARKER })
+        now.push(shown.get(i).map(|(p, turn, label)| {
+            (p.x.round() as i32, p.y.round() as i32, turn.map_or(0, |t| t.round() as i32), if turn.is_some() { INDICATOR_ARROW.to_string() } else { label.to_string() })
         }));
     }
     now.push(waypoint.0.map(|w| {
         let (p, turn) = place(w);
-        (p.x.round() as i32, p.y.round() as i32, turn.map_or(0, |t| t.round() as i32), if turn.is_some() { WAYPOINT_OUTSIDE } else { WAYPOINT_INSIDE })
+        (p.x.round() as i32, p.y.round() as i32, turn.map_or(0, |t| t.round() as i32), (if turn.is_some() { WAYPOINT_OUTSIDE } else { WAYPOINT_INSIDE }).to_string())
     }));
     if *last == now {
         return;
@@ -3267,8 +3296,8 @@ fn drive_indicators(
         }
         let id = if i < INDICATORS { format!("ObjectiveIndicator_{i}") } else { "PlayerMarkerIndicator".to_string() };
         host.dps_visible(&id, slot.is_some());
-        if let Some((x, y, turn, frame)) = *slot {
-            host.dps_frame(&id, num(frame as f64));
+        if let Some((x, y, turn, frame)) = slot.clone() {
+            host.dps_frame(&id, fc3_ui::ExternalValue::String(frame));
             host.dps_set(&id, "_x", num(x as f64));
             host.dps_set(&id, "_y", num(y as f64));
             host.dps_set(&id, "_rotation", num(turn as f64));

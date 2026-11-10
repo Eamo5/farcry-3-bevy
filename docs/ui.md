@@ -470,7 +470,21 @@ only what changed (and everything again until the movies have loaded):
   pixels in from the edges toward it, turned that way ("ObjectiveArrow",
   frame 1, its art pointing up); `PlayerMarkerIndicator` is the waypoint
   ("Inside" 1, "Outside" 2). The movie shows no distances; our diamonds
-  and distances stand down.
+  and distances stand down. Which markers show in the world, how near, in
+  what order and as what is the map markers' kinds' (the game's
+  `generated\databases\generic\mapobjectivetype.lib`, cached as
+  `ui/map_objective_types.txt`, `fc3_formats::map_objectives`): a
+  mission's or quest's objective however far; a mission's giver within
+  300 m (`MissionGiverIndicator`); a quest's within 50 m as its sub-kind
+  plays it (`HuntingIndicator`, `WantedIndicator`, `SupplyIndicator`,
+  `HurkIndicator`, `LostExpeditionIndicator`, else
+  `SidequestGiverIndicator`); an activity within 50 m (`PokerIndicator`,
+  `KnifeIndicator`, `ShootingIndicator`, `RacingIndicator`,
+  `TrialsIndicator`); a script's `ThrowRock` objective its own; and shops,
+  safe houses, towers, villages and collectibles not at all (the minimap's
+  and the map's). Only an objective's marker is held at the edge off
+  screen. Every marker had shown in the world as an objective's, however
+  far: the island's quest givers stood round the screen's edge.
 * **The way to go, the XP bar, crouching**: three of the HUD's pieces that
   nothing drove. Under the radar on its right, `ObjectiveDistanceTextMC`
   shows how far the map's waypoint is, else the nearest objective ("325m",
@@ -478,8 +492,10 @@ only what changed (and everything again until the movies have loaded):
   down when it's over 10 m above or below the player (its frames: 1 none,
   2-16 up, 17-31 down; `drive_minimap_distance`). Over the radar, the bar to
   the next level comes in with an XP kicker (`XPBar`: `guns_in`, out by
-  `guns_out` as the kicker goes) at the share of the way made
-  (`XPUIBar`, a frame a percent, as the pause menu counts the levels). By
+  `guns_out` as the kicker goes, then hidden: its `off` frame still draws
+  the bar, which had stayed over the radar for good) at the share of the
+  way made (`XPUIBar`, a frame a percent, as the pause menu counts the
+  levels). By
   the ammo, `CrouchIconMC`'s kneeling figure comes in by its `Crouch` label
   as the player crouches on foot and goes by `Stand`.
 * **Weapon swap box**: `H_WeaponSwapping.feu` (the HUD's

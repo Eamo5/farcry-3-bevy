@@ -34,6 +34,7 @@ pub mod hash;
 pub mod havok;
 pub mod kits;
 pub mod lzo;
+pub mod map_objectives;
 pub mod material;
 pub mod menu_views;
 pub mod original;

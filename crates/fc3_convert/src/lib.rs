@@ -1410,6 +1410,22 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
 
+    // ---- the map markers' kinds: where each shows, and its clip
+    if opts.only_sectors.is_none() && (job.should_write(fc3_formats::map_objectives::MAP_OBJECTIVES_REL) || !job.root().join(fc3_formats::map_objectives::MAP_OBJECTIVES_REL).exists()) {
+        let result = (|| -> Result<()> {
+            let bytes = job.vfs.read(fc3_formats::map_objectives::SOURCE)?;
+            let at = bytes.windows(4).position(|w| w == b"nbCF").context("no FCB header")?;
+            let types = fc3_formats::map_objectives::from_library(&*fc3_formats::fcb::parse(&bytes[at..])?);
+            if types.is_empty() {
+                bail!("no map objective kinds");
+            }
+            write_atomic(job.root(), fc3_formats::map_objectives::MAP_OBJECTIVES_REL, fc3_formats::map_objectives::to_text(&types).as_bytes(), job.ctx)
+        })();
+        if let Err(e) = result {
+            job.error(format!("map objectives: {e:#}"));
+        }
+    }
+
     // ---- how animals notice threats and behave
     let current = std::fs::read_to_string(job.root().join(fc3_formats::animals::ANIMALS_REL)).is_ok_and(|t| fc3_formats::animals::is_current(&t));
     if opts.only_sectors.is_none() && (job.should_write(fc3_formats::animals::ANIMALS_REL) || !current) {

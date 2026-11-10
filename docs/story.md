@@ -5967,7 +5967,21 @@ to SQC_080, each a brief at its giver then its blocks):
   left to do (the story quiet 30 s, `GIVER_WALK_AFTER`), it now goes to the
   nearest quest's or mission's giver on the map not yet gone to, as a
   player looks over the map. A Lost Expedition running (they're left be
-  unless `FC3_STORY_AUTOPILOT_DLC`) no longer counts as a mission on.
+  unless `FC3_STORY_AUTOPILOT_DLC`) no longer counts as a mission on. (The
+  givers are gone to after it has gone nowhere 30 s and the story is quiet
+  8 s: the world's people at their business stir the story every half
+  minute.)
+* **The maneater.** SQA_D7 asks for the rare bull shark killed with a bow.
+  The hunt stood in the water by the quarry and the sharks bit the player
+  to death, the autopilot letting the quarry's bites go (won, they die by
+  the machete): a quarry in the water is now shot from dry ground with it
+  in sight, as near as there is. Dead, 5 m down, it couldn't be skinned: a
+  body's search wanted the player out of the water, though the game skins
+  sharks swimming (its own `SKIN_SHARK` prompt); an animal's body is
+  skinned swimming now, and the autopilot swims down to it (a move sets
+  the player on the ground under him). SQA_D7 completed, and on through
+  the island's posters: SQA_F4, SQA_F5, SQA_E6, SQA_D6B, SQW_F4, SQW_E6,
+  SQW_C7, SQW_C6, SQS_F4.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

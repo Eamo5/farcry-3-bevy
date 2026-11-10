@@ -32,6 +32,7 @@ impl Plugin for StoryPlugin {
             .init_resource::<ScriptedPlayer>()
             .init_resource::<MissionArea>()
             .init_resource::<ObjectiveMarkers>()
+            .init_resource::<HudMarkers>()
             .init_resource::<HiddenEntities>()
             .init_resource::<EntityPlacements>()
             .init_resource::<StoryPurchases>()
@@ -43,7 +44,7 @@ impl Plugin for StoryPlugin {
             .add_systems(Update, apply_entity_poses.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, apply_entity_physics.after(StorySet).in_set(EntityPosesSet))
             .add_systems(Update, apply_entity_scales.after(apply_entity_poses).in_set(EntityPosesSet))
-            .add_systems(Update, draw_markers.after(StorySet))
+            .add_systems(Update, (hud_markers.after(StorySet), draw_markers.after(hud_markers)))
             .add_systems(Update, (weapon_events, shot_events).after(StorySet).run_if(in_state(GameState::Playing)))
             .add_systems(Update, (player_landings, autopilot_drop).after(StorySet).run_if(in_state(GameState::Playing)))
             .add_systems(Update, story_blasts.after(StorySet).before(crate::breakables::BreakablesSet))
@@ -1659,13 +1660,90 @@ fn hide_entities(
 #[derive(Resource, Default)]
 pub struct ObjectiveMarkers(pub Vec<Vec3>);
 
+/// The markers the HUD shows in the world: those whose kind shows there
+/// (`map_objectives`' `DisplayOnHUD`: a mission's or quest's objective, a
+/// giver, an activity; not a shop, a safe house or a collectible), most
+/// important first, each with how near it must be to show and the clip its
+/// indicator plays (`ObjectiveIndicator.feu`'s frame labels).
+#[derive(Resource, Default)]
+pub struct HudMarkers(pub Vec<HudMarker>);
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HudMarker {
+    pub at: Vec3,
+    /// The indicator's clip: `ObjectiveMarker`, `HuntingIndicator`, ...
+    pub label: String,
+    /// How near (m) it shows (0: however far).
+    pub within: f32,
+    pub priority: u32,
+}
+
+impl HudMarker {
+    /// An objective's own marker (the others are givers' and places'
+    /// icons): held at the screen's edge when off it.
+    pub fn objective(&self) -> bool {
+        self.label == "ObjectiveMarker"
+    }
+}
+
+fn hud_markers(
+    host: Option<NonSend<StoryHost>>,
+    info: Option<Res<CacheInfo>>,
+    mut kinds: Local<Option<HashMap<u64, fc3_formats::map_objectives::MapObjectiveType>>>,
+    mut out: ResMut<HudMarkers>,
+) {
+    let (Some(host), Some(info)) = (host, info) else { return };
+    let kinds = kinds.get_or_insert_with(|| {
+        let text = std::fs::read_to_string(info.root.join(fc3_formats::map_objectives::MAP_OBJECTIVES_REL)).unwrap_or_default();
+        let table = fc3_formats::map_objectives::from_text(&text).unwrap_or_else(|e| {
+            warn!("map markers' kinds: {e:#} (convert the game again)");
+            Vec::new()
+        });
+        table.into_iter().map(|t| (t.key, t)).collect()
+    });
+    let data = host.story.data();
+    let mut now: Vec<HudMarker> = host
+        .story
+        .objective_markers_shown()
+        .into_iter()
+        .filter_map(|(id, p, sub)| {
+            let marker = data.markers.get(&id);
+            match marker.and_then(|m| kinds.get(&m.kind)) {
+                Some(kind) if !kind.on_hud => None,
+                Some(kind) => {
+                    let sub_id = marker.map_or(0, |m| m.sub_kind);
+                    Some(HudMarker { at: to_bevy(p), label: kind.label_for(sub_id, &sub).to_string(), within: kind.hud_within, priority: kind.priority_for(sub_id) })
+                }
+                // (Of no kind we know, or the kinds not converted: an objective.)
+                None => Some(HudMarker { at: to_bevy(p), label: if sub.eq_ignore_ascii_case("ThrowRock") { sub } else { "ObjectiveMarker".into() }, within: 0.0, priority: 0 }),
+            }
+        })
+        .collect();
+    now.sort_by_key(|m| m.priority);
+    if out.0.len() != now.len() && std::env::var_os("FC3_STORY_WAIT_DEBUG").is_some() {
+        let shown: Vec<String> = host
+            .story
+            .objective_markers_shown()
+            .into_iter()
+            .map(|(id, _, sub)| {
+                let kind = data.markers.get(&id).map(|m| kinds.get(&m.kind).map_or_else(|| format!("{:#x}", m.kind), |k| k.name.clone()));
+                format!("{} {kind:?} {sub}", data.name_of(id).unwrap_or("?"))
+            })
+            .collect();
+        info!("story: {} markers shown in the world of {}: {shown:?}", now.len(), shown.len());
+    }
+    if out.0 != now {
+        out.0 = now;
+    }
+}
+
 #[derive(Component)]
 struct MarkerIcon;
 
 /// Objective markers: a diamond and the distance, held at the screen's edge
 /// when off screen; none while a scene holds the view or the HUD is off.
 fn draw_markers(
-    markers: Res<ObjectiveMarkers>,
+    markers: Res<HudMarkers>,
     scripted: Res<ScriptedPlayer>,
     cinema: Res<crate::cinema::Cinema>,
     cameras: Query<(&Camera, &GlobalTransform), With<crate::player::PlayerCamera>>,
@@ -1684,25 +1762,32 @@ fn draw_markers(
     // (A race's next gate with them; while a race holds the player, the gate
     // alone.)
     let racing = races.as_ref().is_some_and(|r| r.holds_player()) || trials.is_some_and(|t| t.holds_player());
-    let all: Vec<Vec3> = markers.0.iter().copied().filter(|_| !racing).chain(races.and_then(|r| r.marker)).collect();
+    let Ok((cam, cam_t)) = cameras.single() else { return };
+    // (Each as near as its kind shows; a giver's or a place's off screen
+    // not at all.)
+    let near = |m: &&HudMarker| m.within <= 0.0 || m.at.distance(cam_t.translation()) <= m.within;
+    let all: Vec<(Vec3, bool)> =
+        markers.0.iter().filter(near).map(|m| (m.at, m.objective())).filter(|_| !racing).chain(races.and_then(|r| r.marker).map(|m| (m, true))).collect();
     if all.is_empty() || scripted.hud_hidden || cinema.view.is_some() || minigame.is_some_and(|m| m.holds_player()) {
         if !markers.0.is_empty() {
             trace!("markers hidden: hud {} scene view {}", scripted.hud_hidden, cinema.view.is_some());
         }
         return;
     }
-    let Ok((cam, cam_t)) = cameras.single() else { return };
     let Some(size) = cam.logical_viewport_size() else { return };
     let size = crate::ui_nav::viewport_to_ui(size, scale.0);
     // Off screen markers sit on a frame inside the compass and the HUD.
     let (lo, hi) = (Vec2::new(40.0, 90.0), size - Vec2::new(40.0, 150.0));
     let mid = (lo + hi) * 0.5;
     let view = cam_t.affine().inverse();
-    for &at in &all {
+    for &(at, edge) in &all {
         let to = at - cam_t.translation();
         let local = view.transform_point3(at);
         let seen = cam.world_to_viewport(cam_t, at).ok().map(|p| crate::ui_nav::viewport_to_ui(p, scale.0))
             .filter(|p| local.z < 0.0 && p.cmpge(lo).all() && p.cmple(hi).all());
+        if seen.is_none() && !edge {
+            continue;
+        }
         let px = seen.unwrap_or_else(|| {
             // Toward it from the middle, out to the frame (behind: its side).
             let mut d = Vec2::new(local.x, -local.y);
@@ -2855,7 +2940,10 @@ fn run_story(
             host.story
                 .objective_markers()
                 .into_iter()
-                .filter(|_| !mission_on && focus.is_empty() && nothing_left && host.quiet > GIVER_WALK_AFTER)
+                // (Gone nowhere a while, not merely quiet: the world's people
+                // at their business stir the story every half minute.)
+                .filter(|_| !mission_on && focus.is_empty() && nothing_left && host.quiet > GIVER_WALK_QUIET)
+                .filter(|_| host.focus_since.as_ref().is_some_and(|(_, since)| now - since > GIVER_WALK_AFTER))
                 .filter(|(id, _)| data.markers.get(id).is_some_and(|m| GIVERS.contains(&m.kind)))
                 .map(|(id, p)| (id, to_bevy(p)))
                 .filter(|(id, at)| {
@@ -4749,9 +4837,11 @@ const MARKER_WALK_SHORT: f32 = 8.0;
 const NOT_OBJECTIVES: [u64; 5] = [0x058d_6bbd, 0x1350_8ab1, 0x0375_88d5, 0x82ca_abbe, 0x7d8e_4092];
 /// The givers' kinds among those: a mission's brief, a quest's giver.
 const GIVERS: [u64; 2] = [0x82ca_abbe, 0x7d8e_4092];
-/// How quiet (s) the story is, nothing to do and no mission on, before the
-/// autopilot goes to a giver.
+/// How long (s) the autopilot has gone nowhere, nothing to do and no
+/// mission on, before it goes to a giver; and how quiet the story is then
+/// (a giver's poster comes into the world, its script with it, meanwhile).
 const GIVER_WALK_AFTER: f32 = 30.0;
+const GIVER_WALK_QUIET: f32 = 8.0;
 /// How quiet (s) the story is before the autopilot goes after a character
 /// only a health listener watches who has the mission's marker within this
 /// far (m) of him, across the ground (SQC_070's first privateer stands
@@ -7275,6 +7365,29 @@ fn autopilot_loot(
                     .find(|p| sight(*p));
                 stand = found.unwrap_or(qt.translation + side * 1.5);
             }
+            // (In the water, shot from dry ground with it in sight, as near
+            // as there is: SQA_D7's maneater, hunted with a bow from the
+            // water it swam in, and its kin, bit the player to death.)
+            let wet = |p: Vec3| heights.height_at(p).is_some_and(|g| crate::water::surface(p, Some(g)) > g + 0.5);
+            if !melee && wet(qt.translation) && wet(stand) {
+                let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+                let sight = |p: Vec3| {
+                    let eye = p + Vec3::Y * 1.6;
+                    let to = target - eye;
+                    Dir3::new(to).ok().is_none_or(|d| spatial.cast_ray(eye, d, to.length(), true, &filter).is_none_or(|h| h.distance > to.length() - 1.0))
+                };
+                let dry = [0.5, 1.0, 1.5, 2.0, 3.0]
+                    .into_iter()
+                    .flat_map(|k| (0..16).map(move |i| (k, i)))
+                    .filter_map(|(k, i)| {
+                        let p = qt.translation + Quat::from_rotation_y(i as f32 * std::f32::consts::TAU / 16.0) * side * HUNT_FROM * k;
+                        heights.height_at(p).filter(|g| *g > crate::water::surface(p, Some(*g)) + 0.3).map(|g| p.with_y(g))
+                    })
+                    .find(|p| sight(*p));
+                if let Some(p) = dry {
+                    stand = p;
+                }
+            }
             // (Up close, on dry ground by it where there's some: SQA_G4's
             // albino crocodile, at the surface, was gone after from the
             // river bed under it, the machete swung under water.)
@@ -7354,10 +7467,37 @@ fn autopilot_loot(
                 *last = Some((body.id, "skin"));
             }
             let flat = (bt.translation - at.translation).with_y(0.0);
+            // (One in the water, swum down to and kept by: SQA_D7's maneater,
+            // dead 5 m down, had the player put on the sea bed under it and
+            // float up past it, over and over.)
+            let under = heights.height_at(bt.translation).is_some_and(|g| crate::water::surface(bt.translation, Some(g)) > bt.translation.y + 0.5);
+            if under {
+                actions.hold(crate::controls::Action::SwimDown);
+            }
+            if std::env::var("FC3_STORY_WAIT_DEBUG").is_ok() && (now - time.delta_secs()) as u32 / 5 != now as u32 / 5 {
+                info!(
+                    "story autopilot: skinning {} at {:?}, the player at {:?} ({:.1} m), under water {under}, swimming {}, hands busy {}, looting allowed {}",
+                    body.id,
+                    bt.translation,
+                    at.translation,
+                    bt.translation.distance(at.translation),
+                    player.swimming,
+                    busy.busy(),
+                    scripted.animal_looting
+                );
+            }
             if flat.length() > 1.6 || (bt.translation.y - at.translation.y).abs() > 1.5 {
                 let mut feet = bt.translation - flat.normalize_or(Vec3::Z) * 1.0;
-                feet.y = feet_near(&spatial, &heights, me, feet, bt.translation.y);
-                teleport(&mut at, &mut player, to_dunia(feet), 0.0);
+                if under {
+                    // (Put there swimming: a move sets the player down on
+                    // the ground under him.)
+                    at.translation = feet.with_y(bt.translation.y);
+                    player.velocity = Vec3::ZERO;
+                    player.swimming = true;
+                } else {
+                    feet.y = feet_near(&spatial, &heights, me, feet, bt.translation.y);
+                    teleport(&mut at, &mut player, to_dunia(feet), 0.0);
+                }
                 host.quiet = 0.0;
             } else if now >= *next_press {
                 *next_press = now + 0.6;

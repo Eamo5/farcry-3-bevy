@@ -806,6 +806,13 @@ impl Story {
         c.objective_markers.keys().filter_map(|&m| c.position(m).map(|p| (m, p))).collect()
     }
 
+    /// The same, each with the sub-kind a script showed it as (its name, as
+    /// `GlobalSetObjectiveMarker` gives it: `ThrowRock`; empty for none).
+    pub fn objective_markers_shown(&self) -> Vec<(u64, [f32; 3], String)> {
+        let c = self.core.borrow();
+        c.objective_markers.iter().filter_map(|(&m, sub)| c.position(m).map(|p| (m, p, sub.clone()))).collect()
+    }
+
     /// The members of a group as scripts write it (`#hash`, or one id).
     pub fn group_members(&self, group: &str) -> Vec<u64> {
         self.core.borrow().groups(&values::Text(group.to_string()))

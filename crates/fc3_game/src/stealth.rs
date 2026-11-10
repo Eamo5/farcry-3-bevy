@@ -1158,8 +1158,10 @@ fn takedown(
             td.chain_target = None;
         }
     }
-    // E with the skill: take him down and drag the body away.
-    let drag = perks.takedown_drag && actions.just_pressed(Action::Interact);
+    // With the skill, the takedown with the back key held (the game's
+    // "quickly hold [WalkBackward]"), or E: take him down and drag the body
+    // away.
+    let drag = perks.takedown_drag && (actions.just_pressed(Action::Interact) || (actions.just_pressed(Action::Melee) && actions.pressed(Action::Back)));
     if !actions.just_pressed(Action::Melee) && !drag {
         return;
     }
@@ -1267,7 +1269,6 @@ fn takedown_prompt(
     td: Res<Takedown>,
     actions: Res<ActionState>,
     settings: Res<crate::settings::Settings>,
-    perks: Res<crate::progression::Perks>,
     text: Option<Res<crate::hud::GameText>>,
     mut hud: ResMut<crate::hud::HudState>,
 ) {
@@ -1292,12 +1293,11 @@ fn takedown_prompt(
             TakedownKind::Below => "takedown from below",
             TakedownKind::Chain => "throw knife",
         };
-        let mut line = game
+        // (The drag is the game's tutorial's to tell, not the prompt's: the
+        // takedown with the back key held.)
+        let line = game
             .and_then(|id| text.as_deref()?.prompt(id, &actions, &settings))
             .unwrap_or_else(|| format!("{}  {what}", actions.label(Action::Melee, &settings)));
-        if td.kind == TakedownKind::Ground && perks.takedown_drag {
-            line += &format!("      {}  drag", actions.label(Action::Interact, &settings));
-        }
         hud.prompt = Some(line);
     }
 }
@@ -1347,7 +1347,7 @@ fn detection_markers(
             })
             .clone()
     };
-    let mut place = |commands: &mut Commands, at: Vec3| -> Option<Entity> {
+    let place = |commands: &mut Commands, at: Vec3| -> Option<Entity> {
         if cam_t.translation().distance(at) > 250.0 {
             return None;
         }

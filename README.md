@@ -197,7 +197,8 @@ No game data is included in this repository, and none is written into it.
   in front, shoot up to three of them before letting him drop; the shots are loud. The double takedown skill drops onto two enemies standing
   together and takes both. With the grenade takedown skill, when two or more enemies stand
   a few metres ahead, you pull the pin on the victim's grenade and kick him into them. The
-  takedown drag skill (E instead of F) takes him down and lets you drag the body out of sight,
+  takedown drag skill (the takedown with the back key held, as the game's tutorial has it, or E)
+  takes him down and lets you drag the body out of sight,
   walking backwards with it, before letting go (E or F). With Death From Below, an unaware
   enemy at the edge of a ledge just above you (or of a dock, from the water) can be pulled off
   it. Grass and
