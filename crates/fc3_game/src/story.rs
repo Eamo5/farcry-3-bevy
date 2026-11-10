@@ -2755,8 +2755,10 @@ fn run_story(
                 focus.push(next);
             }
         }
-        // (On a mission, the places of the missions running only.)
-        let mission_on = host.story.mission_in_progress().is_some();
+        // (On a mission, the places of the missions running only.) (A Lost
+        // Expedition's isn't one while the autopilot leaves them be.)
+        let skip_dlc = std::env::var_os("FC3_STORY_AUTOPILOT_DLC").is_none();
+        let mission_on = host.story.mission_in_progress().is_some_and(|m| !(skip_dlc && dlc_mission(&m)));
         let in_focus: std::collections::HashSet<u64> = if mission_on { host.story.watched_proximity_of_missions(&focus).into_iter().collect() } else { Default::default() };
         // (The story's own missions before side ones, a lost expedition's or
         // a supply run's: WIL_020's boat got away while the autopilot went
@@ -2801,7 +2803,7 @@ fn run_story(
         // their labs are entered as places apart, and the autopilot, gone
         // off to the story's missions mid-lab, left a lab's block running
         // that put the player back in it on every reload.)
-        if std::env::var_os("FC3_STORY_AUTOPILOT_DLC").is_none() {
+        if skip_dlc {
             let dlc: Vec<String> = host.story.missions().into_iter().map(|m| m.0).filter(|m| dlc_mission(m)).map(|m| m.trim_end_matches("_MAIN").to_string()).collect();
             if !dlc.is_empty() {
                 let skip: std::collections::HashSet<u64> = host.story.watched_triggers_of(graph.as_deref(), &dlc).into_iter().map(|w| w.0).collect();
@@ -2844,6 +2846,25 @@ fn run_story(
             .map(|(id, p)| (id, to_bevy(p)))
             .filter(|(id, at)| at.with_y(0.0).distance(t.translation.with_y(0.0)) > MARKER_WALK_NEAR && !host.used.contains(&(*id, "go to".to_string())) && !host.fatal.contains(&(*id, "go to".to_string())))
             .min_by(|a, b| a.1.distance(t.translation).total_cmp(&b.1.distance(t.translation)));
+        // (No mission on and nothing at all to do: on to the nearest quest's
+        // or mission's giver not gone to, as a player looks over the map.
+        // Their posters' scripts run only with their sector in the world:
+        // the island's hunts, wanted posters and supply runs went unseen.)
+        let nothing_left = !watched.iter().chain(focused.iter()).any(|w| w.3 && !host.used.contains(&(w.0, w.1.clone())) && !host.fatal.contains(&(w.0, w.1.clone())));
+        let marker_walk = marker_walk.or_else(|| {
+            host.story
+                .objective_markers()
+                .into_iter()
+                .filter(|_| !mission_on && focus.is_empty() && nothing_left && host.quiet > GIVER_WALK_AFTER)
+                .filter(|(id, _)| data.markers.get(id).is_some_and(|m| GIVERS.contains(&m.kind)))
+                .map(|(id, p)| (id, to_bevy(p)))
+                .filter(|(id, at)| {
+                    at.with_y(0.0).distance(t.translation.with_y(0.0)) > MARKER_WALK_NEAR
+                        && !host.used.contains(&(*id, "go to".to_string()))
+                        && !host.fatal.contains(&(*id, "go to".to_string()))
+                })
+                .min_by(|a, b| a.1.distance(t.translation).total_cmp(&b.1.distance(t.translation)))
+        });
         if marker_walk.is_some() {
             watched.clear();
         }
@@ -4726,6 +4747,11 @@ const MARKER_WALK_SHORT: f32 = 8.0;
 /// The map markers' kinds that aren't objectives: activities, shops, the
 /// challenge boards, missions' and quests' givers.
 const NOT_OBJECTIVES: [u64; 5] = [0x058d_6bbd, 0x1350_8ab1, 0x0375_88d5, 0x82ca_abbe, 0x7d8e_4092];
+/// The givers' kinds among those: a mission's brief, a quest's giver.
+const GIVERS: [u64; 2] = [0x82ca_abbe, 0x7d8e_4092];
+/// How quiet (s) the story is, nothing to do and no mission on, before the
+/// autopilot goes to a giver.
+const GIVER_WALK_AFTER: f32 = 30.0;
 /// How quiet (s) the story is before the autopilot goes after a character
 /// only a health listener watches who has the mission's marker within this
 /// far (m) of him, across the ground (SQC_070's first privateer stands

@@ -571,7 +571,17 @@ only what changed (and everything again until the movies have loaded):
   the enemy's bearing from where the player faces) filling as its
   suspicion grows (`StealthIndicatorAnim_<n>`, frames 1 to 100) and white
   while suspicious, red once spotted (`StealthIndicatorState_<n>` frame 1
-  or 8).
+  or 8). Our own bars over noticing enemies' heads are left out with it
+  (the game shows who notices only by these arrows).
+* **Tagged**: over each tagged enemy and animal, through walls, the icon
+  the engine draws for its kind (`tx_tagged_<kind>` under
+  `graphics\__fc3_graphics\_common\_textures\ui\tagindicators\`, converted
+  with the screen overlays), the camera legend's: a skull for the
+  ordinary, a shield for heavies and flamers, a lightning bolt for
+  chargers, a crosshair for snipers and rocketeers, fangs for predators and
+  a paw for the other animals. The camera tags animals as well as enemies.
+  (It had been a red diamond of ours over enemies alone.) `FC3_TAG_TEST=all`
+  (tests) tags everyone and everything within 100 m 6 s in.
 * **Hit indicators**: each hit on the player plays the next of six arrows
   round the centre (`HitIndicator_<n>` from frame 2; it fades over its 23
   frames and turns itself off), turned toward where the hit came from

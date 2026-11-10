@@ -1702,6 +1702,8 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         // The screen overlays the HUD draws (the sniper scopes, blood on the
         // screen, an animal's slash, the drowning vignette).
         textures.extend(vfs.names.values().filter(|n| n.starts_with(cache::SCREEN_OVERLAYS) && n.ends_with(".xbt") && !n.contains("_mip0")).cloned());
+        // (And the icons over tagged enemies and animals.)
+        textures.extend(vfs.names.values().filter(|n| n.starts_with(cache::TAG_INDICATORS) && n.ends_with(".xbt") && !n.contains("_mip0")).cloned());
     }
     let textures: Vec<String> = textures.into_iter().collect();
 

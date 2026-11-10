@@ -5958,6 +5958,16 @@ to SQC_080, each a brief at its giver then its blocks):
   machete as the struggle was won ("You did not use a flamethrower."): the
   autopilot takes a hunt's quarry's bite when the hunt asks for another
   weapon than a blade. SQA_G3 completed.
+* **The island's quests.** With every outpost and tower taken, the
+  island's hunts, wanted posters and supply runs (each country's
+  `C3_POIsQuests` and the like, opened by `C3_1_OutpostIsUnlocked` and
+  `C3_RadioTowerIsUnlocked`) were open, their givers on the map, but the
+  autopilot never took them: a poster's script runs only with its sector
+  in the world, so nothing waited on it. With no mission on and nothing
+  left to do (the story quiet 30 s, `GIVER_WALK_AFTER`), it now goes to the
+  nearest quest's or mission's giver on the map not yet gone to, as a
+  player looks over the map. A Lost Expedition running (they're left be
+  unless `FC3_STORY_AUTOPILOT_DLC`) no longer counts as a mission on.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

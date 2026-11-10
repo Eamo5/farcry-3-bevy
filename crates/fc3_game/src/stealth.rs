@@ -453,7 +453,11 @@ fn binoculars(
     mut commands: Commands,
     mut sfx: MessageWriter<crate::sound::PlaySfx>,
     perks: Res<crate::progression::Perks>,
-    (mut scripted, hud): (ResMut<crate::story::ScriptedPlayer>, Res<crate::map::HudParams>),
+    (mut scripted, hud, animals): (
+        ResMut<crate::story::ScriptedPlayer>,
+        Res<crate::map::HudParams>,
+        Query<(Entity, &GlobalTransform, &Health), (With<crate::wildlife::WildAnimal>, Without<Tagged>, Without<NoTag>, Without<Npc>)>,
+    ),
     (actors, mut saw, mut reported, mut story_dwell, placed, mut targets): (
         Query<(Entity, &GlobalTransform, &crate::story_actors::StoryActor, Has<NoTag>)>,
         MessageWriter<CameraSaw>,
@@ -541,6 +545,23 @@ fn binoculars(
         let filter = SpatialQueryFilter::from_excluded_entities([pe]);
         let clear = spatial.cast_ray(eye, dir, dist, true, &filter).is_none_or(|hit| hit.entity == e || hit.distance > dist - 0.8);
         if clear {
+            seen.push(e);
+        }
+    }
+    // (And animals, as the game's camera tags them: the legend's predators
+    // and herbivores.)
+    for (e, gt, ah) in &animals {
+        if ah.dead {
+            continue;
+        }
+        let to = gt.translation() + Vec3::Y * 0.3 - eye;
+        let dist = to.length();
+        if dist > range * perks.tag_range || to.normalize_or_zero().dot(fwd) < 4f32.to_radians().cos() {
+            continue;
+        }
+        let Ok(dir) = Dir3::new(to) else { continue };
+        let filter = SpatialQueryFilter::from_excluded_entities([pe]);
+        if spatial.cast_ray(eye, dir, dist, true, &filter).is_none_or(|hit| hit.entity == e || hit.distance > dist - 0.8) {
             seen.push(e);
         }
     }
@@ -763,10 +784,14 @@ fn tag_test(
     mut actions: ResMut<ActionState>,
     tagged: Query<(), With<Tagged>>,
     mut commands: Commands,
+    (players, others): (
+        Query<&Transform, With<Player>>,
+        Query<(Entity, &GlobalTransform), (Without<Tagged>, Or<(With<Npc>, With<crate::wildlife::WildAnimal>)>)>,
+    ),
 ) {
-    if std::env::var("FC3_TAG_TEST").is_err() {
+    let Ok(mode) = std::env::var("FC3_TAG_TEST") else {
         return;
-    }
+    };
     let (start, shots, logged) = &mut *state;
     let now = time.elapsed_secs();
     if *start == 0.0 {
@@ -775,7 +800,19 @@ fn tag_test(
     if now < *start {
         return;
     }
-    actions.hold(Action::Tag);
+    // (`all`: everyone and every animal within 100 m tagged at once, to see
+    // their icons.)
+    if mode == "all" {
+        if let Ok(pt) = players.single() {
+            for (e, gt) in &others {
+                if gt.translation().distance(pt.translation) < 100.0 {
+                    commands.entity(e).insert(Tagged);
+                }
+            }
+        }
+    } else {
+        actions.hold(Action::Tag);
+    }
     let t = now - *start;
     let at: Vec<f32> = std::env::var("FC3_TD_SHOT").unwrap_or_default().split(',').filter_map(|s| s.parse().ok()).collect();
     if let (Some(&when), Some(path)) = (at.get(*shots), args.screenshot.as_ref()) {
@@ -1269,31 +1306,90 @@ fn takedown_prompt(
 #[derive(Component)]
 struct DetectionMarker;
 
+/// The icon the engine draws over a tagged enemy or animal, by its kind
+/// (`TAG_INDICATORS`' `tx_tagged_<kind>`), as the camera's legend names
+/// them: normal, heavy, charger, sniper/RPG, predator, herbivore.
+fn tag_icon(role: Option<crate::npc::Role>, predator: bool) -> &'static str {
+    use crate::npc::Role;
+    match role {
+        Some(Role::Heavy | Role::Flamer) => "heavy",
+        Some(Role::Charger) => "charger",
+        Some(Role::Sniper | Role::Rocket) => "long",
+        Some(_) => "normal",
+        None if predator => "animal_agressive",
+        None => "animal_normal",
+    }
+}
+
+/// How big (px) a tag's icon is drawn.
+const TAG_ICON: f32 = 24.0;
+
+#[allow(clippy::too_many_arguments)]
 fn detection_markers(
     cameras: Query<(&Camera, &GlobalTransform), With<PlayerCamera>>,
     npcs: Query<(&GlobalTransform, &Npc, &Health, Has<Tagged>)>,
+    animals: Query<(&GlobalTransform, &crate::wildlife::WildAnimal, &Health), (With<Tagged>, Without<Npc>)>,
     markers: Query<Entity, With<DetectionMarker>>,
     mut commands: Commands,
     scale: Res<UiScale>,
+    (server, original, mut icons): (Res<AssetServer>, Res<crate::hud::OriginalHud>, Local<HashMap<&'static str, Handle<Image>>>),
 ) {
     for e in &markers {
         commands.entity(e).despawn();
     }
     let Ok((cam, cam_t)) = cameras.single() else { return };
+    let mut icon = |kind: &'static str| {
+        icons
+            .entry(kind)
+            .or_insert_with(|| {
+                let path = format!("{}tx_tagged_{kind}.xbt", fc3_formats::cache::TAG_INDICATORS);
+                server.load(crate::cache_assets::cache_path(&fc3_formats::cache::texture_rel(&path)))
+            })
+            .clone()
+    };
+    let mut place = |commands: &mut Commands, at: Vec3| -> Option<Entity> {
+        if cam_t.translation().distance(at) > 250.0 {
+            return None;
+        }
+        let px = cam.world_to_viewport(cam_t, at).ok()?;
+        let px = crate::ui_nav::viewport_to_ui(px, scale.0);
+        Some(
+            commands
+                .spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(px.x - TAG_ICON * 0.5),
+                        top: Val::Px(px.y - TAG_ICON),
+                        width: Val::Px(TAG_ICON),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    GlobalZIndex(1),
+                    DetectionMarker,
+                ))
+                .id(),
+        )
+    };
+    // Tagged animals: their icon over them.
+    for (gt, animal, h) in &animals {
+        if h.dead {
+            continue;
+        }
+        let Some(root) = place(&mut commands, gt.translation() + Vec3::Y * 1.0) else { continue };
+        commands.spawn((Node { width: Val::Px(TAG_ICON), height: Val::Px(TAG_ICON), ..default() }, ImageNode::new(icon(tag_icon(None, animal.predator()))), ChildOf(root)));
+    }
     for (gt, npc, h, tagged) in &npcs {
         if h.dead || !npc.hostile() {
             continue;
         }
-        let noticing = npc.awareness > 0.05 || npc.state != NpcState::Idle;
+        // (The game's own HUD shows who is noticing the player by its arrows
+        // round the reticule, not over their heads.)
+        let noticing = !original.0 && (npc.awareness > 0.05 || npc.state != NpcState::Idle);
         if !noticing && !tagged {
             continue;
         }
-        let head = gt.translation() + Vec3::Y * 1.25;
-        if cam_t.translation().distance(head) > 250.0 {
-            continue;
-        }
-        let Ok(px) = cam.world_to_viewport(cam_t, head) else { continue };
-        let px = crate::ui_nav::viewport_to_ui(px, scale.0);
+        let Some(root) = place(&mut commands, gt.translation() + Vec3::Y * 1.25) else { continue };
         let colour = match npc.state {
             NpcState::Combat => Color::srgb(0.95, 0.15, 0.1),
             NpcState::Search => Color::srgb(1.0, 0.55, 0.12),
@@ -1301,31 +1397,10 @@ fn detection_markers(
             _ => Color::srgb(0.95, 0.95, 0.9),
         };
         let fill = if npc.state == NpcState::Combat { 1.0 } else { npc.awareness.clamp(0.0, 1.0) };
-        let root = commands
-            .spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(px.x - 9.0),
-                    top: Val::Px(px.y - 18.0),
-                    width: Val::Px(18.0),
-                    height: Val::Px(18.0),
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-                GlobalZIndex(1),
-                DetectionMarker,
-            ))
-            .id();
-        // Tagged enemies: a red diamond; noticing ones: a coloured bar filling up.
+        // Tagged enemies: their kind's icon; noticing ones (without the
+        // game's HUD): a coloured bar filling up.
         if tagged {
-            commands.spawn((
-                Node { width: Val::Px(9.0), height: Val::Px(9.0), border: UiRect::all(Val::Px(1.0)), ..default() },
-                BackgroundColor(Color::srgb(0.85, 0.12, 0.1)),
-                BorderColor::all(Color::srgb(0.05, 0.05, 0.05)),
-                UiTransform { rotation: Rot2::degrees(45.0), ..default() },
-                ChildOf(root),
-            ));
+            commands.spawn((Node { width: Val::Px(TAG_ICON), height: Val::Px(TAG_ICON), ..default() }, ImageNode::new(icon(tag_icon(Some(npc.role), false))), ChildOf(root)));
         }
         if noticing {
             let bar = commands

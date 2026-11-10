@@ -975,6 +975,11 @@ fn bite_prefix(a: Animal) -> Option<&'static str> {
 
 impl WildAnimal {
     /// Let go after a struggle (or the animal's held pose).
+    /// A hunter of men (its tag's fangs, else a paw).
+    pub(crate) fn predator(&self) -> bool {
+        SPECIES[self.species].behaviour == Behaviour::Predator
+    }
+
     pub(crate) fn release(&mut self) {
         self.frozen = None;
         self.attack_cooldown = self.attack_cooldown.max(2.0);

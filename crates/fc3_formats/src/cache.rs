@@ -1294,6 +1294,11 @@ pub const ANIMAL_SKINS: &[&str] = &[
 /// The folder of the screen overlays the HUD draws (scopes, blood, slashes).
 pub const SCREEN_OVERLAYS: &str = r"graphics\postfx\";
 
+/// The folder of the icons the engine draws over tagged enemies and animals
+/// (`tx_tagged_<kind>.xbt`: normal, heavy, charger, long, leader, companion,
+/// animal_agressive, animal_normal).
+pub const TAG_INDICATORS: &str = r"graphics\__fc3_graphics\_common\_textures\ui\tagindicators\";
+
 /// Original path of an animal skin material.
 pub fn animal_skin_path(stem: &str) -> String {
     format!("graphics\\_materials\\{stem}.material.bin")
