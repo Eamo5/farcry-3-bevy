@@ -6896,7 +6896,10 @@ fn autopilot_loot(
             return;
         }
         player.yaw = (-delta.x).atan2(-delta.z);
-        if off > 1.4 {
+        // (Within a takedown's reach, taken down from there: SQW_D3's
+        // commander stood 1.42 m off below a ledge the player couldn't
+        // walk off, and the walk up to 1.4 m went on for good.)
+        if off > 2.0 {
             actions.movement = Vec2::Y;
             return;
         }
@@ -6909,7 +6912,7 @@ fn autopilot_loot(
             use crate::controls::Action;
             // (Melee takes the machete out, or takes him down with the
             // skill; fire swings it.)
-            let blade = inventory.def().class == crate::weapons::WeaponClass::Melee;
+            let blade = inventory.def().class == crate::weapons::WeaponClass::Melee && off <= 1.4;
             actions.press(if nh.dead {
                 Action::Interact
             } else if blade {
