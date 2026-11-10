@@ -6679,6 +6679,9 @@ fn autopilot_loot(
             })
             .min_by(|a, b| off(a.1).total_cmp(&off(b.1)));
         if let Some((p, gt)) = other {
+            // (Swapped for one carried, every holster full: the autopilot
+            // swaps only for the gun it means to.)
+            swap.0 = Some(p.id);
             if *last != Some((p.id, "pick up")) {
                 info!("story autopilot: dry; pick up a {} {:?}", if crate::pickups::is_dropped(p.id) { "dropped" } else { "lying" }, p.kind);
                 *last = Some((p.id, "pick up"));

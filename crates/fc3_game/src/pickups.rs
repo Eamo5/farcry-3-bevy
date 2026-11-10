@@ -791,6 +791,7 @@ fn interact(
     (busy, mut gestures, mut xp, mut looted, scripted): (Res<crate::fp::HandsBusy>, MessageWriter<crate::fp::FpAction>, MessageWriter<crate::progression::XpGain>, MessageWriter<crate::progression::ItemLooted>, Res<crate::story::ScriptedPlayer>),
     (crafting, sources, owns, mut picked): (Option<Res<crate::crafting::CraftCatalog>>, Query<&LootSource>, Query<&OwnLoot>, MessageWriter<PickedUp>),
     (mut offer, mut held, time, autopilot_swap): (ResMut<WeaponOffer>, Local<f32>, Res<Time>, Res<AutopilotSwap>),
+    bodies: Query<&GlobalTransform, (With<LootableBody>, Without<Pickup>)>,
 ) {
     let was = offer.0;
     offer.0 = None;
@@ -819,6 +820,21 @@ fn interact(
         if best.is_none_or(|(s, _)| score < s) {
             best = Some((score, e));
         }
+    }
+    // (A body to search that the player faces more: its search is offered
+    // instead, `loot_bodies`. A dead guard's gun lies beside him, and its
+    // offer stood in front of his search for good: the autopilot, out of
+    // rounds, could search none at HUR_030's temple.)
+    let body = bodies
+        .iter()
+        .filter_map(|gt| {
+            let to = gt.translation() - pt.translation;
+            let flat = Vec3::new(to.x, 0.0, to.z);
+            (flat.length() + to.y.abs() * 0.5 < 2.4).then(|| flat.length() - flat.normalize_or_zero().dot(fwd) * 0.8)
+        })
+        .fold(f32::INFINITY, f32::min);
+    if best.is_some_and(|(s, _)| body < s) {
+        return;
     }
     let Some((_, e)) = best else { return };
     let Ok((_, p, _)) = pickups.get(e) else { return };

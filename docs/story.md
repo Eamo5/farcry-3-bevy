@@ -6064,6 +6064,14 @@ to SQC_080, each a brief at its giver then its blocks):
   when they were. Such a pickup offers nothing until a script makes it
   takeable again (`WorldState::unpickable`), and the autopilot leaves it.
   HUR_030 completed, on into HUR_020.
+* **A body beside its gun.** A dead guard's gun lies by him, and its offer
+  (any pickup in reach, by distance and facing) took the prompt, which a
+  body's search only takes when nothing else has it: out of rounds, the
+  autopilot could search none of HUR_030's or DEN_020's dead. A body the
+  player faces more than the nearest pickup now has its search offered
+  instead (`pickups::interact`), as the game offers what is looked at. And
+  a gun the autopilot, dry, goes to pick up is one it means to swap for
+  (`AutopilotSwap`): it had refused the swap and left each after a while.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.
