@@ -6002,6 +6002,11 @@ to SQC_080, each a brief at its giver then its blocks):
   was stood by for good, no takedown coming: near him 5 s without one
   (`TAKEDOWN_AGAIN`), the autopilot is set behind him again. SQW_G2 and
   SQS_F3 completed.
+* **The RPG hunt.** SQA_C6 asks for its dogs killed with an RPG, and
+  failed ("You did not use an RPG.") the moment a rocket killed any: its
+  check (`AnimalSQWeaponsClassCheck`) takes a blast whose weapon is the
+  rocket (`RPG-7_Rocket`), and our blasts named none. A blast hurting the
+  story's characters with the launcher in hand names its rocket now.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

@@ -1393,8 +1393,13 @@ fn actor_health(
     players: Query<(Entity, &Health), (With<Player>, Changed<Health>)>,
     harm: Res<crate::combat::LastHarm>,
     mut seen: Local<HashMap<u64, f32>>,
+    inventories: Query<&crate::weapons::Inventory, With<Player>>,
 ) {
     let Some(mut host) = host else { return };
+    // (A blast with the launcher in hand: its rocket's, as the game names
+    // the projectile. SQA_C6's RPG hunt failed as each rocket's blast,
+    // naming no weapon, killed its dogs.)
+    let rocket = inventories.single().is_ok_and(|i| i.def().class == crate::weapons::WeaponClass::Launcher);
     let changes = actors.iter().map(|(e, a, h)| (e, a.id, h.current)).chain(players.iter().map(|(e, h)| (e, fc3_story::PLAYER, h.current)));
     for (e, id, now) in changes {
         let before = seen.insert(id, now);
@@ -1402,6 +1407,7 @@ fn actor_health(
             // What hurt it (an arrow names itself; a round, the gun in hand).
             let (source, emitter) = match harm.0.get(&e).filter(|_| now < before) {
                 Some((_, crate::combat::Hit::Arrow(_))) => ("BulletImpact", Some("arrow")),
+                Some((crate::combat::DamageKind::Explosion, _)) if rocket => ("explosion", Some("RPG-7_Rocket")),
                 Some((kind, _)) => (kind.source_type(), None),
                 None => ("Generic", None),
             };
