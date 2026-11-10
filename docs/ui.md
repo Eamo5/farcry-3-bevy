@@ -581,6 +581,26 @@ only what changed (and everything again until the movies have loaded):
   by `SetReloadText`) while the weapon in hand's magazine is empty with
   more to load and no reload under way (rare: the game reloads by itself).
   `FC3_EMPTY_MAG` (tests) empties it once the player is in the world.
+* **Struggle prompt**: a QTE asking (`qte::QteAsking`) is the interaction
+  movie's exotic QTE (`original_ui::drive_qte`): the container to
+  `QTE_Visible`, the movie's own `SetExoticQTEButton ["0", "button1_up",
+  <kind>, "0", "button1_down"]` (the first button, at its `Down_MC` place
+  below the middle, played in by `ActivateMash`, `ActivatePress` or
+  `ActivateHoldDown`), its glows to the PC's keycap frames
+  (`PCButtonSmall`, `PCButtonLarge`, `PCButton_Mouse`), its faces the
+  pad's buttons' place taken by the large keycap
+  (`<img src='PCKeySmallMC_Large' id='E'/>`, `_Large_down` the pressed
+  face a mash flicks to; the mouse's buttons their own) and the QTE's word
+  under it (`ExoticQteButtonSub00_DT`, "MASH"). Decided, the button plays
+  `Success` or `Failure` (`HideExoticQTEButton`) and the container
+  `QTE_Success` / `QTE_Fail` a moment, then hides. A struggle's scene hides
+  the HUD; it is shown for the prompt alone (`Hud::qte_only`, every other
+  part hidden by `HideUIElement`), unless the scripts hid the interaction
+  movie themselves (JAS_030's first struggle hides it with the radar):
+  then our own prompt says it. Our meter for a mash or a hold stays (the
+  movie's button has no progress clip of its own). It had been our text
+  prompt alone. `FC3_QTE_TEST=<key>` (tests) asks a mash of that key every
+  other ten seconds.
 * **XP**: `XPKicker` plays a tier by the amount (from frame 2, 42 or 95; it
   holds at 37, 87 or 155 and runs on to its `off` label from the next
   frame), `XPKickerText` the amount (the movie adds the "+") and

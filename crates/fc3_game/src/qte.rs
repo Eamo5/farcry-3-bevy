@@ -36,6 +36,7 @@ pub struct QtePlugin;
 impl Plugin for QtePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Qtes>()
+            .init_resource::<QteAsking>()
             .init_resource::<MoveTable>()
             .init_resource::<QteMoves>()
             .add_systems(OnExit(crate::menu::GameState::Loading), (load_moves, load_qte_moves))
@@ -246,6 +247,25 @@ struct QtePrompt;
 #[derive(Component)]
 struct QteMeter;
 
+/// What a QTE asks of the player now, for the original HUD's prompt (the
+/// interaction movie's exotic QTE: `original_ui::drive_qte`): the key, the
+/// QTE's word, its kind, and the last one decided (won, when).
+#[derive(Resource, Default)]
+pub struct QteAsking {
+    pub now: Option<QteAsk>,
+    pub decided: Option<(bool, f32)>,
+    /// The original HUD is shown (original_ui::drive_hud): hidden (a
+    /// struggle's scene hides it), the prompt is ours.
+    pub hud_shown: bool,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct QteAsk {
+    pub key: String,
+    pub word: String,
+    pub kind: Kind,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_qtes(
     host: Option<NonSendMut<StoryHost>>,
@@ -255,7 +275,7 @@ fn run_qtes(
     mut cinema: ResMut<Cinema>,
     server: Res<AssetServer>,
     clips: Res<Assets<Fc3Clip>>,
-    (mut actions, settings): (ResMut<ActionState>, Res<crate::settings::Settings>),
+    (mut actions, settings, mut asking, original): (ResMut<ActionState>, Res<crate::settings::Settings>, ResMut<QteAsking>, Res<crate::hud::OriginalHud>),
     prompts: Query<Entity, With<QtePrompt>>,
     mut meters: Query<&mut Node, With<QteMeter>>,
     mut shown: Local<String>,
@@ -402,6 +422,7 @@ fn run_qtes(
             commands.entity(e).despawn();
         }
         shown.clear();
+        asking.now = None;
         return;
     };
     let dt = time.delta_secs();
@@ -451,6 +472,7 @@ fn run_qtes(
             if !(a.kind == Kind::Hold && won) {
                 qt.asked[id] = None;
             }
+            asking.decided = Some((won, time.elapsed_secs()));
             decisive |= qt.decide(&mut host, id, won);
         }
     }
@@ -612,13 +634,21 @@ fn run_qtes(
             commands.entity(e).despawn();
         }
         shown.clear();
+        asking.now = None;
         return;
     };
     for &x in answers(a.input) {
         actions.consume(x);
     }
     let word = a.prompt.and_then(|p| host.story.data().strings.get(p).map(str::to_string)).unwrap_or_else(|| format!("{:?}", a.kind).to_uppercase());
-    let text = format!("[{}]  {word}", actions.label(answers(a.input)[0], &settings));
+    let key = actions.label(answers(a.input)[0], &settings);
+    let now = QteAsk { key: key.clone(), word: word.clone(), kind: a.kind };
+    if asking.now.as_ref() != Some(&now) {
+        asking.now = Some(now);
+    }
+    // (With the original HUD, its own prompt says it: the meter alone.)
+    let theirs = original.0 && asking.hud_shown;
+    let text = if theirs { String::new() } else { format!("[{key}]  {word}") };
     let meter = match a.kind {
         Kind::Mash => Some(a.progress / a.values[0].max(1.0)),
         Kind::Hold => Some(a.progress / a.values[0].max(0.01)),
@@ -632,7 +662,7 @@ fn run_qtes(
         let mut e = commands.spawn((
             Node {
                 position_type: PositionType::Absolute,
-                bottom: Val::Percent(22.0),
+                bottom: Val::Percent(if theirs { 12.0 } else { 22.0 }),
                 width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
@@ -642,7 +672,9 @@ fn run_qtes(
             GlobalZIndex(9),
             QtePrompt,
         ));
-        e.with_child((Text::new(text), TextFont { font_size: bevy::text::FontSize::Px(30.0), ..default() }, TextColor(Color::srgb(1.0, 0.85, 0.35))));
+        if !text.is_empty() {
+            e.with_child((Text::new(text), TextFont { font_size: bevy::text::FontSize::Px(30.0), ..default() }, TextColor(Color::srgb(1.0, 0.85, 0.35))));
+        }
         if meter.is_some() {
             e.with_child((
                 Node { width: Val::Px(320.0), height: Val::Px(10.0), ..default() },

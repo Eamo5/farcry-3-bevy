@@ -62,7 +62,7 @@ impl Plugin for OriginalUiPlugin {
                     (drive_timer, drive_minimap_distance, drive_crouch),
                     drive_xp,
                     (drive_loot, drive_saving),
-                    (drive_stealth, drive_indicators, drive_wheel, drive_reload, drive_weapon_swap),
+                    (drive_stealth, drive_indicators, drive_wheel, drive_reload, drive_weapon_swap, drive_qte),
                     drive_hits,
                     drive_grenades,
                     drive_radar,
@@ -2524,6 +2524,9 @@ struct Hud {
     /// Shown at all (not in menus, scenes, missions' no-HUD stretches or
     /// death).
     shown: bool,
+    /// Shown for a struggle's prompt alone (`QTE_ONLY_HIDES` hidden): a QTE
+    /// asking in a scene that hides the HUD.
+    qte_only: bool,
     radar: Option<(Vec2, f32)>,
     /// The reticule's bars' distance from the centre (stage units, rounded),
     /// none when it's down; the hit marker.
@@ -2609,6 +2612,7 @@ fn drive_hud(
     ui_scale: Res<UiScale>,
     (progress, mut armour_full): (Res<crate::progression::Progress>, Local<f32>),
     (actions, mut thrown, time): (Res<crate::controls::ActionState>, ResMut<crate::controls::ThrowChoice>, Res<Time>),
+    mut asking: ResMut<crate::qte::QteAsking>,
 ) {
     let Interface::Running(host) = &*state else { return };
     if !original.0 {
@@ -2645,6 +2649,18 @@ fn drive_hud(
         && !health.dead
         && !poker.is_some_and(|p| p.holds_player())
         && !minigame.is_some_and(|m| m.holds_player());
+    // (A struggle's prompt is the interaction movie's: in a scene hiding the
+    // HUD, it is shown for that alone, the rest hidden, as the game has the
+    // key over the struggle and nothing else.)
+    // (Not with the interaction movie hidden by the scripts: JAS_030's first
+    // struggle, the radar and prompts hidden. Ours says it then.)
+    let interaction_hidden = scripted.hud_parts_hidden.contains("interaction");
+    hud.qte_only = !hud.shown && asking.now.is_some() && *game_state.get() == crate::menu::GameState::Playing && !health.dead && !interaction_hidden;
+    hud.shown |= hud.qte_only;
+    let prompt_shown = hud.shown && !interaction_hidden;
+    if asking.hud_shown != prompt_shown {
+        asking.hud_shown = prompt_shown;
+    }
     // Ammo: the strip of the weapon in hand.
     hud.strip = None;
     hud.strip_frames.clear();
@@ -2782,6 +2798,13 @@ fn drive_hud(
     }
     if first || old.throwable != hud.throwable {
         ok &= host.dps_frame("ThrowableIcon", num(hud.throwable.max(1)));
+    }
+    if first || old.qte_only != hud.qte_only {
+        // (Those the scripts hide stay hidden after.)
+        let parts: Vec<&str> = QTE_ONLY_HIDES.iter().copied().filter(|p| hud.qte_only || !scripted.hud_parts_hidden.contains(*p)).collect();
+        if !parts.is_empty() && (hud.qte_only || !first) {
+            host.event(if hud.qte_only { "HideUIElement" } else { "ShowUIElement" }, &[&parts.join("|")]);
+        }
     }
     if first || old.shown != hud.shown {
         host.event("SetVisible", &[if hud.shown { "1" } else { "0" }]);
@@ -3489,6 +3512,103 @@ fn drive_wheel(
         *shown = Some(wheel.selected);
     }
 }
+
+/// The exotic QTE (the interaction movie's `ExoticQteContainer_MC`, its
+/// first button): a struggle's key, as the PC game draws it, a large keycap
+/// (`PCKeySmallMC_Large`, its pressed `_down` the button's other face, which
+/// a mash plays between) under the QTE's word, played in by the kind
+/// (`ActivatePress`, `ActivateMash`, `ActivateHoldDown`) and out by its end
+/// (`Success`, `Failure`; the container's `QTE_Success`, `QTE_Fail`), then
+/// hidden. (Ours, `qte`, keeps its meter for a mash or a hold.)
+fn drive_qte(state: NonSend<Interface>, asking: Res<crate::qte::QteAsking>, time: Res<Time>, mut shown: Local<(Option<crate::qte::QteAsk>, Option<f32>)>) {
+    use fc3_formats::qte::Kind;
+    let Interface::Running(host) = &*state else { return };
+    let label = |s: &str| fc3_ui::ExternalValue::String(s.to_string());
+    let (was, hide_at) = &mut *shown;
+    // FC3_QTE_TEST=<key> (tests): a mash asked of that key, on and off by the
+    // ten seconds.
+    let test = std::env::var("FC3_QTE_TEST").ok().filter(|_| (time.elapsed_secs() / 10.0) as u32 % 2 == 1);
+    let now = test.map(|key| crate::qte::QteAsk { key, word: "Mash".into(), kind: Kind::Mash }).or_else(|| asking.now.clone());
+    let asking = crate::qte::QteAsking { now, decided: asking.decided, hud_shown: asking.hud_shown };
+    if asking.now == *was {
+        if hide_at.is_some_and(|at| time.elapsed_secs() >= at) {
+            host.dps_frame("ExoticQteContainer_MC", label("QTE_Invisible"));
+            host.event("HideExoticQTEButton", &["0", "HideButton"]);
+            *hide_at = None;
+        }
+        return;
+    }
+    match &asking.now {
+        Some(ask) => {
+            let (glow, up, down) = match ask.key.as_str() {
+                "LMB" => ("PCButton_Mouse", "<img src='PCButton_L_Mouse'/>".to_string(), "<img src='PCButton_L_Mouse_down'/>".to_string()),
+                "RMB" => ("PCButton_Mouse", "<img src='PCButton_R_Mouse'/>".to_string(), "<img src='PCButton_R_Mouse_down'/>".to_string()),
+                key => {
+                    let (glow, cap) = if key.chars().count() <= 2 { ("PCButtonSmall", "PCKeySmallMC") } else { ("PCButtonLarge", "PCKeyLargeMC") };
+                    let id = escape_html(&key.to_uppercase());
+                    (glow, format!("<img src='{cap}_Large' id='{id}'/>"), format!("<img src='{cap}_Large_down' id='{id}'/>"))
+                }
+            };
+            let play = match ask.kind {
+                Kind::Mash => "ActivateMash",
+                Kind::Hold => "ActivateHoldDown",
+                _ => "ActivatePress",
+            };
+            host.dps_frame("ExoticQteContainer_MC", label("QTE_Visible"));
+            // (The movie's own call places the button and plays it in; its
+            // faces are the pad's, which the keycaps then take the place of.)
+            host.event("SetExoticQTEButton", &["0", "button1_up", play, "0", "button1_down"]);
+            for id in ["ExoticQteGlow00_MC", "ExoticQteOuterGlow00_MC"] {
+                host.dps_frame(id, label(glow));
+            }
+            host.dps_html("ExoticQteTextUp00_MC", &up);
+            host.dps_html("ExoticQteTextDown00_MC", &down);
+            host.dps_text("ExoticQteButtonSub00_DT", &ask.word.to_uppercase());
+            debug!("original UI: QTE prompt {} {:?} ({})", ask.key, ask.kind, ask.word);
+            *hide_at = None;
+        }
+        None => {
+            // (Its end as it was decided just now, else just gone.)
+            match asking.decided.filter(|(_, at)| time.elapsed_secs() - at < 0.5) {
+                Some((won, _)) => {
+                    host.event("HideExoticQTEButton", &["0", if won { "Success" } else { "Failure" }]);
+                    host.dps_frame("ExoticQteContainer_MC", label(if won { "QTE_Success" } else { "QTE_Fail" }));
+                    *hide_at = Some(time.elapsed_secs() + QTE_END_SHOWN);
+                }
+                None => {
+                    host.dps_frame("ExoticQteContainer_MC", label("QTE_Invisible"));
+                    host.event("HideExoticQTEButton", &["0", "HideButton"]);
+                }
+            }
+        }
+    }
+    *was = asking.now.clone();
+}
+
+/// How long (s) a decided QTE's prompt plays its end.
+const QTE_END_SHOWN: f32 = 0.8;
+
+/// The HUD's parts (`HideUIElement`'s names) hidden while it shows a
+/// struggle's prompt alone: all but the interaction movie's.
+const QTE_ONLY_HIDES: [&str; 17] = [
+    "ammo",
+    "reticule",
+    "xpindicators",
+    "radar",
+    "weaponswapping",
+    "objectivetimer",
+    "grenadeindicator",
+    "stealthindicator",
+    "playermarkerindicator",
+    "inventory",
+    "loot",
+    "pouch",
+    "repairindicator",
+    "objectiveindicator",
+    "potion",
+    "tutorial",
+    "objective",
+];
 
 /// The reload prompt (the interaction movie's `ReloadMC`, its text by
 /// `SetReloadText`): the game's "[Reload] Reload" while the weapon in hand
