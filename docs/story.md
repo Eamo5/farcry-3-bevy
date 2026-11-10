@@ -6032,6 +6032,15 @@ to SQC_080, each a brief at its giver then its blocks):
   trigger is learned, the marker walked to, and the escape goes on into
   JAS_030. (Runs now each learn into a copy of the fatal list: the campaign
   run had written its wrong lessons into the shared one.)
+* **The first tower again.** JAS_060 then stood still at the scrambler: the
+  autopilot's own take of a tower's panel started it but never finished it
+  (since the camera's flight over the country came in, the finish waits for
+  the flight, and only a player's take played it), so the block waited for
+  `CRadioTowerFinishedEvent` for good, and in the end the autopilot went off
+  to Amanaki's shop keeper, whom a tutorial waits to see used, and failed
+  the mission. Its take now plays the flight and finishes as a player's
+  does; and on a mission it no longer steps into a trigger no mission owns
+  more than 150 m off (`UNOWNED_REACH`). JAS_060 completed, on into JAS_080.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

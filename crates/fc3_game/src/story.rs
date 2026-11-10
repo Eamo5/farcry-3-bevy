@@ -2917,6 +2917,12 @@ fn run_story(
         } else {
             host.story.watched_triggers_unowned(graph.as_deref())
         };
+        // (On a mission, no mission's own far off: JAS_060's player, up the
+        // tower with the scrambler to see to, was sent to Amanaki's shop
+        // keeper a tutorial waits to see used, and the mission failed.)
+        if mission_on && !given_up {
+            watched.retain(|w| to_bevy(w.2).distance(t.translation) < UNOWNED_REACH);
+        }
         // (Not the Lost Expeditions' (`FC3_STORY_AUTOPILOT_DLC` lets it):
         // their labs are entered as places apart, and the autopilot, gone
         // off to the story's missions mid-lab, left a lab's block running
@@ -3364,7 +3370,17 @@ fn run_story(
             if let Some(i) = ways.data.towers.iter().position(|w| Vec3::from(*w) == at) {
                 progress.towers.insert(i as u32);
             }
-            tower_taken(&mut host.story, at);
+            // (Its flight and finish as a player's take has them: taken alone,
+            // JAS_060 waited for the finish for good.)
+            if let Some(panel) = tower_taken(&mut host.story, at) {
+                match tower_flight(&host.story, panel) {
+                    Some((scene, file)) => {
+                        cinema.requests.push(crate::cinema::Request { mode: "play".into(), scene, file: file.clone(), sync: None, meta: None });
+                        host.tower_flights.push((panel, scene, file));
+                    }
+                    None => host.story.radio_tower_finished(panel),
+                }
+            }
             host.quiet = 0.0;
         } else if let Some(signal) = host.story.watched_signals().into_iter().find(|s| s != "throw_rock" && !host.used.contains(&(0, s.clone()))) {
             // No trigger left: give an input a script waits for.
@@ -4874,6 +4890,9 @@ const FATAL_WITHIN: f32 = 2.0;
 const CULPRIT_AT_ONCE: f32 = 0.25;
 /// A script's killing blow this soon (s) after a step was the step's.
 const SCRIPT_KILL_WITHIN: f32 = 5.0;
+/// How near (m) a trigger no mission owns must be for the autopilot, on a
+/// mission, to step into it.
+const UNOWNED_REACH: f32 = 150.0;
 /// As soon after (s), a mission failing; its scripts may warn a while first.
 const FAILED_WITHIN: f32 = 6.0;
 /// How quiet (s) the story is before the autopilot, with nothing else to do
