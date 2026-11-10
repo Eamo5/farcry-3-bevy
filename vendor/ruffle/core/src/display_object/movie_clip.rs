@@ -2306,6 +2306,30 @@ impl<'gc> MovieClip<'gc> {
         graphics
     }
 
+    /// fc3 patch: the text fields this clip's first frame places and how (an
+    /// inline image's words: a keycap's key).
+    pub(crate) fn first_frame_texts(self, library: &MovieLibrary<'gc>) -> Vec<(EditText<'gc>, Matrix)> {
+        let data = self.0.shared.get().swf_data.clone();
+        let mut reader = data.read_from(0);
+        let mut texts = Vec::new();
+        let _ = tag_utils::decode_tags(&mut reader, |reader, tag_code| {
+            let version = match tag_code {
+                TagCode::PlaceObject2 => 2,
+                TagCode::PlaceObject3 => 3,
+                TagCode::ShowFrame => return Ok(ControlFlow::Exit),
+                _ => return Ok(ControlFlow::Continue),
+            };
+            let place = reader.read_place_object_2_or_3(version)?;
+            if let swf::PlaceObjectAction::Place(id) = place.action
+                && let Some(Character::EditText(text)) = library.character_by_id(id)
+            {
+                texts.push((text, place.matrix.map(Matrix::from).unwrap_or_default()));
+            }
+            Ok(ControlFlow::Continue)
+        });
+        texts
+    }
+
     pub fn tag_stream_len(self) -> usize {
         self.0.tag_stream_len()
     }

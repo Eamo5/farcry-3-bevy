@@ -185,6 +185,21 @@ sprite holding one bitmap-filled shape). A line begun by an image takes the
 next line's size from the text going on, not the image's placeholder (a
 2 px space).
 
+**Keycaps.** On PC the game draws the keys a prompt names as keycaps in
+the line: `<img src='PCKeySmallMC' id='E'/>` (`PCKeyLargeMC` for a longer
+name, `id='L-ALT'` as the world map's legend has it), the mouse's buttons
+as their own icons (`PCButton_L_Mouse_Small`...). Scaleform makes the
+image's clip under its `id`, and the keycap's text field reads it
+(`PCKeyTxt.text = _parent._name`). The patch draws those too: an image with
+an `id` draws its symbol's first-frame text fields with the `id` as their
+text, in the field's own font, size, colour and alignment (a format's
+colour carries no alpha: it is drawn opaque). Our prompts then put their
+bound keys in so (`original_ui::keycaps`, from `story::prompt_text`'s
+`[E]`): the interaction prompt (`InteractionText`, now set as HTML), the
+reload line, the tutorial box and the message boxes. Brackets that aren't
+a bound key (a subtitle's "[laughs]") stay as they are, and with a pad in
+hand the text does. (They had read "[E]  Search the body".)
+
 `ruffle_core`'s build compiles Ruffle's ActionScript 3 globals with a Java
 tool, even though these movies are ActionScript 2 (the player sets AVM2 up
 regardless). The patched `vendor/build_playerglobal` reads that compiler's

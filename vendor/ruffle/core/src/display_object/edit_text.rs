@@ -500,6 +500,11 @@ impl<'gc> EditText<'gc> {
         self.0.text_spans.borrow().default_format().clone()
     }
 
+    /// fc3 patch: the field's bounds (an inline image's words go in them).
+    pub(crate) fn fc3_bounds(self) -> Rectangle<Twips> {
+        self.0.bounds.get()
+    }
+
     pub fn set_new_text_format(self, tf: TextFormat) {
         self.0.text_spans.borrow_mut().set_default_format(tf);
     }
@@ -1332,6 +1337,20 @@ impl<'gc> EditText<'gc> {
                 });
                 graphic.render_inline(context);
                 context.transform_stack.pop();
+            }
+            // (And its words: a keycap's key.)
+            for (word, matrix) in image.texts() {
+                word.font.evaluate(&word.text, word.params, |_, transform, glyph, _, _| {
+                    if glyph.renderable(context) {
+                        context.transform_stack.push(&Transform {
+                            matrix: matrix * transform.matrix,
+                            color_transform: transform.color_transform,
+                            ..Default::default()
+                        });
+                        glyph.render(context);
+                        context.transform_stack.pop();
+                    }
+                });
             }
         }
 

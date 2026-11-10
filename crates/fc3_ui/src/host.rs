@@ -310,6 +310,11 @@ impl Host {
         self.dps("dpsText", id, vec![string(value)])
     }
 
+    /// A text field's HTML (a prompt with the keys' keycaps in it).
+    pub fn dps_html(&self, id: &str, value: &str) -> bool {
+        self.dps("dpsHtml", id, vec![string(value)])
+    }
+
     pub fn dps_visible(&self, id: &str, on: bool) -> bool {
         self.dps("dpsVisible", id, vec![ExternalValue::Bool(on)])
     }

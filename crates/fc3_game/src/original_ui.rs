@@ -2921,6 +2921,61 @@ const MISSION_COMPLETE: u32 = 158104;
 /// movie's `SetMissionStart` and `SetMissionTitle`). The objective's box is
 /// `drive_objective`'s.
 #[allow(clippy::type_complexity)]
+/// The game's PC keycaps in a text the movies take as HTML (a prompt, a
+/// tutorial, the reload line): each bound key `story::prompt_text` put in
+/// brackets (`[E]`) drawn as the keycap the movies export, its key the
+/// clip's name (`<img src='PCKeySmallMC' id='E'/>`, as Scaleform names an
+/// image's clip after its `id` and the keycap's field reads it;
+/// `PCKeyLargeMC` for a longer name), the mouse's buttons as their own
+/// icons. Anything else in brackets (a subtitle's "[laughs]") stays, as
+/// does the whole with a pad in hand.
+pub(crate) fn keycaps(text: &str, actions: &crate::controls::ActionState, settings: &crate::settings::Settings) -> String {
+    if actions.gamepad_active {
+        return text.to_string();
+    }
+    let keys: std::collections::HashSet<String> = crate::controls::Action::ALL
+        .iter()
+        .map(|a| actions.label(*a, settings))
+        .chain(["LMB", "RMB", "MMB", "Mouse"].map(String::from))
+        .collect();
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        out.push_str(&rest[..open]);
+        rest = &rest[open..];
+        let Some(close) = rest.find(']') else { break };
+        let key = &rest[1..close];
+        if keys.contains(key) {
+            out.push_str(&keycap(key));
+        } else {
+            out.push_str(&rest[..=close]);
+        }
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// One key's keycap (`keycaps`).
+fn keycap(key: &str) -> String {
+    let icon = |symbol: &str| format!("<img src='{symbol}' vspace='-4'/>");
+    match key {
+        "LMB" => icon("PCButton_L_Mouse_Small"),
+        "RMB" => icon("PCButton_R_Mouse_Small"),
+        "MMB" => icon("PCButton_MouseClick_Small"),
+        "Mouse" => icon("PCButton_MouseMove_Small"),
+        _ => {
+            let symbol = if key.chars().count() <= 2 { "PCKeySmallMC" } else { "PCKeyLargeMC" };
+            format!("<img src='{symbol}' id='{}' vspace='-4'/>", escape_html(&key.to_uppercase()))
+        }
+    }
+}
+
+/// Text made safe to go into HTML as it reads.
+pub(crate) fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('\'', "&apos;")
+}
+
 fn drive_story(
     state: NonSend<Interface>,
     mut ui: ResMut<crate::story::StoryUi>,
@@ -2930,6 +2985,7 @@ fn drive_story(
     (mut commands, time, mut card_shot, mut last_event): (Commands, Res<Time<Real>>, Local<(Option<f32>, u32)>, Local<Option<f32>>),
     mut fade_due: Local<Vec<(&'static str, f32)>>,
     offer: Res<crate::pickups::WeaponOffer>,
+    actions: Res<crate::controls::ActionState>,
 ) {
     let Interface::Running(host) = &*state else { return };
     // A card held a while, then faded as the engine faded it: the same call
@@ -2998,7 +3054,8 @@ fn drive_story(
     let mut ok = true;
     if first || old.1 != now.1 {
         ok &= host.dps_visible("InteractionMC", now.1.is_some());
-        ok &= host.dps_text("InteractionText", now.1.as_deref().unwrap_or(""));
+        // (Its keys as the game's keycaps.)
+        ok &= host.dps_html("InteractionText", &now.1.as_deref().map(|p| keycaps(&escape_html(p), &actions, &settings)).unwrap_or_default());
     }
     if first || old.0 != now.0 {
         match &now.0 {
@@ -3452,7 +3509,7 @@ fn drive_reload(
     }
     if empty {
         if let Some(prompt) = text.prompt(crate::hud::prompt::RELOAD, &actions, &settings) {
-            host.event("SetReloadText", &[&prompt]);
+            host.event("SetReloadText", &[&keycaps(&escape_html(&prompt), &actions, &settings)]);
         }
     }
     host.dps_visible("ReloadMC", empty);
@@ -4709,7 +4766,8 @@ fn drive_tutorial(
 ) {
     let Interface::Running(host) = &*state else { return };
     let text = |s: &str| crate::story::prompt_text(s, &actions, &settings);
-    let now = ui.hints.iter().max_by_key(|(id, _)| **id).map(|(_, (title, body))| (text(title), text(body)));
+    // (The body is the movie's HTML: its keys as the game's keycaps.)
+    let now = ui.hints.iter().max_by_key(|(id, _)| **id).map(|(_, (title, body))| (text(title), keycaps(&text(body), &actions, &settings)));
     if shown.as_ref() == Some(&now) {
         return;
     }
@@ -5005,7 +5063,7 @@ fn drive_boxes(
         true => b.body.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('\n', "<br>"),
         false => b.html.clone(),
     };
-    let body = crate::story::prompt_text(&body, &actions, &settings);
+    let body = keycaps(&crate::story::prompt_text(&body, &actions, &settings), &actions, &settings);
     // (Blanks go as null, which the shim makes blank: Ruffle reads a blank
     // from the host as "null".)
     let value = |s: &str| if s.is_empty() { V::Null } else { fc3_ui::text_value(s) };
@@ -5567,6 +5625,25 @@ fn drive_grenades(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A prompt's bound keys become the game's keycaps (a long name the long
+    /// one, a mouse button its icon); other brackets and a pad's keys stay.
+    #[test]
+    fn prompts_take_the_games_keycaps() {
+        use crate::controls::{Action, ActionState, Binding};
+        let mut settings = crate::settings::Settings::default();
+        settings.rebind(Action::Interact, Binding::Key(KeyCode::KeyV));
+        settings.rebind(Action::Jump, Binding::Key(KeyCode::Space));
+        let mut actions = ActionState::default();
+        let text = crate::story::prompt_text("HOLD [Interact] to gather [laughs] [Jump] [Fire]", &actions, &settings);
+        assert_eq!(
+            keycaps(&text, &actions, &settings),
+            "HOLD <img src='PCKeySmallMC' id='V' vspace='-4'/> to gather [laughs] <img src='PCKeyLargeMC' id='SPACE' vspace='-4'/> \
+             <img src='PCButton_L_Mouse_Small' vspace='-4'/>"
+        );
+        actions.gamepad_active = true;
+        assert_eq!(keycaps("[A] Jump", &actions, &settings), "[A] Jump");
+    }
     use fc3_formats::progression::{Ability, Branch, SkillTree};
 
     /// The skills page buys by tree and index in it, in the tree's order,

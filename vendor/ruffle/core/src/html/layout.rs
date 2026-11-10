@@ -158,7 +158,7 @@ impl<'a, 'gc> LayoutBuilder<'a, 'gc> {
 
         // fc3 patch: an image takes its symbol's width on the line.
         if let Some(image) = &span.image
-            && let Some(inline) = self.context.inline_image(&image.src, self.movie)
+            && let Some(inline) = self.context.inline_image(&image.src, image.id.as_deref(), self.movie)
         {
             self.lay_out_image(span_start, span_text, span, image, inline);
             return;
@@ -1133,31 +1133,58 @@ pub struct InlineImage<'gc> {
     graphics: Vec<Graphic<'gc>>,
     #[collect(require_static)]
     matrices: Vec<Matrix>,
+    /// fc3 patch: its text fields' words (a keycap's key, the `<img>`'s
+    /// `id`, as its clip's script names the field's text after the clip).
+    texts: Vec<InlineText<'gc>>,
     #[collect(require_static)]
     bounds: Rectangle<Twips>,
     #[collect(require_static)]
     hspace: Twips,
 }
 
+/// fc3 patch: a word in an inline image, in a font, a size and a colour,
+/// its line's left end at the baseline's height placed by `matrix`.
+#[derive(Clone, Collect)]
+#[collect(no_drop)]
+pub struct InlineText<'gc> {
+    pub font: Font<'gc>,
+    #[collect(require_static)]
+    pub text: crate::string::WString,
+    #[collect(require_static)]
+    pub params: EvalParameters,
+    #[collect(require_static)]
+    pub matrix: Matrix,
+}
+
 impl<'gc> InlineImage<'gc> {
     /// None without shapes to draw.
-    pub fn new(parts: Vec<(Graphic<'gc>, Matrix)>) -> Option<Self> {
+    pub fn new(parts: Vec<(Graphic<'gc>, Matrix)>, texts: Vec<InlineText<'gc>>) -> Option<Self> {
         let bounds = parts.iter().fold(Rectangle::default(), |b: Rectangle<Twips>, (g, m)| b.union(&(*m * g.inline_bounds())));
         if !bounds.is_valid() || bounds.width() <= Twips::ZERO || bounds.height() <= Twips::ZERO {
             return None;
         }
         let (graphics, matrices) = parts.into_iter().unzip();
-        Some(Self { graphics, matrices, bounds, hspace: Twips::ZERO })
+        Some(Self { graphics, matrices, texts, bounds, hspace: Twips::ZERO })
     }
 
     fn with_hspace(self, hspace: Twips) -> Self {
         Self { hspace, ..self }
     }
 
+    fn to_box(&self) -> Matrix {
+        Matrix::translate(self.hspace - self.bounds.x_min, -self.bounds.y_min)
+    }
+
     /// Its shapes, each placed about the box's top left.
     pub fn parts(&self) -> impl Iterator<Item = (Graphic<'gc>, Matrix)> + '_ {
-        let to_box = Matrix::translate(self.hspace - self.bounds.x_min, -self.bounds.y_min);
+        let to_box = self.to_box();
         self.graphics.iter().zip(&self.matrices).map(move |(g, m)| (*g, to_box * *m))
+    }
+
+    /// fc3 patch: its words, each placed about the box's top left.
+    pub fn texts(&self) -> impl Iterator<Item = (&InlineText<'gc>, Matrix)> + '_ {
+        let to_box = self.to_box();
+        self.texts.iter().map(move |t| (t, to_box * t.matrix))
     }
 }
 
