@@ -4685,9 +4685,13 @@ fn run_story(
             h.current = h.max;
         }
     }
+    // (`FC3_STORY_CONSOLE`, tests: the scripts' own console lines too.)
+    let console = std::env::var_os("FC3_STORY_CONSOLE").is_some();
     for line in host.story.take_log() {
         if !line.starts_with("console:") {
             debug!("story: {line}");
+        } else if console {
+            info!("story {line}");
         }
     }
     let unknown = host.story.take_unknown_calls();

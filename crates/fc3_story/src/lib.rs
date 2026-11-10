@@ -950,7 +950,10 @@ impl Story {
             for group in groups {
                 let members = c.groups(&values::Text(group.clone()));
                 if !members.contains(&id) { continue; }
-                let count = members.iter().filter(|&&e| c.is_loaded(e) && !c.dead.contains(&e)).count();
+                // (Living as the rest of the story counts them: not one
+                // removed, nor one the host has dead. SQA_C6's count ended
+                // on 1 with its twelve dogs dead.)
+                let count = members.iter().filter(|&&e| c.is_loaded(e) && !c.is_dead(e)).count();
                 c.raise(&Listen::Group(group.clone(), "CGroupSizeEvent".into()), vec![
                     Arg::Str("CGroupSizeEvent".into()), Arg::Str("MemberRemoved".into()), Arg::Num(count as f64),
                 ]);
@@ -988,6 +991,14 @@ impl Story {
             "CCounterEvent",
             vec![Arg::Num(counter), Arg::Num(old as f64), Arg::Num(new as f64), Arg::id(by), Arg::Str(source.to_string()), Arg::id(pawn), Arg::Str(emitter)],
         );
+        // (Killed by it: dead now, its death heard straight after its health,
+        // as the engine has each death's events one after another. Two dogs
+        // killed by one rocket had both healths heard, then both deaths, and
+        // SQA_C6's count, waiting on a kill and a member gone in turn, kept
+        // one behind for good.)
+        if new <= 0.0 && old > 0.0 && pawn != PLAYER {
+            self.killed(pawn);
+        }
     }
 
     /// A character reached its contextual action and began it.
@@ -2736,6 +2747,45 @@ mod tests {
             assert_eq!(listener.get::<u32>("received").unwrap(), 2);
             assert_eq!(listener.get::<u32>("memberCount").unwrap(), 0);
         }
+        assert_eq!(story.errors(), 0);
+    }
+
+    /// A member's health falling to nothing is its death, heard straight
+    /// after the health (each death's events together: SQA_C6's two dogs
+    /// killed by one rocket had both healths heard before either death, and
+    /// its count stayed one behind), and the host's own report of it after
+    /// changes nothing.
+    #[test]
+    #[ignore = "requires FC3_TEST_CACHE pointing at converted installed-game assets"]
+    fn installed_health_falling_to_nothing_is_heard_as_the_members_death_in_turn() {
+        let cache = std::path::PathBuf::from(std::env::var("FC3_TEST_CACHE").expect("set FC3_TEST_CACHE"));
+        let pack = ScriptPack::from_bytes(&std::fs::read(cache.join(fc3_formats::scripts::DOMINO_PACK_REL)).unwrap()).unwrap();
+        let mut data = StoryData::default();
+        data.groups.insert(0x12345678, vec![10, 11]);
+        let mut story = Story::new(pack, data).unwrap();
+        let mut view = View::default();
+        for id in [10, 11] { view.spawned.insert(id, Live { alive: true, ..Default::default() }); }
+        story.update(0.0, view);
+        let lua = story.domino().lua().clone();
+        let heard = lua.create_table().unwrap();
+        lua.globals().set("heard", heard.clone()).unwrap();
+        let listener = story.domino().create("Domino/System/GroupSizeListener_v4.lua").unwrap();
+        listener.set("group", "#12345678").unwrap();
+        listener.set("autoDisable", false).unwrap();
+        for output in ["Enabled", "Disabled", "MemberAdded"] {
+            listener.set(output, lua.globals().get::<mlua::Function>("DummyFunction").unwrap()).unwrap();
+        }
+        listener.set("MemberRemoved", lua.load("return function(self) table.insert(heard, 'removed ' .. self.memberCount) end").eval::<mlua::Function>().unwrap()).unwrap();
+        story.domino().call(&listener, "Enable").unwrap();
+        let counter = lua.load("local class = { OnCounter = function(self, event, counter, old, new, by, source, victim) table.insert(heard, 'health ' .. victim .. ' ' .. new) end }; return { _type = class }").eval::<mlua::Table>().unwrap();
+        story.core.borrow_mut().listen(Listen::Group("#12345678".into(), "CCounterEvent".into()), crate::core::Callback { target: counter, method: "OnCounter".into() });
+        story.health_changed(10, 100.0, 0.0, PLAYER, "explosion", Some("RPG-7_Rocket"));
+        story.health_changed(11, 100.0, 0.0, PLAYER, "explosion", Some("RPG-7_Rocket"));
+        story.update(0.0, View::default());
+        story.killed(10);
+        story.killed(11);
+        let order: Vec<String> = heard.sequence_values::<String>().map(Result::unwrap).collect();
+        assert_eq!(order, ["health 10 0", "removed 1", "health 11 0", "removed 0"]);
         assert_eq!(story.errors(), 0);
     }
 

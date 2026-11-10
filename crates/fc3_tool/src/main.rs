@@ -2117,15 +2117,23 @@ fn main() -> Result<()> {
             println!("{hits} files");
         }
         "bytes-find" => {
-            // Files (by path filter) holding any of the given little-endian u64s (hex): bytes-find <filter> <hex>...
+            // Files (by path filter) holding any of the given little-endian u64s (hex; eight digits or
+            // fewer, a u32: a field's name hash): bytes-find <filter> <hex>...
             let filter = args.get(1).context("usage: bytes-find <path filter> <hex u64>...")?.to_ascii_lowercase();
-            let needles: Vec<(String, [u8; 8])> = args[2..].iter().filter_map(|h| u64::from_str_radix(h.trim_start_matches("0x"), 16).ok().map(|v| (h.clone(), v.to_le_bytes()))).collect();
+            let needles: Vec<(String, Vec<u8>)> = args[2..]
+                .iter()
+                .filter_map(|h| {
+                    let digits = h.trim_start_matches("0x");
+                    let v = u64::from_str_radix(digits, 16).ok()?;
+                    Some((h.clone(), if digits.len() <= 8 { (v as u32).to_le_bytes().to_vec() } else { v.to_le_bytes().to_vec() }))
+                })
+                .collect();
             let mut hits = 0;
             for (h, name) in &vfs.names {
                 if !name.to_ascii_lowercase().contains(&filter) { continue; }
                 let Ok(bytes) = vfs.read_hash(*h) else { continue };
                 for (label, n) in &needles {
-                    let count = bytes.windows(8).filter(|w| *w == n).count();
+                    let count = bytes.windows(n.len()).filter(|w| *w == n.as_slice()).count();
                     if count > 0 { println!("{label} x{count} {name}"); hits += 1; }
                 }
             }

@@ -6006,7 +6006,19 @@ to SQC_080, each a brief at its giver then its blocks):
   failed ("You did not use an RPG.") the moment a rocket killed any: its
   check (`AnimalSQWeaponsClassCheck`) takes a blast whose weapon is the
   rocket (`RPG-7_Rocket`), and our blasts named none. A blast hurting the
-  story's characters with the launcher in hand names its rocket now.
+  story's characters with the launcher in hand names its rocket now. Then
+  it ended on "Animals remaining: 1" with all twelve dogs dead. The count
+  moves on when a `MultipleAND` has both the kill (the health listener's
+  `Killed`, through the weapon check) and the member gone (the group size
+  listener's `MemberRemoved`); one rocket killing two dogs had both healths
+  heard, then both deaths, so the AND fired once for the pair and stayed a
+  kill ahead, showing each count one late and never the last. A health
+  falling to nothing is now the pawn's death at once (`Story::health_changed`
+  calls `killed`), as the engine has each death's events together; the
+  host's own report after it changes nothing. The group counts also leave
+  out the ones the host has dead (`is_dead`, not only those the story was
+  told of). SQA_C6 completed. `FC3_STORY_CONSOLE=1` logs the scripts' own
+  console lines (`LogConsole`) at info.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.
