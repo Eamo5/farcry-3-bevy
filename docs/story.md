@@ -6019,6 +6019,19 @@ to SQC_080, each a brief at its giver then its blocks):
   out the ones the host has dead (`is_dead`, not only those the story was
   told of). SQA_C6 completed. `FC3_STORY_CONSOLE=1` logs the scripts' own
   console lines (`LogConsole`) at info.
+* **Whose death.** A fresh campaign run stood still in JAS_020's escape.
+  The trigger by Vaas's camp (`ProximityTrigger_SpawnEnemies`) lets the
+  pirates loose and, if the player is still in it 2 s on, has him shot (a
+  health manager's `Cancelled`, a killing `HealthModifier`). The autopilot,
+  stepping in, was dead as it stepped out again, and the leaving was
+  learned as fatal; the next time the walk to the objective's marker begun
+  as he died was. The death is now put down to the step before when the
+  last one was taken under 0.25 s before it and wasn't into a trigger (a
+  leaving, a walk: only a death volume kills on the spot), a script's
+  killing blow up to 5 s after the step (`StoryHost::culprit`). The
+  trigger is learned, the marker walked to, and the escape goes on into
+  JAS_030. (Runs now each learn into a copy of the fatal list: the campaign
+  run had written its wrong lessons into the shared one.)
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

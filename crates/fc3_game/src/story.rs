@@ -933,6 +933,8 @@ pub struct StoryHost {
     /// at once (CIT_020 B30's escaping-on-foot box), left alone since, over
     /// reloads.
     last_step: Option<(u64, String, f32)>,
+    /// The step before it (`StoryHost::culprit`).
+    prev_step: Option<(u64, String, f32)>,
     fatal: Fatal,
     /// Radio towers' panels whose camera flight plays (panel, scene, file):
     /// each is done once its flight is over.
@@ -1083,6 +1085,36 @@ pub struct StoryHost {
 }
 
 impl StoryHost {
+    /// The autopilot took a step (into a trigger, out of one, toward a
+    /// marker), the one before kept.
+    fn stepped(&mut self, id: u64, event: &str, now: f32) {
+        self.prev_step = self.last_step.replace((id, event.to_string(), now));
+    }
+
+    /// The step a death or a failure now is put down to: the last one taken
+    /// within `within` s; but one taken just now that couldn't have done it
+    /// at once (a trigger left, a walk begun: only stepping into a death
+    /// volume kills on the spot) is passed over for the one before. (JAS_020's
+    /// escape shoots the player who lingers 2 s in the trigger by the camp;
+    /// he was dead as the autopilot left it, and the leaving was learned,
+    /// then the walk to the next marker begun as he died, and the mission
+    /// stood still for good.)
+    fn culprit(&mut self, now: f32, within: f32) -> Option<(u64, String, f32)> {
+        let last = self.last_step.as_ref()?;
+        if now - last.2 < CULPRIT_AT_ONCE && last.1 != "Enter" {
+            if self.prev_step.as_ref().is_some_and(|p| now - p.2 < within + CULPRIT_AT_ONCE) {
+                self.last_step = None;
+                return self.prev_step.take();
+            }
+            return None;
+        }
+        if now - last.2 < within {
+            self.prev_step = None;
+            return self.last_step.take();
+        }
+        None
+    }
+
     /// Back to the last checkpoint as play resumes (the pause menu's "last
     /// checkpoint").
     pub(crate) fn reload_checkpoint(&mut self, now: f32) {
@@ -1230,6 +1262,7 @@ impl StoryHost {
             recent: Default::default(),
             used: Default::default(),
             last_step: None,
+            prev_step: None,
             fatal: fatal_learned(),
             tower_flights: Vec::new(),
             objective_before: None,
@@ -2324,7 +2357,7 @@ fn run_story(
     // the burning fuel truck, stepped into, put the player in its fire.)
     let fell = stats.single().is_ok_and(|s| s.last_hurt == crate::combat::DamageKind::Fall);
     if dead && !host.was_dead {
-        if let Some((id, event, _)) = host.last_step.take_if(|s| now - s.2 < if fell { FALL_FATAL_WITHIN } else { FATAL_WITHIN }) {
+        if let Some((id, event, _)) = host.culprit(now, if fell { FALL_FATAL_WITHIN } else { FATAL_WITHIN }) {
             let ids = if fell { fatal_namesakes(&host.story.data(), id) } else { vec![id] };
             info!("story autopilot: {event} {} let the player die; it and {} like it left alone from now", host.story.data().name_of(id).unwrap_or("?"), ids.len() - 1);
             for i in ids {
@@ -3091,7 +3124,7 @@ fn run_story(
             if let Some((id, event, point, _)) = next.filter(|_| !cinema.drives_vehicle()) {
                 info!("story autopilot: drive {} {}", if event == "EnterFOV" { "up to" } else { "into" }, data.name_of(*id).unwrap_or("?"));
                 host.used.insert((*id, event.clone()));
-                host.last_step = Some((*id, event.clone(), now));
+                host.stepped(*id, event, now);
                 if event == "EnterFOV" {
                     let at = to_bevy(host.story.look_at_point(*id).unwrap_or(*point));
                     let mut from = at + Vec3::Z * FOV_DRIVE_BACK;
@@ -3147,7 +3180,7 @@ fn run_story(
         } else if let Some((id, at)) = leave {
             info!("story autopilot: Leave {}", data.name_of(id).unwrap_or("?"));
             host.used.insert((id, "Leave".into()));
-            host.last_step = Some((id, "Leave".into(), now));
+            host.stepped(id, "Leave", now);
             teleport(&mut t, &mut p, at, 0.0);
             host.quiet = 0.0;
         } else if let Some((id, at)) = destructible {
@@ -3159,7 +3192,7 @@ fn run_story(
         } else if let Some((id, event, point, _)) = next {
             info!("story autopilot: {event} {}", data.name_of(*id).unwrap_or("?"));
             host.used.insert((*id, event.clone()));
-            host.last_step = Some((*id, event.clone(), now));
+            host.stepped(*id, event, now);
             // A region: somewhere its heights reach the ground.
             let ground = |x: f32, y: f32, top: f32| ground_under(&spatial, &heights, x, y, top);
             let point = host.story.trigger_ground_point(*id, ground).unwrap_or(*point);
@@ -3246,7 +3279,7 @@ fn run_story(
             // still at the end).
             info!("story autopilot: near {} ({radius} m)", data.name_of(id).unwrap_or("?"));
             host.used.insert((id, format!("near {radius}")));
-            host.last_step = Some((id, format!("near {radius}"), now));
+            host.stepped(id, &format!("near {radius}"), now);
             host.near_at.insert(id, now);
             let at = to_bevy(point);
             let side = (t.translation - at).with_y(0.0).normalize_or(Vec3::Z);
@@ -3279,7 +3312,7 @@ fn run_story(
             // (One that fails the mission is left alone under its objective:
             // HUR_040's zone marker, gone to, failed its barge's defence on
             // every reload.)
-            host.last_step = Some((id, "go to".into(), now));
+            host.stepped(id, "go to", now);
             let side = (t.translation - at).with_y(0.0).normalize_or(Vec3::Z);
             let mut stand = at + side * MARKER_WALK_SHORT;
             stand.y = heights.height_at(stand).unwrap_or(at.y);
@@ -3399,7 +3432,7 @@ fn run_story(
                 }
                 // (A few seconds on too: CIT_060's brief fails one stepped
                 // into its stuck-below region after a 4 s warning.)
-                if let Some((id, event, _)) = host.last_step.take_if(|s| now - s.2 < FAILED_WITHIN) {
+                if let Some((id, event, _)) = host.culprit(now, FAILED_WITHIN) {
                     info!("story autopilot: {event} {} failed the mission; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
                     learn_fatal(&mut host.fatal, id, event, host.objective_before);
                 }
@@ -3686,8 +3719,10 @@ fn run_story(
                             // that trigger is left alone from now. (An older
                             // step is kept: a fall into a death volume a
                             // while after it is the step's, BAM_040's path.)
+                            // (Some kill a while on: JAS_020's escape shoots
+                            // one who lingers 2 s by the camp.)
                             if pawn == fc3_story::PLAYER && amount >= KILLING_BLOW {
-                                if let Some((id, event, _)) = host.last_step.take_if(|s| now - s.2 < FATAL_WITHIN) {
+                                if let Some((id, event, _)) = host.culprit(now, SCRIPT_KILL_WITHIN) {
                                     info!("story autopilot: {event} {} killed the player; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
                                     learn_fatal(&mut host.fatal, id, event, None);
                                 }
@@ -4834,6 +4869,11 @@ const DESTROY_REACH: f32 = 80.0;
 /// A mission failing this soon after the autopilot stepped into a trigger
 /// failed for it.
 const FATAL_WITHIN: f32 = 2.0;
+/// A step taken this soon (s) before a death is passed over for the one
+/// before (`StoryHost::culprit`), unless it stepped into a trigger.
+const CULPRIT_AT_ONCE: f32 = 0.25;
+/// A script's killing blow this soon (s) after a step was the step's.
+const SCRIPT_KILL_WITHIN: f32 = 5.0;
 /// As soon after (s), a mission failing; its scripts may warn a while first.
 const FAILED_WITHIN: f32 = 6.0;
 /// How quiet (s) the story is before the autopilot, with nothing else to do
