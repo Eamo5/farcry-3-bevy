@@ -247,6 +247,19 @@ impl Host {
         Ok(Self { player, bridge, executor, profile: Default::default() })
     }
 
+    /// Draws over a colour instead of nothing (`None`: see-through again): a
+    /// movie drawn with multiplying blends needs a white to multiply.
+    pub fn set_background(&self, rgb: Option<[u8; 3]>) {
+        let mut player = self.player.lock().unwrap();
+        match rgb {
+            Some([r, g, b]) => {
+                player.set_window_mode("opaque");
+                player.set_background_color(Some(ruffle_core::Color { r, g, b, a: 255 }));
+            }
+            None => player.set_window_mode("transparent"),
+        }
+    }
+
     /// Answers the engine gives to the movies' `Get`s (`IsHighDefinition`,
     /// `GetLanguage`...; `Platform` for `GetPlatform`).
     pub fn answer(&self, key: &str, value: &str) {

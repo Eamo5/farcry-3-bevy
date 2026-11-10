@@ -604,6 +604,24 @@ only what changed (and everything again until the movies have loaded):
   round the centre (`HitIndicator_<n>` from frame 2; it fades over its 23
   frames and turns itself off), turned toward where the hit came from
   (`PlayerStats::hurt_dir`).
+* **Blood on the screen**: `UI\Singleplayer\Hud\Damage\H_Blood.feu` (the
+  engine's `CFCXHudBloodUI`; `original_ui/blood.rs`) had never been
+  driven. Its splatters and darkening edges are drawn with Flash's
+  multiply blend, which needs the game under them: in the HUD's
+  see-through canvas they come out as white squares. So it plays in a
+  player of its own, cleared to white, at half the window's size, and its
+  canvas multiplies the scene under the HUD (`blood.wgsl`, a UI material
+  whose pipeline blends `dst * src`; white leaves the game as it is, and
+  the node is hidden when nothing shows). A hit with a way it came from
+  (not a fall, a fire or the air running out) shows the one of the eight
+  `BloodMC_<n>` round the screen toward it (0 at the top, then round by
+  the left, 45 degrees apart): `HitDamage`'s splash, or an animal's claw
+  marks (`AnimalDamage`, played on); it holds a second and fades over 1.5
+  (`_alpha`). `WaterEffect`'s smoky edges (101 frames in) close in under
+  water as the breath falls below the player's critical oxygen
+  (`fCriticalOxygen`, 0.4 of the most, in the player's template), and go
+  as the player comes up. (The claw marks are drawn with a plain blend in
+  the movie; multiplied with the rest they come out a little darker.)
 * **Grenade indicators**: the three nearest live grenades within
   `hud::GRENADE_WARN` each turn a `GrenadeIndicator_<n>` toward them (its
   `_rotation`); the others hide.

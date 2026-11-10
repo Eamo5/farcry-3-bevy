@@ -31,6 +31,7 @@ use bevy::ui_render::prelude::{MaterialNode, UiMaterial, UiMaterialPlugin};
 use bevy::window::PrimaryWindow;
 use fc3_ui::wgpu;
 
+mod blood;
 mod frontend;
 mod shop;
 mod views;
@@ -83,6 +84,7 @@ impl Plugin for OriginalUiPlugin {
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render.add_systems(Render, hand_back_texture.in_set(RenderSystems::PrepareResources));
         }
+        blood::build(app);
     }
 
     fn finish(&self, app: &mut App) {
@@ -5588,14 +5590,14 @@ mod tests {
         });
         let mut progress = crate::progression::Progress { skill_points: 1, ..Default::default() };
         // The first tree's second is `a_next`, which waits for its root.
-        assert!(!buy_skill(&mut progress, &skills, 0, 1));
-        assert!(buy_skill(&mut progress, &skills, 0, 0));
+        assert!(buy_skill(&mut progress, &skills, 0, 1).is_none());
+        assert!(buy_skill(&mut progress, &skills, 0, 0).is_some());
         assert!(progress.skills.contains("a_root") && progress.skill_points == 0);
         // No points left; no such tree.
-        assert!(!buy_skill(&mut progress, &skills, 1, 0));
+        assert!(buy_skill(&mut progress, &skills, 1, 0).is_none());
         progress.skill_points = 1;
-        assert!(!buy_skill(&mut progress, &skills, 5, 0));
-        assert!(buy_skill(&mut progress, &skills, 0, 1));
+        assert!(buy_skill(&mut progress, &skills, 5, 0).is_none());
+        assert!(buy_skill(&mut progress, &skills, 0, 1).is_some());
     }
 
     /// The movie knows tattoo parts by the CRC-32 of their names.
