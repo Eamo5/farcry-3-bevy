@@ -2959,7 +2959,7 @@ pub(crate) fn keycaps(text: &str, actions: &crate::controls::ActionState, settin
     let keys: std::collections::HashSet<String> = crate::controls::Action::ALL
         .iter()
         .map(|a| actions.label(*a, settings))
-        .chain(["LMB", "RMB", "MMB", "Mouse"].map(String::from))
+        .chain(["LMB", "RMB", "MMB", "Mouse", "Esc", "Enter"].map(String::from))
         .collect();
     let mut out = String::with_capacity(text.len());
     let mut rest = text;

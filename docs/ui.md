@@ -198,7 +198,15 @@ bound keys in so (`original_ui::keycaps`, from `story::prompt_text`'s
 `[E]`): the interaction prompt (`InteractionText`, now set as HTML), the
 reload line, the tutorial box and the message boxes. Brackets that aren't
 a bound key (a subtitle's "[laughs]") stay as they are, and with a pad in
-hand the text does. (They had read "[E]  Search the body".)
+hand the text does. (They had read "[E]  Search the body".) The message
+boxes' `[Enter]` and `[Esc]` are keycaps too. The game's strings name keys
+by names of their own, now each read as its key: `[IronSight]` the aim,
+`[Throw]` a grenade, `[Run]` and `[HoldBreath]` the sprint key, `[Climb]`
+the jump, `[Shoot]` and `[TakePicture]` firing, `[EquipCamera]` tagging,
+`[Accelerate]`/`[Brake]` forward and back; and some for several keys:
+`[Move]` the four (`[W]/[A]/[S]/[D]`), `[Steer]` left and right,
+`[ZipSpeed]` forward and back, `[Look]` the mouse, `[Start]` Esc (with a pad
+the stick or button). They had been left in brackets as they were.
 
 `ruffle_core`'s build compiles Ruffle's ActionScript 3 globals with a Java
 tool, even though these movies are ActionScript 2 (the player sets AVM2 up

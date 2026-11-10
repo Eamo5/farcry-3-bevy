@@ -50,7 +50,7 @@ impl Plugin for StoryPlugin {
             .add_systems(Update, story_blasts.after(StorySet).before(crate::breakables::BreakablesSet))
             .add_systems(Update, (story_damage, story_searches).after(StorySet))
             .add_systems(PreUpdate, story_boxes.after(crate::controls::update_actions))
-            .add_systems(PreUpdate, story_interactions.after(story_boxes))
+            .add_systems(PreUpdate, (story_interactions, script_message).chain().after(story_boxes))
             .add_systems(PreUpdate, autopilot_loot.after(story_interactions).before(crate::controls::apply_action_maps).run_if(in_state(GameState::Playing)))
             .add_systems(PreUpdate, collect_shop_purchases)
             .add_systems(PreUpdate, collect_loot)
@@ -1431,6 +1431,10 @@ pub struct ScriptedPlayer {
     pub movement: f32,
     pub god: bool,
     pub hud_hidden: bool,
+    /// A line a script holds in the interaction prompt, by its string
+    /// (`DisplayInteractionMessageUI`: SAM_020's "[Shoot] Detonate" on the
+    /// helicopter).
+    pub message: Option<u32>,
     /// Black over the screen: (now, target, seconds to get there).
     pub fade: (f32, f32, f32),
     /// Seconds the screen has been held black (a scene lifts it; this is
@@ -1534,6 +1538,7 @@ impl Default for ScriptedPlayer {
             movement: 1.0,
             god: false,
             hud_hidden: false,
+            message: None,
             fade: (0.0, 0.0, 0.0),
             black_for: 0.0,
             backup: None,
@@ -2031,7 +2036,20 @@ pub(crate) fn prompt_text(text: &str, actions: &crate::controls::ActionState, se
         out.push_str(&rest[..open]);
         rest = &rest[open..];
         let Some(close) = rest.find(']') else { break };
-        if let Some(action) = crate::controls::Action::from_prompt(&rest[1..close]) {
+        use crate::controls::Action;
+        // (Several keys for one: walking, steering, a zip line's speed.)
+        let keys = |list: &[Action]| list.iter().map(|a| format!("[{}]", actions.label(*a, settings))).collect::<Vec<_>>().join("/");
+        let several = match rest[1..close].to_ascii_lowercase().as_str() {
+            "move" => Some(if actions.gamepad_active { "[Left stick]".to_string() } else { keys(&[Action::Forward, Action::Left, Action::Back, Action::Right]) }),
+            "steer" => Some(if actions.gamepad_active { "[Left stick]".to_string() } else { keys(&[Action::Left, Action::Right]) }),
+            "zipspeed" => Some(if actions.gamepad_active { "[Left stick]".to_string() } else { keys(&[Action::Forward, Action::Back]) }),
+            "look" => Some(if actions.gamepad_active { "[Right stick]" } else { "[Mouse]" }.to_string()),
+            "start" => Some(if actions.gamepad_active { "[Start]" } else { "[Esc]" }.to_string()),
+            _ => None,
+        };
+        if let Some(text) = several {
+            out.push_str(&text);
+        } else if let Some(action) = Action::from_prompt(&rest[1..close]) {
             out.push_str(&format!("[{}]", actions.label(action, settings)));
         } else if rest[1..close].eq_ignore_ascii_case("MapFastTravel") {
             out.push_str(if actions.gamepad_active { "[A]" } else { "[LMB]" });
@@ -4079,6 +4097,11 @@ fn run_story(
                             .map(|z| z.0);
                         scripted_map.open = Some(true);
                     }
+                    // A line held in the interaction prompt (`show, string`;
+                    // `false, -1` takes it down).
+                    "DisplayInteractionMessageUI" => {
+                        scripted.message = (a(0) == "true" || a(0) == "1").then(|| a(1).parse::<u32>().ok()).flatten();
+                    }
                     // The privateer's uniform on or off (HOY_020 on: Hoyt's
                     // men take the player for one of theirs from then on,
                     // `pass_for_privateer`), its tutorial once.
@@ -4874,6 +4897,22 @@ pub(crate) fn story_interactions(
     }
 }
 
+/// The line a script holds in the interaction prompt (`ScriptedPlayer::message`),
+/// unless something nearer to hand has it.
+fn script_message(
+    host: Option<NonSend<StoryHost>>,
+    scripted: Res<ScriptedPlayer>,
+    mut hud: ResMut<crate::hud::HudState>,
+    (actions, settings): (Res<crate::controls::ActionState>, Res<crate::settings::Settings>),
+) {
+    let (Some(host), Some(id)) = (host, scripted.message) else { return };
+    if hud.prompt.is_none() {
+        if let Some(text) = host.story.data().strings.get(id) {
+            hud.prompt = Some(prompt_text(&plain(text), &actions, &settings));
+        }
+    }
+}
+
 /// How near a door a script waits to see opened a trigger must be for the
 /// autopilot to walk through the door rather than step into the trigger.
 const DOOR_REACH: f32 = 12.0;
@@ -4890,6 +4929,8 @@ const FATAL_WITHIN: f32 = 2.0;
 const CULPRIT_AT_ONCE: f32 = 0.25;
 /// A script's killing blow this soon (s) after a step was the step's.
 const SCRIPT_KILL_WITHIN: f32 = 5.0;
+/// How near (m) the autopilot swings the machete from (its reach is 2.4).
+const MACHETE_REACH: f32 = 1.8;
 /// How near (m) a trigger no mission owns must be for the autopilot, on a
 /// mission, to step into it.
 const UNOWNED_REACH: f32 = 150.0;
@@ -6729,6 +6770,41 @@ fn autopilot_loot(
                 return;
             }
         }
+        // Nothing left to fire and nothing about to fire (no rounds, no gun
+        // or body near): the machete, up close. (JAS_100's pirates, alert,
+        // were fired at with an empty pistol for two hours.)
+        let spent = inventory.slots.iter().all(|s| inventory.defs[s.def].class == crate::weapons::WeaponClass::Melee || s.mag + s.reserve == 0);
+        let blade = inventory.slots.iter().any(|s| inventory.defs[s.def].class == crate::weapons::WeaponClass::Melee);
+        if spent && blade && !fixed && !sniping && player.mounted.is_none() {
+            let delta = nt.translation - at.translation;
+            if Vec2::new(delta.x, delta.z).length() > MACHETE_REACH || delta.y.abs() > 1.5 {
+                let mut feet = nt.translation - delta.with_y(0.0).normalize_or(Vec3::Z) * (MACHETE_REACH - 0.4);
+                feet.y = feet_near(&spatial, &heights, me, feet, nt.translation.y - crate::player::HALF_HEIGHT);
+                if leashed(feet) {
+                    info!("story autopilot: {} too far from the companion for the machete; another for a while", actor.id);
+                    skipped.insert(actor.id, now + 20.0);
+                    *shooting = None;
+                    return;
+                }
+                if *last != Some((actor.id, "machete")) {
+                    info!("story autopilot: dry; the machete for {}", actor.id);
+                    *last = Some((actor.id, "machete"));
+                }
+                teleport(&mut at, &mut player, to_dunia(feet), 0.0);
+                host.quiet = 0.0;
+                return;
+            }
+            let chest = nt.translation + Vec3::Y * 0.3 - (at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT));
+            player.yaw = (-chest.x).atan2(-chest.z);
+            player.pitch = chest.y.atan2(Vec2::new(chest.x, chest.z).length().max(0.3));
+            if now >= *next_press && !player.spawning {
+                *next_press = now + 0.35;
+                use crate::controls::Action;
+                // (Melee takes the machete out; fire swings it.)
+                actions.press(if inventory.def().class == crate::weapons::WeaponClass::Melee { Action::Fire } else { Action::Melee });
+            }
+            return;
+        }
         // On foot and beyond the guns' reach: nearer first.
         let reach = inventory
             .slots
@@ -8069,6 +8145,8 @@ mod tests {
         assert_eq!(prompt_text("[GadgetWheel] / [WeaponWheelSelect] / [SwitchWeapon]", &actions, &settings), "[T] / [Mouse] / [T]");
         assert_eq!(prompt_text("[Interact] Use — [ThrowRock] Distract [unknown] [unfinished", &actions, &settings),
             "[V] Use — [MMB] Distract [unknown] [unfinished");
+        // (The game's other names for the keys, and those for several.)
+        assert_eq!(prompt_text("[Shoot] Detonate, [IronSight] Aim, [Move] Walk, [Look]", &actions, &settings), "[LMB] Detonate, [RMB] Aim, [W]/[A]/[S]/[D] Walk, [Mouse]");
         actions.gamepad_active = true;
         assert_eq!(prompt_text("[GadgetWheel] / [WeaponWheelSelect] / [SwitchWeapon]", &actions, &settings), "[Y] / [Right stick] / [Y]");
         assert_eq!(prompt_text("[Interact] Use / [Crouch] Hide", &actions, &settings), "[X] Use / [B] Hide");

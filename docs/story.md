@@ -6041,6 +6041,16 @@ to SQC_080, each a brief at its giver then its blocks):
   the mission. Its take now plays the flight and finishes as a player's
   does; and on a mission it no longer steps into a trigger no mission owns
   more than 150 m off (`UNOWNED_REACH`). JAS_060 completed, on into JAS_080.
+* **The machete.** JAS_100's pirates, alert, were fired at with an empty
+  pistol for two hours: every gun dry, no gun or body about to take rounds
+  from, and an alert foe is shot rather than taken down. With nothing left
+  to fire, the autopilot now goes up to him and swings the machete (Melee
+  draws it, Fire swings; from 1.8 m, `MACHETE_REACH`). JAS_100 completed,
+  then DOC_020's cave and on into HUR_030.
+* **A line held in the prompt.** `DisplayInteractionMessageUI(show, string)`
+  (SAM_020's helicopter: "[Shoot] Detonate") holds its line in the
+  interaction prompt until it is taken down (`ScriptedPlayer::message`,
+  `script_message`), unless something nearer to hand has the prompt.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

@@ -430,6 +430,18 @@ impl Action {
             // (The wingsuit and the parachute open with a jump.)
             "parachute" | "wingsuit" => Some(Action::Jump),
             "takedown" => Some(Action::Melee),
+            // (The sights; a grenade; sprinting, and a sniper's breath held
+            // as the sprint key holds it; climbing with a jump; firing, the
+            // camera's shot and SAM_020's detonator; the camera out with the
+            // tagging key; a car's pedals.)
+            "ironsight" => Some(Action::Aim),
+            "throw" => Some(Action::Grenade),
+            "run" | "holdbreath" => Some(Action::Sprint),
+            "climb" => Some(Action::Jump),
+            "shoot" | "takepicture" => Some(Action::Fire),
+            "equipcamera" => Some(Action::Tag),
+            "accelerate" => Some(Action::Forward),
+            "brake" => Some(Action::Back),
             "nextweapon" | "gadgetwheel" | "switchweapon" => Some(Action::NextWeapon),
             "previousweapon" => Some(Action::PrevWeapon),
             "showmap" | "worldmap" => Some(Action::Map),
