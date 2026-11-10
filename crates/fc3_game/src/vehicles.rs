@@ -1980,7 +1980,7 @@ struct Spawned(HashSet<u64>, u32);
 
 #[allow(clippy::too_many_arguments)]
 fn spawn_vehicles(
-    mut spawned: Local<Spawned>,
+    (mut spawned, mut picks): (Local<Spawned>, Local<crate::objects::SectorPicks>),
     assets: Option<Res<VehicleAssets>>,
     server: Res<AssetServer>,
     models: Res<Assets<Fc3Model>>,
@@ -1996,9 +1996,8 @@ fn spawn_vehicles(
     let live: HashSet<u64> = existing.iter().map(|v| v.spawn_id).collect();
     spawned.0.retain(|id| live.contains(id));
     let mut budget = 2;
-    for so in &loaded {
-        let Some(sector) = sectors.get(&so.sector) else { continue };
-        for e in &sector.entities {
+    {
+        for e in picks.entities(&sectors, &loaded, |e| def_for(&e.name).is_some()) {
             let Some(def) = def_for(&e.name) else { continue };
             if spawned.0.contains(&e.id) || budget == 0 {
                 continue;

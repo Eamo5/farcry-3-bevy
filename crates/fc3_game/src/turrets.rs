@@ -174,7 +174,7 @@ fn node(model: &Fc3Model, prefix: &str) -> Option<Vec3> {
 
 #[allow(clippy::too_many_arguments)]
 fn spawn_turrets(
-    mut spawned: Local<HashSet<u64>>,
+    (mut spawned, mut picks): (Local<HashSet<u64>>, Local<crate::objects::SectorPicks>),
     mounts: Option<Res<MountModels>>,
     models: Res<Assets<Fc3Model>>,
     sectors: Res<Assets<Fc3Sector>>,
@@ -191,9 +191,8 @@ fn spawn_turrets(
             commands.entity(e).despawn();
         }
     }
-    for so in &loaded {
-        let Some(sector) = sectors.get(&so.sector) else { continue };
-        for e in &sector.entities {
+    {
+        for e in picks.entities(&sectors, &loaded, |e| kind_for(&e.name).is_some()) {
             let Some(k) = kind_for(&e.name) else { continue };
             let at = Vec3::from_array(e.translation);
             if spawned.contains(&e.id) || at.distance(pt.translation) > SPAWN {

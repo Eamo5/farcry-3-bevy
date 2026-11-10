@@ -750,6 +750,9 @@ struct SoundPoints {
     points: Vec<(u32, Vec3)>,
     /// Seconds to each one-off point's next sounding.
     next: Vec<f32>,
+    /// How far each one's sounds carry (`SoundBank::reach`), found once:
+    /// found every frame it cost a third of a millisecond.
+    reach: Vec<Option<f32>>,
 }
 
 /// Sound points are heard within this range (m), louder nearer.
@@ -771,7 +774,7 @@ fn load_sound_points(mut commands: Commands, info: Res<CacheInfo>) {
         .collect();
     info!("{} sound points", points.len());
     let next = vec![0.0; points.len()];
-    commands.insert_resource(SoundPoints { points, next });
+    commands.insert_resource(SoundPoints { points, next, reach: Vec::new() });
 }
 
 /// The sound points in earshot (as far as their sounds carry, else
@@ -789,10 +792,13 @@ fn sound_points(
     let (Some(bank), Some(mut points), Ok(ear)) = (bank, points, listener.single()) else { return };
     let ear = ear.translation();
     let dt = time.delta_secs();
-    let SoundPoints { points, next } = &mut *points;
+    let SoundPoints { points, next, reach: reaches } = &mut *points;
+    if reaches.len() != points.len() {
+        *reaches = points.iter().map(|(event, _)| bank.reach(*event)).collect();
+    }
     for (i, (event, at)) in points.iter().enumerate() {
         let d = at.distance(ear);
-        let reach = bank.reach(*event);
+        let reach = reaches[i];
         if d > reach.unwrap_or(POINT_RANGE) {
             continue;
         }

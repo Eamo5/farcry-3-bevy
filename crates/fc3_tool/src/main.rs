@@ -2833,7 +2833,9 @@ fn main() -> Result<()> {
                 quiet += 0.1;
             }
             println!("commands: {counts:#?}");
-            for (name, state) in story.missions().into_iter().filter(|m| m.1 != "Locked") {
+            // (FC3_STORY_ALL: the locked ones too.)
+            let all = std::env::var_os("FC3_STORY_ALL").is_some();
+            for (name, state) in story.missions().into_iter().filter(|m| all || m.1 != "Locked") {
                 println!("mission {name}: {state}");
             }
             for (name, state) in story.blocks() {

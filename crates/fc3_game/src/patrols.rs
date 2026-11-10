@@ -440,7 +440,7 @@ fn spawn_boat_patrols(
     time: Res<Time>,
     args: Res<crate::Args>,
     mut routes: ResMut<Routes>,
-    mut boats: Local<std::collections::HashMap<u64, (usize, f32)>>,
+    (mut boats, mut picks): (Local<std::collections::HashMap<u64, (usize, f32)>>, Local<crate::objects::SectorPicks>),
     assets: Option<Res<VehicleAssets>>,
     models: Res<Assets<Fc3Model>>,
     heights: Res<crate::terrain::Heightfield>,
@@ -466,9 +466,8 @@ fn spawn_boat_patrols(
     let (Ok(pt), Some(assets)) = (players.single(), assets) else { return };
     let Some(def) = crate::vehicles::def_named("Boat") else { return };
     let Some(model) = models.get(&assets.models[def]) else { return };
-    for so in &loaded {
-        let Some(sector) = sectors.get(&so.sector) else { continue };
-        for e in sector.entities.iter().filter(|e| boat_marker(&e.name)) {
+    {
+        for e in picks.entities(&sectors, &loaded, |e| boat_marker(&e.name)) {
             let centre = Vec3::from_array(e.translation);
             let d = Vec2::new(centre.x - pt.translation.x, centre.z - pt.translation.z).length();
             // None in country the rebels hold.

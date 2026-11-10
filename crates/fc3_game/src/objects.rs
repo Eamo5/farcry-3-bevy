@@ -109,6 +109,34 @@ pub struct SectorObjects {
     pub sector: Handle<Fc3Sector>,
 }
 
+/// The loaded sectors' entities a system wants (by name: a turret's mount,
+/// a boat patrol's marker, a guard's post), picked out once a sector rather
+/// than every frame. (Each system that went through every loaded sector's
+/// entities by name every frame spent about 0.3 ms of it.)
+#[derive(Default)]
+pub struct SectorPicks(HashMap<AssetId<Fc3Sector>, Vec<u32>>);
+
+impl SectorPicks {
+    /// The entities `pick` takes of the sectors loaded now.
+    pub fn entities<'s>(&mut self, sectors: &'s Assets<Fc3Sector>, loaded: &Query<&SectorObjects>, pick: impl Fn(&CachedEntity) -> bool) -> Vec<&'s CachedEntity> {
+        let mut out = Vec::new();
+        let mut live = 0;
+        for so in loaded {
+            let id = so.sector.id();
+            let Some(sector) = sectors.get(id) else { continue };
+            live += 1;
+            let picked = self.0.entry(id).or_insert_with(|| sector.entities.iter().enumerate().filter(|(_, e)| pick(e)).map(|(i, _)| i as u32).collect());
+            out.extend(picked.iter().filter_map(|&i| sector.entities.get(i as usize)));
+        }
+        // (The sectors left behind's let go now and then.)
+        if self.0.len() > live * 2 + 32 {
+            let now: HashSet<AssetId<Fc3Sector>> = loaded.iter().map(|so| so.sector.id()).collect();
+            self.0.retain(|id, _| now.contains(id));
+        }
+        out
+    }
+}
+
 struct Slot {
     handle: Handle<Fc3Sector>,
     root: Option<Entity>,

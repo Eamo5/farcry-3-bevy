@@ -1302,11 +1302,25 @@ fn apply_xp(mut gains: MessageReader<XpGain>, skills: Res<Skills>, mut progress:
     }
 }
 
-fn update_perks(mut progress: ResMut<Progress>, skills: Res<Skills>, crafting: Res<crate::crafting::CraftCatalog>, mut perks: ResMut<Perks>) {
-    if progress.is_changed() || skills.is_changed() || crafting.is_changed() {
+fn update_perks(
+    mut progress: ResMut<Progress>,
+    skills: Res<Skills>,
+    crafting: Res<crate::crafting::CraftCatalog>,
+    mut perks: ResMut<Perks>,
+    mut pending: Local<(bool, u32)>,
+) {
+    // (The progress changes most frames, its statistics counting: worked
+    // out every eighth frame after a change, at once after the skills or
+    // the recipes do. Every frame it cost 0.16 ms.)
+    pending.0 |= progress.is_changed();
+    pending.1 = pending.1.wrapping_add(1);
+    if skills.is_changed() || crafting.is_changed() || (pending.0 && pending.1 % 8 == 0) {
+        pending.0 = false;
         // The crafted wallets' hold ($1000 to begin with).
         let wallet = if crafting.recipes.is_empty() { 0 } else { 1000 + crafting.gear_bonus(&progress, gear::WALLET) as u32 };
-        let wallet = if progress.story { wallet } else { wallet.max(Progress { wallet: 0, ..progress.clone() }.money_cap()) };
+        // (Without the story, the bought wallet upgrades' hold at the least:
+        // `money_cap` with no crafted wallet.)
+        let wallet = if progress.story { wallet } else { wallet.max([1000, 2000, 5000, 10000][progress.upgrade("wallet").min(3) as usize]) };
         if progress.wallet != wallet {
             progress.bypass_change_detection().wallet = wallet;
         }

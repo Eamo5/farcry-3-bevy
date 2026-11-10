@@ -1167,7 +1167,7 @@ const REBEL_POST: u64 = 1 << 61;
 
 #[allow(clippy::too_many_arguments)]
 fn spawn_from_sectors(
-    time: Res<Time>,
+    (time, mut picks): (Res<Time>, Local<crate::objects::SectorPicks>),
     mut director: ResMut<NpcDirector>,
     assets: Option<Res<NpcAssets>>,
     sectors: Res<Assets<Fc3Sector>>,
@@ -1215,9 +1215,8 @@ fn spawn_from_sectors(
     }
     let cleared: HashSet<u64> = director.cleared.iter().map(|(id, _)| *id).collect();
     let mut candidates = Vec::new();
-    for so in &loaded {
-        let Some(sector) = sectors.get(&so.sector) else { continue };
-        for e in &sector.entities {
+    {
+        for e in picks.entities(&sectors, &loaded, |e| post_faction(&e.name).is_some()) {
             let Some(mut faction) = post_faction(&e.name) else { continue };
             let pos = Vec3::from_array(e.translation);
             // A mission being played here has its own people.

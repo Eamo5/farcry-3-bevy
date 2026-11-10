@@ -113,10 +113,13 @@ fn fx_test(
 pub fn available(name: &str) -> bool {
     static SEEN: std::sync::Mutex<Option<HashMap<String, bool>>> = std::sync::Mutex::new(None);
     let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
-    *seen
-        .get_or_insert_with(HashMap::new)
-        .entry(name.to_string())
-        .or_insert_with(|| fc3_formats::cache::default_cache_root().join(fc3_formats::particle_effects::authored_rel(name)).exists())
+    let seen = seen.get_or_insert_with(HashMap::new);
+    if let Some(&known) = seen.get(name) {
+        return known;
+    }
+    let there = fc3_formats::cache::default_cache_root().join(fc3_formats::particle_effects::authored_rel(name)).exists();
+    seen.insert(name.to_string(), there);
+    there
 }
 
 /// Plays an authored effect once where it's asked for, as an impact's

@@ -158,6 +158,12 @@ fn play_effects(
     let chance = |rate: f32, rng: &mut Rng| rng.f32() < rate * dt;
     for (i, &(kind, at, placed)) in effects.list.iter().enumerate() {
         let d = at.distance(eye);
+        // (Far out and not playing: nothing to do, before looking the
+        // effect up: the world's 5,500 looked up every frame cost half a
+        // millisecond.)
+        if d > kind.range() * 1.15 && !playing.contains_key(&i) {
+            continue;
+        }
         if let Some((turn, name)) = placed.filter(|(_, n)| crate::authored_fx::available(n)) {
             // (A little past its reach before it goes, so it doesn't flicker
             // at the edge.)

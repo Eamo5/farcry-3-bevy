@@ -249,7 +249,8 @@ fn drive_blood(
         blood.host.dps_frame("WaterEffect", num(frame as f64));
         blood.water_sent = frame;
     }
-    // (Nothing to multiply: not drawn at all.)
+    // (Nothing to multiply: not drawn at all, nor the movie run: ticking it
+    // cost most of a millisecond a frame.)
     let showing = blood.splats.iter().any(Option::is_some) || frame > 1;
     if let Ok(mut v) = node.single_mut() {
         let want = if showing { Visibility::Inherited } else { Visibility::Hidden };
@@ -257,8 +258,10 @@ fn drive_blood(
             *v = want;
         }
     }
-    blood.host.run(real.delta_secs_f64());
-    blood.host.render_if_changed();
+    if showing {
+        blood.host.run(real.delta_secs_f64());
+        blood.host.render_if_changed();
+    }
 }
 
 #[cfg(test)]
