@@ -6080,6 +6080,15 @@ to SQC_080, each a brief at its giver then its blocks):
   An area marker's foes are now those within 30 m of it
   (`MARKED_FOE_IN_AREA`; the `Area` sub-kinds are read from the map
   objective types). JAS_110_B10 completed.
+* **The truck that rolled away.** JAS_130's escape has the player push
+  Liza's truck off (a QTE), then ride its bed as it follows its route.
+  Liza takes the wheel as the push begins, and a vehicle with someone at
+  its wheel had no parking brake; with no orders for the twelve seconds of
+  the push it rolled 40 m down its hill, its route's first node far behind
+  it, and it never drove: it tried for that node uphill at the push's 0.4
+  m/s for ten minutes, until the pirates blew it up. A vehicle whose driver
+  isn't the player keeps its parking brake on until it is first given
+  controls (`Vehicle::control`).
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

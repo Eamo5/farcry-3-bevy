@@ -3385,7 +3385,11 @@ fn drive(
                     // Drive on the driven wheels; braking and rolling resistance.
                     let along = point_vel.dot(wheel_fwd);
                     let mut drive = if flooded || !wheel.driving { 0.0 } else { tune.pull(speed, v.throttle) / driven };
-                    let parking = v.parked && !v.seats.iter().any(|s| s.kind == 1 && s.pawn.is_some());
+                    // (A character at the wheel with no orders yet keeps the
+                    // brake on too: JAS_130's truck, Liza in it before its
+                    // push, rolled 40 m down its hill, its route's start far
+                    // behind it, and it never drove.)
+                    let parking = v.parked && v.driver().is_none_or(|d| d != fc3_story::PLAYER);
                     if v.brake || locked || parking || (v.throttle * speed < -0.5 && v.throttle.abs() > 0.1) {
                         drive = (-along * m / 4.0 / dt * 0.25).clamp(-limit, limit);
                     }
