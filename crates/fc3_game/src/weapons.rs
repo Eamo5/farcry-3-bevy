@@ -1618,6 +1618,18 @@ pub(crate) fn shot_rider(origin: Vec3, dir: Vec3, hull: f32, heads: impl Iterato
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
+/// A rider out in the open the shot passes (head to hips, within a body's
+/// width) before it meets anything else `reach` along: the nearest, and how
+/// far along the ray.
+pub(crate) fn rider_in_open(origin: Vec3, dir: Vec3, reach: f32, heads: impl Iterator<Item = (Entity, Vec3)>) -> Option<(Entity, f32)> {
+    heads
+        .filter_map(|(e, head)| {
+            let (t, off) = ray_to_segment(origin, dir, head - Vec3::Y * RIDER_HEIGHT, head);
+            (off < RIDER_RADIUS && t > 0.5 && t < reach - 0.05).then_some((e, t))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+}
+
 /// The ray's nearest approach to a segment: how far along the (unit) ray,
 /// and how far off.
 fn ray_to_segment(origin: Vec3, dir: Vec3, a: Vec3, b: Vec3) -> (f32, f32) {
@@ -1669,7 +1681,7 @@ fn fire(
     parents: Query<&ChildOf>,
     writers: (MessageWriter<DamageEvent>, MessageWriter<HitMarker>, MessageWriter<crate::npc::Noise>, MessageWriter<WorldHit>),
     sounds: (MessageWriter<crate::sound::PlaySfx>, MessageWriter<crate::sound::LoopSfx>, crate::surfaces::SurfaceProbe),
-    (mut shot_fx, boosts, mount, driving, vehicles, riders, cinema): (
+    (mut shot_fx, boosts, mount, driving, vehicles, riders, cinema, guns): (
         crate::particles::ShotFx,
         Option<Res<crate::syringes::Boosts>>,
         Res<crate::traversal::Mount>,
@@ -1681,6 +1693,7 @@ fn fire(
             Or<(With<crate::npc::Riding>, With<crate::story_actors::StoryActor>)>,
         >,
         Res<crate::cinema::Cinema>,
+        Query<&crate::turrets::Turret>,
     ),
 ) {
     use crate::controls::Action;
@@ -1792,8 +1805,10 @@ fn fire(
     let forward = assist.correct(origin, cam.forward().as_vec3(), inv.aim_blend > 0.5, d.aim.as_ref());
     let right = cam.right().as_vec3();
     let up = cam.up().as_vec3();
-    // (Not the vehicle he's riding in: shots from a seat go past its sides.)
-    let riding = driving.vehicle.and_then(|v| vehicles.get(v).ok().map(|vh| [v, vh.body()]));
+    // (Not the vehicle he's riding in: shots from a seat go past its sides;
+    // nor the one whose gun he mans, HUR_040's barge.)
+    let gun_vehicle = player.mounted.and_then(|m| guns.get(m.turret).ok()).and_then(|g| g.on_vehicle());
+    let riding = driving.vehicle.or(gun_vehicle).and_then(|v| vehicles.get(v).ok().map(|vh| [v, vh.body()]));
     let filter = SpatialQueryFilter::from_excluded_entities(std::iter::once(player_e).chain(riding.into_iter().flatten()));
     let muzzle_pos = muzzle.single().map(|(_, m)| m.translation()).unwrap_or(origin + forward * 0.6 - up * 0.1);
     let muzzle_node = muzzle.single().ok().map(|(e, _)| e);
@@ -1929,7 +1944,22 @@ fn fire(
             None => spread_dir(&mut rng, forward, right, up, cone),
         };
         let Ok(dir3) = Dir3::new(dir) else { continue };
-        let hit = spatial.cast_ray(origin, dir3, d.range, true, &filter);
+        let mut hit = spatial.cast_ray(origin, dir3, d.range, true, &filter);
+        // A rider clear of his vehicle's hull has no collider of his own (a
+        // boat's crew over its gunwale, the gunner in a technical's bed): the
+        // shot finds him on its way to whatever it meets. (HUR_040's boat
+        // crews took the barge gun's rounds and the rifle's for minutes,
+        // unhurt, the shots going on past them.)
+        // (Not those beside him in his own.)
+        let own = riding.map(|[v, _]| v);
+        let open = riders
+            .iter()
+            .filter(|(_, _, ride, actor)| ride.is_some_and(|r| r.visible && Some(r.vehicle) != own) || actor.is_some_and(|a| a.seated && !a.dead))
+            .filter(|(_, _, _, actor)| actor.is_none_or(|a| own.and_then(|v| vehicles.get(v).ok()).is_none_or(|v| !v.carries(a.id))))
+            .map(|(e, gt, _, _)| (e, heads.get(e).map_or(gt.translation() + Vec3::Y * RIDER_HEIGHT, |h| h.0)));
+        if let Some((rider, t)) = rider_in_open(origin, dir, hit.map_or(d.range, |h| h.distance), open) {
+            hit = Some(avian3d::prelude::RayHitData { entity: rider, distance: t, normal: -dir });
+        }
         let end = hit.map(|h| origin + dir * h.distance).unwrap_or(origin + dir * d.range);
         if d.class != WeaponClass::Melee && rng.f32() < 0.6 {
             spawn_tracer(&mut commands, &fx, muzzle_pos, end);
@@ -2843,6 +2873,24 @@ mod stats_tests {
         assert_eq!(shot_rider(Vec3::new(-20.0, 2.2, 0.0), Vec3::X, 20.0, heads.into_iter()), None);
         // The hull hit far short of them (the vehicle's other end).
         assert_eq!(shot_rider(origin, Vec3::X, 15.0, heads.into_iter()), None);
+    }
+
+    /// A shot passing a rider clear of his hull finds him before what it
+    /// meets beyond; not one behind what it meets, nor one it passes wide of.
+    #[test]
+    fn a_shot_finds_a_rider_out_in_the_open() {
+        let mut world = World::new();
+        let (bow, stern) = (world.spawn_empty().id(), world.spawn_empty().id());
+        // A boat's crew standing over its gunwale, along +X 20 and 22 m off.
+        let heads = [(bow, Vec3::new(20.0, 1.7, 0.0)), (stern, Vec3::new(22.0, 1.7, 0.0))];
+        let origin = Vec3::new(0.0, 1.4, 0.0);
+        let hit = rider_in_open(origin, Vec3::X, 100.0, heads.into_iter());
+        assert_eq!(hit.map(|h| h.0), Some(bow));
+        assert!((hit.unwrap().1 - 20.0).abs() < 1e-3);
+        // A wall at 15 m stops the shot first.
+        assert_eq!(rider_in_open(origin, Vec3::X, 15.0, heads.into_iter()), None);
+        // Wide of them.
+        assert_eq!(rider_in_open(Vec3::new(0.0, 1.4, 1.0), Vec3::X, 100.0, heads.into_iter()), None);
     }
 
     #[test]

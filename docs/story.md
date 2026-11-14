@@ -6121,6 +6121,17 @@ to SQC_080, each a brief at its giver then its blocks):
   placed him: he climbed it under the loading screen, which stayed up
   through the climb, the puff and the dolly. It now waits for the player to
   be in the world and the world about him in.
+* **Crews in the open.** HUR_040's boat and truck crews took the barge
+  gun's rounds and the rifle's for minutes, unhurt: a rider has no collider
+  of his own (his vehicle's hull stands for him, and a shot into it goes on
+  into a rider just inside, `shot_rider`), so one standing or sitting clear
+  of the hull (over a boat's gunwale, in a technical's bed) was passed by
+  every shot aimed at him. A shot now finds a visible rider it passes (head
+  to hips, within a body's width) before whatever it meets beyond
+  (`weapons::rider_in_open`), not those beside the player in his own
+  vehicle. And the barge's gun's rounds now pass the barge itself, as a
+  seat's do its vehicle. HUR_040's first two stands were held without a
+  death; it had taken three tries.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.
