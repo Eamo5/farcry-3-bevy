@@ -905,8 +905,15 @@ over the loop). The title's text is the consoles' "PRESS START" on its
 timeline (`text.mc.Normal_txt` and its shadow's); its class's label and the
 `SetText` it listens for aren't in this build, so the PC's prompt (159971) is
 put in those fields while it shows, and a key or a click (`StartPressed`)
-brings the menu a moment later (the label that would say it has gone isn't
-there either). `--menu` keeps an automated run at it, `FC3_SAVE` gives it a
+brings the next a moment later (the label that would say it has gone isn't
+there either): the autosave notice (`AutoSaveWarning.feu`, its butterfly the
+save icon), whose text the engine sends (`SetText` with 160264, "This game
+saves data automatically at certain points...") once it says
+`ProcessInitialScreen AutoSave begin`; five seconds on it says `end`, and the
+menu shows. The boot's screens play at level 21 over the menu, which loads
+hidden under them from the start (loaded after them it had left seconds of
+black), and takes no input until it shows (the title's key would have chosen
+its first line). `--menu` keeps an automated run at it, `FC3_SAVE` gives it a
 save, and `FC3_FRONTEND_KEYS=Enter,Down,...` presses on from the title, then
 presses keys once the home list has been up two seconds.
 

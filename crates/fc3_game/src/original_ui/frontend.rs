@@ -33,7 +33,10 @@
 //! the `SetText` its class listens for has no field here), so the PC's is
 //! put in it while it shows; nor has it the label that says it has gone, so
 //! the menu comes a moment after the key. A run with `FC3_FRONTEND_KEYS`
-//! presses there by itself. A game started again from the pause menu's
+//! presses there by itself. Then the autosave notice (`AutoSaveWarning.feu`:
+//! the save icon's butterfly over "This game saves data automatically...",
+//! the engine's `SetText` once it says `ProcessInitialScreen AutoSave
+//! begin`; five seconds on it says `end`), and the menu. A game started again from the pause menu's
 //! "Quit" (`save::BackToMenu`) comes straight to the menu.
 
 use bevy::prelude::*;
@@ -45,6 +48,12 @@ use super::Interface;
 const FRONTEND_MOVIE: &str = r"UI\Multiplayer\Menu\MultiMain.feu";
 const LOGO_MOVIE: &str = r"UI\Singleplayer\Menu\MainMenu\M_LogoUbi.feu";
 const PRESS_START_MOVIE: &str = r"UI\Singleplayer\Menu\PressStartScreen\PressStartScreen.feu";
+/// The autosave notice after the title (its butterfly the save icon), its
+/// text the PC's, and how long it may take before the menu comes anyway (it
+/// plays five seconds and says `ProcessInitialScreen AutoSave end`).
+const AUTOSAVE_MOVIE: &str = r"UI\Singleplayer\Menu\PressStartScreen\AutoSaveWarning.feu";
+const AUTOSAVE_TEXT: u32 = 160264;
+const AUTOSAVE_MOST: f32 = 7.0;
 /// The title's text (PC's), and how long the logo and the title's way out
 /// may take before the menu comes anyway.
 const PRESS_ANY_KEY: u32 = 159971;
@@ -53,6 +62,8 @@ const PRESS_OUT_MOST: f32 = 0.8;
 /// The loop it plays behind (it loads it into a clip; the engine drew it).
 pub(super) const FRONTEND_VIDEO: &str = r"UI\Singleplayer\Video\Swan_30_Sec_loop.bik";
 const FRONTEND_LEVEL: u32 = 20;
+/// The boot's screens, over the menu.
+const BOOT_LEVEL: u32 = 21;
 
 /// The home list's entries: their names (string ids) and actions.
 const HOME: [(u32, u32); 3] = [(150445, STORY), (150446, OPTIONS), (155610, QUIT)];
@@ -78,6 +89,7 @@ enum Boot {
     #[default]
     Logo,
     Title,
+    AutoSave,
     Menu,
 }
 
@@ -88,8 +100,10 @@ pub(super) struct FrontendShown {
     /// When the logo or title came up, and when the title was left.
     since: Option<std::time::Instant>,
     started: Option<std::time::Instant>,
-    /// The home list is up (the test's keys go then), and when.
+    /// The home list is up (the test's keys go then), and when; when the
+    /// menu was shown.
     home: Option<std::time::Instant>,
+    menu_at: Option<std::time::Instant>,
     pressed: usize,
     mouse: Vec2,
 }
@@ -176,10 +190,15 @@ pub(super) fn drive_frontend(
                 shown.boot = Boot::Menu;
             }
             if shown.boot == Boot::Logo {
-                host.load(LOGO_MOVIE, FRONTEND_LEVEL);
+                host.load(LOGO_MOVIE, BOOT_LEVEL);
                 shown.since = Some(std::time::Instant::now());
+                // (The menu loads meanwhile, hidden under the boot's
+                // screens: loaded after them, it took seconds of black.)
+                host.load(FRONTEND_MOVIE, FRONTEND_LEVEL);
+                host.level_visible(FRONTEND_LEVEL, false);
             } else {
                 shown.boot = Boot::Menu;
+                shown.menu_at = Some(std::time::Instant::now());
                 host.load(FRONTEND_MOVIE, FRONTEND_LEVEL);
                 backdrop(&mut videos);
             }
@@ -191,6 +210,7 @@ pub(super) fn drive_frontend(
             shown.pressed = 0;
         } else {
             host.unload(FRONTEND_LEVEL);
+            host.unload(BOOT_LEVEL);
             videos.stop_backdrop();
             host.level_visible(super::HUD_LEVEL, true);
         }
@@ -207,13 +227,32 @@ pub(super) fn drive_frontend(
         shown.boot = Boot::Title;
         shown.since = Some(std::time::Instant::now());
         shown.started = None;
-        host.load(PRESS_START_MOVIE, FRONTEND_LEVEL);
+        host.load(PRESS_START_MOVIE, BOOT_LEVEL);
         backdrop(&mut videos);
     }
-    let title_done = calls.0.iter().any(|c| c.args.first().is_some_and(|a| a == "ProcessInitialScreen") && c.args.get(2).is_some_and(|a| a == "end"));
-    if shown.boot == Boot::Title && (title_done || shown.started.is_some_and(|t| t.elapsed().as_secs_f32() > PRESS_OUT_MOST)) {
-        shown.boot = Boot::Menu;
-        host.load(FRONTEND_MOVIE, FRONTEND_LEVEL);
+    let screen_done = |screen: &str| {
+        calls.0.iter().any(|c| {
+            c.args.first().is_some_and(|a| a == "ProcessInitialScreen") && c.args.get(1).is_some_and(|a| a == screen) && c.args.get(2).is_some_and(|a| a == "end")
+        })
+    };
+    if shown.boot == Boot::Title && (screen_done("PressStart") || shown.started.is_some_and(|t| t.elapsed().as_secs_f32() > PRESS_OUT_MOST)) {
+        // (Then the autosave notice, as the game has it before its menu.)
+        shown.boot = Boot::AutoSave;
+        shown.since = Some(std::time::Instant::now());
+        host.load(AUTOSAVE_MOVIE, BOOT_LEVEL);
+    }
+    if shown.boot == Boot::AutoSave {
+        // (Its text comes as the engine's `SetText`, once it listens.)
+        if calls.0.iter().any(|c| c.args.first().is_some_and(|a| a == "ProcessInitialScreen") && c.args.get(1).is_some_and(|a| a == "AutoSave") && c.args.get(2).is_some_and(|a| a == "begin")) {
+            host.event("SetText", &[&host.text(AUTOSAVE_TEXT)]);
+        }
+        let shown_for = shown.since.map_or(0.0, |t| t.elapsed().as_secs_f32());
+        if screen_done("AutoSave") || shown_for > AUTOSAVE_MOST {
+            shown.boot = Boot::Menu;
+            shown.menu_at = Some(std::time::Instant::now());
+            host.unload(BOOT_LEVEL);
+            host.level_visible(FRONTEND_LEVEL, true);
+        }
     }
     for call in calls.0.iter().filter(|c| c.command.eq_ignore_ascii_case("Send")) {
         let arg = |i: usize| call.args.get(i).map(String::as_str).unwrap_or("");
@@ -292,9 +331,14 @@ pub(super) fn drive_frontend(
         }
     }
     let scale = windows.single().map_or(1.0, |(w, _)| w.scale_factor()) as f64;
+    // (Not to the menu while it waits under the boot's screens: the key
+    // that left the title would choose its first line.)
+    let to_menu = shown.boot == Boot::Menu;
     for m in moves.read() {
         shown.mouse = m.position;
-        host.input(PlayerEvent::MouseMove { x: m.position.x as f64 * scale, y: m.position.y as f64 * scale });
+        if to_menu {
+            host.input(PlayerEvent::MouseMove { x: m.position.x as f64 * scale, y: m.position.y as f64 * scale });
+        }
     }
     let mut clicked = false;
     for b in buttons.read() {
@@ -306,19 +350,21 @@ pub(super) fn drive_frontend(
             _ => continue,
         };
         let (x, y) = (shown.mouse.x as f64 * scale, shown.mouse.y as f64 * scale);
-        host.input(if b.state.is_pressed() { PlayerEvent::MouseDown { x, y, button, index: None } } else { PlayerEvent::MouseUp { x, y, button } });
+        if to_menu {
+            host.input(if b.state.is_pressed() { PlayerEvent::MouseDown { x, y, button, index: None } } else { PlayerEvent::MouseUp { x, y, button } });
+        }
     }
     let mut pressed_any = false;
     for k in keys.read() {
         pressed_any |= k.state.is_pressed();
-        let Some(key) = super::movie_key(k.key_code) else { continue };
+        let Some(key) = super::movie_key(k.key_code).filter(|_| to_menu) else { continue };
         host.input(if k.state.is_pressed() { PlayerEvent::KeyDown { key } } else { PlayerEvent::KeyUp { key } });
     }
     // (The PC's text, kept in its fields as its timeline plays.)
     if shown.boot == Boot::Title {
         let text = host.text(PRESS_ANY_KEY).to_uppercase();
         for clip in ["mc", "mcB"] {
-            host.set_path(&format!("_level{FRONTEND_LEVEL}.text.{clip}.Normal_txt.text"), V::String(text.clone()));
+            host.set_path(&format!("_level{BOOT_LEVEL}.text.{clip}.Normal_txt.text"), V::String(text.clone()));
         }
     }
     // The title goes with any key or click (or by itself in a test).
@@ -331,7 +377,8 @@ pub(super) fn drive_frontend(
     }
     // FC3_FRONTEND_KEYS (tests): keys pressed one by one once the home list
     // has been up two seconds.
-    if let (Ok(list), Some(since)) = (std::env::var("FC3_FRONTEND_KEYS"), shown.home) {
+    let since = shown.home.zip(shown.menu_at).map(|(a, b)| a.max(b));
+    if let (Ok(list), Some(since)) = (std::env::var("FC3_FRONTEND_KEYS"), since.filter(|_| to_menu)) {
         let names: Vec<&str> = list.split(',').collect();
         if since.elapsed().as_secs_f32() > 2.0 + 0.6 * shown.pressed as f32 {
             if let Some(key) = names.get(shown.pressed).and_then(|n| super::test_key(n)).and_then(super::movie_key) {
