@@ -6814,6 +6814,17 @@ fn autopilot_loot(
                 return;
             }
             player.pitch = -0.9;
+            // (Every holster full, the gun swapped is the one in hand: never
+            // the flamethrower, a mission's to burn with, which these
+            // pickups leave out of the reckoning. WIL_020's was swapped for a
+            // dropped rifle, and its fields were never burnt.)
+            // (Nor with the machete in hand, which has the first gun go.)
+            use crate::weapons::WeaponClass as W;
+            let spare = |c: W| !matches!(c, W::Flamethrower | W::Melee);
+            if !spare(inventory.def().class) && inventory.slots.iter().any(|s| spare(inventory.defs[s.def].class)) {
+                actions.cycle = 1;
+                return;
+            }
             if now >= *next_press {
                 *next_press = now + 0.6;
                 actions.press(crate::controls::Action::Interact);

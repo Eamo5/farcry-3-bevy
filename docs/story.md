@@ -6139,6 +6139,12 @@ to SQC_080, each a brief at its giver then its blocks):
   mission's to step into, the autopilot now tries such a trigger again.
   Its sight lines from a vehicle's gun pass that vehicle too, as from a
   seat.
+* **The flamethrower kept.** Out of rounds for its guns (the flamethrower
+  left out of the reckoning, a mission's to burn with), the autopilot picks
+  up a dropped gun; every holster full, the one in hand is swapped, and in
+  WIL_020 that was the flamethrower: its fields were never burnt. It now
+  draws a spare gun first (not the flamethrower, nor the machete, which has
+  the first gun go). WIL_020 completed, all five fields burnt.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.
