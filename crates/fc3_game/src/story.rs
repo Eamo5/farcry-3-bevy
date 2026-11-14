@@ -917,8 +917,10 @@ pub struct StoryHost {
     quiet: f32,
     /// When the autopilot last threw a rock to lure a guard off (tests).
     distracted_at: f32,
-    /// What last kept the story from going quiet (tests: the stall dump).
+    /// What last kept the story from going quiet (tests: the stall dump),
+    /// and the autopilot's step that last did (where in the code).
     stirred_by: String,
+    stepped_from: Option<&'static std::panic::Location<'static>>,
     /// When the autopilot last went near a place a script waits for the
     /// player to come near, by the place.
     near_at: HashMap<u64, f32>,
@@ -1156,8 +1158,10 @@ impl StoryHost {
     }
 
     /// Something happened (a test's step).
+    #[track_caller]
     pub fn reset_quiet(&mut self) {
         self.quiet = 0.0;
+        self.stepped_from = Some(std::panic::Location::caller());
     }
 
     /// Whether a step of the autopilot's on a thing failed the mission before
@@ -1269,6 +1273,7 @@ impl StoryHost {
             quiet: 0.0,
             distracted_at: f32::MIN,
             stirred_by: String::new(),
+            stepped_from: None,
             near_at: HashMap::new(),
             replays: Default::default(),
             replay_metas: Default::default(),
@@ -2822,6 +2827,7 @@ fn run_story(
     if let Some(c) = stirred {
         host.quiet = 0.0;
         host.stirred_by = format!("{c:?}").chars().take(120).collect();
+        host.stepped_from = None;
     }
     // (With FC3_STORY_WAIT_DEBUG, a minute on too: a script's looping bark
     // can keep the story from ever going quiet.)
@@ -2831,9 +2837,10 @@ fn run_story(
         && ((host.quiet > 20.0 && host.quiet - dt <= 20.0) || minute)
     {
         info!(
-            "story autopilot: stalled ({:.1} s quiet, last stirred by {}; scene view {}, scene plays the player {}); triggers {:?}, signals {:?}",
+            "story autopilot: stalled ({:.1} s quiet, last stirred by {}, the autopilot's last step at {}; scene view {}, scene plays the player {}); triggers {:?}, signals {:?}",
             host.quiet,
             host.stirred_by,
+            host.stepped_from.map_or("none".to_string(), |l| format!("{}:{}", l.file(), l.line())),
             cinema.view.is_some(),
             cinema.plays_player(),
             host.story.watched_triggers(),
@@ -3172,7 +3179,7 @@ fn run_story(
                     let ground = |x: f32, y: f32, top: f32| ground_under(&spatial, &heights, x, y, top);
                     drive.0 = Some((to_bevy(host.story.trigger_ground_point(*id, ground).unwrap_or(*point)), None));
                 }
-                host.quiet = 0.0;
+                host.reset_quiet();
             } else if let Some((id, radius, point)) = host
                 .story
                 .watched_vehicle_proximity(graph.as_deref())
@@ -3188,7 +3195,7 @@ fn run_story(
                 host.used.insert((id, "drive near".into()));
                 let at = to_bevy(point);
                 drive.0 = Some((at.with_y(heights.height_at(at).unwrap_or(at.y)), None));
-                host.quiet = 0.0;
+                host.reset_quiet();
             } else if host.quiet > 20.0 && !cinema.drives_vehicle() {
                 // Nothing to drive into: on to an objective marker near
                 // (SAM_015's, Sam to be brought to a building: its box
@@ -3212,7 +3219,7 @@ fn run_story(
                     info!("story autopilot: drive to the marker {}", data.name_of(id).unwrap_or("?"));
                     host.used.insert((id, "drive to".into()));
                     drive.0 = Some((at.with_y(heights.height_at(at).unwrap_or(at.y)), None));
-                    host.quiet = 0.0;
+                    host.reset_quiet();
                 }
             }
         } else if let Some((id, at)) = leave {
@@ -3220,13 +3227,13 @@ fn run_story(
             host.used.insert((id, "Leave".into()));
             host.stepped(id, "Leave", now);
             teleport(&mut t, &mut p, at, 0.0);
-            host.quiet = 0.0;
+            host.reset_quiet();
         } else if let Some((id, at)) = destructible {
             info!("story autopilot: breaking {}", data.name_of(id).unwrap_or("?"));
             host.used.insert((id, "destroy".into()));
             teleport(&mut t, &mut p, at, 0.0);
             breaks.break_now(id);
-            host.quiet = 0.0;
+            host.reset_quiet();
         } else if let Some((id, event, point, _)) = next {
             info!("story autopilot: {event} {}", data.name_of(*id).unwrap_or("?"));
             host.used.insert((*id, event.clone()));
@@ -3257,7 +3264,7 @@ fn run_story(
             if event == "Use" {
                 host.story.entity_event(*id, "Use", vec![Arg::id(fc3_story::PLAYER)]);
             }
-            host.quiet = 0.0;
+            host.reset_quiet();
         } else if let Some((id, at)) = actors
             .iter()
             .filter(|(a, _, npc)| npc.is_some() && !a.dead && !host.used.contains(&(a.id, "distract".into())))
@@ -3275,7 +3282,7 @@ fn run_story(
             host.used.insert((id, "distract".into()));
             host.distracted_at = time.elapsed_secs();
             if let Some(test) = rock_test.as_mut() { test.0 = Some(target); }
-            host.quiet = 0.0;
+            host.reset_quiet();
         } else if let Some((id, radius, point)) = host
             .story
             .watched_proximity_in_graph(graph.as_deref())
@@ -3322,7 +3329,7 @@ fn run_story(
             let at = to_bevy(point);
             let side = (t.translation - at).with_y(0.0).normalize_or(Vec3::Z);
             teleport(&mut t, &mut p, to_dunia(at + side * (radius * 0.5).min(1.5)), 0.0);
-            host.quiet = 0.0;
+            host.reset_quiet();
         } else if !host.used.contains(&(0, "buy".into())) && host.story.waiting_on().iter().any(|w| w.contains("CPawnBuyItemEvent")) {
             if shop_override.0.is_some() {
                 // The tutorial's smoke purchase uses the UI's real transaction,
@@ -3334,7 +3341,7 @@ fn run_story(
                         host.story.entity_event(fc3_story::PLAYER, "CPawnBuyItemEvent",
                             vec![Arg::Str(archetype.clone()), Arg::Str("Name".into()), Arg::Str(id.to_string())]);
                         host.used.insert((0, "buy".into()));
-                        host.quiet = 0.0;
+                        host.reset_quiet();
                     }
                 }
             }
@@ -3343,7 +3350,7 @@ fn run_story(
             // challenge is played: its targets shot, see `autopilot_loot`.)
             info!("story autopilot: end gameplay {name}");
             host.story.gameplay_ended(id);
-            host.quiet = 0.0;
+            host.reset_quiet();
         } else if let Some((id, at)) = marker_walk {
             info!("story autopilot: go to the marker {}", data.name_of(id).unwrap_or("?"));
             host.used.insert((id, "go to".into()));
@@ -3355,7 +3362,7 @@ fn run_story(
             let mut stand = at + side * MARKER_WALK_SHORT;
             stand.y = heights.height_at(stand).unwrap_or(at.y);
             teleport(&mut t, &mut p, to_dunia(stand), 0.0);
-            host.quiet = 0.0;
+            host.reset_quiet();
         } else if let Some(at) = host
             .last_ordered
             // (Not with the camera a script drew, an action map holding the
@@ -3380,7 +3387,7 @@ fn run_story(
                 host.followed = Some((id, t.translation));
                 let to = to_dunia(at + Vec3::new(1.5, 0.0, 1.5) - Vec3::Y * crate::player::HALF_HEIGHT);
                 teleport(&mut t, &mut p, to, 0.0);
-                host.quiet = 0.0;
+                host.reset_quiet();
             }
         } else if let Some(at) = ways
             .data
@@ -3413,13 +3420,13 @@ fn run_story(
                     None => host.story.radio_tower_finished(panel),
                 }
             }
-            host.quiet = 0.0;
+            host.reset_quiet();
         } else if let Some(signal) = host.story.watched_signals().into_iter().find(|s| s != "throw_rock" && !host.used.contains(&(0, s.clone()))) {
             // No trigger left: give an input a script waits for.
             info!("story autopilot: input {signal}");
             host.used.insert((0, signal.clone()));
             host.story.input_signal(&signal);
-            host.quiet = 0.0;
+            host.reset_quiet();
         }
     }
     for c in commands {
@@ -4182,6 +4189,44 @@ fn run_story(
                     "CAPI_Pawn.Holster" | "CAPI_Pawn.ForceHolster" if a(0) == fc3_story::PLAYER.to_string() => {
                         scripted.camera_drawn = false;
                         scripted.holstered = true;
+                    }
+                    // A weapon drawn by a script (`WieldInventory`'s
+                    // DrawWeapon: `player, category, class, name, force`):
+                    // the one named, else the first carried of its class or
+                    // category. (JAS_130's ride hands the player the GM-94
+                    // so, for the trucks behind; it had stayed on whatever
+                    // was in hand.)
+                    "CAPI_Pawn.DrawWeapon" if a(0) == fc3_story::PLAYER.to_string() => {
+                        if let Ok(mut inv) = inventory.single_mut() {
+                            let named = Some(a(3)).filter(|n| !n.is_empty()).and_then(|n| weapon_def(&inv, &n, &host.story.data()));
+                            let kind = |c: crate::weapons::WeaponClass| {
+                                use crate::weapons::WeaponClass as W;
+                                if !a(2).is_empty() {
+                                    return hunt_class(&a(2)) == Some(c) || (a(2).eq_ignore_ascii_case("carlgustav") && c == W::Launcher);
+                                }
+                                match a(1).to_ascii_lowercase().as_str() {
+                                    "handtohand" => c == W::Melee,
+                                    "secondary" => c == W::Pistol,
+                                    "primary" => matches!(c, W::Smg | W::Rifle | W::Shotgun | W::Sniper | W::Lmg),
+                                    "special" => matches!(c, W::Launcher | W::Bow | W::Flamethrower | W::GrenadeLauncher),
+                                    _ => false,
+                                }
+                            };
+                            let slot = match named {
+                                Some(def) => inv.slots.iter().position(|s| s.def == def),
+                                None => inv.slots.iter().position(|s| kind(inv.defs[s.def].class)),
+                            };
+                            debug!("story: draw {:?} ({:?})", slot.map(|i| inv.defs[inv.slots[i].def].name), args);
+                            if let Some(i) = slot.filter(|i| *i != inv.current) {
+                                // (Put away and drawn as a switch is.)
+                                let away = inv.def().holster;
+                                inv.current = i;
+                                inv.reloading = 0.0;
+                                inv.switching = away + inv.def().draw;
+                                inv.cooldown = inv.cooldown.max(inv.switching);
+                                scripted.redraw = true;
+                            }
+                        }
                     }
                     // The player's field of view set, or given back (`player,
                     // degrees, seconds, on`).
@@ -6161,7 +6206,7 @@ fn autopilot_loot(
     let harmless = |at: Vec3| stims.harm_near(at, 1.0).is_none() && !fires.is_burning_at(at);
     // (Once the story has stalled a while: what holds this step back, if
     // anything.)
-    let report = host.quiet > 20.0 && host.quiet - time.delta_secs() <= 20.0;
+    let report = [8.0, 20.0].iter().any(|at| host.quiet > *at && host.quiet - time.delta_secs() <= *at);
     if report {
         if let Ok((_, pt, p, h, _, _)) = players.single() {
             info!(
@@ -6253,7 +6298,7 @@ fn autopilot_loot(
             p.y = feet_near(&spatial, &heights, me, p, feet_here.y);
             info!("story autopilot: out of the flames");
             teleport(&mut at, &mut player, to_dunia(p), 0.0);
-            host.quiet = 0.0;
+            host.reset_quiet();
             return;
         }
     }
@@ -6333,7 +6378,7 @@ fn autopilot_loot(
                 actions.press(Action::Fire);
             }
         }
-        host.quiet = 0.0;
+        host.reset_quiet();
         return;
     }
     // A camera a script drew and no longer holds the player in (no action
@@ -6658,7 +6703,7 @@ fn autopilot_loot(
                 *last = Some((p.id, "rounds"));
             }
             teleport(&mut at, &mut player, to_dunia(gt.translation()), 0.0);
-            host.quiet = 0.0;
+            host.reset_quiet();
             return;
         }
         let body = npcs
@@ -6697,7 +6742,7 @@ fn autopilot_loot(
                 let mut feet = nt.translation + (at.translation - nt.translation).with_y(0.0).normalize_or(Vec3::Z) * 0.9;
                 feet.y = feet_near(&spatial, &heights, me, feet, nt.translation.y).max(nt.translation.y - crate::player::HALF_HEIGHT - 0.5);
                 teleport(&mut at, &mut player, to_dunia(feet), 0.0);
-                host.quiet = 0.0;
+                host.reset_quiet();
                 return;
             }
             player.yaw = (-delta.x).atan2(-delta.z);
@@ -6743,7 +6788,7 @@ fn autopilot_loot(
             let delta = gt.translation() - (at.translation - Vec3::Y * crate::player::HALF_HEIGHT);
             if Vec2::new(delta.x, delta.z).length() > 1.0 || delta.y.abs() > 1.5 {
                 teleport(&mut at, &mut player, to_dunia(gt.translation()), 0.0);
-                host.quiet = 0.0;
+                host.reset_quiet();
                 return;
             }
             player.pitch = -0.9;
@@ -6798,7 +6843,7 @@ fn autopilot_loot(
                     if let Some(feet) = feet.filter(|f| !fixed && !leashed(*f) && came_near.insert(actor.id)) {
                         info!("story autopilot: {} out of reach; going up to him", actor.id);
                         teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
-                        host.quiet = 0.0;
+                        host.reset_quiet();
                         *shooting = None;
                         return;
                     }
@@ -6837,7 +6882,7 @@ fn autopilot_loot(
                 .map(|(_, p)| *p);
             if let Some(feet) = ground {
                 teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
-                host.quiet = 0.0;
+                host.reset_quiet();
                 *shooting = None;
                 return;
             }
@@ -6863,7 +6908,7 @@ fn autopilot_loot(
                     *last = Some((actor.id, "machete"));
                 }
                 teleport(&mut at, &mut player, to_dunia(feet), 0.0);
-                host.quiet = 0.0;
+                host.reset_quiet();
                 return;
             }
             let chest = nt.translation + Vec3::Y * 0.3 - (at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT));
@@ -6896,7 +6941,7 @@ fn autopilot_loot(
                 return;
             }
             teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
-            host.quiet = 0.0;
+            host.reset_quiet();
             *shooting = None;
             return;
         }
@@ -6971,7 +7016,7 @@ fn autopilot_loot(
             feet.y = feet_near(&spatial, &heights, me, feet, at.translation.y - crate::player::HALF_HEIGHT);
             info!("story autopilot: {who}, someone to keep safe, beside the player; stepping away");
             teleport(&mut at, &mut player, to_dunia(feet), 0.0);
-            host.quiet = 0.0;
+            host.reset_quiet();
             *shooting = None;
             return;
         }
@@ -7015,14 +7060,14 @@ fn autopilot_loot(
                 if let Some(spot) = beside_companion {
                     info!("story autopilot: someone in the line of fire; to the companion's side for {}", actor.id);
                     teleport(&mut at, &mut player, to_dunia(spot), 0.0);
-                    host.quiet = 0.0;
+                    host.reset_quiet();
                 } else if leashed(feet) {
                     info!("story autopilot: {} behind someone and too far from the companion; another for a while", actor.id);
                     skipped.insert(actor.id, now + 20.0);
                 } else {
                     info!("story autopilot: {} in the line of fire; round to {}'s other side", "someone", actor.id);
                     teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
-                    host.quiet = 0.0;
+                    host.reset_quiet();
                 }
                 *blocked = None;
             }
@@ -7119,7 +7164,7 @@ fn autopilot_loot(
             let mut feet = behind;
             feet.y = feet_near(&spatial, &heights, me, feet, nt.translation.y - crate::player::HALF_HEIGHT).max(nt.translation.y - crate::player::HALF_HEIGHT - 0.5);
             teleport(&mut at, &mut player, to_dunia(feet), 0.0);
-            host.quiet = 0.0;
+            host.reset_quiet();
             return;
         }
         player.yaw = (-delta.x).atan2(-delta.z);
@@ -7296,7 +7341,7 @@ fn autopilot_loot(
                 let mut stand = spot + side * 0.8;
                 stand.y = feet_near(&spatial, &heights, me, stand, spot.y).max(spot.y - player.eye - 0.9);
                 teleport(&mut at, &mut player, to_dunia(stand), 0.0);
-                host.quiet = 0.0;
+                host.reset_quiet();
                 return;
             }
             let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
@@ -7329,7 +7374,7 @@ fn autopilot_loot(
                 info!("story autopilot: go to pickup {}", data.name_of(id).unwrap_or("?"));
                 far_pickups.insert(id);
                 teleport(&mut at, &mut player, to_dunia(to_bevy(pos) + Vec3::Z * 1.5), 0.0);
-                host.quiet = 0.0;
+                host.reset_quiet();
                 return;
             }
         }
@@ -7337,9 +7382,9 @@ fn autopilot_loot(
     // A character or body a script waits to see through the camera (a VIP's
     // corpse to photograph): a few steps off, the camera raised at it.
     let photos: Vec<u64> = host.story.awaited_discoveries().into_iter().filter(|id| !taken.taken.contains(id)).collect();
-    if !photos.is_empty() && host.quiet > 20.0 && host.quiet - time.delta_secs() <= 20.0 {
+    if !photos.is_empty() && host.quiet > 8.0 && host.quiet - time.delta_secs() <= 8.0 {
         let found: Vec<u64> = npcs.iter().filter(|q| photos.contains(&q.4.id)).map(|q| q.4.id).collect();
-        info!("story autopilot: to photograph {photos:?} (in the world {found:?}, camera {})", scripted.has_camera());
+        info!("story autopilot: to photograph {photos:?} (in the world {found:?}, camera {}, alarms first {alarm_first})", scripted.has_camera());
     }
     // (Once begun, it keeps the camera up: the story stirring meanwhile, as
     // a script's timer does, mustn't drop it every few frames. An alarm to
@@ -7421,7 +7466,7 @@ fn autopilot_loot(
                     if feet_now.distance(*feet) > 2.0 && *tries < 2 {
                         *tries += 1;
                         teleport(&mut at, &mut player, to_dunia(*feet), 0.0);
-                        host.quiet = 0.0;
+                        host.reset_quiet();
                         return;
                     }
                     // (No photo from there after a while: another stand.)
@@ -7449,7 +7494,7 @@ fn autopilot_loot(
                 let mut feet = spot + side * 4.0;
                 feet.y = feet_near(&spatial, &heights, me, feet, spot.y - crate::player::HALF_HEIGHT).max(spot.y - crate::player::HALF_HEIGHT - 0.5);
                 teleport(&mut at, &mut player, to_dunia(feet), 0.0);
-                host.quiet = 0.0;
+                host.reset_quiet();
                 return;
             }
             let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
@@ -7525,7 +7570,7 @@ fn autopilot_loot(
                     let mut stand = spot + Vec3::X * 0.8;
                     stand.y = heights.height_at(stand).unwrap_or(spot.y).max(spot.y - 0.5);
                     teleport(&mut at, &mut player, to_dunia(stand), 0.0);
-                    host.quiet = 0.0;
+                    host.reset_quiet();
                 } else if now >= *next_press {
                     *next_press = now + 0.5;
                     let aim = spot - (at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT));
@@ -7637,7 +7682,7 @@ fn autopilot_loot(
             let feet = at.translation - Vec3::Y * crate::player::HALF_HEIGHT;
             if Vec2::new(stand.x - feet.x, stand.z - feet.z).length() > if melee { 1.0 } else { 3.0 } {
                 teleport(&mut at, &mut player, to_dunia(stand), 0.0);
-                host.quiet = 0.0;
+                host.reset_quiet();
                 return;
             }
             let eye = at.translation + Vec3::Y * (player.eye - crate::player::HALF_HEIGHT);
@@ -7685,7 +7730,7 @@ fn autopilot_loot(
                 stand.y = heights.height_at(stand).unwrap_or(p.y);
                 teleport(&mut at, &mut player, to_dunia(stand), 0.0);
                 host.hunted_at = now;
-                host.quiet = 0.0;
+                host.reset_quiet();
                 return;
             }
         }
@@ -7731,7 +7776,7 @@ fn autopilot_loot(
                     feet.y = feet_near(&spatial, &heights, me, feet, bt.translation.y);
                     teleport(&mut at, &mut player, to_dunia(feet), 0.0);
                 }
-                host.quiet = 0.0;
+                host.reset_quiet();
             } else if now >= *next_press {
                 *next_press = now + 0.6;
                 actions.press(crate::controls::Action::Interact);
@@ -7791,7 +7836,7 @@ fn autopilot_loot(
         feet.y = heights.height_at(feet).unwrap_or(target.y - crate::player::HALF_HEIGHT);
         if !inside(feet) { return }
         teleport(&mut at, &mut player, to_dunia(feet), 0.0);
-        host.quiet = 0.0;
+        host.reset_quiet();
         return;
     }
     let eye = at.translation + Vec3::Y * (crate::player::EYE_HEIGHT - crate::player::HALF_HEIGHT);

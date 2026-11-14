@@ -6099,6 +6099,18 @@ to SQC_080, each a brief at its giver then its blocks):
   vehicle no longer hides him from their eyes, and rounds at him go into it
   (some getting through to him, `stray_hits`). JAS_130 completed, on into
   "Find a way to the cave."
+* **A weapon handed over.** `WieldInventory`'s DrawWeapon
+  (`CAPI_Pawn.DrawWeapon(player, category, class, name, force)`) had gone
+  unplayed: JAS_130's ride hands the player the GM-94 for the trucks
+  behind, and he stayed on whatever was in hand. The weapon named (by the
+  script's archetype name, `weapon_def`), else the first carried of the
+  class or category (`primary`, `secondary`, `HandToHand`, `Special`), is
+  now put away for and drawn as a switch is.
+* **What reset the quiet.** The autopilot's steps take the story to have
+  stirred (`StoryHost::reset_quiet`, `#[track_caller]`), and the stall
+  report now says where the last one was, beside the script command that
+  last stirred it: HUR_020's corpses went unphotographed in one run, the
+  quiet reset every few seconds by something the report couldn't name.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.
