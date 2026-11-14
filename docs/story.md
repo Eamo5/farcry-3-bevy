@@ -2859,6 +2859,8 @@ tests pass; full conversion reports zero errors
 Actual puff simulation/rendering and its attachment/stop semantics remain
 unfinished.
 
+(Superseded: the puff now plays by default, `FC3_VINE_PUFF_OFF` leaving it
+out; see "The vine's puff, always".)
 `FC3_VINE_PUFF_TEST=1` now enables an explicitly provisional puff preview
 alongside the opt-in vine controller. It draws the cached six-vertex sprite
 polygon with the original 5x5 atlas, authored tint/size/alpha knot values,
@@ -6111,6 +6113,14 @@ to SQC_080, each a brief at its giver then its blocks):
   report now says where the last one was, beside the script command that
   last stirred it: HUR_020's corpses went unphotographed in one run, the
   quiet reset every few seconds by something the report couldn't name.
+* **The vine's puff, always.** The vine's authored puff (its
+  `Teleport_Particle`, `vine_puff`) had stayed an opt-in preview while the
+  vine itself is played by default; it now plays with it
+  (`FC3_VINE_PUFF_OFF` leaves it out). Checking it showed the autopilot
+  putting the player on DOC_020's vine while a checkpoint's load still
+  placed him: he climbed it under the loading screen, which stayed up
+  through the climb, the puff and the dolly. It now waits for the player to
+  be in the world and the world about him in.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

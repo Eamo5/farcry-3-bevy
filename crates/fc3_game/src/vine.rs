@@ -274,6 +274,7 @@ fn autopilot_climb(
     mut actions: ResMut<crate::controls::ActionState>,
     mut players: Query<(&mut Transform, &mut Player)>,
     mut placed: Local<Option<(u64, f32)>>,
+    (terrain, objects, vegetation): (Res<crate::terrain::TerrainStreamer>, Res<crate::objects::ObjectStreamer>, Res<crate::vegetation::VegStreamer>),
 ) {
     let _slow = crate::story::Slow::new("autopilot_climb");
     if std::env::var_os("FC3_STORY_AUTOPILOT").is_none() {
@@ -295,6 +296,14 @@ fn autopilot_climb(
     vines.autopilot = true;
     let Ok((mut t, mut p)) = players.single_mut() else { return };
     let mounted = mounted_on(&mount, &ways, ladder);
+    // (Not before he is in the world, the world about him in: put on the
+    // vine as a checkpoint's load still placed him, he climbed it under the
+    // loading screen, which stayed up through the climb, its puff and its
+    // dolly.)
+    let streaming = terrain.pending_count() + objects.pending_count() + vegetation.pending_count() > 0;
+    if (p.spawning || streaming) && !mounted {
+        return;
+    }
     let since = placed.filter(|(v, _)| *v == id).map(|(_, s)| s + time.delta_secs());
     if !mounted && since.is_none_or(|s| s > PLACE_AGAIN) {
         let base = Vec3::from(l.base);

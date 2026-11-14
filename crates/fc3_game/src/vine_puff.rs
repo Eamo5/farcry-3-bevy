@@ -1,5 +1,7 @@
-//! Opt-in authored puff preview. Preserves the source geometry and knot
-//! values; interpolation, SH lighting and soft intersections remain provisional.
+//! The vine's authored puff (its `Teleport_Particle`), played as the vine
+//! takes the player away (`FC3_VINE_PUFF_OFF` leaves it out). Preserves the
+//! source geometry and knot values; interpolation, SH lighting and soft
+//! intersections remain provisional.
 use bevy::prelude::*;
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -27,7 +29,7 @@ pub struct Puff {
 
 fn load(mut puff: ResMut<Puff>, server: Res<AssetServer>, mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ParticleMaterial>>, mut commands: Commands) {
-    if std::env::var("FC3_VINE_PUFF_TEST").as_deref() != Ok("1") { return; }
+    if std::env::var_os("FC3_VINE_PUFF_OFF").is_some() { return; }
     let result = (|| -> anyhow::Result<Emitter> {
         use anyhow::{Context, ensure};
         let effect = Effect::parse(&std::fs::read_to_string(fc3_formats::cache::default_cache_root()
