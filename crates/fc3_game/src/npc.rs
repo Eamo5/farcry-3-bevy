@@ -1918,10 +1918,19 @@ fn perceive(
     players: Query<(Entity, &Transform, &Player, &Health, Option<&crate::weapons::Inventory>)>,
     mut npcs: Query<(Entity, &Transform, &mut Npc, &Health), (Without<Corpse>, Without<Frozen>, Without<Riding>)>,
     beasts: Query<(Entity, &Transform, &Health, &crate::wildlife::WildAnimal, Has<crate::wildlife::Handled>), Without<Npc>>,
-    (cover, cinema, disguise): (Res<crate::vegetation::Concealment>, Res<crate::cinema::Cinema>, Res<Disguise>),
+    (cover, cinema, disguise, driving, rides): (
+        Res<crate::vegetation::Concealment>,
+        Res<crate::cinema::Cinema>,
+        Res<Disguise>,
+        Res<crate::vehicles::Driving>,
+        Query<&crate::vehicles::Vehicle>,
+    ),
 ) {
     let dt = time.delta_secs();
     let Ok((pe, pt, player, ph, inventory)) = players.single() else { return };
+    // (The player in a vehicle is seen through it, its windows: its body
+    // stood between him and every eye, and no one saw a driver.)
+    let riding: Vec<Entity> = driving.vehicle.and_then(|v| rides.get(v).ok().map(|r| vec![v, r.body()])).unwrap_or_default();
     let posture = posture(player, inventory);
     // The story's autopilot (tests) steps into triggers in plain view: unseen.
     // (Nor while a cutscene has the player.)
@@ -1997,7 +2006,7 @@ fn perceive(
         let mut visible = false;
         if !friendly && !fooled && impaired.sees() && !ph.dead && !unseen && dist < reach && (in_view || dist < sixth.0) {
             if let Ok(dir) = Dir3::new(to) {
-                let filter = SpatialQueryFilter::from_excluded_entities([e]);
+                let filter = SpatialQueryFilter::from_excluded_entities(std::iter::once(e).chain(riding.iter().copied()));
                 visible = match spatial.cast_ray(eye, dir, dist, true, &filter) {
                     Some(hit) => hit.entity == pe || hit.distance > dist - 0.6,
                     None => true,
@@ -2325,7 +2334,7 @@ fn act(
     mut commands: Commands,
     mut noises: MessageWriter<Noise>,
     mut damage: MessageWriter<DamageEvent>,
-    (mut loops, mut sfx, aim_table, settings, strikes, vehicles, parents): (
+    (mut loops, mut sfx, aim_table, settings, strikes, vehicles, parents, driving): (
         MessageWriter<crate::sound::LoopSfx>,
         MessageWriter<crate::sound::PlaySfx>,
         Res<AimTable>,
@@ -2333,6 +2342,7 @@ fn act(
         Res<crate::combat::DamageTable>,
         Query<(), With<crate::vehicles::Vehicle>>,
         Query<&ChildOf>,
+        Res<crate::vehicles::Driving>,
     ),
     (mut alarms, mut throw_clock, nav, probe, collider_names, bystanders): (
         MessageWriter<crate::outposts::AlarmRaised>,
@@ -2368,8 +2378,13 @@ fn act(
     let Ok((pe, pt, player)) = players.single() else { return };
     *throw_clock -= dt;
     let spare: Vec<Vec3> = bystanders.iter().filter(|(_, a)| !a.dead).map(|(t, _)| t.translation()).collect();
-    // (A vehicle, or one of its parts: held fire through.)
-    let is_vehicle = |e: Entity| vehicles.contains(e) || parents.get(e).is_ok_and(|c| vehicles.contains(c.parent()));
+    // (A vehicle, or one of its parts: held fire through; but not the one
+    // the player rides when he is shot at, its rounds his and its own: no
+    // one fired on a driver.)
+    let is_vehicle = |e: Entity, at_player: bool| {
+        let root = if vehicles.contains(e) { Some(e) } else { parents.get(e).ok().map(|c| c.parent()).filter(|p| vehicles.contains(*p)) };
+        root.is_some_and(|r| !(at_player && driving.vehicle == Some(r)))
+    };
     let mut others: std::collections::HashMap<Entity, (Vec3, Vec3)> = npcs.iter().map(|(e, t, n, _, _, _)| (e, (t.translation, n.velocity))).collect();
     others.extend(beasts.iter().map(|(e, t)| (e, (t.translation, Vec3::ZERO))));
     for (e, mut t, mut npc, h, children, garrison) in &mut npcs {
@@ -3018,7 +3033,7 @@ fn shoot(
     sfx: &mut MessageWriter<crate::sound::PlaySfx>,
     lap: Option<&Lap>,
     spare: &[Vec3],
-    is_vehicle: &dyn Fn(Entity) -> bool,
+    is_vehicle: &dyn Fn(Entity, bool) -> bool,
 ) {
     use crate::sound::ev;
     // (A charger has nothing to shoot.)
@@ -3033,7 +3048,7 @@ fn shoot(
         let along = chest - muzzle;
         if let Ok(d) = Dir3::new(along) {
             let blocked = spatial.cast_ray(muzzle, d, along.length(), true, &SpatialQueryFilter::from_excluded_entities([me]));
-            if blocked.is_some_and(|h| h.entity != tgt.entity && h.distance < along.length() - 0.5 && is_vehicle(h.entity)) {
+            if blocked.is_some_and(|h| h.entity != tgt.entity && h.distance < along.length() - 0.5 && is_vehicle(h.entity, tgt.is_player)) {
                 return;
             }
         }

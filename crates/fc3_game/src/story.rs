@@ -6085,7 +6085,13 @@ fn autopilot_loot(
     (heights, stims, fires, startled): (Res<crate::terrain::Heightfield>, Res<crate::stims::Stims>, Res<crate::fire::Fires>, Res<crate::story_actors::Startled>),
     mut players: Query<(Entity, &mut Transform, &mut Player, &crate::combat::Health, &crate::weapons::Inventory, Option<&crate::combat::PlayerStats>)>,
     animals: Query<(Entity, &Transform, &crate::wildlife::WildAnimal, &crate::combat::Health, Option<&crate::wildlife::Carcass>, Option<&crate::story_actors::StoryActor>), Without<Player>>,
-    (plants, mut swap, world): (Query<(&crate::pickups::Pickup, &GlobalTransform)>, ResMut<crate::pickups::AutopilotSwap>, Res<crate::pickups::WorldState>),
+    (plants, mut swap, world, driving, rides): (
+        Query<(&crate::pickups::Pickup, &GlobalTransform)>,
+        ResMut<crate::pickups::AutopilotSwap>,
+        Res<crate::pickups::WorldState>,
+        Res<crate::vehicles::Driving>,
+        Query<&crate::vehicles::Vehicle>,
+    ),
     mut actions: ResMut<crate::controls::ActionState>,
     mut last: Local<Option<(u64, &'static str)>>,
     (
@@ -6198,6 +6204,13 @@ fn autopilot_loot(
         return;
     }
     let Ok((me, mut at, mut player, health, inventory, stats)) = players.single_mut() else { return };
+    // (Sight lines pass through the vehicle he rides, as his rounds do:
+    // JAS_130's ambush stood in plain view of the truck's front seat and was
+    // never shot, each foe "out of sight" behind the cab's own body.)
+    let sight: [Entity; 3] = {
+        let riding = driving.vehicle.and_then(|v| rides.get(v).ok().map(|r| (v, r.body())));
+        riding.map_or([me; 3], |(v, body)| [me, v, body])
+    };
     // Shooting from where he is, not going after anyone: a passenger, gun in
     // hand, or on a mounted gun (HUR_040's barge).
     // (Or with a rifle lent where it was taken: a sniping challenge's.)
@@ -6297,7 +6310,7 @@ fn autopilot_loot(
         use crate::controls::Action;
         let now = time.elapsed_secs();
         if std::env::var("FC3_STORY_WAIT_DEBUG").is_ok() && (now - time.delta_secs()) as u32 / 2 != now as u32 / 2 {
-            let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+            let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(sight);
             let meets = Dir3::new(aim).ok().and_then(|d| spatial.cast_ray(eye, d, aim.length() + 2.0, true, &filter)).map(|h| (h.entity, h.entity == e, aim.length() - h.distance));
             info!(
                 "story autopilot: defending from {id}: it at {:?} ({:.0} health), {} with {} in the magazine, aim blend {:.2}; the aim meets {meets:?}",
@@ -6762,7 +6775,7 @@ fn autopilot_loot(
                     let flat = (at.translation - nt.translation).with_y(0.0).normalize_or(Vec3::Z);
                     let chest = nt.translation + Vec3::Y * 0.4;
                     let his_feet = nt.translation.y - crate::player::HALF_HEIGHT;
-                    let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+                    let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(sight);
                     // (A flamethrower in hand, from its reach's end: close
                     // up, its fire took the shack and the player with it.)
                     let radii = if inventory.def().class == crate::weapons::WeaponClass::Flamethrower { [8.0f32, 6.0, 10.0, 5.0] } else { [2.0, 3.0, 5.0, 8.0] };
@@ -6897,7 +6910,7 @@ fn autopilot_loot(
         let clear = |point: Vec3| {
             let to = point - eye;
             let Ok(dir) = Dir3::new(to) else { return true };
-            let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+            let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(sight);
             spatial.cast_ray(eye, dir, to.length() + 0.5, true, &filter).is_none_or(|h| {
                 let hit = eye + dir * h.distance;
                 h.distance > to.length() - 0.45 || (hit - nt.translation).with_y(0.0).length() < 0.6
@@ -6921,7 +6934,7 @@ fn autopilot_loot(
         if std::env::var("FC3_STORY_WAIT_DEBUG").is_ok() && (now - time.delta_secs()) as u32 / 3 != now as u32 / 3 {
             // (And what a shot along the aim meets first, how far short of
             // him.)
-            let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+            let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(sight);
             let meets = Dir3::new(aim).ok().and_then(|d| spatial.cast_ray(eye, d, aim.length() + 2.0, true, &filter)).map(|h| {
                 let name = placed.get(h.entity).ok().and_then(|(id, _)| host.story.data().name_of(id.0).map(str::to_string));
                 (h.entity, name, aim.length() - h.distance)
@@ -7364,7 +7377,7 @@ fn autopilot_loot(
             // canyon: from the spot the player was sent to watch it from,
             // not off the catwalk's edge, down in the canyon under it).
             if !npcs.iter().any(|q| q.4.id == id) {
-                let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+                let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(sight);
                 let aim = spot + Vec3::Y * rise;
                 // (Not steeply up or down at it: the view's pitch has its
                 // limits.)
@@ -7569,7 +7582,7 @@ fn autopilot_loot(
             // gone after from the hill over it, the player sent off its edge.)
             let under_ground = heights.height_at(qt.translation).is_some_and(|g| g > qt.translation.y + 3.0);
             if (under_ground && (stand.y - qt.translation.y).abs() > 2.0) || (stand.y - qt.translation.y).abs() > 6.0 {
-                let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+                let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(sight);
                 let sight = |p: Vec3| {
                     let eye = p + Vec3::Y * 1.6;
                     let to = target - eye;
@@ -7590,7 +7603,7 @@ fn autopilot_loot(
             // water it swam in, and its kin, bit the player to death.)
             let wet = |p: Vec3| heights.height_at(p).is_some_and(|g| crate::water::surface(p, Some(g)) > g + 0.5);
             if !melee && wet(qt.translation) && wet(stand) {
-                let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities([me]);
+                let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(sight);
                 let sight = |p: Vec3| {
                     let eye = p + Vec3::Y * 1.6;
                     let to = target - eye;

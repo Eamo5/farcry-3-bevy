@@ -6089,6 +6089,16 @@ to SQC_080, each a brief at its giver then its blocks):
   m/s for ten minutes, until the pirates blew it up. A vehicle whose driver
   isn't the player keeps its parking brake on until it is first given
   controls (`Vehicle::control`).
+* **Seen through the cab.** Then JAS_130_B60's ambush stood in plain view of
+  the truck's front seat and was never shot: every sight line the autopilot
+  drew from the seat met the cab's own body first, so each foe was "out of
+  sight". Its sight lines now pass through the vehicle it rides, as its
+  rounds already did. The same held for the foes: no one saw the player in
+  a vehicle (its body between him and every eye), and a round meeting a
+  vehicle on its way was held, so no one fired on a driver; the player's
+  vehicle no longer hides him from their eyes, and rounds at him go into it
+  (some getting through to him, `stray_hits`). JAS_130 completed, on into
+  "Find a way to the cave."
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.
