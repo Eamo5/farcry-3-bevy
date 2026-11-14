@@ -45,13 +45,16 @@ static colliders are built from it.
   collider from the render meshes, for comparisons.
 
 The physics engine's collider trees (its bounding volume hierarchies, one per
-kind of body) are mended after each step by reinserting the colliders that
-moved, in place (`physics::collider_tree_optimization`). Avian's default
-rebuilds a tree in part or whole by how much of it moved, on a clone of it,
-and with the island's tens of thousands of colliders streamed in and out and
-the story's people about, that held every physics step up 5 to 6 ms (the
-step itself 7.6 ms a frame, now 2.2 ms, at WIL_040's village). In place, the
-trees can't be queried during the step; nothing of ours queries them then.
+kind of body) are mended after each step in place
+(`physics::collider_tree_optimization`): by default avian mends a clone of
+each, and with the island's tens of thousands of colliders streamed in and
+out and the story's people about, cloning and mending held every physics
+step up 5 to 6 ms (the step itself 7.6 ms a frame, now 2 to 4 ms, at
+WIL_040's village). In place, the trees can't be queried during the step;
+nothing of ours queries them then. (Mending by reinsertion alone, whatever
+moved, was cheaper still from step to step, but a sector's colliders
+streamed in at once took one step 0.9 s: avian's own choice, by how much
+moved, of reinsertion, a partial rebuild or a full one, is kept.)
 
 ## Climbing
 

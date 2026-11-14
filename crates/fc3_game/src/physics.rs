@@ -29,8 +29,7 @@ impl Plugin for WorldPhysicsPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(PhysicsPlugins::default())
             .insert_resource(Gravity(Vec3::NEG_Y * 9.81))
-            // (The collider trees mended a step at a time by reinserting what
-            // moved, in place: rebuilding them, a clone of each taken first,
+            // (The collider trees mended in place: a clone of each mended
             // held every physics step up 5 ms with the island's thousands of
             // colliders and the story's people about. Our spatial queries
             // run outside the physics step.)
@@ -48,11 +47,7 @@ impl Plugin for WorldPhysicsPlugin {
 }
 
 fn collider_tree_optimization() -> avian3d::collider_tree::ColliderTreeOptimization {
-    avian3d::collider_tree::ColliderTreeOptimization {
-        optimization_mode: avian3d::collider_tree::TreeOptimizationMode::Reinsert,
-        optimize_in_place: true,
-        ..default()
-    }
+    avian3d::collider_tree::ColliderTreeOptimization { optimize_in_place: true, ..default() }
 }
 
 /// Marks the child entity holding a terrain sector's heightfield.
