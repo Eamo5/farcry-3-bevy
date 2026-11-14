@@ -6072,6 +6072,14 @@ to SQC_080, each a brief at its giver then its blocks):
   instead (`pickups::interact`), as the game offers what is looked at. And
   a gun the autopilot, dry, goes to pick up is one it means to swap for
   (`AutopilotSwap`): it had refused the swap and left each after a while.
+* **An area's foe.** JAS_110's "Kill the camp operator" marks the camp with
+  an area marker (`MissionObjectiveMarker_CO_Zone`, its sub-kind `Area`),
+  and a health listener watches the operator alone; he walks the camp 14 m
+  from the marker's middle, past the 12 m a foe watched alone is gone after
+  from his marker (`MARKED_FOE_WITHIN`), and he was left alone for good.
+  An area marker's foes are now those within 30 m of it
+  (`MARKED_FOE_IN_AREA`; the `Area` sub-kinds are read from the map
+  objective types). JAS_110_B10 completed.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

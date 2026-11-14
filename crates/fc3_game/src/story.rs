@@ -4986,6 +4986,24 @@ const GIVER_WALK_QUIET: f32 = 8.0;
 /// 6.2 m off his marker's foot).
 const MARKED_FOE_AFTER: f32 = 15.0;
 const MARKED_FOE_WITHIN: f32 = 12.0;
+/// As near (m) an area's marker (its sub-kind `Area`: a place to search, a
+/// camp) as a foe watched alone is to be gone after.
+const MARKED_FOE_IN_AREA: f32 = 30.0;
+
+/// The markers' sub-kinds that mark an area (`map_objectives`, `Area`).
+fn area_subtypes() -> &'static std::collections::HashSet<u64> {
+    static AREAS: std::sync::OnceLock<std::collections::HashSet<u64>> = std::sync::OnceLock::new();
+    AREAS.get_or_init(|| {
+        let text = std::fs::read_to_string(fc3_formats::cache::default_cache_root().join(fc3_formats::map_objectives::MAP_OBJECTIVES_REL)).unwrap_or_default();
+        fc3_formats::map_objectives::from_text(&text)
+            .unwrap_or_default()
+            .iter()
+            .flat_map(|t| t.subtypes.iter())
+            .filter(|s| s.name.eq_ignore_ascii_case("Area"))
+            .map(|s| s.id)
+            .collect()
+    })
+}
 /// How long (s) the autopilot has gone after a vehicle before a mission
 /// failing is put down to it.
 const WRECK_BLAMED_AFTER: f32 = 3.0;
@@ -6427,13 +6445,26 @@ fn autopilot_loot(
     // has gone quiet: SQC_070's privateers, "Eliminate the first
     // privateer.", each a health listener's alone.)
     if host.quiet > MARKED_FOE_AFTER {
-        let marks: Vec<Vec3> = host.story.objective_markers().into_iter().map(|(_, p)| to_bevy(p)).collect();
+        // (An area's marker over the place he keeps to, the further: JAS_110's
+        // camp operator walks his camp 14 m from its marker's middle, "Kill
+        // the camp operator", and was left alone for good.)
+        let data = host.story.data();
+        let marks: Vec<(Vec3, f32)> = host
+            .story
+            .objective_markers_shown()
+            .into_iter()
+            .map(|(id, p, sub)| {
+                let area = sub.eq_ignore_ascii_case("Area") || data.markers.get(&id).is_some_and(|m| area_subtypes().contains(&m.sub_kind));
+                (to_bevy(p), if area { MARKED_FOE_IN_AREA } else { MARKED_FOE_WITHIN })
+            })
+            .collect();
+        drop(data);
         for q in &npcs {
             // (Across the ground: SQC_070's first privateer stands 6 m
             // under his marker, 4 m to the side; a counter on him alone
             // watches him, `CCounterEvent`.)
             let watched = singly.contains(&q.4.id) || counted.contains(&q.4.id);
-            if watched && marks.iter().any(|m| m.with_y(0.0).distance(q.0.translation.with_y(0.0)) < MARKED_FOE_WITHIN) {
+            if watched && marks.iter().any(|(m, within)| m.with_y(0.0).distance(q.0.translation.with_y(0.0)) < *within) {
                 to_kill.insert(q.4.id);
                 if report {
                     info!("story autopilot: marked foe {} (hostile {}, {:?}, seated {}, dead {})", q.4.id, q.5.hostile(), q.5.state, q.4.seated, q.1.dead);
