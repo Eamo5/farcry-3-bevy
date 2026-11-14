@@ -6145,6 +6145,11 @@ to SQC_080, each a brief at its giver then its blocks):
   WIL_020 that was the flamethrower: its fields were never burnt. It now
   draws a spare gun first (not the flamethrower, nor the machete, which has
   the first gun go). WIL_020 completed, all five fields burnt.
+* **Held still to look.** `PlayerLookAtModifier` with `lockPlayer` (and a
+  mission bomb's countdown) pushes the "observer" beautifier on the player
+  while it turns his view to something, and pops it after; it had gone
+  unplayed, and he could walk off mid-turn. While one is pushed he now
+  stands still (`ScriptedPlayer::observers`).
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

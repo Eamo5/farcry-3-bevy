@@ -1454,6 +1454,9 @@ pub struct ScriptedPlayer {
     /// (`DisplayInteractionMessageUI`: SAM_020's "[Shoot] Detonate" on the
     /// helicopter).
     pub message: Option<u32>,
+    /// The "observer" beautifiers pushed on the player: while any is, he
+    /// stands still.
+    pub observers: u32,
     /// Black over the screen: (now, target, seconds to get there).
     pub fade: (f32, f32, f32),
     /// Seconds the screen has been held black (a scene lifts it; this is
@@ -1558,6 +1561,7 @@ impl Default for ScriptedPlayer {
             god: false,
             hud_hidden: false,
             message: None,
+            observers: 0,
             fade: (0.0, 0.0, 0.0),
             black_for: 0.0,
             backup: None,
@@ -4088,6 +4092,16 @@ fn run_story(
                         }
                     }
                     "CAPI_Player.SetMovementSensitivity" => scripted.movement = a(1).parse().unwrap_or(1.0f32).clamp(0.0, 2.0),
+                    // The player held still while a script turns his view
+                    // to something (`PlayerLookAtModifier`'s lockPlayer, a
+                    // mission bomb's countdown: the "observer" beautifier),
+                    // and let go.
+                    "CAPI_Pawn.PushBeautifier" if a(0) == fc3_story::PLAYER.to_string() && a(1).eq_ignore_ascii_case("observer") => {
+                        scripted.observers += 1;
+                    }
+                    "CAPI_Pawn.PopBeautifier" if a(0) == fc3_story::PLAYER.to_string() && a(1).eq_ignore_ascii_case("observer") => {
+                        scripted.observers = scripted.observers.saturating_sub(1);
+                    }
                     "EnableGodMode" => scripted.god = a(0) != "0" && a(0) != "false",
                     "SetHudVisible" => scripted.hud_hidden = a(0) == "0" || a(0) == "false",
                     "OverrideShopMenu" => shop_override.set(a(0) == "true" || a(0) == "1", a(1).parse().unwrap_or(0), a(2).parse().unwrap_or(0)),

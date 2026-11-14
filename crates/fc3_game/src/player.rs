@@ -1159,7 +1159,9 @@ pub(crate) fn player_move(
         axis.y = 1.0;
     }
     // (Drunk, the walk wanders off where it is steered.)
-    let wish = Quat::from_rotation_y(drunk.drift) * (forward * axis.y + right * axis.x).clamp_length_max(1.0) * scripted.movement;
+    // (Held still as a script turns his view: the "observer" beautifier.)
+    let still = if scripted.observers > 0 { 0.0 } else { 1.0 };
+    let wish = Quat::from_rotation_y(drunk.drift) * (forward * axis.y + right * axis.x).clamp_length_max(1.0) * scripted.movement * still;
 
     if p.noclip {
         let look = Quat::from_rotation_y(p.yaw) * Quat::from_rotation_x(p.pitch) * Vec3::NEG_Z;
