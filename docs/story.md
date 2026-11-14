@@ -6132,6 +6132,13 @@ to SQC_080, each a brief at its giver then its blocks):
   vehicle. And the barge's gun's rounds now pass the barge itself, as a
   seat's do its vehicle. HUR_040's first two stands were held without a
   death; it had taken three tries.
+* **Left alone for good.** A death an earlier run put down to HUR_050_B90C's
+  "Go speak to Hurk" trigger had it left alone always, and the campaign
+  stood there for minutes, the mission's one trigger never stepped into.
+  Long stuck (`FATAL_RETRY_AFTER`, 150 s quiet) with nothing else of the
+  mission's to step into, the autopilot now tries such a trigger again.
+  Its sight lines from a vehicle's gun pass that vehicle too, as from a
+  seat.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

@@ -3121,6 +3121,22 @@ fn run_story(
                 && !(w.1 == "EnterFOV" && tails.contains(&w.0))
                 && (!p.driving || matches!(w.1.as_str(), "Enter" | "EnterFOV"))
         });
+        // (Long stuck with only a trigger of the mission's own it learned to
+        // leave alone: that one again. A death an earlier run put down to
+        // HUR_050_B90C's "Go speak to Hurk" kept the campaign there for good.)
+        let next = next.or_else(|| {
+            focused.iter().find(|w| {
+                host.quiet > FATAL_RETRY_AFTER
+                    && !awaiting_rock
+                    && !vines.autopilot_climbing()
+                    && !leading
+                    && near_companion(w.2)
+                    && w.3
+                    && !host.used.contains(&(w.0, w.1.clone()))
+                    && host.fatal.contains(&(w.0, w.1.clone()))
+                    && (!p.driving || matches!(w.1.as_str(), "Enter" | "EnterFOV"))
+            })
+        });
         // (In the stall report: the triggers it may step into and what holds
         // each back.)
         if (host.quiet > 20.0 && host.quiet - dt <= 20.0) || minute {
@@ -5193,6 +5209,9 @@ fn fatal_namesakes(data: &fc3_story::data::StoryData, id: u64) -> Vec<u64> {
 
 /// A fall killing the player this soon (s) after a step was the step's.
 const FALL_FATAL_WITHIN: f32 = 12.0;
+/// How long (s) the story is quiet, nothing else to step into, before the
+/// autopilot tries a mission's trigger it learned to leave alone again.
+const FATAL_RETRY_AFTER: f32 = 150.0;
 /// How near (m) a trigger's namesakes are left alone with it.
 const NAMESAKES_WITHIN: f32 = 150.0;
 
@@ -6130,12 +6149,13 @@ fn autopilot_loot(
     (heights, stims, fires, startled): (Res<crate::terrain::Heightfield>, Res<crate::stims::Stims>, Res<crate::fire::Fires>, Res<crate::story_actors::Startled>),
     mut players: Query<(Entity, &mut Transform, &mut Player, &crate::combat::Health, &crate::weapons::Inventory, Option<&crate::combat::PlayerStats>)>,
     animals: Query<(Entity, &Transform, &crate::wildlife::WildAnimal, &crate::combat::Health, Option<&crate::wildlife::Carcass>, Option<&crate::story_actors::StoryActor>), Without<Player>>,
-    (plants, mut swap, world, driving, rides): (
+    (plants, mut swap, world, driving, rides, guns): (
         Query<(&crate::pickups::Pickup, &GlobalTransform)>,
         ResMut<crate::pickups::AutopilotSwap>,
         Res<crate::pickups::WorldState>,
         Res<crate::vehicles::Driving>,
         Query<&crate::vehicles::Vehicle>,
+        Query<&crate::turrets::Turret>,
     ),
     mut actions: ResMut<crate::controls::ActionState>,
     mut last: Local<Option<(u64, &'static str)>>,
@@ -6253,7 +6273,9 @@ fn autopilot_loot(
     // JAS_130's ambush stood in plain view of the truck's front seat and was
     // never shot, each foe "out of sight" behind the cab's own body.)
     let sight: [Entity; 3] = {
-        let riding = driving.vehicle.and_then(|v| rides.get(v).ok().map(|r| (v, r.body())));
+        // (Or the one whose gun he mans: HUR_040's barge.)
+        let gun_vehicle = player.mounted.and_then(|m| guns.get(m.turret).ok()).and_then(|g| g.on_vehicle());
+        let riding = driving.vehicle.or(gun_vehicle).and_then(|v| rides.get(v).ok().map(|r| (v, r.body())));
         riding.map_or([me; 3], |(v, body)| [me, v, body])
     };
     // Shooting from where he is, not going after anyone: a passenger, gun in
