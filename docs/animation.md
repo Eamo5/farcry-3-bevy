@@ -686,7 +686,9 @@ in it 1.4 s (`npc::react_to_blasts`). Something worth a look heard by a man at
 ease at his post (a thrown rock) has him turn his head to it the same way,
 `eventreactions\interestingsound\relaxnoaim\..._interestingsound_rank0_...` for
 its side, standing 1.2 s before he goes to see (`npc::react_to_noises`, ahead
-of the senses so he is still at ease). `FC3_ROCK_TEST=<seconds>` (with
+of the senses so he is still at ease). Not the story's characters, whom their
+scripts hold: JAS_020's seated guard, turned by the rock thrown for the one at
+the window, drew the autopilot onto him and failed the escape. `FC3_ROCK_TEST=<seconds>` (with
 `--npc-test guards`) throws a rock beside the nearest man that long in.
 
 Close quarters:

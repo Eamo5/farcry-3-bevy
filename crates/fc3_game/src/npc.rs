@@ -4330,13 +4330,19 @@ fn react_to_noises(
     mut noises: MessageReader<Noise>,
     clips: Option<Res<BlastHeardClips>>,
     mut rng: ResMut<Rng>,
-    mut npcs: Query<(&Transform, &mut Npc, &Health), Without<Corpse>>,
+    // (Not the story's characters: their scripts hold them, and JAS_020's
+    // seated guard, turned by the rock thrown for the one at the window,
+    // drew the autopilot onto him and failed the escape.)
+    mut npcs: Query<
+        (&Transform, &mut Npc, &Health),
+        (Without<Corpse>, Without<Frozen>, Without<Riding>, Without<crate::story_actors::StoryActor>),
+    >,
     mut rigs: Query<&mut CharacterRig>,
 ) {
     let Some(clips) = clips else { return };
-    for n in noises.read().filter(|n| n.kind == NoiseKind::Interesting) {
+    for n in noises.read().filter(|n| n.kind == NoiseKind::Interesting && !n.aside) {
         for (t, mut npc, h) in &mut npcs {
-            if h.dead || npc.state != NpcState::Idle || npc.flinch > 0.0 || npc.breaking_off > 0.0 {
+            if h.dead || !npc.hostile() || npc.state != NpcState::Idle || npc.flinch > 0.0 || npc.breaking_off > 0.0 {
                 continue;
             }
             if !npc.impaired.hears(n.kind) || t.translation.distance(n.at) > n.radius {
@@ -4363,7 +4369,7 @@ fn react_to_blasts(
     mut blasts: MessageReader<crate::weapons::Explosion>,
     clips: Option<Res<BlastHeardClips>>,
     mut rng: ResMut<Rng>,
-    mut npcs: Query<(&Transform, &mut Npc, &Health), Without<Corpse>>,
+    mut npcs: Query<(&Transform, &mut Npc, &Health), (Without<Corpse>, Without<Frozen>, Without<Riding>)>,
     mut rigs: Query<&mut CharacterRig>,
 ) {
     let Some(clips) = clips else { return };
