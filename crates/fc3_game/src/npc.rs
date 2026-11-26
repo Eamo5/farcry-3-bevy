@@ -41,6 +41,7 @@ impl Plugin for NpcPlugin {
                     despawn_far,
                     (perceive, think, act, npc_melee).run_if(in_state(crate::menu::GameState::Playing)),
                     hit_reactions,
+                    react_to_blasts,
                     react_to_death,
                     sink_corpses,
                     ledge_falls,
@@ -4248,10 +4249,70 @@ const MELEE_HIT_CLIPS: [&str; 4] = [
 #[derive(Resource)]
 struct MeleeHitClips(Vec<Handle<Fc3Clip>>);
 
+/// Startled by a blast heard (the game's `eventreactions\explosionsound`),
+/// by side (front, left, right, behind on the left, behind on the right):
+/// on alert (aiming), and at ease with a gun not raised.
+const BLAST_HEARD_ALERT: [&str; 5] = [
+    r"graphics\characters\_common\animations\eventreactions\explosionsound\alert\3rdge_fulbst_idlealertaimnormal_explosionsound_+000fw_v00_ak74.mab",
+    r"graphics\characters\_common\animations\eventreactions\explosionsound\alert\3rdge_fulbst_idlealertaimnormal_explosionsound_-090lt_v00_ak74.mab",
+    r"graphics\characters\_common\animations\eventreactions\explosionsound\alert\3rdge_fulbst_idlealertaimnormal_explosionsound_+090rt_v00_ak74.mab",
+    r"graphics\characters\_common\animations\eventreactions\explosionsound\alert\3rdge_fulbst_idlealertaimnormal_explosionsound_-180lt_v00_ak74.mab",
+    r"graphics\characters\_common\animations\eventreactions\explosionsound\alert\3rdge_fulbst_idlealertaimnormal_explosionsound_+180rt_v00_ak74.mab",
+];
+const BLAST_HEARD_RELAXED: [&str; 5] = [
+    r"graphics\characters\_common\animations\eventreactions\explosionsound\relaxnoaim\3rdge_fulbst_relaxnoaim_explosionsound_000fw_v00_ak74.mab",
+    r"graphics\characters\_common\animations\eventreactions\explosionsound\relaxnoaim\3rdge_fulbst_relaxnoaim_explosionsound_090lt_v00_ak74.mab",
+    r"graphics\characters\_common\animations\eventreactions\explosionsound\relaxnoaim\3rdge_fulbst_relaxnoaim_explosionsound_090rt_v00_ak74.mab",
+    r"graphics\characters\_common\animations\eventreactions\explosionsound\relaxnoaim\3rdge_fulbst_relaxnoaim_explosionsound_180lt_v00_ak74.mab",
+    r"graphics\characters\_common\animations\eventreactions\explosionsound\relaxnoaim\3rdge_fulbst_relaxnoaim_explosionsound_180rt_v00_ak74.mab",
+];
+
+/// The blast reactions, loaded: on alert, and at ease.
+#[derive(Resource)]
+struct BlastHeardClips([Vec<Handle<Fc3Clip>>; 2]);
+
+/// How far off (m) a blast startles (beyond its own reach, which hurts).
+const BLAST_HEARD: f32 = 60.0;
+/// How long (s) the startle holds him (the clips run 1.5 to 2.5 s).
+const BLAST_STARTLE: f32 = 1.4;
+
 fn load_melee_clips(mut commands: Commands, server: Res<AssetServer>) {
     let load = |p: &&str| server.load(crate::cache_assets::cache_path(&fc3_formats::cache::anim_rel(p)));
     commands.insert_resource(MeleeClips(MELEE_CLIPS.iter().map(load).collect(), CHARGER_MELEE_CLIPS.iter().map(load).collect()));
     commands.insert_resource(MeleeHitClips(MELEE_HIT_CLIPS.iter().map(load).collect()));
+    commands.insert_resource(BlastHeardClips([BLAST_HEARD_ALERT.iter().map(load).collect(), BLAST_HEARD_RELAXED.iter().map(load).collect()]));
+}
+
+/// Men who hear a blast near them (not caught in it) start and turn their
+/// heads to it, the game's explosion-heard reactions: aiming if they were
+/// already on alert, else from at ease.
+fn react_to_blasts(
+    mut blasts: MessageReader<crate::weapons::Explosion>,
+    clips: Option<Res<BlastHeardClips>>,
+    mut rng: ResMut<Rng>,
+    mut npcs: Query<(&Transform, &mut Npc, &Health), Without<Corpse>>,
+    mut rigs: Query<&mut CharacterRig>,
+) {
+    let Some(clips) = clips else { return };
+    for ex in blasts.read() {
+        for (t, mut npc, h) in &mut npcs {
+            let d = t.translation.distance(ex.at);
+            if h.dead || npc.flinch > 0.0 || d <= ex.radius || d > BLAST_HEARD {
+                continue;
+            }
+            let i = match side_of(&npc, t.translation, ex.at) {
+                Side::Front => 0,
+                Side::Left => 1,
+                Side::Right => 2,
+                Side::Back => 3 + (rng.f32() < 0.5) as usize,
+            };
+            let set = if matches!(npc.state, NpcState::Combat | NpcState::Search) { 0 } else { 1 };
+            let (Some(clip), Some(mut r)) = (clips.0[set].get(i).cloned(), npc.rig.and_then(|r| rigs.get_mut(r).ok())) else { continue };
+            swap_clip(&mut r, AnimKind::Hit, clip);
+            npc.flinch = BLAST_STARTLE;
+            debug!("npc {}: startled by a blast {d:.0} m off ({}, side {i})", npc.marker_id, if set == 0 { "alert" } else { "at ease" });
+        }
+    }
 }
 
 /// An enemy in a fight with the player at arm's length swings the rifle butt

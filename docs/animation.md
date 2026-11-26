@@ -678,6 +678,12 @@ the enemy's facing. It relaxes the side, then the region, then the motion when
 nothing matches. It swaps that clip into a copy of the enemy's clip set.
 Takedowns and burning keep their own deaths.
 
+A blast heard near by (within 60 m, not caught in it) startles a man: he plays
+`eventreactions\explosionsound\{alert,relaxnoaim}\...` for the side it went off
+on (front, left, right, or behind on either side), the alert set (still aiming)
+if he was already fighting or searching, the at-ease one otherwise, and is held
+in it 1.4 s (`npc::react_to_blasts`).
+
 Close quarters:
 
 - **Enemies' rifle-butt strikes:**
