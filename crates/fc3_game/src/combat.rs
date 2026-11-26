@@ -379,6 +379,12 @@ impl Invincible {
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct NpcDamageRate(pub f32);
 
+/// The share of his harm a character deals (`CAPI_Companion.
+/// CompanionSetDamage`: 0 for JAS_130's riders, the player to do the
+/// killing).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct DamageDealt(pub f32);
+
 impl NpcDamageRate {
     /// The box's levels: none, slow, medium, fast, immediate.
     pub fn of_level(level: u8) -> NpcDamageRate {
@@ -408,7 +414,7 @@ fn apply_damage(
     driving: Option<Res<crate::vehicles::Driving>>,
     mut progress: ResMut<crate::progression::Progress>,
     mut harm: ResMut<LastHarm>,
-    (rates, invincible): (Query<&NpcDamageRate>, Query<&Invincible>),
+    (rates, invincible, dealt): (Query<&NpcDamageRate>, Query<&Invincible>, Query<&DamageDealt>),
 ) {
     for ev in events.read() {
         // (Kept a while: those gone are let go now and then.)
@@ -454,6 +460,11 @@ fn apply_damage(
             if ev.kind == DamageKind::Bullet && ev.instigator.is_some_and(|i| instigators.get(i).is_ok_and(|(_, npc, ..)| npc.is_some())) {
                 amount *= rate.0;
             }
+        }
+        // (A companion's harm as a script sets it: none, so the player does
+        // the killing.)
+        if let Some(d) = ev.instigator.and_then(|i| dealt.get(i).ok()) {
+            amount *= d.0;
         }
         // The game's counters: each kind of harm and body part's armour, and
         // a part that has taken all it can kills.

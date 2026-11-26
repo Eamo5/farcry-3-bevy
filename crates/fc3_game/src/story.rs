@@ -1057,6 +1057,9 @@ pub struct StoryHost {
     /// Characters whose weapons the scripts took away (a companion holstering
     /// for a talk: `CAPI_Pawn.RemoveAllWeapon`), till they give them back.
     pub holstered: std::collections::HashSet<u64>,
+    /// The share of their harm companions deal, as scripts set it
+    /// (`CAPI_Companion.CompanionSetDamage`).
+    pub companion_damage: HashMap<u64, f32>,
     /// The armies scripts put their characters in (`CAPI_NPC.SwitchArmy`:
     /// 1 red, 2 grey, 3 neutral), by story id, and the throwable a script
     /// chose for the player (`CAPI_Player.SelectThrowGadget`).
@@ -1375,6 +1378,7 @@ impl StoryHost {
             gsf_events: Vec::new(),
             gameplay_params: Default::default(),
             holstered: Default::default(),
+            companion_damage: HashMap::new(),
             armies: Default::default(),
             throw_choice: None,
             called_from: Default::default(),
@@ -1672,9 +1676,24 @@ fn apply_damage_rates(
     actors: Query<(Entity, &crate::story_actors::StoryActor, Option<&crate::combat::NpcDamageRate>)>,
     mut spared: Query<(Entity, Option<&crate::story_actors::StoryActor>, Has<Player>, Option<&mut crate::combat::Invincible>), Or<(With<crate::story_actors::StoryActor>, With<Player>)>>,
     immune: Query<(Entity, &crate::story_actors::StoryActor, Has<crate::vehicles::ImmuneToCollisions>)>,
+    dealing: Query<(Entity, &crate::story_actors::StoryActor, Option<&crate::combat::DamageDealt>)>,
     mut commands: Commands,
 ) {
     let Some(host) = host else { return };
+    for (e, actor, dealt) in &dealing {
+        match (host.companion_damage.get(&actor.id), dealt) {
+            (Some(&share), Some(d)) if d.0 != share => {
+                commands.entity(e).insert(crate::combat::DamageDealt(share));
+            }
+            (Some(&share), None) => {
+                commands.entity(e).insert(crate::combat::DamageDealt(share));
+            }
+            (None, Some(_)) => {
+                commands.entity(e).remove::<crate::combat::DamageDealt>();
+            }
+            _ => {}
+        }
+    }
     for (e, actor, rammed) in &immune {
         let want = host.collision_immune.contains(&actor.id);
         if want && !rammed {
@@ -2530,6 +2549,7 @@ fn run_story(
             host.sounds_asked.clear();
             host.sound_loops.clear();
             host.holstered.clear();
+            host.companion_damage.clear();
             // (What the autopilot did since is to do again, but for what
             // failed the mission: JAS_020 B15's guard, lured off before the
             // reload, was never lured again.)
@@ -4887,6 +4907,13 @@ fn run_story(
                         }
                     }
                     "CAPI_Pawn.BackupInventory" => {}
+                    // A companion's harm (`companion, share`): JAS_130's
+                    // riders deal none, the trucks behind left to the player.
+                    "CAPI_Companion.CompanionSetDamage" => {
+                        if let (Ok(id), Ok(share)) = (a(0).parse::<u64>(), a(1).parse::<f32>()) {
+                            host.companion_damage.insert(id, share.max(0.0));
+                        }
+                    }
                     // A storm brought on, or the sky left fair, for a while
                     // (`<factor> <seconds>`), and let go (`<seconds>`).
                     "SetScriptedStormFactorOverride" => {

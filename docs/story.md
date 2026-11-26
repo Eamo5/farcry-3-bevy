@@ -6186,6 +6186,11 @@ to SQC_080, each a brief at its giver then its blocks):
   again, for 300 s. A QTE the states test that nothing in the move asks is
   now taken as won when nothing else would play; BNG_030 went from its dance
   to its end in 50 s.
+* **A companion's harm.** `CAPI_Companion.CompanionSetDamage <companion>
+  <share>` (JAS_130's riders get 0 as the trucks give chase) sets how much
+  of his harm a companion deals (`combat::DamageDealt`), taken as the harm
+  he does rather than takes: the trucks are left to the player. A reload
+  lets it go.
 * **Holstered.** The narrative's companions put their guns away for a talk
   (`NarrativeHolsterWeaponNPCCompanion`: `CAPI_Pawn.BackupInventory`,
   `RemoveAllWeapon`, later `RestoreBackupInventory`); only the player's were
