@@ -479,6 +479,10 @@ const BURN_AGAIN: f32 = 120.0;
 /// Tests: how far (m) from a field's middle the autopilot goes back to once
 /// it has set it alight, out of the fire's way.
 const BURN_RETREAT: f32 = 30.0;
+/// Tests: how long (s) without a burn before the autopilot burns though the
+/// story isn't quiet (WIL_020 B30's waves stir it every few seconds, and
+/// after a reload its last field went unburnt for an hour).
+const BURN_DESPITE_FIGHT: f32 = 45.0;
 
 /// Tests (`FC3_STORY_AUTOPILOT`): a burnable region a script waits to catch
 /// (a drug field), once the story has gone quiet: the player set down a few
@@ -495,7 +499,7 @@ fn autopilot_burn(
     mut actions: ResMut<crate::controls::ActionState>,
     mut players: Query<(&mut Transform, &mut crate::player::Player, &crate::weapons::Inventory)>,
     mut burning: Local<Option<(u64, f32, Vec3)>>,
-    mut tried: Local<std::collections::HashMap<u64, f32>>,
+    (mut tried, mut last_burn): (Local<std::collections::HashMap<u64, f32>>, Local<f32>),
 ) {
     let _slow = crate::story::Slow::new("autopilot_burn");
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() {
@@ -536,7 +540,8 @@ fn autopilot_burn(
         return;
     }
     let can_burn = inventory.molotovs > 0 || inventory.slots.iter().any(|s| inventory.defs[s.def].class == crate::weapons::WeaponClass::Flamethrower);
-    if host.quiet() < 6.0 || !can_burn || host.autopilot_wrecking {
+    let fight_long = now - *last_burn > BURN_DESPITE_FIGHT;
+    if (host.quiet() < 6.0 && !fight_long) || !can_burn || host.autopilot_wrecking {
         return;
     }
     let awaited = host.story.awaited_entity_events("FireStarted");
@@ -549,6 +554,7 @@ fn autopilot_burn(
     let mut feet = centre + side * 3.0;
     feet.y = heights.height_at(feet).unwrap_or(centre.y);
     info!("story autopilot: burn region {id}");
+    *last_burn = now;
     // (Where to go back to after: where he came from if that was near,
     // else well off on his side of it.)
     let came = t.translation - Vec3::Y * crate::player::HALF_HEIGHT;

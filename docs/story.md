@@ -4191,6 +4191,11 @@ needed more of it:
   briefing running with its triggers within 20 m of the player now joins the
   focus (`BRIEF_NEAR`), and an awaited door is held back by any script's
   thing to use within 20 m of it (`StoryHost::pending_use_by`).
+* **Burning through the waves.** The burn step waited for the story to go
+  quiet, and B30's reinforcements stir it every few seconds: after a reload
+  the last field went unburnt for an hour. It now burns once 45 s have gone
+  without a burn, quiet or not (`BURN_DESPITE_FIGHT`); from that reload
+  B30, B40 and WIL_020 completed within four minutes.
 
 ## WIL_040: the rice fields and the escort
 
