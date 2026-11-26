@@ -129,6 +129,8 @@ pub struct WorldEntity {
     pub stp_moves: Vec<String>,
     /// A room's sound volume (caves, buildings).
     pub room: Option<crate::rooms::RoomVolume>,
+    /// Its interior volume, lit with an ambient of its own.
+    pub interior: Option<crate::interiors::InteriorRef>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -157,6 +159,7 @@ pub fn parse_entity(e: &Object) -> WorldEntity {
     let Some(components) = e.child("Components") else { return out };
     out.light = crate::lights::parse_light(components);
     out.room = crate::rooms::parse_room(components);
+    out.interior = crate::interiors::parse_interior(components);
     out.cable = crate::traversal::parse_anchor(components);
     out.ladder_animation_package = components.child("CLadder").and_then(|c| c.u64("sAnimationPackage")).unwrap_or(0);
     out.ladder_type = components.child("CLadder").and_then(|c| c.u32("selLadderType")).unwrap_or(0);

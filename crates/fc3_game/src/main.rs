@@ -99,6 +99,7 @@ mod shadow_lod;
 mod sky;
 mod sky_probe;
 mod probes;
+mod interiors;
 mod sound;
 mod sound_source;
 mod splines;
@@ -447,7 +448,7 @@ fn main() {
         ))
         .add_plugins((
             grade::GradePlugin,
-            probes::ProbesPlugin,
+            (probes::ProbesPlugin, interiors::InteriorsPlugin),
             dof::DofPlugin,
             bloom::GameBloomPlugin,
             upload_budget::UploadBudgetPlugin,

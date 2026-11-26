@@ -594,8 +594,10 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     let mut villager_spots: Vec<(&'static str, [f32; 3], [f32; 4])> = Vec::new();
     let mut splines: Vec<(u32, fc3_formats::splines::SplinePrimitive)> = Vec::new();
     let mut intangible: Vec<u64> = Vec::new();
+    let mut interior_refs = Vec::new();
     for r in sector_results {
         intangible.extend(r.intangible.iter().copied());
+        interior_refs.extend(r.interiors.iter().cloned());
         material_paths.extend(r.splines.iter().map(|s| s.material.clone()));
         splines.extend(r.splines.into_iter().map(|s| (r.id, s)));
         guard_spots.extend(r.guard_spots.iter().cloned());
@@ -700,6 +702,27 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         let text: String = regions.iter().map(|r| r.to_line() + "\n").chain(rooms.iter().map(|r| r.to_line() + "\n")).collect();
         if let Err(e) = write_atomic(job.root(), cache::ROOMS_REL, text.as_bytes(), job.ctx) {
             job.error(format!("rooms: {e:#}"));
+        }
+    }
+    // The interior volumes: each one's model's bounds where its entity
+    // stands, with the ambient it names.
+    if opts.only_sectors.is_none() && job.should_write(cache::INTERIORS_REL) {
+        let ambients: HashMap<u32, fc3_formats::interiors::Ambient> = job
+            .vfs
+            .read(fc3_formats::interiors::AMBIENTS_PATH)
+            .map(|b| fc3_formats::interiors::parse_ambients(&b).into_iter().map(|(k, _, a)| (k, a)).collect())
+            .unwrap_or_default();
+        let mut bounds: HashMap<String, Option<([f32; 3], [f32; 3])>> = HashMap::new();
+        let mut interiors = Vec::new();
+        for (entity, layer, pos, angles, i) in &interior_refs {
+            let Some(ambient) = ambients.get(&i.ambient) else { continue };
+            let b = *bounds.entry(i.model.clone()).or_insert_with(|| job.vfs.read(&i.model).ok().and_then(|d| fc3_formats::mesh::bbox(&d)));
+            if let Some(b) = b.filter(|(min, max)| (0..3).all(|k| max[k] > min[k])) {
+                interiors.push(fc3_formats::interiors::Interior::place(*entity, *layer, b, *pos, *angles, *ambient));
+            }
+        }
+        if let Err(e) = write_atomic(job.root(), cache::INTERIORS_REL, fc3_formats::interiors::to_text(&interiors).as_bytes(), job.ctx) {
+            job.error(format!("interiors: {e:#}"));
         }
     }
     if opts.only_sectors.is_none() && (job.should_write(cache::SOUND_POINTS_REL) || south_east) {
@@ -3299,6 +3322,9 @@ struct SectorResult {
     sound_points: Vec<(u32, [f32; 3])>,
     /// Rooms' sound volumes.
     rooms: Vec<fc3_formats::rooms::Room>,
+    /// Interior volumes as their entities name them: entity, layer, where it
+    /// stands (Dunia position, angles) and the volume.
+    interiors: Vec<(u64, u64, [f32; 3], [f32; 3], fc3_formats::interiors::InteriorRef)>,
     /// Placed effects the game plays: kind, position, rotation and name.
     effects: Vec<(&'static str, [f32; 3], [f32; 4], String)>,
     /// Guard spots: kind, position and orientation.
@@ -3380,10 +3406,15 @@ fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool, reorder: bool) ->
     let mut villager_spots = Vec::new();
     let mut splines = Vec::new();
     let mut intangible = Vec::new();
+    let mut interiors = Vec::new();
     for e in &data.entities {
         let entity_index = s.entities.len() as u32;
         if !e.solid && !e.meshes.is_empty() {
             intangible.push(e.id);
+        }
+        // (Those of mission layers too, with their layer.)
+        if let Some(i) = &e.interior {
+            interiors.push((e.id, e.mission_layer, e.pos, e.angles, i.clone()));
         }
         let rotation = fw::angles_to_bevy_quat(e.angles);
         let translation = fw::pos_to_bevy(e.pos);
@@ -3572,6 +3603,7 @@ fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool, reorder: bool) ->
         climbs,
         sound_points,
         rooms,
+        interiors,
         effects,
         guard_spots,
         stp_moves,

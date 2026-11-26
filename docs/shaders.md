@@ -1014,9 +1014,52 @@ sky's light and opened the exposure up under a roof) is left out: the
 probes darken the shelter and the eye adapts to it, and the landscape seen
 from a doorway is no longer dimmed with the room.
 
-Not yet: the interior volumes (`CInteriorVolumeComponent`) that give a room
-a probe of its own; the top-down sky occlusion the game uses past the
-volume; the PC's local radiance transfer from the dynamic lights.
+Bevy's shader reads the second half of an ambient cube slice's rows for a
+normal facing the negative way (`neg_offset` in `irradiance_volume.wgsl`),
+whatever its docs' table says, so the sides facing negative are written
+there (`probes::put_side`). They had been written the other way round at
+first: ceilings and the undersides of planks took the sky's light, and the
+ground in the shade the ground's dim bounce.
+
+### Interior volumes (`fc3_game/src/interiors.rs`)
+
+Indoors the outdoor probes bleed the sky's blue light in, so the game has
+artists place closed volumes inside buildings, tunnels and caves
+(`CInteriorVolumeComponent`, on the building's own entity): a model of its
+own (string field `0x3182766C`, an `*_interiorvolume.xbg`) and an ambient
+(`intambientInteriorAmbient`, a key into
+`generated\databases\generic\interiorambient.lib`). The talk has the volumes
+drawn into a screen-space mask, blurred, and the pixels within lit with
+their volume's own probe. Each of the lib's 34 ambients is a floor and a
+ceiling colour and an intensity, by day and by night (`Generic/Interior_TOD`,
+the shacks': a warm grey floor at 0.38 and a darker ceiling, intensity 0.32;
+`Generic/CaveDark_FlashLight`, `Generic/Cenote_F5`, the bunkers' and Buck's
+quests' own). Of 72,950 interior volume components in the world 2,410 name a
+model or an ambient (`fc3tool interior-survey`); the converter places the
+1,748 with both as boxes, the model's bounds turned and moved with its
+entity, and writes them with their ambients to `world/interiors.txt` (mission
+layers' too, with their entity).
+
+The seven nearest the camera (Bevy binds eight irradiance volumes a view,
+the probes' takes one) each get an irradiance volume of one voxel, placed as
+the box: surfaces facing up take the floor colour, facing down the
+ceiling's, walls between, eased from night to day with the daylight, in the
+game's light units (the presets' lux per unit, over π as the game's diffuse
+has no 1/π). Their intensity is negative, which the vendored `bevy_pbr`
+takes for an interior's: within it, it stands in for the probes and the
+environment map by its weight (over its last half metre, for the mask's
+blur) rather than mixing with them. Those on mission layers light while
+their entity is in the world. A shack's floor by day comes to about 530
+cd/m² and its ceiling 170, against the probes' sky of some 10,000 overhead
+outside; the gun and arms darken stepping in. Only volumes no bigger than
+16 m a half-side are used: the caves' models sprawl over whole hillsides
+(one's bounds are three kilometres across), and their bounds would take the
+open ground about them indoors. `FC3_INTERIORS=0` leaves them out;
+`FC3_INTERIOR_DEBUG` logs the one about the camera.
+
+Not yet: the caves' large volumes (their models' shape, not their bounds);
+the top-down sky occlusion the game uses past the probes' volume; the PC's
+local radiance transfer from the dynamic lights.
 
 ## Post-effects (`fc3_game/src/post_effects.rs`)
 

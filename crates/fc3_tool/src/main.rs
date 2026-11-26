@@ -2232,6 +2232,37 @@ fn main() -> Result<()> {
                 }
             }
         }
+        "interior-survey" => {
+            // The world's interior volumes (`CInteriorVolumeComponent`) that
+            // name a volume model or an interior ambient: interior-survey
+            // [path filter]
+            let filter = args.get(1).cloned().unwrap_or_else(|| "worlds\\fc3_main\\".into());
+            let (mut all, mut set) = (0usize, Vec::new());
+            for (h, name) in &vfs.names {
+                if !name.contains(&filter) || !name.ends_with(".fcb") {
+                    continue;
+                }
+                let Ok(bytes) = vfs.read_hash(*h) else { continue };
+                let start = bytes.windows(4).position(|w| w == b"nbCF").unwrap_or(0);
+                let Ok(root) = fc3_formats::fcb::parse(&bytes[start..]) else { continue };
+                root.walk(&mut |o, _| {
+                    if !o.is("Entity") {
+                        return;
+                    }
+                    let Some(c) = o.child("Components").and_then(|c| c.child("CInteriorVolumeComponent")) else { return };
+                    all += 1;
+                    let model = c.u64("fileModel").filter(|m| *m != u64::MAX);
+                    let ambient = c.u64("intambientInteriorAmbient").map(|a| a as u32).filter(|a| *a != u32::MAX);
+                    if model.is_some() || ambient.is_some() {
+                        set.push((o.str("hidName").unwrap_or_default(), o.vec3("hidPos").unwrap_or_default(), c.str_h(0x3182766C).unwrap_or_default(), ambient));
+                    }
+                });
+            }
+            println!("{all} interior volume components, {} with a model or an ambient", set.len());
+            for (name, pos, model, ambient) in set.iter().take(40) {
+                println!("  {name} at {pos:?}: model {model:?}, ambient {ambient:?}");
+            }
+        }
         "override-survey" => {
             // How often do entity material overrides differ from the mesh's own materials?
             let filter = args.get(1).cloned().unwrap_or_else(|| "levels\\c5\\generated\\worldsectors".into());

@@ -1518,6 +1518,9 @@ pub fn world_fx_kind(name: &str) -> Option<&'static str> {
 pub const SOUND_POINTS_REL: &str = "world/sound_points.txt";
 /// The rooms' sound volumes (`rooms::Room::to_line`, one a line).
 pub const ROOMS_REL: &str = "world/rooms.txt";
+/// The interior volumes and their ambients (`interiors::Interior::to_line`,
+/// one a line).
+pub const INTERIORS_REL: &str = "world/interiors.txt";
 
 /// Sound points left out: voices and crowd chatter, story moments and
 /// scripted one-offs (explosions, thunder claps).

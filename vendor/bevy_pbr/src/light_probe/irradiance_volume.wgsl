@@ -21,7 +21,10 @@
 //
 // fc3 patch: returns how much the volumes cover the fragment too (alpha, the
 // summed weights, at most 1), so that the environment map's diffuse light
-// makes up the rest outside them and across their falloff.
+// makes up the rest outside them and across their falloff. And a volume of
+// negative intensity is an interior's: within it its light stands in for
+// the others' (and the environment map's), by its weight, rather than
+// mixing with them.
 fn irradiance_volume_light(
     world_position: vec3<f32>,
     N: vec3<f32>,
@@ -37,6 +40,8 @@ fn irradiance_volume_light(
 
     var total_weight = 0.0;
     var total_irradiance = vec3(0.0);
+    var interior_weight = 0.0;
+    var interior_irradiance = vec3(0.0);
 
     while (true) {
         var query_result = light_probe_iterator_next(&iterator);
@@ -82,17 +87,28 @@ fn irradiance_volume_light(
 
         // Use Valve's formula to sample.
         let NN = N * N;
-        total_irradiance += (rgb_x * NN.x + rgb_y * NN.y + rgb_z * NN.z) * query_result.intensity *
-            query_result.weight;
-
-        total_weight += query_result.weight;
+        let irradiance = (rgb_x * NN.x + rgb_y * NN.y + rgb_z * NN.z) * abs(query_result.intensity);
+        if (query_result.intensity < 0.0) {
+            interior_irradiance += irradiance * query_result.weight;
+            interior_weight += query_result.weight;
+        } else {
+            total_irradiance += irradiance * query_result.weight;
+            total_weight += query_result.weight;
+        }
     }
 
     if (total_weight != 0.0) {
         total_irradiance /= total_weight;
     }
+    let coverage = saturate(total_weight);
+    if (interior_weight > 0.0) {
+        let inside = saturate(interior_weight);
+        let all = inside + (1.0 - inside) * coverage;
+        let light = inside * interior_irradiance / interior_weight + (1.0 - inside) * coverage * total_irradiance;
+        return vec4(light / max(all, 1e-4), all);
+    }
 
-    return vec4(total_irradiance, saturate(total_weight));
+    return vec4(total_irradiance, coverage);
 }
 
 #endif  // IRRADIANCE_VOLUMES_ARE_USABLE

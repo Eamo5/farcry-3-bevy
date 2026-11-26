@@ -212,6 +212,19 @@ fn parse_nodes(x: &XbgFile, c: &Chunk) -> Result<Vec<Bone>> {
     Ok(nodes)
 }
 
+/// A model's bounds (Bevy axes, its own space), from its `BBOX` alone.
+pub fn bbox(data: &[u8]) -> Option<([f32; 3], [f32; 3])> {
+    let x = XbgFile::parse(data).ok()?;
+    bbox_of(&x, x.root.find("BBOX")?).ok()
+}
+
+fn bbox_of(x: &XbgFile, c: &Chunk) -> Result<([f32; 3], [f32; 3])> {
+    let mut r = Reader::new(x.chunk_data(c));
+    let a = to_bevy(r.vec3()?);
+    let b = to_bevy(r.vec3()?);
+    Ok(([a[0].min(b[0]), a[1].min(b[1]), a[2].min(b[2])], [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])]))
+}
+
 pub fn decode(data: &[u8], max_lods: usize) -> Result<Model> {
     let x = XbgFile::parse(data)?;
     if x.major != 52 {
@@ -228,17 +241,7 @@ pub fn decode(data: &[u8], max_lods: usize) -> Result<Model> {
     };
 
     let (bmin, bmax) = match x.root.find("BBOX") {
-        Some(c) => {
-            let mut r = Reader::new(x.chunk_data(c));
-            let a = r.vec3()?;
-            let b = r.vec3()?;
-            let a2 = to_bevy(a);
-            let b2 = to_bevy(b);
-            (
-                [a2[0].min(b2[0]), a2[1].min(b2[1]), a2[2].min(b2[2])],
-                [a2[0].max(b2[0]), a2[1].max(b2[1]), a2[2].max(b2[2])],
-            )
-        }
+        Some(c) => bbox_of(&x, c)?,
         None => ([0.0; 3], [0.0; 3]),
     };
 

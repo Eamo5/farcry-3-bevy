@@ -146,7 +146,7 @@ fn basis() -> [Vec3; 4] {
 }
 
 /// The six sides' normals, in the irradiance volume's order of axes.
-const SIDES: [Vec3; 6] = [Vec3::NEG_X, Vec3::X, Vec3::NEG_Y, Vec3::Y, Vec3::NEG_Z, Vec3::Z];
+pub(crate) const SIDES: [Vec3; 6] = [Vec3::NEG_X, Vec3::X, Vec3::NEG_Y, Vec3::Y, Vec3::NEG_Z, Vec3::Z];
 
 /// A second-order harmonic of light, per channel: L00 and L1 (Bevy axes).
 #[derive(Clone, Copy, Default)]
@@ -331,19 +331,29 @@ fn build(lit: &Lit, centre: Vec3) -> Vec<u8> {
                 let at = centre + (Vec3::new(i as f32, j as f32, k as f32) + 0.5 - Vec3::new(rx as f32, ry as f32, rz as f32) * 0.5) * CELL;
                 let sides = voxel(lit, at, &basis);
                 for (f, c) in sides.iter().enumerate() {
-                    let axis = f / 2;
-                    let t = j + if f % 2 == 1 { ry } else { 0 };
-                    let p = k + axis * rz;
-                    let at = ((p * 2 * ry + t) * rx + i) * 8;
-                    let c = c.min(Vec3::splat(60_000.0));
-                    for (n, v) in [c.x, c.y, c.z, 1.0].into_iter().enumerate() {
-                        out[at + n * 2..at + n * 2 + 2].copy_from_slice(&half::f16::from_f32(v).to_le_bytes());
-                    }
+                    put_side(&mut out, RES, [i, j, k], f, *c);
                 }
             }
         }
     }
     out
+}
+
+/// Writes the light on a voxel's side (`SIDES[f]`, the way the surface
+/// faces) into an irradiance volume's texels (`res` voxels, half floats).
+/// (Bevy's shader reads the second half of a slice's rows for a normal
+/// facing the negative way, whatever its docs say: the sides facing
+/// negative go there. They had gone in the first, and up-facing ground took
+/// the ground's dim bounce, ceilings and undersides the sky.)
+pub(crate) fn put_side(out: &mut [u8], res: [usize; 3], [i, j, k]: [usize; 3], f: usize, c: Vec3) {
+    let [rx, ry, rz] = res;
+    let t = j + if f % 2 == 0 { ry } else { 0 };
+    let p = k + (f / 2) * rz;
+    let at = ((p * 2 * ry + t) * rx + i) * 8;
+    let c = c.min(Vec3::splat(60_000.0));
+    for (n, v) in [c.x, c.y, c.z, 1.0].into_iter().enumerate() {
+        out[at + n * 2..at + n * 2 + 2].copy_from_slice(&half::f16::from_f32(v).to_le_bytes());
+    }
 }
 
 /// Builds the volume about the camera afresh (off the main thread) as it
