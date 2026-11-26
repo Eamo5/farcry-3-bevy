@@ -53,7 +53,7 @@ impl Plugin for StoryActorsPlugin {
             .init_resource::<CalledIn>()
             .init_resource::<Startled>()
             .init_resource::<MetaCharacters>()
-            .add_systems(Update, (startle, dress_meta_characters).run_if(in_state(crate::menu::GameState::Playing)))
+            .add_systems(Update, (startle, dress_meta_characters, simple_animation_idles).run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(
                 Update,
                 (
@@ -158,6 +158,35 @@ fn dress_meta_characters(
             set.clips.insert(AnimKind::Walk, load(w));
         }
         rig.set_clips_blended(std::sync::Arc::new(set));
+    }
+}
+
+/// A kit-dressed figure the world places at something (the `Animated_Mesh`
+/// figures: Bangkok's dancers and patrons, a bar's drinkers, a camp's guards
+/// leaning, smoking or asleep, the caged prisoner cowering) loops its own
+/// simple animation (`CSimpleAnimationComponent`'s `Animation`) for its
+/// idle, as the engine's simple animation plays it; some 500 had stood on
+/// the human idle. Once per actor (one streamed in again is new).
+#[derive(Component)]
+struct OwnLoop;
+
+fn simple_animation_idles(
+    host: Option<NonSend<StoryHost>>,
+    server: Res<AssetServer>,
+    actors: Query<(Entity, &StoryActor), (Without<OwnLoop>, Without<crate::npc::Npc>, Without<crate::wildlife::WildAnimal>)>,
+    mut rigs: Query<&mut crate::characters::CharacterRig>,
+    mut commands: Commands,
+) {
+    let Some(host) = host else { return };
+    let data = host.story.data();
+    for (e, a) in &actors {
+        let Some(mut rig) = a.rig.and_then(|r| rigs.get_mut(r).ok()) else { continue };
+        commands.entity(e).insert(OwnLoop);
+        let Some((_, animation)) = data.entities.get(&a.id).and_then(crate::prop_anims::simple_animation) else { continue };
+        debug!("story actor {}: loops {animation}", a.id);
+        let mut set = crate::characters::ClipSet::clone(rig.clips());
+        set.clips.insert(AnimKind::Idle, server.load(crate::cache_assets::cache_path(&fc3_formats::cache::anim_rel(&animation))));
+        rig.set_clips(std::sync::Arc::new(set));
     }
 }
 

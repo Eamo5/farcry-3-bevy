@@ -2139,6 +2139,39 @@ fn main() -> Result<()> {
             }
             println!("{hits} hits");
         }
+        "simple-anim-survey" => {
+            // The simple animations world entities play (`CSimpleAnimationComponent`'s
+            // `Animation`, string field 0xFCAC35BB), counted by animation, with a
+            // model and a skeleton each: simple-anim-survey [path filter]
+            let filter = args.get(1).cloned().unwrap_or_else(|| "worlds\\fc3_main\\".into());
+            let comp = fc3_formats::hash::crc32(b"CSimpleAnimationComponent");
+            let mut by_anim: BTreeMap<String, (usize, String, String, String)> = BTreeMap::new();
+            let (mut with, mut without) = (0usize, 0usize);
+            for (h, name) in &vfs.names {
+                if !name.contains(&filter) || !name.ends_with(".fcb") { continue; }
+                let Ok(bytes) = vfs.read_hash(*h) else { continue };
+                let start = bytes.windows(4).position(|w| w == b"nbCF").unwrap_or(0);
+                let Ok(root) = fc3_formats::fcb::parse(&bytes[start..]) else { continue };
+                root.walk(&mut |o, _| {
+                    if !o.is("Entity") { return; }
+                    let Some(c) = o.child("Components").and_then(|cs| cs.children.iter().find(|c| c.name_hash == comp).cloned()) else { return };
+                    let anim = c.str_h(0xFCAC_35BB).filter(|s| !s.trim().is_empty());
+                    let Some(anim) = anim else { without += 1; return };
+                    with += 1;
+                    let skel = c.str_h(0xF9F2_D5F4).unwrap_or_default();
+                    let mut model = String::new();
+                    o.walk(&mut |x, _| if model.is_empty() { if let Some(m) = x.str_h(0x3182_766C).filter(|m| m.ends_with(".xbg")) { model = m; } });
+                    let e = by_anim.entry(anim.to_ascii_lowercase()).or_insert((0, model, skel, o.str("hidName").unwrap_or_default()));
+                    e.0 += 1;
+                });
+            }
+            let mut rows: Vec<_> = by_anim.into_iter().collect();
+            rows.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+            for (anim, (n, model, skel, ent)) in rows {
+                println!("{n:6} {anim} | {model} | {skel} | {ent}");
+            }
+            println!("{with} with an animation, {without} without");
+        }
         "component-find" => {
             // Entities carrying a component (by name), counted, the first few dumped: component-find <Component> [max] [path filter]
             let comp = args.get(1).context("usage: component-find <Component> [max] [path filter]")?;
@@ -2927,7 +2960,9 @@ fn main() -> Result<()> {
             let mut by: std::collections::BTreeMap<String, Vec<String>> = Default::default();
             for e in data.entities.values() {
                 let Some(c) = e.component(comp) else { continue };
-                let v = c.u32(field).map(|v| v.to_string()).or_else(|| c.str(field)).unwrap_or_else(|| "-".into());
+                // (A field the name database lacks by its hash, `0x...`.)
+                let hashed = field.strip_prefix("0x").and_then(|h| u32::from_str_radix(h, 16).ok()).and_then(|h| c.str_h(h));
+                let v = hashed.or_else(|| c.u32(field).map(|v| v.to_string())).or_else(|| c.str(field)).unwrap_or_else(|| "-".into());
                 by.entry(v).or_default().push(e.name.clone());
             }
             for (v, names) in by {

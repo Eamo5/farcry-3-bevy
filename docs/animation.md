@@ -715,6 +715,20 @@ are hidden (`prop_anims`). One whose model has no bones stays as it was.
 Seen: an outpost's flag at (-1420.7, 2712.3) changes shape from frame to
 frame over ten seconds, where it had hung stiff.
 
+The same component on the kit-dressed `Animated_Mesh` figures names what
+each one does where it's placed: some 500 of the story's entities, Bangkok's
+dancers (`bardanceloop`), DJs and pole dancers and its patrons talking in
+pairs (`..._master_loop` beside `..._slave_loop`), Badtown's drinkers on
+chairs, sleepers against crates, trash pickers and beggars, the camps' guards
+leaning (`relaxguard`), smoking or cleaning guns, the training camp's
+recruits listening with crossed arms, the caged prisoner cowering. They are
+dressed as story characters, and had stood on the human idle; a figure that
+doesn't fight now takes its animation for its idle once its rig is up
+(`story_actors::simple_animation_idles`), looping it where it stands.
+`fc3tool simple-anim-survey` counts the world sectors' animations by name,
+and `fc3tool story-field CSimpleAnimationComponent 0xFCAC35BB` the story
+entities'.
+
 ### Paired takedown clips
 
 Takedowns are pairs under `melee\takedown\` and `melee\stealthtakedown_above\`: the player's
