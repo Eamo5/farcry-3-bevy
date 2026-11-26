@@ -1220,6 +1220,15 @@ impl StoryHost {
             })
     }
 
+    /// A thing to use that any script waits on (a briefing's too), not used
+    /// yet, within `reach` of `at` (Bevy): WIL_020's flamethrower on the table
+    /// beside the hut's door, its briefing run while HUR_040 held the focus.
+    pub fn pending_use_by(&self, at: Vec3, reach: f32) -> bool {
+        self.story.watched_triggers().iter().any(|w| {
+            w.1 == "Use" && w.3 && to_bevy(w.2).distance(at) < reach && !self.used.contains(&(w.0, w.1.clone())) && !self.fatal.contains(&(w.0, w.1.clone()))
+        })
+    }
+
     /// As `pending_use`, one within `reach` of `at` (Bevy).
     pub fn pending_use_near(&self, at: Vec3, reach: f32) -> bool {
         let focus = self.story.missions_running();
@@ -3014,6 +3023,17 @@ fn run_story(
         if focus.iter().all(|m| side_mission(m)) {
             if let Some(next) = host.story.objective_missions().into_iter().find(|m| !side_mission(m)) {
                 focus.push(next);
+            }
+        }
+        // (And a briefing running about the player, its things to use by
+        // him: WIL_020's, in Willis's hut as Hurk's call began HUR_040, left
+        // the flamethrower on the table, and its fields were never burnt.)
+        for (name, state) in host.story.missions() {
+            if state == "Running" && name.ends_with("_BRIEF") && !focus.iter().any(|f| name.starts_with(f.as_str())) {
+                let here = host.story.watched_triggers_of(None, std::slice::from_ref(&name)).iter().any(|w| w.3 && to_bevy(w.2).distance(t.translation) < BRIEF_NEAR);
+                if here {
+                    focus.push(name);
+                }
             }
         }
         // (On a mission, the places of the missions running only.) (A Lost
@@ -5406,6 +5426,15 @@ const NAMESAKES_WITHIN: f32 = 150.0;
 /// How long before the autopilot goes near a place again, gone out of reach.
 const NEAR_AGAIN: f32 = 20.0;
 
+/// How near (m) the player a briefing's triggers bring it into the
+/// autopilot's focus beside the missions running.
+const BRIEF_NEAR: f32 = 20.0;
+
+/// A man set behind for a takedown this many times within this long (s)
+/// won't hold still, and is left a while.
+const CHASE_MOST: u32 = 4;
+const CHASE_WINDOW: f32 = 3.0;
+
 /// How long (s) the autopilot's trigger step waits on the player being set
 /// down after a step before going on regardless.
 const SPAWN_WAIT: f32 = 30.0;
@@ -6334,7 +6363,13 @@ fn autopilot_loot(
     scripted: Res<ScriptedPlayer>,
     catalog: Res<crate::progression::LootCatalog>,
     progress: Res<crate::progression::Progress>,
-    (heights, stims, fires, startled): (Res<crate::terrain::Heightfield>, Res<crate::stims::Stims>, Res<crate::fire::Fires>, Res<crate::story_actors::Startled>),
+    (heights, stims, fires, startled, mut chased): (
+        Res<crate::terrain::Heightfield>,
+        Res<crate::stims::Stims>,
+        Res<crate::fire::Fires>,
+        Res<crate::story_actors::Startled>,
+        Local<(u64, f32, u32)>,
+    ),
     mut players: Query<(Entity, &mut Transform, &mut Player, &crate::combat::Health, &crate::weapons::Inventory, Option<&crate::combat::PlayerStats>)>,
     animals: Query<(Entity, &Transform, &crate::wildlife::WildAnimal, &crate::combat::Health, Option<&crate::wildlife::Carcass>, Option<&crate::story_actors::StoryActor>), Without<Player>>,
     (plants, mut swap, world, driving, rides, guns): (
@@ -7072,7 +7107,11 @@ fn autopilot_loot(
                         feet.y = floor_near(&spatial, &heights, me, feet, his_feet)?;
                         Some(feet)
                     });
-                    if let Some(feet) = feet.filter(|f| !fixed && !leashed(*f) && came_near.insert(actor.id)) {
+                    // (Not up to one riding in the air: a helicopter's crew
+                    // over HUR_040's beach, gone up to, set the player on
+                    // the helicopter, and he fell 20 m as it moved on.)
+                    let aloft = actor.seated && heights.height_at(nt.translation).is_some_and(|g| nt.translation.y - crate::player::HALF_HEIGHT - g > 3.0);
+                    if let Some(feet) = feet.filter(|f| !fixed && !aloft && !leashed(*f) && came_near.insert(actor.id)) {
                         info!("story autopilot: {} out of reach; going up to him", actor.id);
                         teleport(&mut at, &mut player, to_dunia(clear_of_kept(feet)), 0.0);
                         host.reset_quiet();
@@ -7393,8 +7432,34 @@ fn autopilot_loot(
             *shooting = Some((actor.id, nh.current, now));
         }
         if off > if nh.dead { 1.6 } else { 4.0 } || delta.y.abs() > 1.5 || stuck {
+            // (Set behind him again and again, he won't hold still: one
+            // carried along, a helicopter's crew in the air over HUR_040's
+            // beach, had the player set behind him every frame till he fell
+            // to his death. Another for a while.)
+            if chased.0 == actor.id && now - chased.1 < CHASE_WINDOW {
+                chased.2 += 1;
+                if chased.2 >= CHASE_MOST {
+                    info!("story autopilot: {} won't hold still; another for a while", actor.id);
+                    skipped.insert(actor.id, now + 20.0);
+                    *chased = (0, 0.0, 0);
+                    *last = None;
+                    return;
+                }
+            } else {
+                *chased = (actor.id, now, 1);
+            }
             let mut feet = behind;
-            feet.y = feet_near(&spatial, &heights, me, feet, nt.translation.y - crate::player::HALF_HEIGHT).max(nt.translation.y - crate::player::HALF_HEIGHT - 0.5);
+            let his_feet = nt.translation.y - crate::player::HALF_HEIGHT;
+            // (Nothing to stand on behind him: he's off the ground, a
+            // helicopter's crewman coming down to the beach. Not followed
+            // into the air.)
+            if !nh.dead && floor_near(&spatial, &heights, me, feet, his_feet).is_none() {
+                info!("story autopilot: {} is off the ground; another for a while", actor.id);
+                skipped.insert(actor.id, now + 20.0);
+                *last = None;
+                return;
+            }
+            feet.y = feet_near(&spatial, &heights, me, feet, his_feet).max(his_feet - 0.5);
             teleport(&mut at, &mut player, to_dunia(feet), 0.0);
             host.reset_quiet();
             return;

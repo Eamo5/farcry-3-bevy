@@ -4182,6 +4182,15 @@ needed more of it:
 * **No screen droplets.** The waterfalls' screen-effect triggers (the
   `fc3_gfx` scripts) are no longer stepped into: going through them again
   and again kept the story from ever counting as quiet.
+* **A briefing in the middle of another mission.** In a fresh run Hurk's
+  call began HUR_040 while the player stood in Willis's hut, and with
+  HUR_040 holding the focus the briefing's offer (the flamethrower on the
+  table) wasn't taken: its Use trigger counted only for the missions
+  running. The door, likewise held back only by those, was walked out of,
+  and B30's fields could never be burnt (35 minutes of B30 waves). A
+  briefing running with its triggers within 20 m of the player now joins the
+  focus (`BRIEF_NEAR`), and an awaited door is held back by any script's
+  thing to use within 20 m of it (`StoryHost::pending_use_by`).
 
 ## WIL_040: the rice fields and the escort
 
@@ -6182,7 +6191,8 @@ to SQC_080, each a brief at its giver then its blocks):
   walked to. Nor is one seated in a vehicle or aboard a helicopter taken
   down (he's shot): B40's reinforcements, their helicopter coming down to
   the beach, had the player set behind one in the air each frame till he
-  fell to his death.
+  fell to his death. And one set behind four times in 3 s won't hold still
+  and is left 20 s (`CHASE_MOST`), whatever carries him.
 * **The club.** BNG_010's dance at the club ends 20 s after the player's
   first good move, when its script sends `QTESETRESULT 4 SUCCESS` to the
   dance's zombie QTE. The host matched `QteSetResult` as written, and the

@@ -196,6 +196,9 @@ fn push_doors(
 /// walking through it into: BAM_060's inside Buck's hut locks the door
 /// behind him), else from the side he is on.
 #[allow(clippy::type_complexity)]
+/// How near (m) an awaited door a thing to use holds it back.
+const DOOR_USE_NEAR: f32 = 20.0;
+
 fn autopilot_doors(
     host: Option<NonSendMut<crate::story::StoryHost>>,
     time: Res<Time>,
@@ -252,6 +255,11 @@ fn autopilot_doors(
         return;
     };
     let (_, closed, hinge) = global.to_scale_rotation_translation();
+    // (Nor while a thing to use by it waits, whoever's: a briefing's offer
+    // is taken before its door is gone out of.)
+    if host.pending_use_by(hinge, DOOR_USE_NEAR) && host.quiet() < 40.0 {
+        return;
+    }
     let width = models.get(&object.model).map_or(1.0, |m| m.aabb_max.x * t.scale.x).clamp(0.4, 3.0);
     let along = closed * Vec3::X;
     let across = closed * Vec3::Z * approach_side(&host, hinge, closed * Vec3::Z, pt.translation);
