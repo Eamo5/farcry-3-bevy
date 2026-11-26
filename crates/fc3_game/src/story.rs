@@ -1060,6 +1060,9 @@ pub struct StoryHost {
     /// The share of their harm companions deal, as scripts set it
     /// (`CAPI_Companion.CompanionSetDamage`).
     pub companion_damage: HashMap<u64, f32>,
+    /// Characters a script has on their guard at their posts
+    /// (`SetIdleSubState` cautious).
+    pub cautious: std::collections::HashSet<u64>,
     /// The armies scripts put their characters in (`CAPI_NPC.SwitchArmy`:
     /// 1 red, 2 grey, 3 neutral), by story id, and the throwable a script
     /// chose for the player (`CAPI_Player.SelectThrowGadget`).
@@ -1388,6 +1391,7 @@ impl StoryHost {
             gameplay_params: Default::default(),
             holstered: Default::default(),
             companion_damage: HashMap::new(),
+            cautious: Default::default(),
             armies: Default::default(),
             throw_choice: None,
             called_from: Default::default(),
@@ -1687,8 +1691,15 @@ fn apply_damage_rates(
     immune: Query<(Entity, &crate::story_actors::StoryActor, Has<crate::vehicles::ImmuneToCollisions>)>,
     dealing: Query<(Entity, &crate::story_actors::StoryActor, Option<&crate::combat::DamageDealt>)>,
     mut commands: Commands,
+    mut guards: Query<(&crate::story_actors::StoryActor, &mut crate::npc::Npc)>,
 ) {
     let Some(host) = host else { return };
+    for (actor, mut npc) in &mut guards {
+        let cautious = host.cautious.contains(&actor.id);
+        if npc.cautious != cautious {
+            npc.cautious = cautious;
+        }
+    }
     for (e, actor, dealt) in &dealing {
         match (host.companion_damage.get(&actor.id), dealt) {
             (Some(&share), Some(d)) if d.0 != share => {
@@ -2559,6 +2570,7 @@ fn run_story(
             host.sound_loops.clear();
             host.holstered.clear();
             host.companion_damage.clear();
+            host.cautious.clear();
             // (What the autopilot did since is to do again, but for what
             // failed the mission: JAS_020 B15's guard, lured off before the
             // reload, was never lured again.)
@@ -4931,6 +4943,21 @@ fn run_story(
                         }
                     }
                     "CAPI_Pawn.BackupInventory" => {}
+                    // A group at ease or on its guard at its posts (`group,
+                    // 0|1`: an outpost's defenders turn cautious once they
+                    // fight, 35 graphs).
+                    "SetIdleSubState" => {
+                        let cautious = a(1) == "1";
+                        let members = host.story.group_members(&a(0));
+                        info!("story: group {} {} ({} members)", a(0), if cautious { "cautious" } else { "at ease" }, members.len());
+                        for id in members {
+                            if cautious {
+                                host.cautious.insert(id);
+                            } else {
+                                host.cautious.remove(&id);
+                            }
+                        }
+                    }
                     // A companion's harm (`companion, share`): JAS_130's
                     // riders deal none, the trucks behind left to the player.
                     "CAPI_Companion.CompanionSetDamage" => {

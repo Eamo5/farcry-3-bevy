@@ -680,6 +680,11 @@ pub struct Npc {
     /// Seconds left of getting up from a guard spot, startled (its move's
     /// abort clip, in the hit's slot): he stands where he is meanwhile.
     pub(crate) breaking_off: f32,
+    /// At his post on his guard rather than at ease (a script's
+    /// `SetIdleSubState` cautious: an outpost's defenders once they've
+    /// fought): no relaxing at the guard spots, and the senses of one who
+    /// suspects something.
+    pub cautious: bool,
 }
 
 /// A script's hold on an NPC's senses (`SetImpairedState`'s 0, 1, 2).
@@ -1782,6 +1787,7 @@ pub(crate) fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker
         vantage_search: rng.range(2.0, 4.0),
         flinch: 0.0,
         breaking_off: 0.0,
+        cautious: false,
     }
 }
 
@@ -1988,6 +1994,7 @@ fn perceive(
         // in his state, and the sixth sense close by.
         let senses = sense_table.for_role(npc.role);
         let level = match npc.state {
+            NpcState::Idle if npc.cautious => 1,
             NpcState::Idle => 0,
             NpcState::Suspicious | NpcState::Search => 1,
             NpcState::Combat => 2,

@@ -650,7 +650,9 @@ fn take_spots(
                 commands.entity(e).insert(SpotChecked);
                 continue;
             }
-            Some(_) if npc.state != NpcState::Idle || npc.awareness > 0.1 => continue,
+            // (Nor while on his guard: an outpost's defenders, once they've
+            // fought, stand cautious at their posts.)
+            Some(_) if npc.state != NpcState::Idle || npc.awareness > 0.1 || npc.cautious => continue,
             Some(_) => {}
             None => {
                 commands.entity(e).insert(SpotChecked);
