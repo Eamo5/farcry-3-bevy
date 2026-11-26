@@ -6213,6 +6213,13 @@ to SQC_080, each a brief at its giver then its blocks):
   again, for 300 s. A QTE the states test that nothing in the move asks is
   now taken as won when nothing else would play; BNG_030 went from its dance
   to its end in 50 s.
+* **On their guard.** `SetIdleSubState <group> <0|1>` (the `SetIdleSubState`
+  box: the outposts' defence graphs, 35 of them, set their defenders
+  cautious once they fight) now holds a group at ease or on its guard
+  (`StoryHost::cautious`, `Npc::cautious`): back at his post, a cautious man
+  watches with the senses of one who suspects something (the sense table's
+  second level, not the relaxed one), and one with a part of his own in a
+  scene doesn't go back to it. A reload sets them at ease again.
 * **A companion's harm.** `CAPI_Companion.CompanionSetDamage <companion>
   <share>` (JAS_130's riders get 0 as the trucks give chase) sets how much
   of his harm a companion deals (`combat::DamageDealt`), taken as the harm
