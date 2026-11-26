@@ -806,6 +806,20 @@ impl Story {
         c.objective_markers.keys().filter_map(|&m| c.position(m).map(|p| (m, p))).collect()
     }
 
+    /// The mission block an objective marker belongs to, by its name
+    /// (`WIL_020_B10`): the one whose mission showed it for itself, else the
+    /// one whose layer it stands on. None for the world's own markers.
+    pub fn marker_block(&self, marker: u64) -> Option<String> {
+        let c = self.core.borrow();
+        if let Some(owner) = c.marker_owners.get(&marker) {
+            if let Some(m) = c.missions.by_id.values().find(|m| m.owner == *owner) {
+                return Some(m.name.clone());
+            }
+        }
+        let layer = c.data.entities.get(&marker)?.layer;
+        c.data.blocks.values().find(|b| !b.base && b.layers.contains(&layer)).map(|b| b.name.clone())
+    }
+
     /// The same, each with the sub-kind a script showed it as (its name, as
     /// `GlobalSetObjectiveMarker` gives it: `ThrowRock`; empty for none).
     pub fn objective_markers_shown(&self) -> Vec<(u64, [f32; 3], String)> {

@@ -259,8 +259,10 @@ pub(crate) fn man_turrets(
             .is_some_and(|v| host.as_ref().is_some_and(|h| h.story.vehicle_rules(v.story_id()).exit_disabled));
         // (Put somewhere else, a checkpoint or a script's teleport: off the
         // gun where he is. Held on it, HOY_010's DShK kept the player 7 m
-        // from Sam, who waited for him at 5.)
-        let moved = p.spawning || on.as_ref().is_some_and(|(_, t)| t.pivot.distance(pt.translation) > 4.0);
+        // from Sam, who waited for him at 5. Not off a gun he's held on:
+        // HUR_040's barge went on down the river without him, the autopilot
+        // gone to shoot a crew ashore, and capsized at its sequence's end.)
+        let moved = !held && (p.spawning || on.as_ref().is_some_and(|(_, t)| t.pivot.distance(pt.translation) > 4.0));
         let leave = h.dead || on.is_none() || p.driving || moved || (actions.just_pressed(Action::Interact) && !held);
         if leave {
             actions.consume(Action::Interact);

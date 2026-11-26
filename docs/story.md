@@ -6170,7 +6170,19 @@ to SQC_080, each a brief at its giver then its blocks):
   last wave the player stayed on the DShK by Sam, 7 m from the spot where
   Sam waited for him within 5, and the mission stalled there. Moved more
   than 4 m from the gun, or being placed afresh, he now leaves it where he
-  was put.
+  was put; but not a gun a script holds him on (its vehicle's exit
+  disabled): HUR_040's barge, left so for a crew ashore, went on down the
+  river without him and capsized at its sequence's end.
+* **Whose marker.** With WIL_020 running beside HUR_040, the autopilot's
+  walk to an objective marker took WIL_020's, across the island, and B40
+  failed for leaving its zone, five times before the walk was learned
+  fatal. A marker's mission is now known (`Story::marker_block`: the
+  mission that showed it for itself, else the block whose layer it stands
+  on), and with a mission on only those of the missions in focus are
+  walked to. Nor is one seated in a vehicle or aboard a helicopter taken
+  down (he's shot): B40's reinforcements, their helicopter coming down to
+  the beach, had the player set behind one in the air each frame till he
+  fell to his death.
 * **The club.** BNG_010's dance at the club ends 20 s after the player's
   first good move, when its script sends `QTESETRESULT 4 SUCCESS` to the
   dance's zombie QTE. The host matched `QteSetResult` as written, and the

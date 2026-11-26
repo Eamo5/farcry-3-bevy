@@ -3110,6 +3110,10 @@ fn run_story(
             .filter(|_| mission_on && !own_left && (host.quiet > MARKER_WALK_AFTER || focus_stuck))
             // (An objective's, not a giver's, a shop's or an activity's.)
             .filter(|(id, _)| data.markers.get(id).is_none_or(|m| !NOT_OBJECTIVES.contains(&m.kind)))
+            // (One of the missions in focus, where it's known whose it is:
+            // WIL_020's, running beside HUR_040, drew the player off the
+            // barge's beach and out of its mission's zone.)
+            .filter(|(id, _)| host.story.marker_block(*id).is_none_or(|b| focus.iter().any(|f| b.starts_with(f.as_str()))))
             .map(|(id, p)| (id, to_bevy(p)))
             .filter(|(id, at)| at.with_y(0.0).distance(t.translation.with_y(0.0)) > MARKER_WALK_NEAR && !host.used.contains(&(*id, "go to".to_string())) && !host.fatal.contains(&(*id, "go to".to_string())))
             .min_by(|a, b| a.1.distance(t.translation).total_cmp(&b.1.distance(t.translation)));
@@ -6859,6 +6863,11 @@ fn autopilot_loot(
                 || player.swimming
                 // (One on his guard can't be taken down: shot at once.)
                 || q.5.state != crate::npc::NpcState::Idle
+                // (Nor one seated in a vehicle or aboard a helicopter: HUR_040
+                // B40's reinforcements, their helicopter coming down to the
+                // beach, had the player set behind one in the air each frame
+                // till he fell to his death.)
+                || q.4.seated
                 || (*last == Some((q.4.id, "take down")) && shooting.is_some_and(|(id, _, since)| id == q.4.id && now - since > TAKEDOWN_PATIENCE)))
     });
     // Riding as a passenger: the foe nearest is shot from the seat, gun in
