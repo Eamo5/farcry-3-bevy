@@ -528,6 +528,25 @@ fn run_qtes(
     }
     let leaves = qt.state.is_some_and(|s| decisive && !q::holds_within(states, s, &qt.results));
     if !qt.ended && (qt.state.is_none() || leaves || qt.t >= qt.length) {
+        // (Nothing to play, for a QTE the states test that no clip of the
+        // move asks: taken as won. BNG_030's bar fight branches on QTE1 after
+        // the counter punch, and nothing asks it; the intro played over and
+        // over for 300 s.)
+        if q::select(states, &qt.results, &qt.progress).is_none() {
+            let asked: Vec<u8> = states
+                .iter()
+                .filter_map(|s| s.clip.as_ref().and_then(|c| moves.clips.get(c)))
+                .flatten()
+                .filter(|e| matches!(e.kind, Kind::Press | Kind::Hold | Kind::Mash | Kind::Zombie))
+                .map(|e| e.id)
+                .collect();
+            for &(id, _) in states.iter().flat_map(|s| &s.conds) {
+                if (id as usize) < SLOTS && !asked.contains(&id) && qt.results[id as usize] == q::NONE {
+                    info!("qte: {} tests QTE{id}, which nothing asks: won", qt.player);
+                    qt.results[id as usize] = q::SUCCEEDED;
+                }
+            }
+        }
         // (Nothing to play: the state plays again.)
         if let Some(n) = q::select(states, &qt.results, &qt.progress).or(qt.state) {
             let next = &states[n];

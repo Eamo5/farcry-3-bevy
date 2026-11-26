@@ -6175,7 +6175,12 @@ to SQC_080, each a brief at its giver then its blocks):
   anchor from the parameters the story's commands bring, which the host
   takes up a frame after another system's event (the autopilot's use of the
   bartender) started it: it found none and gave the game up. It now waits
-  for them.
+  for them. BNG_030's bar fight (`Ex_BarFightQTE_Jason`) branches after the
+  counter punch on QTE1, to the uppercut that ends it or to a recovery, and
+  no clip of the move asks QTE1: nothing played, the intro played again, and
+  again, for 300 s. A QTE the states test that nothing in the move asks is
+  now taken as won when nothing else would play; BNG_030 went from its dance
+  to its end in 50 s.
 * **Holstered.** The narrative's companions put their guns away for a talk
   (`NarrativeHolsterWeaponNPCCompanion`: `CAPI_Pawn.BackupInventory`,
   `RemoveAllWeapon`, later `RestoreBackupInventory`); only the player's were
