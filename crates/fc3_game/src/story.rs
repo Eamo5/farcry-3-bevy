@@ -69,9 +69,35 @@ impl Plugin for StoryPlugin {
                 matches!(state.get(), GameState::Playing | GameState::Paused | GameState::Map | GameState::Journal | GameState::Shop)
             }))
             .add_systems(Update, show_story_ui)
-            .add_systems(Update, (apply_sides, apply_tags, scripted_controls, scripted_ambience, apply_damage_rates, script_sounds).after(StorySet));
+            .add_systems(Update, (apply_sides, apply_tags, scripted_controls, scripted_ambience, apply_damage_rates, script_sounds, holster_characters).after(StorySet));
         if std::env::var_os("FC3_STORY_RETRY_TEST").is_some() {
             app.add_systems(Update, retry_inventory_test.after(StorySet).run_if(in_state(GameState::Playing)));
+        }
+    }
+}
+
+/// Characters whose weapons the scripts took away hold none: what's in their
+/// hand hidden till they're given back (`StoryHost::holstered`).
+fn holster_characters(
+    host: Option<NonSend<StoryHost>>,
+    actors: Query<(&crate::story_actors::StoryActor, &crate::npc::Npc)>,
+    rigs: Query<&crate::characters::CharacterRig>,
+    mut held: Query<(&ChildOf, &mut Visibility), With<crate::characters::HeldWeapon>>,
+    mut hidden: Local<std::collections::HashSet<u64>>,
+) {
+    let Some(host) = host else { return };
+    if host.holstered.is_empty() && hidden.is_empty() {
+        return;
+    }
+    for (actor, npc) in &actors {
+        let (wanted, was) = (host.holstered.contains(&actor.id), hidden.contains(&actor.id));
+        let Some(rig) = npc.rig.and_then(|r| rigs.get(r).ok()) else { continue };
+        if wanted {
+            crate::guard_spots::hold_weapon(rig, &mut held, false);
+            hidden.insert(actor.id);
+        } else if was {
+            crate::guard_spots::hold_weapon(rig, &mut held, true);
+            hidden.remove(&actor.id);
         }
     }
 }
@@ -1024,6 +1050,9 @@ pub struct StoryHost {
     /// Each specific gameplay's parameters (`CreateSpecificGameplay`'s,
     /// by its id), for the minigames that read them.
     pub gameplay_params: std::collections::HashMap<u64, Vec<(String, String)>>,
+    /// Characters whose weapons the scripts took away (a companion holstering
+    /// for a talk: `CAPI_Pawn.RemoveAllWeapon`), till they give them back.
+    pub holstered: std::collections::HashSet<u64>,
     /// The armies scripts put their characters in (`CAPI_NPC.SwitchArmy`:
     /// 1 red, 2 grey, 3 neutral), by story id, and the throwable a script
     /// chose for the player (`CAPI_Player.SelectThrowGadget`).
@@ -1341,6 +1370,7 @@ impl StoryHost {
             detonations: Vec::new(),
             gsf_events: Vec::new(),
             gameplay_params: Default::default(),
+            holstered: Default::default(),
             armies: Default::default(),
             throw_choice: None,
             called_from: Default::default(),
@@ -2490,6 +2520,7 @@ fn run_story(
             host.due.clear();
             host.sounds_asked.clear();
             host.sound_loops.clear();
+            host.holstered.clear();
             // (What the autopilot did since is to do again, but for what
             // failed the mission: JAS_020 B15's guard, lured off before the
             // reload, was never lured again.)
@@ -4807,6 +4838,21 @@ fn run_story(
                             scripted.restore_inventory(&mut inv);
                         }
                     }
+                    // A character's weapons taken away and given back (the
+                    // narrative's companion holstering for a talk: backed
+                    // up, removed, restored): hidden from his hand meanwhile
+                    // (`holster_characters`).
+                    "CAPI_Pawn.RemoveAllWeapon" | "CAPI_Pawn.RemoveAllInventory" => {
+                        if let Ok(pawn) = a(0).parse::<u64>() {
+                            host.holstered.insert(pawn);
+                        }
+                    }
+                    "CAPI_Pawn.RestoreBackupInventory" => {
+                        if let Ok(pawn) = a(0).parse::<u64>() {
+                            host.holstered.remove(&pawn);
+                        }
+                    }
+                    "CAPI_Pawn.BackupInventory" => {}
                     // A storm brought on, or the sky left fair, for a while
                     // (`<factor> <seconds>`), and let go (`<seconds>`).
                     "SetScriptedStormFactorOverride" => {

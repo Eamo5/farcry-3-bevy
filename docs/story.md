@@ -6176,6 +6176,11 @@ to SQC_080, each a brief at its giver then its blocks):
   takes up a frame after another system's event (the autopilot's use of the
   bartender) started it: it found none and gave the game up. It now waits
   for them.
+* **Holstered.** The narrative's companions put their guns away for a talk
+  (`NarrativeHolsterWeaponNPCCompanion`: `CAPI_Pawn.BackupInventory`,
+  `RemoveAllWeapon`, later `RestoreBackupInventory`); only the player's were
+  played. A character's now leave his hand (hidden) till they're given back,
+  and a checkpoint's reload gives them back.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.
