@@ -1193,7 +1193,10 @@ impl StoryHost {
     /// stood still for good.)
     fn culprit(&mut self, now: f32, within: f32) -> Option<(u64, String, f32)> {
         let last = self.last_step.as_ref()?;
-        if now - last.2 < CULPRIT_AT_ONCE && last.1 != "Enter" {
+        // (A use acts at once too: JAS_060's Amanaki, used as the map was to
+        // be opened, set the player in B40's failing zone, which failed the
+        // mission 30 ms on, reload after reload.)
+        if now - last.2 < CULPRIT_AT_ONCE && last.1 != "Enter" && last.1 != "Use" {
             if self.prev_step.as_ref().is_some_and(|p| now - p.2 < within + CULPRIT_AT_ONCE) {
                 self.last_step = None;
                 return self.prev_step.take();

@@ -3794,6 +3794,13 @@ steep crease at (-1987, -2456), can wedge the capsule; the route keeps to x
   the player under one of JAS_030's helicopter crew every frame for five
   minutes, the machete never in reach. One set by four times in 3 s is
   left 20 s, for the machete as for a takedown (`chase_trips`).
+* **A use fails at once.** With the reload forgetting the steps before,
+  JAS_060's B40 failed and reloaded every 12 s: the autopilot used Amanaki
+  as the map was to be opened, which set the player in the block's failing
+  zone, and a use, like a trigger left, was passed over as the culprit of
+  what happened 30 ms on. A use, like stepping into a trigger, is now put
+  down as acting at once (`StoryHost::culprit`); B40 failed once, and then
+  the map was opened and JAS_060 and JAS_080 completed.
 
 ## DEN_020: the radio operators (B10)
 
