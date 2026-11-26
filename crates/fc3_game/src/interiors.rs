@@ -34,8 +34,10 @@ impl Plugin for InteriorsPlugin {
 }
 
 /// How many interiors light at once (Bevy binds eight irradiance volumes a
-/// view, the nearest first; the probes' takes one).
-const SLOTS: usize = 7;
+/// view, those whose centres are nearest the camera; the probes' near and
+/// far volumes take two. With seven, a village's shacks pushed the far
+/// volume out, its centre up to 34 m off, and the distant shade went blue.)
+const SLOTS: usize = 6;
 /// How far off (m, from its box) an interior is lit.
 const REACH: f32 = 60.0;
 /// Over how much of its edge (m) a volume fades in.

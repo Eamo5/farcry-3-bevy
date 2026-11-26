@@ -1040,8 +1040,10 @@ model or an ambient (`fc3tool interior-survey`); the converter places the
 entity, and writes them with their ambients to `world/interiors.txt` (mission
 layers' too, with their entity).
 
-The seven nearest the camera (Bevy binds eight irradiance volumes a view,
-the probes' takes one) each get an irradiance volume of one voxel, placed as
+The six nearest the camera (Bevy binds the eight irradiance volumes whose
+centres are nearest the camera; the probes' near and far volumes take two,
+and with seven a village's shacks pushed the far one out) each get an
+irradiance volume of one voxel, placed as
 the box: surfaces facing up take the floor colour, facing down the
 ceiling's, walls between, eased from night to day with the daylight, in the
 game's light units (the presets' lux per unit, over π as the game's diffuse
