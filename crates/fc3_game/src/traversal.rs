@@ -609,7 +609,7 @@ fn tower_prompt(
     players: Query<(&Transform, &Health, &crate::weapons::Inventory, &Player)>,
     mut taken: MessageWriter<TowerTaken>,
     skills: Option<Res<crate::progression::Skills>>,
-    mut story_ui: ResMut<crate::story::StoryUi>,
+    (mut story_ui, mut scripted_map): (ResMut<crate::story::StoryUi>, ResMut<crate::map::ScriptedMap>),
 ) {
     let Ok((t, h, inv, p)) = players.single() else { return };
     // (Not while the world comes in round him: the autopilot took a tower
@@ -637,6 +637,10 @@ fn tower_prompt(
         let reward = if freed.is_empty() { String::new() } else { format!(" Free in shops: {}.", freed.join(", ")) };
         hud.notify_native(format!("Radio tower taken: map revealed.{reward}"));
         story_ui.cards.push(crate::story::MissionCard::Event { text: CARD_TOWER, count: Some((CARD_TOWERS, progress.towers.len())) });
+        // (And the world map tells of it the next time it opens.)
+        let news = scripted_map.news.get_or_insert_with(Default::default);
+        news.towers = progress.towers.len();
+        news.freed.extend(freed.iter().map(|s| s.to_string()));
     }
 }
 

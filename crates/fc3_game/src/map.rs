@@ -505,6 +505,15 @@ pub struct ScriptedMap {
     pub open: Option<bool>,
     pub reveal: Option<u64>,
     opened_at: Option<f32>,
+    /// What the map tells the next time it opens: the radio towers taken
+    /// since (the count after the last) and the weapons they made free.
+    pub news: Option<TowerNews>,
+}
+
+#[derive(Default, Clone, Debug, PartialEq)]
+pub struct TowerNews {
+    pub towers: usize,
+    pub freed: Vec<String>,
 }
 
 const SCRIPTED_MAP_FOR: f32 = 4.0;

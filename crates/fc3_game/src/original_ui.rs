@@ -899,11 +899,21 @@ struct MapPage {
     /// The zone a reveal fades once the icons are in
     /// (`map::ScriptedMap`).
     fade: Option<u64>,
+    /// `FC3_MAP_NEWS`'s news given (tests).
+    news_tested: bool,
 }
 
 /// How far (window pixels) the mouse goes with its button down before it
 /// pans the map rather than clicks.
 const MAP_DRAG: f32 = 4.0;
+
+/// The map's news of radio towers taken (the game's strings): "Radio tower
+/// %d of 18 activated.", "Activate another radio tower to receive new items
+/// at the store, and new Supply Drop quests.", and each weapon's header,
+/// "Now Free In Stores".
+const MAP_NEWS_TOWER: u32 = 119295;
+const MAP_NEWS_NEXT_TOWER: u32 = 150305;
+const MAP_NEWS_FREE: u32 = 167474;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Travel {
@@ -1315,6 +1325,26 @@ fn drive_map_page(
                 host.event("CenterMap", &[&map_level(zoom).to_string(), &zoom.to_string()]);
                 if let Some(zone) = page.fade.take() {
                     host.event("HideOutpostZone", &[&zone.to_string()]);
+                }
+                // What changed since it was last open: the radio towers
+                // taken and the weapons they made free in the shops, each in
+                // the movie's own message box for 5 s (`OutpostMessage
+                // <header> <text>`, then `OutpostMessageSent`). (FC3_MAP_NEWS=
+                // <towers> (tests): as if that many were taken, freeing two.)
+                if let Some(n) = std::env::var("FC3_MAP_NEWS").ok().and_then(|v| v.parse::<usize>().ok()).filter(|_| !page.news_tested) {
+                    page.news_tested = true;
+                    scripted_map.news = Some(crate::map::TowerNews { towers: n, freed: vec!["1911".into(), "AK-74M Rifle".into()] });
+                }
+                if let Some(news) = scripted_map.news.take() {
+                    let tower = host.text(MAP_NEWS_TOWER).replace("%d", &news.towers.to_string());
+                    let next = if news.towers < 18 { host.text(MAP_NEWS_NEXT_TOWER) } else { String::new() };
+                    host.event("OutpostMessage", &[&tower, &next]);
+                    let free = host.text(MAP_NEWS_FREE);
+                    for weapon in &news.freed {
+                        host.event("OutpostMessage", &[&free, weapon]);
+                    }
+                    host.event("OutpostMessageSent", &[]);
+                    info!("original UI: world map: news of {} towers, {} weapons free", news.towers, news.freed.len());
                 }
                 // FC3_MAP_PATHS=<path>;... (tools): what the movie holds there.
                 if std::env::var_os("FC3_MAP_PATHS").is_some() {

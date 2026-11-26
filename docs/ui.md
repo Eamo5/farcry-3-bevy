@@ -1272,6 +1272,19 @@ Everything else is the engine's to drive (`original_ui::drive_map_page`):
 * `SetupMarker 1 <x> <y> <type> <icon>` places the waypoint (`SetupMarker
   0` takes it away), and `onFastTravel <n>` travels to the n-th fast travel
   icon sent (the movie counts safehouses and liberated outposts).
+* **News.** The movie keeps a queue of message boxes of its own
+  (`OutpostMessage <header> <text>`, shown one after another for 5 s each
+  in `H_TutorialBox` once `OutpostMessageSent` comes). The radio towers taken
+  since the map was last open are told there once the icons are in: "Radio
+  tower %d of 18 activated." over "Activate another radio tower to receive
+  new items at the store, and new Supply Drop quests." (the game's strings
+  119295 and 150305), then each weapon they made free under "Now Free In
+  Stores" (167474) (`map::ScriptedMap::news`). The movie's other queues
+  (`SetTutorialMode`, `RadioTowerMessageSent` with `AddShopItems` and
+  `AddNewQuest`: the first tower's guided tour, panning to the tower and the
+  shop, and the waypoint lesson toward the boar region) aren't driven: their
+  strings are the engine's and unknown. `FC3_MAP_NEWS=<towers>` (tests) tells
+  of that many towers and two weapons the next time the map opens.
 
 **Sharpshooter challenges** (`UI\Singleplayer\Activities\Acti_Shooting.feu`,
 level 4, while a shooting gallery runs: `original_ui::drive_gallery`, the
