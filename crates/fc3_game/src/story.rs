@@ -69,10 +69,41 @@ impl Plugin for StoryPlugin {
                 matches!(state.get(), GameState::Playing | GameState::Paused | GameState::Map | GameState::Journal | GameState::Shop)
             }))
             .add_systems(Update, show_story_ui)
-            .add_systems(Update, (apply_sides, apply_tags, scripted_controls, scripted_ambience, apply_damage_rates).after(StorySet));
+            .add_systems(Update, (apply_sides, apply_tags, scripted_controls, scripted_ambience, apply_damage_rates, script_sounds).after(StorySet));
         if std::env::var_os("FC3_STORY_RETRY_TEST").is_some() {
             app.add_systems(Update, retry_inventory_test.after(StorySet).run_if(in_state(GameState::Playing)));
         }
+    }
+}
+
+/// The sounds scripts play (`CDominoSoundManager:PlaySound`): a one-off
+/// heard once, its box told it's finished when it has played through; a
+/// looping one (an alarm, a radio, a generator) kept going, on the entity it
+/// plays on, till the script stops it (`StopSound`), when it fades out.
+/// (Every one had been played once and called finished 2 s on; a loop went
+/// quiet at its first turn, and `StopSound` had nothing to stop.)
+fn script_sounds(
+    host: Option<NonSendMut<StoryHost>>,
+    bank: Option<Res<crate::sound::SoundBank>>,
+    time: Res<Time>,
+    mut sfx: MessageWriter<crate::sound::PlaySfx>,
+    mut loops: MessageWriter<crate::sound::LoopSfx>,
+) {
+    let (Some(mut host), Some(bank)) = (host, bank) else { return };
+    let now = time.elapsed_secs();
+    let host = &mut *host;
+    let at = |story: &Story, e: Option<u64>| e.and_then(|e| story.data().position(e)).map(to_bevy);
+    for (handle, event, entity) in std::mem::take(&mut host.sounds_asked) {
+        if bank.loops(event) {
+            info!("story: a script's sound {event:08x} loops on {entity:?} till it's stopped ({handle})");
+            host.sound_loops.insert(handle, (event, entity));
+        } else {
+            sfx.write(crate::sound::PlaySfx { event, at: at(&host.story, entity), volume: 1.0 });
+            host.due.push((now + bank.length(event).unwrap_or(2.0).clamp(0.2, 60.0), Due::Sound(handle)));
+        }
+    }
+    for (&handle, &(event, entity)) in &host.sound_loops {
+        loops.write(crate::sound::LoopSfx { key: 0x5343_0000_0000_0000 ^ handle, event, at: at(&host.story, entity), volume: 1.0, ..default() });
     }
 }
 
@@ -900,6 +931,11 @@ pub struct StoryHost {
     pub story: Story,
     /// Host work due later: (time, what).
     due: Vec<(f32, Due)>,
+    /// The sounds scripts asked for this frame (`script_sounds`): handle,
+    /// event, and the entity it plays on (none for the player's own).
+    sounds_asked: Vec<(u64, u32, Option<u64>)>,
+    /// The scripts' looping sounds, playing till they stop them.
+    sound_loops: HashMap<u64, (u32, Option<u64>)>,
     /// The last block that completed, and whether it was a cinematic one
     /// (its end spawn is where the cinematic left the player).
     last_completed: Option<String>,
@@ -1265,6 +1301,8 @@ impl StoryHost {
         StoryHost {
             story,
             due: Vec::new(),
+            sounds_asked: Vec::new(),
+            sound_loops: HashMap::new(),
             last_completed: None,
         used_since: None,
             focus_since: None,
@@ -2450,6 +2488,8 @@ fn run_story(
             placements.reset(&host.story.data());
             host.hidden_synced = false;
             host.due.clear();
+            host.sounds_asked.clear();
+            host.sound_loops.clear();
             // (What the autopilot did since is to do again, but for what
             // failed the mission: JAS_020 B15's guard, lured off before the
             // reload, was never lured again.)
@@ -4011,12 +4051,20 @@ fn run_story(
                     "StopSoundMixingFromLua" => mixings.stop(&a(0)),
                     "StopBinkVideo" => videos.stops.push(false),
                     "StopFullscreenVideo" => videos.stops.push(true),
+                    // (Played by `script_sounds`: a looping one till the
+                    // script stops it.)
                     "PlaySound" => {
-                        let at = a(1).parse().ok().filter(|&e| e != fc3_story::PLAYER).and_then(|e| data.position(e)).map(to_bevy);
-                        if let Some(id) = fc3_story::values::Text(a(2)).sound() {
-                            sfx.write(crate::sound::PlaySfx { event: id, at, volume: 1.0 });
+                        let handle = a(0).parse().unwrap_or(0);
+                        match fc3_story::values::Text(a(2)).sound() {
+                            Some(event) => host.sounds_asked.push((handle, event, a(1).parse().ok().filter(|&e| e != fc3_story::PLAYER))),
+                            None => host.due.push((now + 2.0, Due::Sound(handle))),
                         }
-                        host.due.push((now + 2.0, Due::Sound(a(0).parse().unwrap_or(0))));
+                    }
+                    "StopSound" => {
+                        let handle = a(0).parse().unwrap_or(0);
+                        if host.sound_loops.remove(&handle).is_some() {
+                            host.due.push((now, Due::Sound(handle)));
+                        }
                     }
                     // (As the game's strings have them, HTML: the original
                     // HUD's box shows their bullets, icons and colours.)

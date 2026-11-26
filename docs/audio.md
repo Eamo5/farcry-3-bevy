@@ -341,6 +341,21 @@ default`. There are 22: type 0 is a low-pass (its parameter 1 the cutoff, 20,000
 Hz open; one sits at 3,080 by default), type 2 a high-pass (150 Hz). The
 manifest writes `fx <unit> <bus> <type> <default>`.
 
+## Scripted sounds
+
+The scripts' `CDominoSoundManager:PlaySound(entity, sound, kind, box)`
+plays an event on an entity (the player's own non-spatially) and returns a
+handle; its box hears "started" at once and "finished" when it has played
+through; `StopSound(handle, fade)` stops it. A one-off is played once and
+its box is told it's finished after its length (`SoundBank::length`; 2 s
+when unknown). One whose every voice loops (an alarm, a radio, a
+generator) is kept going on its entity, following it, till the script
+stops it (`story::script_sounds`), and fades out then; its box hears
+"finished" as it stops. (Every one had been played once and called finished
+2 s on: a loop went quiet at its first turn, a box replaying its sound when
+told it had finished replayed it every 2 s whatever its length, and
+`StopSound` had nothing to stop.) A checkpoint's reload stops them all.
+
 ## Mixings
 
 The game and its scripts change the mix by name:
