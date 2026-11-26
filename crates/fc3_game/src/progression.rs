@@ -384,6 +384,7 @@ fn legacy_skill(name: &str) -> Vec<&'static str> {
         "death_from_below" => "SP_TakedownFromBelowSingle",
         "heavy_takedown" => "SP_HeavyUnitTakedown",
         "chain_takedown" => "SP_ChainTakedown",
+        "knife_throw_takedown" => "SP_TakedownKnifeThrow",
         "pistol_takedown" => "SP_PistolMarksmanTakedown",
         "grenade_takedown" => "SP_GrenadeTakedown",
         "takedown_drag" => "SP_DragBackTakedown",
@@ -809,7 +810,12 @@ pub struct Perks {
     pub front_takedown: bool,
     pub heavy_takedown: bool,
     pub death_from_above: bool,
+    /// After a takedown, on to the next foe in reach and down with him too
+    /// (`SP_ChainTakedown`).
     pub chain_takedown: bool,
+    /// The victim's knife thrown at a second foe in view as he goes down
+    /// (`SP_TakedownKnifeThrow`).
+    pub knife_throw_takedown: bool,
     pub pistol_takedown: bool,
     pub grenade_takedown: bool,
     pub takedown_drag: bool,
@@ -952,6 +958,7 @@ impl Perks {
             heavy_takedown: learned("SP_HeavyUnitTakedown"),
             death_from_above: learned("SP_DeathFromAboveSingle"),
             chain_takedown: learned("SP_ChainTakedown"),
+            knife_throw_takedown: learned("SP_TakedownKnifeThrow"),
             pistol_takedown: learned("SP_PistolMarksmanTakedown"),
             grenade_takedown: learned("SP_GrenadeTakedown"),
             takedown_drag: learned("SP_DragBackTakedown"),

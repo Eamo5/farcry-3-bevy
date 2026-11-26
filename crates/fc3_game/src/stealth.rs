@@ -157,8 +157,10 @@ enum TakedownKind {
     Chain,
 }
 
-/// Chained knife throws: how long after a takedown, and how far.
+/// Chained takedowns: how long after a takedown the next may be chained,
+/// and how far off he may stand. The knife throw's reach.
 const CHAIN_WINDOW: f32 = 1.8;
+const CHAIN_REACH: f32 = 10.0;
 const CHAIN_RANGE: f32 = 15.0;
 /// How far the pistol takedown reaches.
 const PISTOL_RANGE: f32 = 30.0;
@@ -850,7 +852,7 @@ fn camera_shot(time: Res<Time>, args: Res<crate::Args>, scripted: Res<crate::sto
 
 /// Finds a takedown target and performs the takedown on the melee key:
 /// on the ground from behind (or the front with the skill), dropping onto an
-/// enemy from above, or, right after one, a thrown knife at another.
+/// enemy from above, or, right after one, chained on to the next.
 #[allow(clippy::too_many_arguments)]
 fn takedown(
     time: Res<Time>,
@@ -894,47 +896,47 @@ fn takedown(
     let fwd = Vec3::new(-p.yaw.sin(), 0.0, -p.yaw.cos());
     let takeable = |npc: &Npc, nh: &Health| nh.dead || !npc.hostile() || (npc.role.armoured() && !perks.heavy_takedown);
 
-    // Chain: a knife thrown at another enemy in view, once the takedown is done.
+    // Chained (`SP_ChainTakedown`): as a takedown ends, the move pushed
+    // toward another foe in reach (or the takedown pressed with one in view)
+    // closes on him and takes him down too, and so on while foes are near
+    // ("Push [Move] to target the next enemy and chain the takedown").
     if td.chain_window > 0.0 && perks.chain_takedown && td.timer < 0.3 && !p.swimming {
         let eye = pt.translation + Vec3::Y * (crate::player::EYE_HEIGHT - crate::player::HALF_HEIGHT);
-        let look = Quat::from_rotation_y(p.yaw) * Quat::from_rotation_x(p.pitch) * Vec3::NEG_Z;
+        let right = Vec3::new(p.yaw.cos(), 0.0, -p.yaw.sin());
+        let pushed = (actions.movement.length() > 0.5).then(|| (fwd * actions.movement.y + right * actions.movement.x).normalize_or_zero());
+        let toward = pushed.unwrap_or(fwd);
+        let filter = SpatialQueryFilter::from_excluded_entities([pe]);
         let best = npcs
             .iter()
             .filter(|(e, _, npc, nh)| Some(*e) != td.last && !takeable(npc, nh))
             .filter_map(|(e, t, _, _)| {
                 let to = t.translation + Vec3::Y * 0.4 - eye;
-                let d = to.length();
-                let aim = to.normalize_or_zero().dot(look);
-                (d < CHAIN_RANGE && aim > 0.94).then_some((e, d, to, aim))
+                let flat = Vec3::new(to.x, 0.0, to.z);
+                let aim = flat.normalize_or_zero().dot(toward);
+                (flat.length() < CHAIN_REACH && to.y.abs() < 2.0 && aim > 0.7).then_some((e, to, aim))
             })
-            .filter(|(e, d, to, _)| {
-                let filter = SpatialQueryFilter::from_excluded_entities([pe]);
-                Dir3::new(*to).ok().is_some_and(|dir| spatial.cast_ray(eye, dir, *d, true, &filter).is_none_or(|h| h.entity == *e || h.distance > d - 0.6))
-            })
-            .max_by(|a, b| a.3.total_cmp(&b.3));
-        if let Some((target, _, to, _)) = best {
+            .filter(|(e, to, _)| Dir3::new(*to).ok().is_some_and(|dir| spatial.cast_ray(eye, dir, to.length(), true, &filter).is_none_or(|h| h.entity == *e || h.distance > to.length() - 0.6)))
+            .max_by(|a, b| a.2.total_cmp(&b.2));
+        if let Some((target, _, _)) = best {
             td.candidate = Some(target);
             td.kind = TakedownKind::Chain;
-            if actions.just_pressed(Action::Melee) {
+            if pushed.is_some() || actions.just_pressed(Action::Melee) {
                 actions.consume(Action::Melee);
-                td.chain_window = 0.0;
-                rewards.0.insert(target, "TakedownKnifeThrow");
-                stats.write(crate::progression::StatGain { stat: crate::statistics::stat::KNIFE_THROW_TAKEDOWNS, amount: 1 });
-                damage.write(DamageEvent {
-                    target,
-                    amount: 10_000.0,
-                    kind: DamageKind::Melee,
-                    source: Some(pt.translation),
-                    instigator: Some(pe),
-                    headshot: false,
-                    hit: crate::combat::Hit::Whole,
-                });
-                crate::particles::fx::blood(&mut particles, &mut rng, eye + to, to.normalize_or_zero());
-                sfx.write(crate::sound::PlaySfx {
-                    event: crate::sound::switched(crate::sound::ev::MELEE_IMPACT, crate::surfaces::value::FLESH, 0),
-                    at: Some(eye + to),
-                    volume: 0.8,
-                });
+                let Ok((_, t, npc, _)) = npcs.get(target) else { return };
+                // Across to him, a metre short, facing him.
+                let to = t.translation - pt.translation;
+                let flat = Vec3::new(to.x, 0.0, to.z).normalize_or(fwd);
+                pt.translation = Vec3::new(t.translation.x, pt.translation.y.max(t.translation.y), t.translation.z) - flat;
+                p.yaw = (-flat.x).atan2(-flat.z);
+                p.velocity = Vec3::ZERO;
+                let facing = Vec3::new(-npc.yaw.sin(), 0.0, -npc.yaw.cos());
+                let style = if facing.dot(flat) < -0.3 { crate::fp::TakedownStyle::Front } else { crate::fp::TakedownStyle::Back };
+                let at = t.translation;
+                strike(&mut td, &mut inv, target, pe, at, &mut damage, &mut sfx);
+                rewards.0.insert(target, "TakedownChain");
+                stats.write(crate::progression::StatGain { stat: crate::statistics::stat::CHAIN_TAKEDOWNS, amount: 1 });
+                crate::particles::fx::blood(&mut particles, &mut rng, at + Vec3::Y * 0.4, flat);
+                anims.write(crate::fp::TakedownAnim { victim: target, style, chain: None, grenade: None, drag: false, second: None, pistol: [None; 3] });
             }
             return;
         }
@@ -1140,10 +1142,11 @@ fn takedown(
         seen.sort_by(|a, b| a.1.total_cmp(&b.1));
         seen.into_iter().map(|(e, _)| e).collect()
     };
-    // With the skill, the nearest other enemy in view gets the victim's knife
-    // (the game's paired clips cover the regular build, not heavies).
+    // With the skill (`SP_TakedownKnifeThrow`), the nearest other enemy in
+    // view gets the victim's knife (the game's paired clips cover the regular
+    // build, not heavies).
     td.chain_target = None;
-    if td.grenade_at.is_none() && perks.chain_takedown && regular {
+    if td.grenade_at.is_none() && perks.knife_throw_takedown && regular {
         td.chain_target = in_view(CHAIN_RANGE).first().copied();
     }
     // With the pistol skill, two or more in view (or one, without the knife
@@ -1196,8 +1199,8 @@ fn takedown(
         } else {
             stat::STANDARD_TAKEDOWNS
         };
-        let chained = if chain.is_some() { 1 } else { 0 };
-        for (stat, amount) in [(kind, 1), (stat::CHAIN_TAKEDOWNS, chained), (stat::PISTOL_TAKEDOWNS, shots as u32)] {
+        let thrown = if chain.is_some() { 1 } else { 0 };
+        for (stat, amount) in [(kind, 1), (stat::KNIFE_THROW_TAKEDOWNS, thrown), (stat::PISTOL_TAKEDOWNS, shots as u32)] {
             if amount > 0 {
                 stats.write(crate::progression::StatGain { stat, amount });
             }
@@ -1205,7 +1208,7 @@ fn takedown(
     }
     rewards.0.insert(target, if heavy { "HeavyTakedown" } else if grenade.is_some() { "TakedownGrenadePinPull" } else { "StandardTakedown" });
     if let Some(c) = chain {
-        rewards.0.insert(c, "TakedownChain");
+        rewards.0.insert(c, "TakedownKnifeThrow");
     }
     for e in pistol.iter().flatten() {
         rewards.0.insert(*e, "TakedownPistolMarksman");
@@ -1286,12 +1289,12 @@ fn takedown_prompt(
         let what = match td.kind {
             TakedownKind::Ground if td.grenade_at.is_some() => "grenade takedown",
             TakedownKind::Ground if td.pistol_targets[0].is_some() => "pistol takedown",
-            TakedownKind::Ground if td.chain_target.is_some() => "chain takedown",
+            TakedownKind::Ground if td.chain_target.is_some() => "knife throw takedown",
             TakedownKind::Ground => "takedown",
             TakedownKind::Above => "takedown from above",
             TakedownKind::Double => "double takedown",
             TakedownKind::Below => "takedown from below",
-            TakedownKind::Chain => "throw knife",
+            TakedownKind::Chain => "chained takedown",
         };
         // (The drag is the game's tutorial's to tell, not the prompt's: the
         // takedown with the back key held.)
@@ -1417,7 +1420,9 @@ fn detection_markers(
 
 /// `--takedown-test`: steps up to the test enemy, presses melee and logs the
 /// result. `FC3_TAKEDOWN_MODE=above` drops onto it instead; `chain` (with two
-/// guards, `--npc-test guards`) takes one down and throws at the other.
+/// guards, `--npc-test guards`, and `SP_ChainTakedown`) takes one down and
+/// chains on to the other. With `SP_TakedownKnifeThrow` the plain takedown
+/// throws the knife at the second.
 fn takedown_test(
     args: Res<crate::Args>,
     time: Res<Time>,

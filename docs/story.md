@@ -584,9 +584,15 @@ is the story's own:
   armour, and `SP_SilentRun` quietens
   steps (guards hear steps out of sight, a sprint farthest and a crouch
   hardly at all), and `SP_LootTakedown` searches a takedown's victim as he
-  falls. The tattoo grows with what is learned (below). The knife throw
-  that ends a chained takedown pays its own XP (`Takedown/
-  TakedownKnifeThrow`, five times a kill's) and counts in the statistics.
+  falls. The tattoo grows with what is learned (below). The two takedown
+  skills that had been one are apart now, as the game's handbook tells
+  them: `SP_TakedownKnifeThrow` ("Knife Throw Takedown") throws the
+  victim's knife at a second foe in view as he goes down (`Takedown/
+  TakedownKnifeThrow`, five times a kill's XP), and `SP_ChainTakedown`
+  ("Chained Takedown") goes on to the next: as a takedown ends, the move
+  pushed toward another foe within 10 m (or the takedown key with one
+  ahead) closes on him and takes him down too, and so on while foes are
+  near (`TakedownChain`, ten times). Both count in the statistics.
 * **The handbook's statistics** (`statistics`; the page in `docs/ui.md`):
   the engine's counters by their numbers (`enumStatisticType`, kept in
   `Progress::stats`, saved with it), counted as they happen:

@@ -747,7 +747,8 @@ half `1stge_fulb_<name>.mab` and the victim's `3rdge_fulb_<name>.mab`, e.g.
 * The clips carry every prop they might use, all on `RightHand`: `npc_knife`, `frag_grenade`
   and `machete`. The machete's sub-clip has prop skeleton `744CBC42` (as in the machete's own
   clips). It is not the largest sub-clip, so `main_prop_clip()` would pick the wrong one.
-* Chain takedowns branch from the kill clip's hold, at about 1.2 s, where the poses match, into
+* Knife throw takedowns (`SP_TakedownKnifeThrow`) branch from the kill clip's hold, at about
+  1.2 s, where the poses match, into
   `..._kill2knife[_varN]_...` (0.5 s), then `..._knifethrow_...` (1.83 s for the player, 0.93 s
   for the victim). These three play back to back in the same frame. The knife leaves the hand
   about 0.6 s into the throw.
