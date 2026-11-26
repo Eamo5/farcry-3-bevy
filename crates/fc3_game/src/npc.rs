@@ -39,6 +39,8 @@ impl Plugin for NpcPlugin {
                     spawn_from_sectors,
                     spawn_requested,
                     despawn_far,
+                    // (Before the senses take the sound up: at ease still.)
+                    react_to_noises,
                     (perceive, think, act, npc_melee).run_if(in_state(crate::menu::GameState::Playing)),
                     hit_reactions,
                     react_to_blasts,
@@ -50,7 +52,7 @@ impl Plugin for NpcPlugin {
             )
             .add_systems(
                 Update,
-                (npc_test_spawn, npc_test_pose, npc_test_log, npc_test_stealth, kill_test.before(crate::pickups::loot_bodies), melee_test, clear_test)
+                (npc_test_spawn, npc_test_pose, npc_test_log, npc_test_stealth, kill_test.before(crate::pickups::loot_bodies), melee_test, clear_test, rock_test)
                     .after(sink_corpses),
             )
             .add_systems(PreUpdate, outpost_fire_test.after(crate::controls::update_actions).run_if(in_state(crate::menu::GameState::Playing)))
@@ -4267,9 +4269,22 @@ const BLAST_HEARD_RELAXED: [&str; 5] = [
     r"graphics\characters\_common\animations\eventreactions\explosionsound\relaxnoaim\3rdge_fulbst_relaxnoaim_explosionsound_180rt_v00_ak74.mab",
 ];
 
-/// The blast reactions, loaded: on alert, and at ease.
+/// Something worth a look heard by a man at ease (the game's
+/// `eventreactions\interestingsound`), by side as the blasts'.
+const SOUND_HEARD: [&str; 5] = [
+    r"graphics\characters\_common\animations\eventreactions\interestingsound\relaxnoaim\3rdge_fulbst_idlerelax_interestingsound_rank0_v00_+000fw_ak74.mab",
+    r"graphics\characters\_common\animations\eventreactions\interestingsound\relaxnoaim\3rdge_fulbst_idlerelax_interestingsound_rank0_v00_-090lt_ak74.mab",
+    r"graphics\characters\_common\animations\eventreactions\interestingsound\relaxnoaim\3rdge_fulbst_idlerelax_interestingsound_rank0_v00_+090rt_ak74.mab",
+    r"graphics\characters\_common\animations\eventreactions\interestingsound\relaxnoaim\3rdge_fulbst_idlerelax_interestingsound_rank0_v00_-180bklt_ak74.mab",
+    r"graphics\characters\_common\animations\eventreactions\interestingsound\relaxnoaim\3rdge_fulbst_idlerelax_interestingsound_rank0_v00_+180bkrt_ak74.mab",
+];
+/// How long (s) a sound worth a look holds him before he goes to see.
+const SOUND_STARTLE: f32 = 1.2;
+
+/// The blast reactions, loaded: on alert, and at ease; and the sound-heard
+/// ones.
 #[derive(Resource)]
-struct BlastHeardClips([Vec<Handle<Fc3Clip>>; 2]);
+struct BlastHeardClips([Vec<Handle<Fc3Clip>>; 3]);
 
 /// How far off (m) a blast startles (beyond its own reach, which hurts).
 const BLAST_HEARD: f32 = 60.0;
@@ -4280,7 +4295,65 @@ fn load_melee_clips(mut commands: Commands, server: Res<AssetServer>) {
     let load = |p: &&str| server.load(crate::cache_assets::cache_path(&fc3_formats::cache::anim_rel(p)));
     commands.insert_resource(MeleeClips(MELEE_CLIPS.iter().map(load).collect(), CHARGER_MELEE_CLIPS.iter().map(load).collect()));
     commands.insert_resource(MeleeHitClips(MELEE_HIT_CLIPS.iter().map(load).collect()));
-    commands.insert_resource(BlastHeardClips([BLAST_HEARD_ALERT.iter().map(load).collect(), BLAST_HEARD_RELAXED.iter().map(load).collect()]));
+    commands.insert_resource(BlastHeardClips([
+        BLAST_HEARD_ALERT.iter().map(load).collect(),
+        BLAST_HEARD_RELAXED.iter().map(load).collect(),
+        SOUND_HEARD.iter().map(load).collect(),
+    ]));
+}
+
+/// `FC3_ROCK_TEST=<seconds>` (tests, with `--npc-test guards`): that long in,
+/// a rock thrown to land 5 m beside the nearest man, once.
+fn rock_test(
+    time: Res<Time>,
+    mut done: Local<bool>,
+    mut aim: ResMut<crate::stealth::RockAimTest>,
+    players: Query<&Transform, With<Player>>,
+    npcs: Query<&Transform, (With<Npc>, Without<Corpse>)>,
+) {
+    let Some(at) = std::env::var("FC3_ROCK_TEST").ok().and_then(|v| v.parse::<f32>().ok()) else { return };
+    let Ok(p) = players.single() else { return };
+    if *done || time.elapsed_secs() < at {
+        return;
+    }
+    let Some(n) = npcs.iter().min_by(|a, b| a.translation.distance(p.translation).total_cmp(&b.translation.distance(p.translation))) else { return };
+    *done = true;
+    let side = (n.translation - p.translation).with_y(0.0).normalize_or(Vec3::X).cross(Vec3::Y);
+    aim.0 = Some(n.translation + side * 5.0);
+    info!("rock test: a rock to land beside the man at {:.0}", n.translation);
+}
+
+/// A man at ease at his post who hears something worth a look (a thrown
+/// rock) turns his head to it, the game's interesting-sound reaction, and
+/// stands a moment before he goes to see.
+fn react_to_noises(
+    mut noises: MessageReader<Noise>,
+    clips: Option<Res<BlastHeardClips>>,
+    mut rng: ResMut<Rng>,
+    mut npcs: Query<(&Transform, &mut Npc, &Health), Without<Corpse>>,
+    mut rigs: Query<&mut CharacterRig>,
+) {
+    let Some(clips) = clips else { return };
+    for n in noises.read().filter(|n| n.kind == NoiseKind::Interesting) {
+        for (t, mut npc, h) in &mut npcs {
+            if h.dead || npc.state != NpcState::Idle || npc.flinch > 0.0 || npc.breaking_off > 0.0 {
+                continue;
+            }
+            if !npc.impaired.hears(n.kind) || t.translation.distance(n.at) > n.radius {
+                continue;
+            }
+            let i = match side_of(&npc, t.translation, n.at) {
+                Side::Front => 0,
+                Side::Left => 1,
+                Side::Right => 2,
+                Side::Back => 3 + (rng.f32() < 0.5) as usize,
+            };
+            let (Some(clip), Some(mut r)) = (clips.0[2].get(i).cloned(), npc.rig.and_then(|r| rigs.get_mut(r).ok())) else { continue };
+            swap_clip(&mut r, AnimKind::Hit, clip);
+            npc.breaking_off = SOUND_STARTLE;
+            debug!("npc {}: heard something worth a look (side {i})", npc.marker_id);
+        }
+    }
 }
 
 /// Men who hear a blast near them (not caught in it) start and turn their
@@ -4297,7 +4370,7 @@ fn react_to_blasts(
     for ex in blasts.read() {
         for (t, mut npc, h) in &mut npcs {
             let d = t.translation.distance(ex.at);
-            if h.dead || npc.flinch > 0.0 || d <= ex.radius || d > BLAST_HEARD {
+            if h.dead || npc.flinch > 0.0 || npc.breaking_off > 0.0 || d <= ex.radius || d > BLAST_HEARD {
                 continue;
             }
             let i = match side_of(&npc, t.translation, ex.at) {
@@ -4309,7 +4382,9 @@ fn react_to_blasts(
             let set = if matches!(npc.state, NpcState::Combat | NpcState::Search) { 0 } else { 1 };
             let (Some(clip), Some(mut r)) = (clips.0[set].get(i).cloned(), npc.rig.and_then(|r| rigs.get_mut(r).ok())) else { continue };
             swap_clip(&mut r, AnimKind::Hit, clip);
-            npc.flinch = BLAST_STARTLE;
+            // (Held where he stands meanwhile, as one getting up from a spot
+            // startled: not slid along at a walk.)
+            npc.breaking_off = BLAST_STARTLE;
             debug!("npc {}: startled by a blast {d:.0} m off ({}, side {i})", npc.marker_id, if set == 0 { "alert" } else { "at ease" });
         }
     }
