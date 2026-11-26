@@ -1521,6 +1521,8 @@ pub const ROOMS_REL: &str = "world/rooms.txt";
 /// The interior volumes and their ambients (`interiors::Interior::to_line`,
 /// one a line).
 pub const INTERIORS_REL: &str = "world/interiors.txt";
+/// The large interior volumes' own shapes (`interiors::shapes_to_bytes`).
+pub const INTERIOR_SHAPES_REL: &str = "world/interior_shapes.bin";
 
 /// Sound points left out: voices and crowd chatter, story moments and
 /// scripted one-offs (explosions, thunder claps).

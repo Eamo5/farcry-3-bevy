@@ -130,6 +130,90 @@ fn rotate(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
     [v[0] + w * t[0] + (y * t[2] - z * t[1]), v[1] + w * t[1] + (z * t[0] - x * t[2]), v[2] + w * t[2] + (x * t[1] - y * t[0])]
 }
 
+/// The longest half-size (m) of a volume its bounds stand for; bigger ones
+/// (the caves', which sprawl over hillsides) take their model's own shape.
+pub const LARGEST_BOX: f32 = 16.0;
+
+impl Interior {
+    /// Whether its bounds are too big to stand for it.
+    pub fn sprawls(&self) -> bool {
+        self.half.iter().any(|h| *h > LARGEST_BOX)
+    }
+}
+
+/// A large interior volume's own shape: its model's triangles where its
+/// entity stands (Bevy space).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InteriorShape {
+    pub interior: Interior,
+    pub vertices: Vec<[f32; 3]>,
+    pub indices: Vec<u32>,
+}
+
+impl InteriorShape {
+    /// A model's triangles (Bevy axes, its own space) placed as `interior`
+    /// was, its entity at (Dunia) `pos`, turned by `angles`.
+    pub fn place(interior: Interior, vertices: &[[f32; 3]], indices: &[u32], pos: [f32; 3], angles: [f32; 3]) -> InteriorShape {
+        let q = crate::world::angles_to_bevy_quat(angles);
+        let at = crate::world::pos_to_bevy(pos);
+        let vertices = vertices.iter().map(|v| rotate(q, *v)).map(|r| std::array::from_fn(|i| at[i] + r[i])).collect();
+        InteriorShape { interior, vertices, indices: indices.to_vec() }
+    }
+}
+
+const SHAPES_MAGIC: &[u8; 4] = b"FC3S";
+
+/// The shapes as the cache keeps them: each one's `Interior` line, then its
+/// vertices and indices.
+pub fn shapes_to_bytes(shapes: &[InteriorShape]) -> Vec<u8> {
+    let mut out = SHAPES_MAGIC.to_vec();
+    out.extend_from_slice(&(shapes.len() as u32).to_le_bytes());
+    for s in shapes {
+        let line = s.interior.to_line();
+        out.extend_from_slice(&(line.len() as u32).to_le_bytes());
+        out.extend_from_slice(line.as_bytes());
+        out.extend_from_slice(&(s.vertices.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(s.indices.len() as u32).to_le_bytes());
+        for v in s.vertices.iter().flatten() {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        for i in &s.indices {
+            out.extend_from_slice(&i.to_le_bytes());
+        }
+    }
+    out
+}
+
+pub fn shapes_from_bytes(b: &[u8]) -> Option<Vec<InteriorShape>> {
+    if b.get(..4)? != SHAPES_MAGIC {
+        return None;
+    }
+    let mut at = 4;
+    let mut u32_at = |at: &mut usize| -> Option<u32> {
+        let v = u32::from_le_bytes(b.get(*at..*at + 4)?.try_into().ok()?);
+        *at += 4;
+        Some(v)
+    };
+    let n = u32_at(&mut at)?;
+    let mut out = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        let len = u32_at(&mut at)? as usize;
+        let interior = Interior::from_line(std::str::from_utf8(b.get(at..at + len)?).ok()?)?;
+        at += len;
+        let (nv, ni) = (u32_at(&mut at)? as usize, u32_at(&mut at)? as usize);
+        let floats = b.get(at..at + nv * 12)?;
+        let vertices = floats.chunks_exact(12).map(|c| std::array::from_fn(|i| f32::from_le_bytes(c[i * 4..i * 4 + 4].try_into().unwrap()))).collect();
+        at += nv * 12;
+        let indices: Vec<u32> = b.get(at..at + ni * 4)?.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+        at += ni * 4;
+        if indices.iter().any(|&i| i as usize >= nv) {
+            return None;
+        }
+        out.push(InteriorShape { interior, vertices, indices });
+    }
+    Some(out)
+}
+
 pub fn to_text(interiors: &[Interior]) -> String {
     interiors.iter().map(|i| i.to_line() + "\n").collect()
 }
@@ -157,5 +241,12 @@ mod tests {
         let back = Interior::from_line(&i.to_line()).unwrap();
         assert_eq!(back, i);
         assert_eq!(from_text(&to_text(&[i, i])).len(), 2);
+        assert!(!i.sprawls());
+        // A shape: its triangle moved to the entity, and through the cache.
+        let s = InteriorShape::place(i, &[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], &[0, 1, 2], [100.0, 200.0, 50.0], [0.0; 3]);
+        assert_eq!(s.vertices[0], [100.0, 50.0, -200.0]);
+        assert_eq!(s.vertices[2], [100.0, 51.0, -200.0]);
+        let shapes = vec![s.clone(), s];
+        assert_eq!(shapes_from_bytes(&shapes_to_bytes(&shapes)), Some(shapes));
     }
 }

@@ -38,8 +38,6 @@ impl Plugin for InteriorsPlugin {
 const SLOTS: usize = 7;
 /// How far off (m, from its box) an interior is lit.
 const REACH: f32 = 60.0;
-/// The largest volume used (its longest half-size, m).
-const LARGEST: f32 = 16.0;
 /// Over how much of its edge (m) a volume fades in.
 const SOFT: f32 = 0.5;
 
@@ -59,7 +57,7 @@ struct Slot {
     light: [Vec3; 3],
 }
 
-fn enabled() -> bool {
+pub(crate) fn enabled() -> bool {
     static ON: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var("FC3_INTERIORS").as_deref() != Ok("0"));
     *ON
 }
@@ -72,7 +70,8 @@ fn load_interiors(info: Res<crate::data::CacheInfo>, mut interiors: ResMut<Inter
     let text = std::fs::read_to_string(info.root.join(fc3_formats::cache::INTERIORS_REL)).unwrap_or_default();
     let all = fc3_formats::interiors::from_text(&text);
     let total = all.len();
-    interiors.list = all.into_iter().filter(|i| i.half.iter().all(|h| *h <= LARGEST && *h > 0.05)).collect();
+    // (The large ones by their shape, in the probes' volume: `probes`.)
+    interiors.list = all.into_iter().filter(|i| !i.sprawls() && i.half.iter().all(|h| *h > 0.05)).collect();
     info!("interiors: {} of {total} volumes small enough to light", interiors.list.len());
     interiors.slots = (0..SLOTS)
         .map(|_| {
@@ -99,7 +98,7 @@ fn outside(i: &Interior, p: Vec3) -> f32 {
 
 /// The light (cd/m², before the exposure) an interior gives surfaces facing
 /// up, down and sideways, by how much day it is.
-fn ambient_light(i: &Interior, day: f32, unit: f32) -> [Vec3; 3] {
+pub(crate) fn ambient_light(i: &Interior, day: f32, unit: f32) -> [Vec3; 3] {
     let colour = |c: [f32; 3]| Color::srgb(c[0], c[1], c[2]).to_linear().to_vec3();
     let (d, n) = (i.ambient.day, i.ambient.night);
     let floor = colour(n.0).lerp(colour(d.0), day) * (n.2 + (d.2 - n.2) * day);

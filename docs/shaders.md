@@ -1051,15 +1051,27 @@ environment map by its weight (over its last half metre, for the mask's
 blur) rather than mixing with them. Those on mission layers light while
 their entity is in the world. A shack's floor by day comes to about 530
 cd/m² and its ceiling 170, against the probes' sky of some 10,000 overhead
-outside; the gun and arms darken stepping in. Only volumes no bigger than
-16 m a half-side are used: the caves' models sprawl over whole hillsides
-(one's bounds are three kilometres across), and their bounds would take the
-open ground about them indoors. `FC3_INTERIORS=0` leaves them out;
-`FC3_INTERIOR_DEBUG` logs the one about the camera.
+outside; the gun and arms darken stepping in. `FC3_INTERIORS=0` leaves them
+out; `FC3_INTERIOR_DEBUG` logs the one about the camera.
 
-Not yet: the caves' large volumes (their models' shape, not their bounds);
-the top-down sky occlusion the game uses past the probes' volume; the PC's
-local radiance transfer from the dynamic lights.
+Only volumes no bigger than 16 m a half-side are boxes. The 122 larger ones
+are the caves' and the tunnels', whose models sprawl over whole hillsides
+(one's bounds are three kilometres across) and whose bounds would take the
+open ground about them indoors. The converter writes their models'
+triangles, placed, to `world/interior_shapes.bin` (277 KB), and the probes'
+volume takes them in (`probes::ShapeGrid`): a voxel whose centre is inside
+one (a ray straight up from it crosses the shape's surface an odd number of
+times; the triangles binned 4 m apart on the ground plane) takes the cave's
+ambient in place of the probes'. The probes stand over the ground, above
+the caves, so a cave had been lit with the open hillside's sky. Most caves
+name `Generic/CaveDark_FlashLight` (a dark grey-blue, 33, 40, 45 of 255 at
+0.85): some 250 cd/m², and as dark as the name says against a sunlit day
+the eye opens up to by only 0.76 stops. (The managers' `cave_generic` zone,
+whose exposure would let the eye open further, is painted nowhere in the
+main world.) The cave's lamps and the daylight in at its mouth light it.
+
+Not yet: the top-down sky occlusion the game uses past the probes' volume;
+the PC's local radiance transfer from the dynamic lights.
 
 ## Post-effects (`fc3_game/src/post_effects.rs`)
 

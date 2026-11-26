@@ -84,6 +84,86 @@ struct Lit {
     /// only, and with the ground's stand-in below as the environment map has.
     sky_above: [Vec3; 6],
     sky_all: [Vec3; 6],
+    /// The large interior volumes about, and their ambient on surfaces facing
+    /// up, down and sideways (`interiors::ambient_light`).
+    shapes: Vec<(Arc<ShapeGrid>, [Vec3; 3])>,
+}
+
+/// A large interior volume's shape (a cave's), its triangles binned on the
+/// ground plane, to tell what's inside it: a ray straight up from a point
+/// inside crosses its surface an odd number of times.
+pub(crate) struct ShapeGrid {
+    interior: fc3_formats::interiors::Interior,
+    min: Vec3,
+    max: Vec3,
+    tris: Vec<[Vec3; 3]>,
+    /// Triangle indices by `BIN` m cell (x, z) from `min`.
+    bins: Vec<Vec<u32>>,
+    across: usize,
+}
+
+const BIN: f32 = 4.0;
+
+impl ShapeGrid {
+    fn new(s: &fc3_formats::interiors::InteriorShape) -> ShapeGrid {
+        let v: Vec<Vec3> = s.vertices.iter().map(|v| Vec3::from(*v)).collect();
+        let tris: Vec<[Vec3; 3]> = s.indices.chunks_exact(3).map(|t| [v[t[0] as usize], v[t[1] as usize], v[t[2] as usize]]).collect();
+        let (min, max) = v.iter().fold((Vec3::MAX, Vec3::MIN), |(a, b), p| (a.min(*p), b.max(*p)));
+        let across = (((max.x - min.x) / BIN).floor() as usize + 1).min(4096);
+        let down = (((max.z - min.z) / BIN).floor() as usize + 1).min(4096);
+        let mut bins = vec![Vec::new(); across * down];
+        let bin = |p: f32, lo: f32, n: usize| (((p - lo) / BIN).floor().max(0.0) as usize).min(n - 1);
+        for (i, t) in tris.iter().enumerate() {
+            let (lo, hi) = (t[0].min(t[1]).min(t[2]), t[0].max(t[1]).max(t[2]));
+            for z in bin(lo.z, min.z, down)..=bin(hi.z, min.z, down) {
+                for x in bin(lo.x, min.x, across)..=bin(hi.x, min.x, across) {
+                    bins[z * across + x].push(i as u32);
+                }
+            }
+        }
+        ShapeGrid { interior: s.interior, min, max, tris, bins, across }
+    }
+
+    fn contains(&self, p: Vec3) -> bool {
+        if p.cmplt(self.min).any() || p.cmpgt(self.max).any() {
+            return false;
+        }
+        // (A hair off the grid's round numbers, so as not to run down an
+        // edge two triangles share and count both.)
+        let p = p + Vec3::new(1.37e-3, 0.0, 2.71e-3);
+        let (x, z) = (((p.x - self.min.x) / BIN) as usize, ((p.z - self.min.z) / BIN) as usize);
+        let Some(ids) = self.bins.get(z * self.across + x.min(self.across - 1)) else { return false };
+        let mut crossings = 0;
+        for &i in ids {
+            let [a, b, c] = self.tris[i as usize];
+            // Where the vertical through p meets the triangle, if it does.
+            let d = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
+            if d.abs() < 1e-9 {
+                continue;
+            }
+            let u = ((b.z - c.z) * (p.x - c.x) + (c.x - b.x) * (p.z - c.z)) / d;
+            let v = ((c.z - a.z) * (p.x - c.x) + (a.x - c.x) * (p.z - c.z)) / d;
+            let w = 1.0 - u - v;
+            if u < 0.0 || v < 0.0 || w < 0.0 {
+                continue;
+            }
+            if u * a.y + v * b.y + w * c.y > p.y {
+                crossings += 1;
+            }
+        }
+        crossings % 2 == 1
+    }
+
+    /// Whether it reaches into a box.
+    fn meets(&self, lo: Vec3, hi: Vec3) -> bool {
+        self.min.cmple(hi).all() && self.max.cmpge(lo).all()
+    }
+}
+
+/// The large interior volumes' shapes, from the cache.
+fn load_shapes(root: &std::path::Path) -> Vec<Arc<ShapeGrid>> {
+    let bytes = std::fs::read(root.join(fc3_formats::cache::INTERIOR_SHAPES_REL)).unwrap_or_default();
+    fc3_formats::interiors::shapes_from_bytes(&bytes).unwrap_or_default().iter().map(|s| Arc::new(ShapeGrid::new(s))).collect()
 }
 
 #[derive(Resource, Default)]
@@ -92,6 +172,10 @@ struct ProbeField {
     centre: Option<SectorCoord>,
     /// Bumped as sectors come and go.
     loaded: u32,
+    /// The large interior volumes' shapes (loaded with the first sectors).
+    shapes: Option<Vec<Arc<ShapeGrid>>>,
+    /// Those reaching into the probes' sectors and in the world now.
+    shapes_on: Vec<usize>,
     lit: Option<Arc<Lit>>,
     /// What the probes were last relit for, and a count of relightings.
     lit_for: Option<(u32, f32, f32, Vec3, f32)>,
@@ -119,6 +203,11 @@ fn stream_probes(info: Option<Res<crate::data::CacheInfo>>, cams: Query<&GlobalT
         return;
     }
     field.centre = Some(centre);
+    if field.shapes.is_none() {
+        let shapes = if crate::interiors::enabled() { load_shapes(&info.root) } else { Vec::new() };
+        info!("light probes: {} large interior volumes by their shape", shapes.len());
+        field.shapes = Some(shapes);
+    }
     let near = |s: SectorCoord| (s.x - centre.x).abs() <= LOAD && (s.y - centre.y).abs() <= LOAD;
     let before = field.sectors.len();
     field.sectors.retain(|id, _| near(SectorCoord::from_id(*id)));
@@ -204,6 +293,7 @@ fn relight(
     weather: Res<crate::clouds::Weather>,
     suns: Query<(&Transform, &DirectionalLight), With<crate::sky::Sun>>,
     cams: Query<&GlobalTransform, With<PlayerCamera>>,
+    (daylight, host): (Res<crate::clouds::Daylight>, Option<NonSend<crate::story::StoryHost>>),
     mut field: ResMut<ProbeField>,
 ) {
     let (Some(e), Ok((sun_t, sun))) = (env.0.as_ref(), suns.single()) else { return };
@@ -211,6 +301,25 @@ fn relight(
     if field.sectors.is_empty() || e.sky_sun_side.0.is_empty() {
         return;
     }
+    // The large interiors reaching into the probes' sectors, in the world
+    // now (those of mission layers while their entity is).
+    let shapes_on: Vec<usize> = match (field.centre, field.shapes.as_ref()) {
+        (Some(c), Some(shapes)) => {
+            let [x0, y0] = SectorCoord::new(c.x - LOAD, c.y - LOAD).origin();
+            let [x1, y1] = SectorCoord::new(c.x + LOAD + 1, c.y + LOAD + 1).origin();
+            let (lo, hi) = (Vec3::new(x0, -1e4, -y1), Vec3::new(x1, 1e4, -y0));
+            shapes
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.meets(lo, hi))
+                .filter(|(_, s)| {
+                    s.interior.layer == fc3_formats::world::DEFAULT_MISSION_LAYER || host.as_ref().is_some_and(|h| h.story.is_loaded(s.interior.entity))
+                })
+                .map(|(i, _)| i)
+                .collect()
+        }
+        _ => Vec::new(),
+    };
     let to_luminance = crate::sky_probe::sky_to_luminance(&scene, &weather);
     let sun_dir = sun_t.translation.normalize_or(Vec3::Y);
     let sun_light = sun.color.to_linear().to_vec3() * sun.illuminance;
@@ -218,11 +327,22 @@ fn relight(
     if let Some((loaded, hours, storm, light, lum)) = field.lit_for {
         let hours_off = (key.1 - hours).abs().min(24.0 - (key.1 - hours).abs());
         let near = |a: f32, b: f32| (a - b).abs() <= 0.02 * a.abs().max(b.abs()).max(1e-3);
-        if loaded == key.0 && hours_off < 0.02 && (key.2 - storm).abs() < 0.02 && near(key.3.length(), light.length()) && near(key.4, lum) {
+        if loaded == key.0
+            && hours_off < 0.02
+            && (key.2 - storm).abs() < 0.02
+            && near(key.3.length(), light.length())
+            && near(key.4, lum)
+            && shapes_on == field.shapes_on
+        {
             return;
         }
     }
     field.lit_for = Some(key);
+    let shapes: Vec<(Arc<ShapeGrid>, [Vec3; 3])> = match (field.shapes.as_ref(), scene.unit) {
+        (Some(all), Some(unit)) => shapes_on.iter().map(|&i| (all[i].clone(), crate::interiors::ambient_light(&all[i].interior, daylight.0, unit))).collect(),
+        _ => Vec::new(),
+    };
+    field.shapes_on = shapes_on;
     let t = tod.hours / 24.0;
     // (The sky as it lights the open: the probes do the sheltering.)
     let colour = crate::sky_probe::sky_colour(e, t, tod.sun_dir(), weather.storm(), 0.0);
@@ -248,9 +368,14 @@ fn relight(
         cells.entry((pos / REACH).floor().as_ivec3()).or_default().push(probes.len() as u32);
         probes.push(LitProbe { pos, sky: p.sky.map(|v| (v as f32 / OPEN_SKY).clamp(0.0, 1.0)), bounce });
     }
-    let lit = Lit { probes, cells, sky_above: SIDES.map(|n| above.irradiance(n)), sky_all: SIDES.map(|n| all.irradiance(n)) };
+    let lit = Lit { probes, cells, sky_above: SIDES.map(|n| above.irradiance(n)), sky_all: SIDES.map(|n| all.irradiance(n)), shapes };
     // `FC3_PROBE_DEBUG`: the probe nearest the camera, relit.
     if std::env::var_os("FC3_PROBE_DEBUG").is_some() {
+        if let Some(c) = cam {
+            for (s, light) in lit.shapes.iter().filter(|(s, _)| s.contains(c)) {
+                info!("light probes: the camera is in {:016x}'s shape ({} triangles): floor {:?}, ceiling {:?}", s.interior.entity, s.tris.len(), light[0], light[1]);
+            }
+        }
         if let Some(p) = cam.and_then(|c| lit.probes.iter().min_by(|a, b| a.pos.distance_squared(c).total_cmp(&b.pos.distance_squared(c)))) {
             info!(
                 "light probes: {} relit; nearest the camera at {:?}: sky seen {:?}, bounced {:?}; the sky's light up {:?}, side {:?}, down {:?} (all round: down {:?}); sun {:?}",
@@ -272,6 +397,11 @@ fn relight(
 
 /// The light on each of a voxel's six sides at `at`.
 fn voxel(lit: &Lit, at: Vec3, basis: &[Vec3; 4]) -> [Vec3; 6] {
+    // Inside a large interior (a cave): its own ambient, the floor colour on
+    // what faces up, the ceiling's on what faces down.
+    if let Some((_, light)) = lit.shapes.iter().find(|(s, _)| s.contains(at)) {
+        return SIDES.map(|n| if n.y > 0.5 { light[0] } else if n.y < -0.5 { light[1] } else { light[2] });
+    }
     let mut total = 0.0;
     let mut sky = [0.0f32; 3];
     let mut bounce = [Vec3::ZERO; 4];
@@ -451,7 +581,7 @@ mod tests {
             let probes = vec![LitProbe { pos: Vec3::ZERO, sky: [seen; 3], bounce: [bounce; 4] }];
             let mut cells = HashMap::new();
             cells.insert(IVec3::ZERO, vec![0]);
-            Lit { probes, cells, sky_above: SIDES.map(|n| above.irradiance(n)), sky_all: SIDES.map(|n| above.irradiance(n) + Vec3::splat(0.3)) }
+            Lit { probes, cells, sky_above: SIDES.map(|n| above.irradiance(n)), sky_all: SIDES.map(|n| above.irradiance(n) + Vec3::splat(0.3)), shapes: Vec::new() }
         };
         let open = voxel(&lit(1.0, Vec3::ZERO), Vec3::new(0.5, 0.5, 0.5), &basis());
         assert!((open[3].x - 1.0).abs() < 0.02, "{open:?}");
@@ -463,5 +593,25 @@ mod tests {
         // Far from any probe: the environment map's light.
         let far = voxel(&lit(0.0, Vec3::ZERO), Vec3::new(40.0, 0.0, 0.0), &basis());
         assert_eq!(far[3], lit(0.0, Vec3::ZERO).sky_all[3]);
+    }
+
+    /// A closed box's shape holds what's in it and not what's beside, above
+    /// or below it; a voxel inside takes the interior's light.
+    #[test]
+    fn a_shape_holds_what_is_inside_it() {
+        // A 10 m cube's twelve triangles, corners (0..10)³.
+        let c = |i: u32| [(i & 1) as f32 * 10.0, ((i >> 1) & 1) as f32 * 10.0, ((i >> 2) & 1) as f32 * 10.0];
+        let vertices: Vec<[f32; 3]> = (0..8).map(c).collect();
+        let quads = [[0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]];
+        let indices: Vec<u32> = quads.iter().flat_map(|q| [q[0], q[1], q[2], q[0], q[2], q[3]]).collect();
+        let shape = fc3_formats::interiors::InteriorShape { vertices, indices, ..Default::default() };
+        let grid = Arc::new(ShapeGrid::new(&shape));
+        assert!(grid.contains(Vec3::new(5.0, 5.0, 5.0)) && grid.contains(Vec3::new(9.3, 0.4, 2.2)));
+        assert!(!grid.contains(Vec3::new(5.0, 12.0, 5.0)) && !grid.contains(Vec3::new(5.0, -2.0, 5.0)) && !grid.contains(Vec3::new(13.0, 5.0, 5.0)));
+        let light = [Vec3::splat(3.0), Vec3::splat(1.0), Vec3::splat(2.0)];
+        let lit = Lit { probes: Vec::new(), cells: HashMap::new(), sky_above: [Vec3::ZERO; 6], sky_all: [Vec3::splat(9.0); 6], shapes: vec![(grid, light)] };
+        let inside = voxel(&lit, Vec3::new(5.0, 5.0, 5.0), &basis());
+        assert_eq!((inside[3], inside[2], inside[0]), (light[0], light[1], light[2]));
+        assert_eq!(voxel(&lit, Vec3::new(5.0, 15.0, 5.0), &basis())[3], Vec3::splat(9.0));
     }
 }

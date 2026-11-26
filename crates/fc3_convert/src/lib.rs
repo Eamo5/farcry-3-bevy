@@ -706,7 +706,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     }
     // The interior volumes: each one's model's bounds where its entity
     // stands, with the ambient it names.
-    if opts.only_sectors.is_none() && job.should_write(cache::INTERIORS_REL) {
+    if opts.only_sectors.is_none() && (job.should_write(cache::INTERIORS_REL) || job.should_write(cache::INTERIOR_SHAPES_REL)) {
         let ambients: HashMap<u32, fc3_formats::interiors::Ambient> = job
             .vfs
             .read(fc3_formats::interiors::AMBIENTS_PATH)
@@ -714,15 +714,31 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             .unwrap_or_default();
         let mut bounds: HashMap<String, Option<([f32; 3], [f32; 3])>> = HashMap::new();
         let mut interiors = Vec::new();
+        // (The large ones' own shapes too: their models' triangles.)
+        let mut shapes = Vec::new();
+        let mut meshes: HashMap<String, Option<(Vec<[f32; 3]>, Vec<u32>)>> = HashMap::new();
         for (entity, layer, pos, angles, i) in &interior_refs {
             let Some(ambient) = ambients.get(&i.ambient) else { continue };
             let b = *bounds.entry(i.model.clone()).or_insert_with(|| job.vfs.read(&i.model).ok().and_then(|d| fc3_formats::mesh::bbox(&d)));
-            if let Some(b) = b.filter(|(min, max)| (0..3).all(|k| max[k] > min[k])) {
-                interiors.push(fc3_formats::interiors::Interior::place(*entity, *layer, b, *pos, *angles, *ambient));
+            let Some(b) = b.filter(|(min, max)| (0..3).all(|k| max[k] > min[k])) else { continue };
+            let placed = fc3_formats::interiors::Interior::place(*entity, *layer, b, *pos, *angles, *ambient);
+            interiors.push(placed);
+            if placed.sprawls() {
+                let mesh = meshes.entry(i.model.clone()).or_insert_with(|| {
+                    let m = job.vfs.read(&i.model).ok().and_then(|d| fc3_formats::mesh::decode(&d, 1).ok())?;
+                    let (_, lod) = m.lods.into_iter().next()?;
+                    Some((lod.positions, lod.indices))
+                });
+                if let Some((v, ix)) = mesh.as_ref().filter(|(_, ix)| !ix.is_empty()) {
+                    shapes.push(fc3_formats::interiors::InteriorShape::place(placed, v, ix, *pos, *angles));
+                }
             }
         }
         if let Err(e) = write_atomic(job.root(), cache::INTERIORS_REL, fc3_formats::interiors::to_text(&interiors).as_bytes(), job.ctx) {
             job.error(format!("interiors: {e:#}"));
+        }
+        if let Err(e) = write_atomic(job.root(), cache::INTERIOR_SHAPES_REL, &fc3_formats::interiors::shapes_to_bytes(&shapes), job.ctx) {
+            job.error(format!("interior shapes: {e:#}"));
         }
     }
     if opts.only_sectors.is_none() && (job.should_write(cache::SOUND_POINTS_REL) || south_east) {
