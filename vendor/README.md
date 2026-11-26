@@ -12,7 +12,7 @@ fixed-size arrays, which inline, rather than with a `memcpy` call per vertex
 and attribute.
 
 `bevy_pbr` is Bevy's 0.19.1 PBR crate (MIT or Apache-2.0, licence files
-alongside) with two changes, marked `fc3 patch` in
+alongside) with three changes, marked `fc3 patch` in
 `src/light_probe/irradiance_volume.wgsl` and `src/render/pbr_functions.wgsl`:
 
 - `irradiance_volume_light` returns how much the volumes cover the fragment
@@ -26,6 +26,9 @@ alongside) with two changes, marked `fc3 patch` in
   within it, its light (at the intensity's size) stands in for the other
   volumes' and the environment map's by its weight, rather than being
   averaged with them.
+- A volume marked as affecting lightmapped meshes (the game has none) is a
+  far one (`fc3_game::probes`' coarse volume): it lights only what the other
+  volumes leave uncovered, before the environment map.
 
 `ruffle_render_wgpu`, `naga-agal` and `naga-pixelbender` are Ruffle's wgpu
 renderer and its AGAL and Pixel Bender shader compilers (MIT or Apache-2.0,

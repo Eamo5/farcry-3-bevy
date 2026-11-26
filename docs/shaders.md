@@ -1070,8 +1070,24 @@ the eye opens up to by only 0.76 stops. (The managers' `cave_generic` zone,
 whose exposure would let the eye open further, is painted nowhere in the
 main world.) The cave's lamps and the daylight in at its mouth light it.
 
-Not yet: the top-down sky occlusion the game uses past the probes' volume;
-the PC's local radiance transfer from the dynamic lights.
+Past its volume maps the game shades distant things with the sky's light
+darkened by a low-resolution top-down occlusion map, one tile per sector,
+made from the probes' sky visibility and heights as they stream in (less
+for things high above the probes), so the distant jungle's shade isn't
+sky-blue. A second, coarser volume stands in for it (`probes::far_voxel`):
+64 × 20 × 64 voxels of 12 m (768 m across) about the camera, built afresh
+when it has moved 48 m, from the probes of the 13 × 13 sectors round. A
+far voxel takes the probes within 18 m of its column of ground, those about
+its height the most (a canopy's tops for a voxel among the leaves, the
+ground's for one beneath), and comes out into the open sky over 15 m above
+their tops. Bevy's volumes would average where they overlap, so the far one
+is marked as lighting lightmapped meshes (there are none) and the vendored
+`bevy_pbr` has it light only what the near volume leaves, before the
+environment map. The cliffs and the jungle a few hundred metres off keep
+their shade's contrast and lose the blue cast; the tour runs about 1 ms
+slower. `FC3_FAR_PROBES=0` leaves it out.
+
+Not yet: the PC's local radiance transfer from the dynamic lights.
 
 ## Post-effects (`fc3_game/src/post_effects.rs`)
 

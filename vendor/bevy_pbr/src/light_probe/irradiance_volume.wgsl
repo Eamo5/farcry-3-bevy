@@ -9,9 +9,8 @@
 };
 #import bevy_pbr::clustered_forward::ClusterableObjectIndexRanges
 
-#ifdef LIGHTMAP
+// (fc3 patch: always, for the far volumes' mark below.)
 #import bevy_pbr::mesh_view_types::LIGHT_PROBE_FLAG_AFFECTS_LIGHTMAPPED_MESH_DIFFUSE;
-#endif
 
 #ifdef IRRADIANCE_VOLUMES_ARE_USABLE
 
@@ -24,7 +23,9 @@
 // makes up the rest outside them and across their falloff. And a volume of
 // negative intensity is an interior's: within it its light stands in for
 // the others' (and the environment map's), by its weight, rather than
-// mixing with them.
+// mixing with them. And one marked as affecting lightmapped meshes (there
+// are none) is a far one: it lights only what the near ones leave, before
+// the environment map.
 fn irradiance_volume_light(
     world_position: vec3<f32>,
     N: vec3<f32>,
@@ -42,6 +43,8 @@ fn irradiance_volume_light(
     var total_irradiance = vec3(0.0);
     var interior_weight = 0.0;
     var interior_irradiance = vec3(0.0);
+    var far_weight = 0.0;
+    var far_irradiance = vec3(0.0);
 
     while (true) {
         var query_result = light_probe_iterator_next(&iterator);
@@ -91,6 +94,9 @@ fn irradiance_volume_light(
         if (query_result.intensity < 0.0) {
             interior_irradiance += irradiance * query_result.weight;
             interior_weight += query_result.weight;
+        } else if ((query_result.flags & LIGHT_PROBE_FLAG_AFFECTS_LIGHTMAPPED_MESH_DIFFUSE) != 0u) {
+            far_irradiance += irradiance * query_result.weight;
+            far_weight += query_result.weight;
         } else {
             total_irradiance += irradiance * query_result.weight;
             total_weight += query_result.weight;
@@ -100,7 +106,13 @@ fn irradiance_volume_light(
     if (total_weight != 0.0) {
         total_irradiance /= total_weight;
     }
-    let coverage = saturate(total_weight);
+    var coverage = saturate(total_weight);
+    if (far_weight > 0.0) {
+        let far = saturate(far_weight);
+        let all = coverage + (1.0 - coverage) * far;
+        total_irradiance = (coverage * total_irradiance + (1.0 - coverage) * far * far_irradiance / far_weight) / max(all, 1e-4);
+        coverage = all;
+    }
     if (interior_weight > 0.0) {
         let inside = saturate(interior_weight);
         let all = inside + (1.0 - inside) * coverage;

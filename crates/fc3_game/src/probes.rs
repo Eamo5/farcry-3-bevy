@@ -19,6 +19,16 @@
 //! Where no probe stands near a voxel (high in the air) it takes the sky's
 //! light as the environment map gives it. `FC3_PROBES=0` leaves the probes
 //! out.
+//!
+//! Past that volume the game darkens the sky's light on distant things with
+//! a top-down occlusion map made from the probes, less for things high above
+//! them, so the distant jungle's shade isn't sky-blue. A coarser volume
+//! stands in for it here (`FAR_RES` of `FAR_CELL` m about the camera, from
+//! the probes of `FAR_LOAD` sectors round): each voxel takes the probes in
+//! its column of ground, those about its height the most, and comes out
+//! into the open sky over `FAR_ABOVE` m above their tops. It lights only
+//! what the near volume leaves (`vendor/bevy_pbr`: it's marked as affecting
+//! lightmapped meshes, of which there are none).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -51,8 +61,21 @@ pub struct ProbesLive(pub bool);
 const RES: [usize; 3] = [48, 12, 48];
 /// A voxel's size (m).
 const CELL: f32 = 3.0;
-/// The sectors about the camera's whose probes are kept (Chebyshev).
-const LOAD: i32 = 2;
+/// The far volume's voxels, their size (m), and how far (m) the camera goes
+/// from its centre before it's built afresh about it.
+const FAR_RES: [usize; 3] = [64, 20, 64];
+const FAR_CELL: f32 = 12.0;
+const FAR_STEP: f32 = 48.0;
+/// The sectors about the camera's whose probes are kept (Chebyshev): the
+/// far volume's reach.
+const FAR_LOAD: i32 = 6;
+/// How far (m, on the ground plane) a far voxel's probes reach, and the
+/// column hash's cell.
+const FAR_REACH: f32 = 18.0;
+/// Over how far (m) above its probes' tops a far voxel comes out into the
+/// open sky.
+const FAR_ABOVE: f32 = 15.0;
+const FAR_FALLOFF: f32 = 0.1;
 /// How far (m) from a voxel a probe still lights it, and the spatial hash's
 /// cell.
 const REACH: f32 = 10.0;
@@ -80,6 +103,8 @@ struct Lit {
     probes: Vec<LitProbe>,
     /// Probe indices by spatial hash cell.
     cells: HashMap<IVec3, Vec<u32>>,
+    /// And by column of ground (`FAR_REACH` m), for the far volume.
+    columns: HashMap<IVec2, Vec<u32>>,
     /// The sky's light (E/π, cd/m²) on each of the six sides: from above
     /// only, and with the ground's stand-in below as the environment map has.
     sky_above: [Vec3; 6],
@@ -180,10 +205,32 @@ struct ProbeField {
     /// What the probes were last relit for, and a count of relightings.
     lit_for: Option<(u32, f32, f32, Vec3, f32)>,
     lit_version: u32,
+    /// The volume about the camera, and the far one about it.
+    near: Volume,
+    far: Volume,
+}
+
+/// A volume as it's built and placed.
+#[derive(Default)]
+struct Volume {
     built_for: Option<(IVec3, u32)>,
     task: Option<Task<(IVec3, u32, Vec<u8>)>>,
     volume: Option<(Entity, Handle<Image>)>,
 }
+
+/// What a volume is: its voxels, their size (m), how far (m) the camera
+/// moves before it's built afresh, its falloff, and whether it's the far one.
+#[derive(Clone, Copy)]
+struct Kind {
+    res: [usize; 3],
+    cell: f32,
+    step: f32,
+    falloff: f32,
+    far: bool,
+}
+
+const NEAR: Kind = Kind { res: RES, cell: CELL, step: CELL, falloff: FALLOFF, far: false };
+const FAR: Kind = Kind { res: FAR_RES, cell: FAR_CELL, step: FAR_STEP, falloff: FAR_FALLOFF, far: true };
 
 fn enabled() -> bool {
     static ON: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var("FC3_PROBES").as_deref() != Ok("0"));
@@ -208,12 +255,12 @@ fn stream_probes(info: Option<Res<crate::data::CacheInfo>>, cams: Query<&GlobalT
         info!("light probes: {} large interior volumes by their shape", shapes.len());
         field.shapes = Some(shapes);
     }
-    let near = |s: SectorCoord| (s.x - centre.x).abs() <= LOAD && (s.y - centre.y).abs() <= LOAD;
+    let near = |s: SectorCoord| (s.x - centre.x).abs() <= FAR_LOAD && (s.y - centre.y).abs() <= FAR_LOAD;
     let before = field.sectors.len();
     field.sectors.retain(|id, _| near(SectorCoord::from_id(*id)));
     let mut changed = before != field.sectors.len();
-    for dy in -LOAD..=LOAD {
-        for dx in -LOAD..=LOAD {
+    for dy in -FAR_LOAD..=FAR_LOAD {
+        for dx in -FAR_LOAD..=FAR_LOAD {
             let s = SectorCoord::new(centre.x + dx, centre.y + dy);
             if !s.valid() || field.sectors.contains_key(&s.id()) {
                 continue;
@@ -305,8 +352,8 @@ fn relight(
     // now (those of mission layers while their entity is).
     let shapes_on: Vec<usize> = match (field.centre, field.shapes.as_ref()) {
         (Some(c), Some(shapes)) => {
-            let [x0, y0] = SectorCoord::new(c.x - LOAD, c.y - LOAD).origin();
-            let [x1, y1] = SectorCoord::new(c.x + LOAD + 1, c.y + LOAD + 1).origin();
+            let [x0, y0] = SectorCoord::new(c.x - FAR_LOAD, c.y - FAR_LOAD).origin();
+            let [x1, y1] = SectorCoord::new(c.x + FAR_LOAD + 1, c.y + FAR_LOAD + 1).origin();
             let (lo, hi) = (Vec3::new(x0, -1e4, -y1), Vec3::new(x1, 1e4, -y0));
             shapes
                 .iter()
@@ -357,6 +404,7 @@ fn relight(
     let dot = |a: [i16; 4], b: [f32; 4]| (0..4).map(|i| a[i] as f32 / ONE * b[i]).sum::<f32>();
     let mut probes = Vec::new();
     let mut cells: HashMap<IVec3, Vec<u32>> = HashMap::new();
+    let mut columns: HashMap<IVec2, Vec<u32>> = HashMap::new();
     for p in field.sectors.values().flat_map(|s| s.iter()) {
         let bounce: [Vec3; 4] = std::array::from_fn(|b| {
             Vec3::from_array(std::array::from_fn(|c| {
@@ -366,9 +414,10 @@ fn relight(
         });
         let pos = Vec3::from_array(p.pos);
         cells.entry((pos / REACH).floor().as_ivec3()).or_default().push(probes.len() as u32);
+        columns.entry((Vec2::new(pos.x, pos.z) / FAR_REACH).floor().as_ivec2()).or_default().push(probes.len() as u32);
         probes.push(LitProbe { pos, sky: p.sky.map(|v| (v as f32 / OPEN_SKY).clamp(0.0, 1.0)), bounce });
     }
-    let lit = Lit { probes, cells, sky_above: SIDES.map(|n| above.irradiance(n)), sky_all: SIDES.map(|n| all.irradiance(n)), shapes };
+    let lit = Lit { probes, cells, columns, sky_above: SIDES.map(|n| above.irradiance(n)), sky_all: SIDES.map(|n| all.irradiance(n)), shapes };
     // `FC3_PROBE_DEBUG`: the probe nearest the camera, relit.
     if std::env::var_os("FC3_PROBE_DEBUG").is_some() {
         if let Some(c) = cam {
@@ -397,10 +446,8 @@ fn relight(
 
 /// The light on each of a voxel's six sides at `at`.
 fn voxel(lit: &Lit, at: Vec3, basis: &[Vec3; 4]) -> [Vec3; 6] {
-    // Inside a large interior (a cave): its own ambient, the floor colour on
-    // what faces up, the ceiling's on what faces down.
-    if let Some((_, light)) = lit.shapes.iter().find(|(s, _)| s.contains(at)) {
-        return SIDES.map(|n| if n.y > 0.5 { light[0] } else if n.y < -0.5 { light[1] } else { light[2] });
+    if let Some(sides) = inside_shape(lit, at) {
+        return sides;
     }
     let mut total = 0.0;
     let mut sky = [0.0f32; 3];
@@ -438,6 +485,62 @@ fn voxel(lit: &Lit, at: Vec3, basis: &[Vec3; 4]) -> [Vec3; 6] {
     let sky = sky.map(|s| s / total);
     let bounce = bounce.map(|b| b / total);
     let sure = 1.0 - crate::sky::smoothstep(SURE, REACH, nearest.sqrt());
+    shade(lit, sky, bounce, sure, basis)
+}
+
+/// Inside a large interior (a cave): its own ambient, the floor colour on
+/// what faces up, the ceiling's on what faces down.
+fn inside_shape(lit: &Lit, at: Vec3) -> Option<[Vec3; 6]> {
+    let (_, light) = lit.shapes.iter().find(|(s, _)| s.contains(at))?;
+    Some(SIDES.map(|n| if n.y > 0.5 { light[0] } else if n.y < -0.5 { light[1] } else { light[2] }))
+}
+
+/// A far voxel's sides: from the probes in its column of ground (within
+/// `FAR_REACH`), those about its height the most, out into the open sky over
+/// `FAR_ABOVE` m above their tops, as the game's top-down occlusion map.
+fn far_voxel(lit: &Lit, at: Vec3, basis: &[Vec3; 4]) -> [Vec3; 6] {
+    if let Some(sides) = inside_shape(lit, at) {
+        return sides;
+    }
+    let (mut total, mut sky, mut bounce) = (0.0, [0.0f32; 3], [Vec3::ZERO; 4]);
+    let (mut nearest, mut top) = (f32::MAX, f32::MIN);
+    let column = (Vec2::new(at.x, at.z) / FAR_REACH).floor().as_ivec2();
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            let Some(ids) = lit.columns.get(&(column + IVec2::new(dx, dz))) else { continue };
+            for &i in ids {
+                let p = &lit.probes[i as usize];
+                let h2 = (p.pos.x - at.x).powi(2) + (p.pos.z - at.z).powi(2);
+                if h2 > FAR_REACH * FAR_REACH {
+                    continue;
+                }
+                nearest = nearest.min(h2);
+                top = top.max(p.pos.y);
+                // (A canopy's tops for a voxel in the leaves, the ground's
+                // for one under them.)
+                let dy = (p.pos.y - at.y) * 0.5;
+                let w = 1.0 / (h2 + dy * dy + 4.0);
+                total += w;
+                for b in 0..3 {
+                    sky[b] += p.sky[b] * w;
+                }
+                for b in 0..4 {
+                    bounce[b] += p.bounce[b] * w;
+                }
+            }
+        }
+    }
+    if total <= 0.0 {
+        return lit.sky_all;
+    }
+    let open = crate::sky::smoothstep(0.0, FAR_ABOVE, at.y - top);
+    let sure = (1.0 - crate::sky::smoothstep(FAR_REACH * 0.5, FAR_REACH, nearest.sqrt())) * (1.0 - open);
+    shade(lit, sky.map(|s| s / total), bounce.map(|b| b / total), sure, basis)
+}
+
+/// A voxel's sides from what its probes see of the sky and bounce, as sure
+/// of them as `sure` (the open sky's light the rest).
+fn shade(lit: &Lit, sky: [f32; 3], bounce: [Vec3; 4], sure: f32, basis: &[Vec3; 4]) -> [Vec3; 6] {
     std::array::from_fn(|f| {
         let n = SIDES[f];
         let up: [f32; 3] = std::array::from_fn(|b| n.dot(basis[b]).max(0.0).powi(2));
@@ -449,19 +552,19 @@ fn voxel(lit: &Lit, at: Vec3, basis: &[Vec3; 4]) -> [Vec3; 6] {
     })
 }
 
-/// The volume's texels (`RES` voxels about `centre`, the ambient cubes laid
-/// out as `bevy_pbr::irradiance_volume` has them), half floats.
-fn build(lit: &Lit, centre: Vec3) -> Vec<u8> {
-    let [rx, ry, rz] = RES;
+/// A volume's texels (its voxels about `centre`, the ambient cubes laid out
+/// as `bevy_pbr::irradiance_volume` has them), half floats.
+fn build(lit: &Lit, centre: Vec3, kind: Kind) -> Vec<u8> {
+    let [rx, ry, rz] = kind.res;
     let basis = basis();
     let mut out = vec![0u8; rx * 2 * ry * 3 * rz * 8];
     for k in 0..rz {
         for j in 0..ry {
             for i in 0..rx {
-                let at = centre + (Vec3::new(i as f32, j as f32, k as f32) + 0.5 - Vec3::new(rx as f32, ry as f32, rz as f32) * 0.5) * CELL;
-                let sides = voxel(lit, at, &basis);
+                let at = centre + (Vec3::new(i as f32, j as f32, k as f32) + 0.5 - Vec3::new(rx as f32, ry as f32, rz as f32) * 0.5) * kind.cell;
+                let sides = if kind.far { far_voxel(lit, at, &basis) } else { voxel(lit, at, &basis) };
                 for (f, c) in sides.iter().enumerate() {
-                    put_side(&mut out, RES, [i, j, k], f, *c);
+                    put_side(&mut out, kind.res, [i, j, k], f, *c);
                 }
             }
         }
@@ -486,8 +589,8 @@ pub(crate) fn put_side(out: &mut [u8], res: [usize; 3], [i, j, k]: [usize; 3], f
     }
 }
 
-/// Builds the volume about the camera afresh (off the main thread) as it
-/// moves a voxel or the probes are relit, and puts each one built in place.
+/// Builds the volumes about the camera afresh (off the main thread) as it
+/// moves on or the probes are relit, and puts each one built in place.
 #[allow(clippy::too_many_arguments)]
 fn rebuild(
     mut commands: Commands,
@@ -498,18 +601,47 @@ fn rebuild(
     mut volumes: Query<(&mut Transform, &mut IrradianceVolume)>,
     mut live: ResMut<ProbesLive>,
 ) {
-    if live.0 != field.volume.is_some() {
-        live.0 = field.volume.is_some();
+    if live.0 != field.near.volume.is_some() {
+        live.0 = field.near.volume.is_some();
     }
     let Ok((cam, env_light)) = cams.single() else { return };
-    // The finished build, put in place.
-    if let Some(mut task) = field.task.take() {
+    // (As bright as the sky's environment map, less its dimming under a
+    // roof: the probes see to that.)
+    let intensity = env_light.map(|env| env.intensity / (1.0 - 0.65 * indoors.0).max(0.05));
+    let (lit, version) = (field.lit.clone(), field.lit_version);
+    let field = &mut *field;
+    static FAR_ON: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var("FC3_FAR_PROBES").as_deref() != Ok("0"));
+    for (v, kind) in [(&mut field.near, NEAR), (&mut field.far, FAR)] {
+        if kind.far && !*FAR_ON {
+            continue;
+        }
+        place(v, kind, &mut commands, &mut images, &mut volumes, intensity);
+        let Some(lit) = lit.clone() else { continue };
+        let snap = (cam.translation() / kind.step).round().as_ivec3();
+        if v.task.is_some() || v.built_for == Some((snap, version)) {
+            continue;
+        }
+        let centre = snap.as_vec3() * kind.step;
+        v.task = Some(AsyncComputeTaskPool::get().spawn(async move { (snap, version, build(&lit, centre, kind)) }));
+    }
+}
+
+/// Puts a volume's finished build in place, and keeps its brightness.
+fn place(
+    v: &mut Volume,
+    kind: Kind,
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    volumes: &mut Query<(&mut Transform, &mut IrradianceVolume)>,
+    intensity: Option<f32>,
+) {
+    if let Some(mut task) = v.task.take() {
         match block_on(future::poll_once(&mut task)) {
             Some((snap, version, data)) => {
-                let centre = snap.as_vec3() * CELL;
-                let [rx, ry, rz] = RES;
-                let scale = Vec3::new(rx as f32, ry as f32, rz as f32) * CELL;
-                match field.volume.clone() {
+                let centre = snap.as_vec3() * kind.step;
+                let [rx, ry, rz] = kind.res;
+                let scale = Vec3::new(rx as f32, ry as f32, rz as f32) * kind.cell;
+                match v.volume.clone() {
                     Some((e, image)) => {
                         if let Some(mut img) = images.get_mut(&image) {
                             img.data = Some(data);
@@ -528,38 +660,29 @@ fn rebuild(
                         ));
                         let e = commands
                             .spawn((
-                                LightProbe { falloff: Vec3::splat(FALLOFF), ..default() },
-                                IrradianceVolume { voxels: image.clone(), intensity: 1.0, affects_lightmapped_meshes: false },
+                                LightProbe { falloff: Vec3::splat(kind.falloff), ..default() },
+                                // (The far one marked as lighting lightmapped
+                                // meshes: `vendor/bevy_pbr` takes that for far.)
+                                IrradianceVolume { voxels: image.clone(), intensity: 1.0, affects_lightmapped_meshes: kind.far },
                                 Transform::from_translation(centre).with_scale(scale),
                             ))
                             .id();
-                        info!("light probes: a {rx} × {ry} × {rz} volume of {CELL} m voxels follows the camera");
-                        field.volume = Some((e, image));
+                        info!("light probes: a {rx} × {ry} × {rz} volume of {} m voxels follows the camera", kind.cell);
+                        v.volume = Some((e, image));
                     }
                 }
-                field.built_for = Some((snap, version));
+                v.built_for = Some((snap, version));
             }
-            None => field.task = Some(task),
+            None => v.task = Some(task),
         }
     }
-    // (As bright as the sky's environment map, less its dimming under a
-    // roof: the probes see to that.)
-    if let (Some((e, _)), Some(env)) = (field.volume.as_ref(), env_light) {
-        if let Ok((_, mut v)) = volumes.get_mut(*e) {
-            let intensity = env.intensity / (1.0 - 0.65 * indoors.0).max(0.05);
-            if (v.intensity - intensity).abs() > 0.005 {
-                v.intensity = intensity;
+    if let (Some((e, _)), Some(intensity)) = (v.volume.as_ref(), intensity) {
+        if let Ok((_, mut iv)) = volumes.get_mut(*e) {
+            if (iv.intensity - intensity).abs() > 0.005 {
+                iv.intensity = intensity;
             }
         }
     }
-    let Some(lit) = field.lit.clone() else { return };
-    let snap = (cam.translation() / CELL).round().as_ivec3();
-    let version = field.lit_version;
-    if field.task.is_some() || field.built_for == Some((snap, version)) {
-        return;
-    }
-    let centre = snap.as_vec3() * CELL;
-    field.task = Some(AsyncComputeTaskPool::get().spawn(async move { (snap, version, build(&lit, centre)) }));
 }
 
 #[cfg(test)]
@@ -581,7 +704,7 @@ mod tests {
             let probes = vec![LitProbe { pos: Vec3::ZERO, sky: [seen; 3], bounce: [bounce; 4] }];
             let mut cells = HashMap::new();
             cells.insert(IVec3::ZERO, vec![0]);
-            Lit { probes, cells, sky_above: SIDES.map(|n| above.irradiance(n)), sky_all: SIDES.map(|n| above.irradiance(n) + Vec3::splat(0.3)), shapes: Vec::new() }
+            Lit { probes, cells, columns: HashMap::new(), sky_above: SIDES.map(|n| above.irradiance(n)), sky_all: SIDES.map(|n| above.irradiance(n) + Vec3::splat(0.3)), shapes: Vec::new() }
         };
         let open = voxel(&lit(1.0, Vec3::ZERO), Vec3::new(0.5, 0.5, 0.5), &basis());
         assert!((open[3].x - 1.0).abs() < 0.02, "{open:?}");
@@ -609,7 +732,7 @@ mod tests {
         assert!(grid.contains(Vec3::new(5.0, 5.0, 5.0)) && grid.contains(Vec3::new(9.3, 0.4, 2.2)));
         assert!(!grid.contains(Vec3::new(5.0, 12.0, 5.0)) && !grid.contains(Vec3::new(5.0, -2.0, 5.0)) && !grid.contains(Vec3::new(13.0, 5.0, 5.0)));
         let light = [Vec3::splat(3.0), Vec3::splat(1.0), Vec3::splat(2.0)];
-        let lit = Lit { probes: Vec::new(), cells: HashMap::new(), sky_above: [Vec3::ZERO; 6], sky_all: [Vec3::splat(9.0); 6], shapes: vec![(grid, light)] };
+        let lit = Lit { probes: Vec::new(), cells: HashMap::new(), columns: HashMap::new(), sky_above: [Vec3::ZERO; 6], sky_all: [Vec3::splat(9.0); 6], shapes: vec![(grid, light)] };
         let inside = voxel(&lit, Vec3::new(5.0, 5.0, 5.0), &basis());
         assert_eq!((inside[3], inside[2], inside[0]), (light[0], light[1], light[2]));
         assert_eq!(voxel(&lit, Vec3::new(5.0, 15.0, 5.0), &basis())[3], Vec3::splat(9.0));
