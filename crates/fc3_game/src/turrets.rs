@@ -257,7 +257,11 @@ pub(crate) fn man_turrets(
             .and_then(|(_, t)| t.on_vehicle())
             .and_then(|ve| vehicles.get(ve).ok())
             .is_some_and(|v| host.as_ref().is_some_and(|h| h.story.vehicle_rules(v.story_id()).exit_disabled));
-        let leave = h.dead || on.is_none() || p.driving || (actions.just_pressed(Action::Interact) && !held);
+        // (Put somewhere else, a checkpoint or a script's teleport: off the
+        // gun where he is. Held on it, HOY_010's DShK kept the player 7 m
+        // from Sam, who waited for him at 5.)
+        let moved = p.spawning || on.as_ref().is_some_and(|(_, t)| t.pivot.distance(pt.translation) > 4.0);
+        let leave = h.dead || on.is_none() || p.driving || moved || (actions.just_pressed(Action::Interact) && !held);
         if leave {
             actions.consume(Action::Interact);
             p.mounted = None;
@@ -273,7 +277,9 @@ pub(crate) fn man_turrets(
             if let Some((_, mut t)) = on {
                 t.user = None;
                 // Down behind the gun.
-                pt.translation = t.gunner() + Vec3::Y * (HALF_HEIGHT + 0.05);
+                if !moved {
+                    pt.translation = t.gunner() + Vec3::Y * (HALF_HEIGHT + 0.05);
+                }
             }
             return;
         }

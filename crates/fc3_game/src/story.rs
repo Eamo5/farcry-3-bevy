@@ -3169,10 +3169,11 @@ fn run_story(
             for w in host.story.watched_proximity_in_graph(graph.as_deref()) {
                 let step = format!("near {}", w.1);
                 info!(
-                    "story autopilot: near candidate {} ({} m, {:.0} m off): in focus {}, used {}, fatal {}, tails {}",
+                    "story autopilot: near candidate {} ({} m, {:.0} m off, at {:?}): in focus {}, used {}, fatal {}, tails {}",
                     data.name_of(w.0).unwrap_or("?"),
                     w.1,
                     to_bevy(w.2).distance(feet),
+                    w.2,
                     !mission_on || in_focus.contains(&w.0),
                     host.used.contains(&(w.0, step.clone())),
                     host.fatal.contains(&(w.0, step)),

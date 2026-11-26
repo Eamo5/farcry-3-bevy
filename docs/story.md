@@ -6159,6 +6159,13 @@ to SQC_080, each a brief at its giver then its blocks):
   went on past the bridge. Nor does it go up to within 6 m of a flamer it
   can't hit from where it is: his tank goes up as he falls, and BAM_040's,
   shot from 2 m, took the player with him.
+* **Off the gun when put elsewhere.** A mounted gun holds its gunner at
+  its seat every frame, so a teleport (the autopilot's, a script's, a
+  checkpoint's) was undone at once while he was on one. After HOY_010's
+  last wave the player stayed on the DShK by Sam, 7 m from the spot where
+  Sam waited for him within 5, and the mission stalled there. Moved more
+  than 4 m from the gun, or being placed afresh, he now leaves it where he
+  was put.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.
