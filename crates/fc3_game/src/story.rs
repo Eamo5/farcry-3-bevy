@@ -3998,13 +3998,15 @@ fn run_story(
                         params: args.iter().skip(2).filter_map(|p| p.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                     }),
                     // A script decides a QTE: `QteSetResult <id> success|failure`.
-                    "SendGSFGenericEventToEntity" if a(2) == "QteSetResult" => {
+                    // (In any case: BNG_010's dance sends `QTESETRESULT 4
+                    // SUCCESS` to end it, and it had danced on 300 s.)
+                    "SendGSFGenericEventToEntity" if a(2).eq_ignore_ascii_case("QteSetResult") => {
                         qtes.decided.push((a(3).parse().unwrap_or(0), a(4).eq_ignore_ascii_case("success")));
                     }
                     // A gallery's spots (its shooter's, its birds' boxes)
                     // registering, to the player: `<player>
                     // SpawnPointRegistration <kind> <spot>`.
-                    "SendGSFGenericEventToEntity" if a(1) == "SpawnPointRegistration" => {
+                    "SendGSFGenericEventToEntity" if a(1).eq_ignore_ascii_case("SpawnPointRegistration") => {
                         if let Ok(spot) = a(3).parse::<u64>() {
                             if !gallery.spawn_points.iter().any(|(_, s)| *s == spot) {
                                 gallery.spawn_points.push((a(2).to_string(), spot));
@@ -4016,7 +4018,7 @@ fn run_story(
                     // A trial's clock started, or the trial failed (its
                     // scripts: off the zone too long).
                     "StartChallengeTimer" | "NotifyChallengerFailure" => trials.natives.push((name.clone(), a(0).parse().unwrap_or(0))),
-                    "SendGSFGenericEventToEntity" if a(1) == "GateRegisterEvent" => {
+                    "SendGSFGenericEventToEntity" if a(1).eq_ignore_ascii_case("GateRegisterEvent") => {
                         if let (Ok(id), Ok(index)) = (a(2).parse::<u64>(), a(5).parse::<u32>()) {
                             races.gates.retain(|g| g.id != id);
                             races.gates.push(crate::races::GateRegistration { id, index, tolerance: a(6).parse().unwrap_or(1.0) });
@@ -4024,7 +4026,7 @@ fn run_story(
                     }
                     // A pulse of the pad (`Rumble <low> <high> <seconds>`:
                     // JAS_020's Grant's death scene, with each heartbeat).
-                    "SendGSFGenericEventToEntity" if a(2) == "Rumble" => {
+                    "SendGSFGenericEventToEntity" if a(2).eq_ignore_ascii_case("Rumble") => {
                         let f = |i| a(i).parse().unwrap_or(0.0f32);
                         shakes.write(crate::shake::Shake::pulse(f(3), f(4), f(5)));
                     }

@@ -6166,6 +6166,16 @@ to SQC_080, each a brief at its giver then its blocks):
   Sam waited for him within 5, and the mission stalled there. Moved more
   than 4 m from the gun, or being placed afresh, he now leaves it where he
   was put.
+* **The club.** BNG_010's dance at the club ends 20 s after the player's
+  first good move, when its script sends `QTESETRESULT 4 SUCCESS` to the
+  dance's zombie QTE. The host matched `QteSetResult` as written, and the
+  scripts write it in capitals, so the dance went on till the QTE's 300 s
+  limit; the GSF events' names are now matched in any case. The bar's
+  drinking game (`CDrinkingMiniGame_Bangkok`) takes its bartender and its
+  anchor from the parameters the story's commands bring, which the host
+  takes up a frame after another system's event (the autopilot's use of the
+  bartender) started it: it found none and gave the game up. It now waits
+  for them.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

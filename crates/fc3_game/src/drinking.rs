@@ -218,7 +218,12 @@ fn run(
             }
             return;
         };
-        let params: HashMap<String, String> = host.gameplay_params.get(&id).cloned().unwrap_or_default().into_iter().collect();
+        // (Its parameters come with the story's commands, which the host
+        // takes up a frame later when another system's event started it:
+        // waited for. The autopilot's use of BNG_010's bartender, from its
+        // own system, had found none yet and given the game up.)
+        let Some(params) = host.gameplay_params.get(&id) else { return };
+        let params: HashMap<String, String> = params.iter().cloned().collect();
         let get = |k: &str| params.get(k).and_then(|v| v.parse::<u64>().ok()).filter(|&v| v != u64::MAX);
         let bytes = info.as_ref().and_then(|i| std::fs::read(i.root.join(fc3_formats::gsf::CACHE_REL)).ok()).unwrap_or_default();
         let data = host.story.data();
