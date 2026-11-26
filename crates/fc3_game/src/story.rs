@@ -1479,6 +1479,11 @@ pub struct StoryUi {
     /// A phone call: who, incoming, and how long it has gone on.
     pub phone: Option<(String, bool, f32)>,
     pub timers: Vec<fc3_story::Timer>,
+    /// Flash movies scripts play over the game (the `FlashMovie` box:
+    /// `UICreatePlayer`, `UILoadMovie`, `DestroyPlayer`), for the original
+    /// interface: a player's id and the movie's path id to load, or none to
+    /// take the player's movie away.
+    pub movies: Vec<(u64, Option<u64>)>,
 }
 
 /// A box the game stops for until the player closes it.
@@ -4570,6 +4575,21 @@ fn run_story(
                     "CAPI_Entity.StartPhysOnEntity" => {
                         if let Ok(id) = a(0).parse::<u64>() {
                             placements.loose.insert(id);
+                        }
+                    }
+                    // A script's Flash movie over the game (JAS_030's title,
+                    // `fc3_logo`, over the logo's video): its player made,
+                    // its movie loaded (`player, path id, ...`), the player
+                    // taken away.
+                    "UICreatePlayer" => {}
+                    "UILoadMovie" => {
+                        if let (Ok(id), Ok(movie)) = (a(0).parse::<u64>(), a(1).parse::<u64>()) {
+                            ui.movies.push((id, Some(movie)));
+                        }
+                    }
+                    "CFCXDominoUiManager:DestroyPlayer" => {
+                        if let Ok(id) = a(0).parse::<u64>() {
+                            ui.movies.push((id, None));
                         }
                     }
                     // A prop pushed toward an entity (`entity, amplitude,

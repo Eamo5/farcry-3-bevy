@@ -560,6 +560,16 @@ only what changed (and everything again until the movies have loaded):
   `Loading\GameModes\Singleplayer_white.feu`: its words and tips on
   white) in place of the usual for every load while they run, and take it
   down again as they end; `GetFlashOverrideLoadingScreen` reads it back.
+* **A script's own movie**: the `FlashMovie` box makes a player
+  (`UICreatePlayer`), loads a movie into it by its path's hash
+  (`UILoadMovie`) and takes it away (`DestroyPlayer`): JAS_030's title,
+  `hud\logo\fc3_logo`, over the logo's video as the player runs into the
+  jungle. These went unplayed; each now loads at a level of its own from 30
+  while its player lasts (`original_ui::drive_script_movies`), the movie
+  found by hashing the converted movies' archive paths. The logo's words
+  (`UbiPresents_txt`, `binkSubs`) wait on cues from the engine that aren't
+  known, so it shows nothing yet. `FC3_SCRIPT_MOVIE_TEST=<archive path>`
+  plays one 10 s in and takes it away at 30.
 * **Subtitles**: `ShowSubTitle(text)` / `HideSubTitle()`.
 * **Using** on foot is a hold, as the game's gameplay map has it (`use` on
   `kb:e` held, after the `ClickGenerator` `HoldTime`, 0.37 s, which the

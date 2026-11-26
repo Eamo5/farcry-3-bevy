@@ -68,7 +68,7 @@ impl Plugin for OriginalUiPlugin {
                     drive_radar,
                     drive_potions,
                     (drive_camera, drive_script_hud, drive_health_bar),
-                    drive_credits,
+                    (drive_credits, drive_script_movies),
                     (drive_loading, frontend::drive_frontend),
                     drive_gallery,
                     drive_poker,
@@ -4750,6 +4750,82 @@ fn drive_credits(
     if credits.skipped.is_some() && !roll.skipped {
         roll.skipped = true;
         host.call_function(&format!("_level{CREDITS_LEVEL}.ec.m_credits.quitBeforeEnd"), Vec::new());
+    }
+}
+
+/// The Flash movies scripts play over the game (the `FlashMovie` box:
+/// JAS_030's title card, `hud\logo\fc3_logo`, over the logo's video as the
+/// player runs into the jungle), each at a level of its own from
+/// `SCRIPT_MOVIE_LEVEL` while its player lasts. Scripts name a movie by its
+/// path's hash (`GetPathID`); the converted movies' paths are hashed once to
+/// find it.
+const SCRIPT_MOVIE_LEVEL: u32 = 30;
+const SCRIPT_MOVIE_SLOTS: u32 = 8;
+
+fn drive_script_movies(
+    state: NonSend<Interface>,
+    mut ui: ResMut<crate::story::StoryUi>,
+    info: Res<crate::data::CacheInfo>,
+    mut playing: Local<std::collections::HashMap<u64, u32>>,
+    mut paths: Local<Option<std::collections::HashMap<u64, String>>>,
+    (time, mut tested): (Res<Time>, Local<u8>),
+) {
+    let Interface::Running(host) = &*state else { return };
+    // FC3_SCRIPT_MOVIE_TEST=<archive path> (tests): that movie as a script
+    // would play it, 10 s in, and taken away 30 s in.
+    if let Ok(test) = std::env::var("FC3_SCRIPT_MOVIE_TEST") {
+        let t = time.elapsed_secs();
+        if *tested == 0 && t > 10.0 {
+            *tested = 1;
+            ui.movies.push((u64::MAX, Some(fc3_formats::hash::path_hash(&test))));
+        } else if *tested == 1 && t > 30.0 {
+            *tested = 2;
+            ui.movies.push((u64::MAX, None));
+        }
+    }
+    if ui.movies.is_empty() {
+        return;
+    }
+    let paths = paths.get_or_insert_with(|| {
+        // (The cache keeps each movie under its archive path, `.swf` for
+        // `.feu`.)
+        let root = info.root.join("ui");
+        let mut out = std::collections::HashMap::new();
+        let mut dirs = vec![root.clone()];
+        while let Some(d) = dirs.pop() {
+            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    dirs.push(p);
+                } else if p.extension().is_some_and(|x| x == "swf") {
+                    if let Ok(rel) = p.strip_prefix(&info.root) {
+                        let archive = rel.with_extension("feu").to_string_lossy().replace('/', "\\");
+                        out.insert(fc3_formats::hash::path_hash(&archive), archive);
+                    }
+                }
+            }
+        }
+        out
+    });
+    for (player, movie) in std::mem::take(&mut ui.movies) {
+        match movie {
+            Some(movie) => {
+                let Some(path) = paths.get(&movie) else {
+                    warn!("original UI: a script's movie {movie} isn't among the converted ones");
+                    continue;
+                };
+                let level = playing.get(&player).copied().or_else(|| (0..SCRIPT_MOVIE_SLOTS).map(|k| SCRIPT_MOVIE_LEVEL + k).find(|l| !playing.values().any(|v| v == l)));
+                let Some(level) = level else { continue };
+                info!("original UI: a script's movie {path} at level {level}");
+                host.load(path, level);
+                playing.insert(player, level);
+            }
+            None => {
+                if let Some(level) = playing.remove(&player) {
+                    host.unload(level);
+                }
+            }
+        }
     }
 }
 
