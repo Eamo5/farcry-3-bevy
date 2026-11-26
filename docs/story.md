@@ -6156,7 +6156,9 @@ to SQC_080, each a brief at its giver then its blocks):
   script watched for from right beside it, and died under it every time,
   learning the bridge assault fatal. It now breaks such a thing from well
   off (10 to 18 m, on ground about as high), as a player shoots it; BAM_040
-  went on past the bridge.
+  went on past the bridge. Nor does it go up to within 6 m of a flamer it
+  can't hit from where it is: his tank goes up as he falls, and BAM_040's,
+  shot from 2 m, took the player with him.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.

@@ -6859,7 +6859,7 @@ fn autopilot_loot(
         }
     }
     if fixed || stubborn || sniping {
-        let Some((nt, nh, _, _, actor, _, head)) = quest.filter(|q| (stubborn || sniping || host.quiet > 3.0) && !q.1.dead) else { return };
+        let Some((nt, nh, _, _, actor, foe, head)) = quest.filter(|q| (stubborn || sniping || host.quiet > 3.0) && !q.1.dead) else { return };
         if *last != Some((actor.id, "shoot")) {
             info!("story autopilot: shoot {} ({})", host.story.data().name_of(actor.id).unwrap_or("?"), actor.id);
             *last = Some((actor.id, "shoot"));
@@ -6882,7 +6882,13 @@ fn autopilot_loot(
                     let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(sight);
                     // (A flamethrower in hand, from its reach's end: close
                     // up, its fire took the shack and the player with it.)
-                    let radii = if inventory.def().class == crate::weapons::WeaponClass::Flamethrower { [8.0f32, 6.0, 10.0, 5.0] } else { [2.0, 3.0, 5.0, 8.0] };
+                    // (Nor up to a flamer, whose tank goes up as he falls:
+                    // BAM_040's, shot from 2 m, took the player with him.)
+                    let radii = if inventory.def().class == crate::weapons::WeaponClass::Flamethrower || foe.role == crate::npc::Role::Flamer {
+                        [8.0f32, 6.0, 10.0, 12.0]
+                    } else {
+                        [2.0, 3.0, 5.0, 8.0]
+                    };
                     let clear = radii.into_iter().flat_map(|r| (0..12).map(move |i| (r, i as f32 * std::f32::consts::TAU / 12.0))).find_map(|(r, a)| {
                         let mut p = nt.translation + Quat::from_rotation_y(a) * flat * r;
                         p.y = floor_near(&spatial, &heights, me, p, his_feet)?;
