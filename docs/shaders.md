@@ -1087,7 +1087,11 @@ environment map. The cliffs and the jungle a few hundred metres off keep
 their shade's contrast and lose the blue cast; the tour runs about 1 ms
 slower. `FC3_FAR_PROBES=0` leaves it out.
 
-Not yet: the PC's local radiance transfer from the dynamic lights.
+The talk also has the PC bounce the dynamic lights' light through the probes
+(some 210 KB a sector), but the shipped sectors' probe components carry no
+such data: `radianceTransferProbes_V3` is empty and `V4` holds only the
+sun's and the sky's transfer, so there's nothing to relight the lamps' bounce
+with.
 
 ## Post-effects (`fc3_game/src/post_effects.rs`)
 

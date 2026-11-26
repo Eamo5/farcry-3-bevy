@@ -149,7 +149,7 @@ use core::{num::NonZero, ops::Deref};
 use bevy_asset::AssetId;
 
 use crate::{
-    add_cubemap_texture_view, binding_arrays_are_usable, RenderLightProbeFlags,
+    binding_arrays_are_usable, RenderLightProbeFlags,
     RenderViewLightProbes, MAX_VIEW_LIGHT_PROBES,
 };
 
@@ -224,14 +224,20 @@ impl<'a> RenderViewIrradianceVolumeBindGroupEntries<'a> {
         let mut sampler = None;
 
         if let Some(irradiance_volumes) = render_view_irradiance_volumes {
-            for &cubemap_id in &irradiance_volumes.binding_index_to_textures {
-                add_cubemap_texture_view(
-                    &mut texture_views,
-                    &mut sampler,
-                    cubemap_id,
-                    images,
-                    fallback_image,
-                );
+            for &image_id in &irradiance_volumes.binding_index_to_textures {
+                // fc3 patch: a volume whose image isn't there this frame (as
+                // it's uploaded afresh) is bound to the 3D fallback; the cube
+                // one `add_cubemap_texture_view` gives made the bind group
+                // invalid, and the app quit.
+                match images.get(image_id) {
+                    None => texture_views.push(&*fallback_image.d3.texture_view),
+                    Some(image) => {
+                        if sampler.is_none() {
+                            sampler = Some(&image.sampler);
+                        }
+                        texture_views.push(&*image.texture_view);
+                    }
+                }
             }
         }
 

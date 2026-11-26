@@ -12,7 +12,7 @@ fixed-size arrays, which inline, rather than with a `memcpy` call per vertex
 and attribute.
 
 `bevy_pbr` is Bevy's 0.19.1 PBR crate (MIT or Apache-2.0, licence files
-alongside) with three changes, marked `fc3 patch` in
+alongside) with four changes, marked `fc3 patch` in
 `src/light_probe/irradiance_volume.wgsl` and `src/render/pbr_functions.wgsl`:
 
 - `irradiance_volume_light` returns how much the volumes cover the fragment
@@ -29,6 +29,12 @@ alongside) with three changes, marked `fc3 patch` in
 - A volume marked as affecting lightmapped meshes (the game has none) is a
   far one (`fc3_game::probes`' coarse volume): it lights only what the other
   volumes leave uncovered, before the environment map.
+- In `src/light_probe/irradiance_volume.rs`, a volume whose image isn't in
+  the render world this frame (as it is uploaded afresh: the probes' and the
+  interiors' volumes are rewritten as the camera moves) is bound to the 3D
+  fallback image. Upstream binds the cube fallback there, which the 3D
+  binding array refuses: the view's bind group was invalid and the app quit
+  (seen as a script moved the player across the island).
 
 `ruffle_render_wgpu`, `naga-agal` and `naga-pixelbender` are Ruffle's wgpu
 renderer and its AGAL and Pixel Bender shader compilers (MIT or Apache-2.0,
