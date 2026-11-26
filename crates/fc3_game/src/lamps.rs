@@ -31,7 +31,11 @@ pub struct LampsPlugin;
 impl Plugin for LampsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Lamps>()
-            .add_systems(Update, (load_lamps.run_if(resource_exists::<CacheInfo>), place_fire_lights, story_lamps, assign_lamps, drive_lights, drive_glows).chain());
+            .init_resource::<LampDaylight>()
+            .add_systems(
+                Update,
+                (load_lamps.run_if(resource_exists::<CacheInfo>), place_fire_lights, story_lamps, lamp_daylight, assign_lamps, drive_lights, drive_glows).chain(),
+            );
     }
 }
 
@@ -119,6 +123,26 @@ fn reach(l: &WorldLight) -> f32 {
 
 fn cell_of(p: Vec3) -> (i32, i32) {
     ((p.x / CELL).floor() as i32, (p.z / CELL).floor() as i32)
+}
+
+/// How much day the lamps switched at night see: the daylight, while the
+/// environment has a sun. (Under a preset with none, the Shipyard's bunker
+/// or the mines, it is night to them whatever the hour: their lamps,
+/// switched at night, burn there by day, as the game's do.)
+#[derive(Resource, Default)]
+struct LampDaylight(f32);
+
+fn lamp_daylight(daylight: Res<Daylight>, env: Res<crate::sky::GameEnvironment>, mut lamp: ResMut<LampDaylight>) {
+    let sun = env.0.as_ref().map_or(1.0, |e| {
+        if e.sun_off || e.sun_color.0.is_empty() {
+            return if e.sun_off { 0.0 } else { 1.0 };
+        }
+        // (The noon colour: dawn's and dusk's black is the daylight's to
+        // tell.)
+        let c = Color::srgb_from_array(e.sun_color.at(0.5)).to_linear();
+        smoothstep(0.02, 0.15, 0.2126 * c.red + 0.7152 * c.green + 0.0722 * c.blue)
+    });
+    lamp.0 = daylight.0 * sun;
 }
 
 /// Night switching: 0 by day, 1 after dusk.
@@ -334,7 +358,7 @@ fn fill(slots: &mut [Slot], mut wanted: Vec<(f32, u32)>) {
 }
 
 /// Hands the pools to the nearest lit lights (a few times a second).
-fn assign_lamps(time: Res<Time>, daylight: Res<Daylight>, cameras: Query<&GlobalTransform, With<PlayerCamera>>, mut lamps: ResMut<Lamps>) {
+fn assign_lamps(time: Res<Time>, daylight: Res<LampDaylight>, cameras: Query<&GlobalTransform, With<PlayerCamera>>, mut lamps: ResMut<Lamps>) {
     let lamps = &mut *lamps;
     lamps.next_assign -= time.delta_secs();
     if lamps.next_assign > 0.0 || lamps.points.is_empty() {
@@ -372,7 +396,7 @@ fn assign_lamps(time: Res<Time>, daylight: Res<Daylight>, cameras: Query<&Global
 /// Places and dims the pooled lights each frame (fades and flicker).
 fn drive_lights(
     time: Res<Time>,
-    daylight: Res<Daylight>,
+    daylight: Res<LampDaylight>,
     lamps: Res<Lamps>,
     scene: Res<crate::sky::SceneExposure>,
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
@@ -435,7 +459,7 @@ fn drive_lights(
 /// Draws a glow sprite (the game's light glow) on each lit lamp in reach.
 fn drive_glows(
     time: Res<Time>,
-    daylight: Res<Daylight>,
+    daylight: Res<LampDaylight>,
     lamps: Res<Lamps>,
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
     mut particles: ResMut<Particles>,

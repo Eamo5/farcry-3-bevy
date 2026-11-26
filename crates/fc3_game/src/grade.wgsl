@@ -19,6 +19,9 @@ struct Grade {
 @group(0) @binding(5) var bloom1: texture_2d<f32>;
 @group(0) @binding(6) var bloom2: texture_2d<f32>;
 @group(0) @binding(7) var bloom3: texture_2d<f32>;
+// What the eye has adapted to (`eye.wgsl`): x, the scale on the exposed
+// colour.
+@group(0) @binding(8) var<storage, read> eye: vec4<f32>;
 
 // A level, smoothed by four bilinear taps half a texel apart (the small ones
 // would show their texels otherwise).
@@ -54,7 +57,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // The bloom joins the scene before the tone curve, as in the game.
     let bloom = (textureSampleLevel(bloom0, linear_sampler, in.uv, 0.0).rgb + textureSampleLevel(bloom1, linear_sampler, in.uv, 0.0).rgb
         + level(bloom2, in.uv) + level(bloom3, in.uv)) * grade.params.z;
-    let c = max(hdr.rgb + bloom, vec3(0.0));
+    let c = max((hdr.rgb + bloom) * eye.x, vec3(0.0));
     let u = vec3(curve(c.r), curve(c.g), curve(c.b));
     // Texel centres from the first to the last, as the game samples it.
     let n = grade.params.y;

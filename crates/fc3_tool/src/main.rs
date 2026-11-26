@@ -3119,6 +3119,24 @@ fn main() -> Result<()> {
                 }
             }
         }
+        "env-preset" => {
+            // An environment preset by its template's name or GUID (as the
+            // scripts give it): its class and fields, curves and all:
+            // env-preset <name>
+            let key = args.get(1).context("usage: env-preset <name or {guid}>")?;
+            let managers = std::fs::read(fc3_formats::cache::default_cache_root().join("story").join("managers.fcb"))?;
+            let Some((class, body)) = fc3_formats::environment::Environment::preset_by_guid(&managers, key) else { anyhow::bail!("no preset {key}") };
+            let mut names = fc3_formats::fcb::NameDb::default();
+            for n in KNOWN_NAMES {
+                names.add(n);
+            }
+            if let Ok(dll) = std::fs::read(data.parent().unwrap_or(&data).join("bin").join("FC3.dll")) {
+                names.add_identifiers_from(&dll);
+            }
+            let mut out = String::new();
+            fc3_formats::fcb::dump(&body, &names, 64, &mut out);
+            println!("{class}\n{out}");
+        }
         "story-layer" => {
             // A mission layer: its block, whether it comes with the block,
             // and the block's other layers: story-layer <id>

@@ -566,6 +566,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     let refresh_realtrees = !exists(job.root(), REALTREE_ENTITIES_STAMP);
     let reorder = opts.only_sectors.is_none() && !exists(job.root(), ENTITY_ORDER_STAMP);
     let relight = opts.only_sectors.is_none() && !exists(job.root(), LIGHT_SWITCH_STAMP);
+    let south_east = opts.only_sectors.is_none() && !exists(job.root(), SOUTH_EAST_STAMP);
     let sector_results: Vec<SectorResult> = job.run(Stage::Sectors, &sectors, |&id| match convert_sector(&job, id, refresh_realtrees, reorder || relight) {
         Ok(r) => r,
         Err(e) => {
@@ -658,11 +659,12 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
     }
     let traversal_current = std::fs::read_to_string(job.root().join(cache::TRAVERSAL_REL))
         .is_ok_and(|text| text.lines().next() == Some(fc3_formats::traversal::CACHE_HEADER));
-    if opts.only_sectors.is_none() && (job.should_write(cache::TRAVERSAL_REL) || !traversal_current || reorder) {
+    if opts.only_sectors.is_none() && (job.should_write(cache::TRAVERSAL_REL) || !traversal_current || reorder || south_east) {
         traversal.cables = resolve_cables(&anchors);
+        // (The towers on the islands only, those of the developers' test
+        // areas left out of the count; the ladders and zip lines of the
+        // far south-east corner kept, where Buck's missions climb.)
         let keep = |p: &[f32; 3]| !fc3_formats::worldmap::in_test_area(p[0], -p[2]);
-        traversal.cables.retain(|c| keep(&c.a) && keep(&c.b));
-        traversal.ladders.retain(|l| keep(&l.base));
         traversal.towers.retain(keep);
         if let Err(e) = write_atomic(job.root(), cache::TRAVERSAL_REL, traversal.to_text().as_bytes(), job.ctx) {
             job.error(format!("traversal: {e:#}"));
@@ -684,8 +686,7 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
         }
     }
     let fx_current = std::fs::read_to_string(job.root().join(cache::WORLD_FX_REL)).is_ok_and(|t| t.starts_with(cache::WORLD_FX_HEADER));
-    if opts.only_sectors.is_none() && (job.should_write(cache::WORLD_FX_REL) || !fx_current) {
-        effects.retain(|(_, p, _, _)| !fc3_formats::worldmap::in_test_area(p[0], -p[2]));
+    if opts.only_sectors.is_none() && (job.should_write(cache::WORLD_FX_REL) || !fx_current || south_east) {
         let lines: String =
             effects.iter().map(|(k, p, q, name)| format!("{k} {} {} {} {} {} {} {} {name}\n", p[0], p[1], p[2], q[0], q[1], q[2], q[3])).collect();
         let text = format!("{}\n{lines}", cache::WORLD_FX_HEADER);
@@ -701,17 +702,23 @@ pub fn convert(opts: &Options, ctx: &Context_, report: Reporter) -> Result<Manif
             job.error(format!("rooms: {e:#}"));
         }
     }
-    if opts.only_sectors.is_none() && job.should_write(cache::SOUND_POINTS_REL) {
-        sound_points.retain(|(_, p)| !fc3_formats::worldmap::in_test_area(p[0], -p[2]));
+    if opts.only_sectors.is_none() && (job.should_write(cache::SOUND_POINTS_REL) || south_east) {
         let text: String = sound_points.iter().map(|(e, p)| format!("{e:08x} {} {} {}\n", p[0], p[1], p[2])).collect();
         if let Err(e) = write_atomic(job.root(), cache::SOUND_POINTS_REL, text.as_bytes(), job.ctx) {
             job.error(format!("sound points: {e:#}"));
         }
     }
-    if opts.only_sectors.is_none() && (job.should_write(cache::LIGHTS_REL) || reorder) {
-        lights.retain(|l: &fc3_formats::lights::WorldLight| !fc3_formats::worldmap::in_test_area(l.position[0], -l.position[2]));
+    // (The lights, effects and sounds of the far south-east corner kept too:
+    // besides the developers' test areas it holds Buck's missions, the
+    // Shipyard's bunker, the mines and the ruins, lit by nothing else.)
+    if opts.only_sectors.is_none() && (job.should_write(cache::LIGHTS_REL) || reorder || south_east) {
         if let Err(e) = write_atomic(job.root(), cache::LIGHTS_REL, fc3_formats::lights::to_text(&lights).as_bytes(), job.ctx) {
             job.error(format!("lights: {e:#}"));
+        }
+    }
+    if south_east {
+        if let Err(e) = write_atomic(job.root(), SOUTH_EAST_STAMP, b"the south-east corner's lights, effects, sounds and ladders kept\n", job.ctx) {
+            job.error(format!("south-east stamp: {e:#}"));
         }
     }
     if reorder {
@@ -3336,6 +3343,10 @@ const ENTITY_ORDER_STAMP: &str = "sectors/stamp-entity-order.txt";
 /// light switch (`MaterialLightSwitch`) from its overrides: its materials
 /// were taken from the light switch before.
 const LIGHT_SWITCH_STAMP: &str = "sectors/stamp-light-switch.txt";
+/// Written once the lights, effects, sounds, ladders and zip lines of the
+/// far south-east corner are kept (they had been left out with the
+/// developers' test areas there).
+const SOUTH_EAST_STAMP: &str = "world/stamp-south-east.txt";
 
 fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool, reorder: bool) -> Result<Option<SectorResult>> {
     let c = SectorCoord::from_id(id);

@@ -225,6 +225,10 @@ pub struct Environment {
     pub middle_grey: Curve,
     pub exposure_min: Curve,
     pub exposure_max: Curve,
+    /// How fast the eye adapts to the dark and to the light
+    /// (`fExposureDarkAdaptionSpeed`, `...BrightAdaptionSpeed`: the share of
+    /// the way a frame goes); 0 when not read (an old cache).
+    pub adaption: (f32, f32),
     /// The sky dome's brightness multiplier.
     pub sky_hdr: Curve,
     /// The light probes' (the shade's light) scale and brightness multiplier.
@@ -305,6 +309,11 @@ fn dof(d: &Object) -> Option<[f32; 6]> {
     })
 }
 
+/// An exposure preset's adaption speeds, to the dark and to the light.
+fn adaption(e: &Object) -> (f32, f32) {
+    (e.f32("fExposureDarkAdaptionSpeed").unwrap_or(0.0), e.f32("fExposureBrightAdaptionSpeed").unwrap_or(0.0))
+}
+
 fn keyed_gradient(o: &Object, name: &str) -> KeyedGradient {
     KeyedGradient(knots(o, name).iter().map(|k| (k.f32("Position").unwrap_or(0.0), gradient(k, "Gradient"))).filter(|(_, g)| !g.0.is_empty()).collect())
 }
@@ -371,6 +380,7 @@ impl Environment {
             middle_grey: curve(exposure, "curveMiddleGrey"),
             exposure_min: curve(exposure, "curveExposureMin"),
             exposure_max: curve(exposure, "curveExposureMax"),
+            adaption: adaption(exposure),
             sky_hdr: curve(sky, "curveSkyColorHDRMul"),
             probe_scale: curve(lighting, "curveProbeScale"),
             probe_hdr: curve(lighting, "curveProbeHDRMul"),
@@ -433,6 +443,7 @@ impl Environment {
                 self.middle_grey = curve(body, "curveMiddleGrey");
                 self.exposure_min = curve(body, "curveExposureMin");
                 self.exposure_max = curve(body, "curveExposureMax");
+                self.adaption = adaption(body);
             }
             "CEnvironmentSky" => {
                 self.sky_hdr = curve(body, "curveSkyColorHDRMul");
@@ -469,6 +480,7 @@ impl Environment {
             middle_grey: self.middle_grey.mix(&other.middle_grey, k),
             exposure_min: self.exposure_min.mix(&other.exposure_min, k),
             exposure_max: self.exposure_max.mix(&other.exposure_max, k),
+            adaption: (num(self.adaption.0, other.adaption.0), num(self.adaption.1, other.adaption.1)),
             sky_hdr: self.sky_hdr.mix(&other.sky_hdr, k),
             probe_scale: self.probe_scale.mix(&other.probe_scale, k),
             probe_hdr: self.probe_hdr.mix(&other.probe_hdr, k),
@@ -539,6 +551,7 @@ impl Environment {
         out += &format!("shafts_fade {} {}\n", self.shafts_fade.0, self.shafts_fade.1);
         out += &format!("storm_fog {} {}\n", self.storm_fog_end, self.storm_fog_sky);
         out += &format!("bloom_intensity {}\n", self.bloom_intensity);
+        out += &format!("adaption {} {}\n", self.adaption.0, self.adaption.1);
         if let Some(v) = self.veg_sss {
             out += &format!("veg_sss {} {} {} {} {} {} {}\n", v[0], v[1], v[2], v[3], v[4], v[5], v[6]);
         }
@@ -572,6 +585,7 @@ impl Environment {
                 ("dof", [a, b, c, d, f, g]) => e.dof = Some([*a, *b, *c, *d, *f, *g]),
                 ("veg_sss", [a, b, c, d, f, g, k]) => e.veg_sss = Some([*a, *b, *c, *d, *f, *g, *k]),
                 ("bloom_intensity", [x]) => e.bloom_intensity = *x,
+                ("adaption", [a, b]) => e.adaption = (*a, *b),
                 ("storm_sky_fog", [a, b]) => e.storm_sky_fog = (*a, *b),
                 ("weather", [a, b, c, d, f, g, h, i, j]) => {
                     e.weather =
@@ -681,6 +695,7 @@ mod tests {
             bloom_response: Curve(vec![(0.0, 0.0), (1.0, 0.03), (3.6, 0.43)]),
             veg_sss: Some([0.9, 1.0, 0.0, 4.0, 3.0, 1.5, 0.8]),
             bloom_intensity: 1.0,
+            adaption: (0.025, 0.045),
             fog_start: 45.0,
             fog_end: 400.0,
             shafts_fade: (40.0, 90.0),

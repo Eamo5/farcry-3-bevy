@@ -364,6 +364,7 @@ pub(crate) fn advance_time(
     mut sun: Query<(&mut Transform, &mut DirectionalLight, &mut SunDisk), With<Sun>>,
     mut cameras: Query<&mut Exposure, With<crate::player::PlayerCamera>>,
     post: Option<Res<crate::post_effects::PostLight>>,
+    overrides: Res<EnvOverrides>,
 ) {
     if keys.pressed(KeyCode::KeyT) {
         tod.hours += time.delta_secs() * 2.0;
@@ -378,7 +379,10 @@ pub(crate) fn advance_time(
         // The presets' light (see `NOON_SUN_LUX`), from the sun while its
         // colour outshines the moon's.
         let (sun_c, moon_c, hdr) = game_light(e, t_day);
-        let unit = lux_per_unit(e, elevation);
+        // (By the world's own light, not a script's preset over it: one with
+        // no sun or moon, a bunker's or a cave's, had made a game unit
+        // 9e8 lux, and the exposure EV 29; all but the lamps went black.)
+        let unit = lux_per_unit(overrides.base.as_ref().unwrap_or(e), elevation);
         let exposure = e.exposure_min.at(t_day).max(0.05);
         let sky = if e.sky_hdr.0.is_empty() { 1.0 } else { e.sky_hdr.at(t_day) };
         let curve_or = |c: &fc3_formats::environment::Curve, v: f32| if c.0.is_empty() { v } else { c.at(t_day) };

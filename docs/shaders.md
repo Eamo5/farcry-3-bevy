@@ -895,9 +895,9 @@ additive and premultiplied `Unlit` ones then go onto their own material
 - moved by `AnimType`: 1 and 2 scroll at `USpeed`/`VSpeed`, 3 goes back and
   forth, 4 turns at `AngularSpeed`.
 
-They cast no shadow. What the game's eye adaptation does to `HDRMul` isn't
-modelled: the multiplier is taken as it is, as the other self-lit materials
-take their maps.
+They cast no shadow. The multiplier is taken as it is, as the other
+self-lit materials take their maps; the eye's adaptation (`grade.rs`) scales
+them with the rest of the frame.
 
 Scripts turn a glow's `HDRMul` up or down (`CAPI_Entity.UpdateMaterialFloat`,
 the `MaterialModifier` box: CIT_015's murals in Citra's temple lit one after
@@ -931,6 +931,22 @@ own that scripts name. The `DynamicLightModifier` box (54 graphs) switches
 them (`CDynamicLightComponent_ActivateLight`, `..._DeactivateLight`); one
 placed switched off (`bEnabled` 0) waits for a script; a reload lets the
 switches go.
+
+The far south-east corner of the world (beyond 2,048 m east and south)
+holds the developers' flat test areas, and the converter had left out every
+light, effect, sound point, ladder and zip line there with them. But it holds
+Buck's missions too: the Shipyard's bunker and submarine pen (BAM_030), the
+mines (BAM_040), the Chinese ruins. Their presets have no sun, moon, sky
+light or probes (`SHA_Quest_Shipyard:Common.Shipyard_Light`: black sun and
+moon, `curveProbeScale` 0; the mines' probe multipliers 0 too), so their
+lamps light them alone, and with none they were black. The converter keeps
+them now (`world/stamp-south-east.txt` rewrites an older cache's lights,
+effects, sounds and ladders once); 49 lights stand within 150 m of the
+bunker's way in, 141 within 300 m of the mines. Only the radio towers, the
+outposts and the patrols of the corner are still left out (they'd count on
+the map). Most of these lamps are switched at night, and under a preset
+with no sun it is night to them whatever the hour (`lamps::lamp_daylight`),
+so they burn there by day.
 
 Parts that leave the standard and original materials for one of another
 kind (the tattooed arm, these effects) are swapped over two frames

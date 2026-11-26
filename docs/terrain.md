@@ -113,7 +113,8 @@ by GUID. The open-air zones (jungle, savannah and the rest) use the
 `Preview_Lighting:Preview_*` set, while caves, interiors and quest areas have
 their own. Curves are keyed by the time of day (0 at midnight, 0.25 at 6:00);
 their knots are (time, value) plus flat Bezier handles. Gradients are (time,
-RGB) knots.
+RGB) knots. `fc3tool env-preset <name or {guid}>` prints one whole, as the
+scripts name it (`SHA_Quest_Shipyard:Common.Shipyard_Light`).
 
 `fc3_formats::environment` reads the outdoor set, and the converter writes it
 to `world/environment.txt`:
@@ -171,8 +172,21 @@ to `world/environment.txt`:
 - Exposure (`CEnvironmentExposure`): the eye adapts the scene toward a middle
   grey (`curveMiddleGrey`), but only within `curveExposureMin` ..
   `curveExposureMax` (a multiplier on the scene: 1.45 to 2.45 by day, 1 to 2
-  at night). That range is narrow, so a typical scene sits at its lower end
-  day and night. With the game's grade the light and the exposure follow
+  at night), slower into the dark than into the light
+  (`fExposureDarkAdaptionSpeed` 0.025, `...BrightAdaptionSpeed` 0.045 of the
+  way a frame). That range is narrow, so a typical scene sits at its lower
+  end day and night. With the game's grade the camera is exposed at the
+  least and the grade's pass adapts from there (`grade.rs`, `eye.wgsl`): a
+  histogram of the exposed frame gives its mean luminance, the target is
+  the middle grey over it (the mean read 8 times over, `GAME_LUMINANCE`, so
+  an open sunny scene sits at the least as the presets suggest), kept within
+  the range, and the colour is scaled toward it at the preset's speeds. Shade
+  (an alley, under trees) opens up to the most by day; the mines' and the
+  bunker's presets (middle grey 0.001, most 10) only in the near-dark.
+  `FC3_ADAPT=0` holds it at the least; `FC3_EXPOSURE_DEBUG` logs it. The
+  light's units (lux per game unit) come from the world's own presets, not
+  a script's over them: one with no sun or moon (the bunker's) had made a
+  unit 9e8 lux and the exposure EV 29. With the game's grade the light and the exposure follow
   the presets as the game's do (`sky.rs`, `NOON_SUN_LUX`): the light is the
   sun's or moon's colour times `curveLightHDRMul` in game units, at the same
   strength whatever the sun's height (its colour does the dawning), and the
