@@ -17,7 +17,49 @@ pub struct LoosePropsPlugin;
 
 impl Plugin for LoosePropsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, (wake_props, float_props).run_if(in_state(crate::menu::GameState::Playing)));
+        app.add_systems(Update, (wake_props, push_props, float_props).run_if(in_state(crate::menu::GameState::Playing)));
+    }
+}
+
+/// The mass (kg) a script's push is reckoned against: the game's impulses
+/// are in its bodies' units, and SAM_020's barrels, pushed with 3400, roll
+/// off at some 11 m/s.
+const PUSHED_MASS: f32 = 300.0;
+/// The fastest a push sends a prop off (m/s).
+const PUSH_MOST: f32 = 20.0;
+
+/// Gives the props scripts pushed their push once they're loose bodies:
+/// toward the entity the script named, a little up.
+fn push_props(
+    time: Res<Time>,
+    mut placements: ResMut<EntityPlacements>,
+    mut props: Query<(Entity, &PlacedId, &Transform, Option<&mut LinearVelocity>), With<Loose>>,
+    mut waited: Local<f32>,
+    mut commands: Commands,
+) {
+    if placements.impulses.is_empty() {
+        *waited = 0.0;
+        return;
+    }
+    *waited += time.delta_secs();
+    let pending = std::mem::take(&mut placements.impulses);
+    for (id, amp, toward) in pending {
+        let Some((e, _, t, v)) = props.iter_mut().find(|(_, p, ..)| p.0 == id) else {
+            // (Not loose yet, or not in the world: waited for a while.)
+            if *waited < 5.0 {
+                placements.impulses.push((id, amp, toward));
+            }
+            continue;
+        };
+        let dir = ((toward - t.translation).normalize_or(Vec3::X) + Vec3::Y * 0.1).normalize();
+        let dv = dir * (amp / PUSHED_MASS).min(PUSH_MOST);
+        debug!("loose prop {id}: pushed at {:.1} m/s", dv.length());
+        match v {
+            Some(mut v) => v.0 += dv,
+            None => {
+                commands.entity(e).insert(LinearVelocity(dv));
+            }
+        }
     }
 }
 

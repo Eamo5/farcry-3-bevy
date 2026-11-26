@@ -422,6 +422,10 @@ pub struct EntityPlacements {
     /// Props scripts set loose (`CAPI_Entity.StartPhysOnEntity`), for
     /// `loose_props`.
     pub loose: std::collections::HashSet<u64>,
+    /// Pushes scripts give props (`CAPI_Entity.AddPhysicsImpulseToEntity`),
+    /// to be given once each is loose: the prop, the impulse's size, and
+    /// where (Bevy space) it pushes toward.
+    pub impulses: Vec<(u64, f32, Vec3)>,
 }
 
 impl EntityPlacements {
@@ -4566,6 +4570,16 @@ fn run_story(
                     "CAPI_Entity.StartPhysOnEntity" => {
                         if let Ok(id) = a(0).parse::<u64>() {
                             placements.loose.insert(id);
+                        }
+                    }
+                    // A prop pushed toward an entity (`entity, amplitude,
+                    // toward, ...`: SAM_020's barrels rolled down at the
+                    // player, JAS_200's): set loose and given the push.
+                    "CAPI_Entity.AddPhysicsImpulseToEntity" => {
+                        let toward = a(2).parse::<u64>().ok().and_then(|t| data.position(t)).map(to_bevy);
+                        if let (Ok(id), Ok(amp), Some(toward)) = (a(0).parse::<u64>(), a(1).parse::<f32>(), toward) {
+                            placements.loose.insert(id);
+                            placements.impulses.push((id, amp, toward));
                         }
                     }
                     // An entity resized (`entity, scale`).

@@ -308,7 +308,12 @@ is the story's own:
   its own (its collision's convex hull, else a box of its bounds) and bobs
   up where it lands in water (`loose_props`). A vehicle is a body already.
   A reload lets them go (a prop streamed in again stands where it was
-  placed).
+  placed). `CAPI_Entity.AddPhysicsImpulseToEntity <entity> <amplitude>
+  <toward>` (the `PhysicsImpulse` box: SAM_020's barrel trap rolls two
+  barrels at the player with 3400, JAS_200's B50 pushes with 3500) sets the
+  prop loose and, once it's a body, sends it toward the entity named, a
+  little up, at the amplitude over a 300 kg body (some 11 m/s, at most 20).
+  It had gone unplayed: the barrels stood where they spawned.
 * **The sea moved.** `SetWorldOceanLevel <level> <seconds>` (the
   `OceanLevelModifier` box: DEN_060's vision drains the sea 20 m over
   16 s, B30's restart puts it there at once and B40 back to 100 m) now
