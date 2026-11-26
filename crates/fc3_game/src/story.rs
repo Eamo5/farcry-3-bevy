@@ -478,6 +478,11 @@ impl EntityPlacements {
         self.physics.insert(id, (self.revision, enabled));
     }
 
+    /// Whether a script has turned an entity's physics off.
+    pub fn physics_off(&self, id: u64) -> bool {
+        self.physics.get(&id).is_some_and(|(_, enabled)| !enabled)
+    }
+
     /// An entity a script resized (`CAPI_Entity.SetScale`): its size times
     /// this, from now on.
     fn set_scale(&mut self, id: u64, scale: f32) {
@@ -1005,6 +1010,11 @@ pub struct StoryHost {
     last_step: Option<(u64, String, f32)>,
     /// The step before it (`StoryHost::culprit`).
     prev_step: Option<(u64, String, f32)>,
+    /// A script dealt the player a killing blow (since the last reload), and
+    /// until when the autopilot goes on at once after the reload, without
+    /// stopping to fight.
+    script_killed: bool,
+    hurry_until: f32,
     fatal: Fatal,
     /// Radio towers' panels whose camera flight plays (panel, scene, file):
     /// each is done once its flight is over.
@@ -1063,6 +1073,9 @@ pub struct StoryHost {
     /// Characters a script has on their guard at their posts
     /// (`SetIdleSubState` cautious).
     pub cautious: std::collections::HashSet<u64>,
+    /// Moves scripts play on characters (`CAPI_Pawn.PlayAnimation`: the
+    /// character and the move's path id), for `story_actors`.
+    pub actor_moves: Vec<(u64, String)>,
     /// The armies scripts put their characters in (`CAPI_NPC.SwitchArmy`:
     /// 1 red, 2 grey, 3 neutral), by story id, and the throwable a script
     /// chose for the player (`CAPI_Player.SelectThrowGadget`).
@@ -1368,6 +1381,8 @@ impl StoryHost {
             used: Default::default(),
             last_step: None,
             prev_step: None,
+            script_killed: false,
+            hurry_until: f32::MIN,
             fatal: fatal_learned(),
             tower_flights: Vec::new(),
             objective_before: None,
@@ -1392,6 +1407,7 @@ impl StoryHost {
             holstered: Default::default(),
             companion_damage: HashMap::new(),
             cautious: Default::default(),
+            actor_moves: Vec::new(),
             armies: Default::default(),
             throw_choice: None,
             called_from: Default::default(),
@@ -2571,6 +2587,21 @@ fn run_story(
             host.holstered.clear();
             host.companion_damage.clear();
             host.cautious.clear();
+            host.actor_moves.clear();
+            // (A step of the life before isn't one of this life's: a
+            // scripted kill soon after the reload was put down to a trigger
+            // stepped into before it, JAS_020's jump at the escape's end,
+            // and the escape could never end.)
+            host.last_step = None;
+            host.prev_step = None;
+            // (Killed by a script soon after the last reload: on at once
+            // this time, without stopping to fight. JAS_020's escape shoots
+            // one who lingers 2 s by the camp, and the autopilot, set down
+            // there, turned on the henchman by it each time.)
+            if std::mem::take(&mut host.script_killed) {
+                host.hurry_until = now + HURRY_FOR;
+                info!("story autopilot: killed by a script last time; on at once for {HURRY_FOR} s");
+            }
             // (What the autopilot did since is to do again, but for what
             // failed the mission: JAS_020 B15's guard, lured off before the
             // reload, was never lured again.)
@@ -2989,6 +3020,8 @@ fn run_story(
     let autopilot_delay = std::env::var("FC3_STORY_AUTOPILOT_DELAY").ok()
         .and_then(|s| s.parse::<f32>().ok()).filter(|s| s.is_finite())
         .unwrap_or(6.0).max(0.5);
+    // (On at once after a reload that followed a scripted kill.)
+    let autopilot_delay = if now < host.hurry_until { 0.5 } else { autopilot_delay };
     // (At the wheel, the autopilot drives into the boxes scripts wait on.)
     let at_wheel = p.driving && vehicle_views.iter().any(|(e, v, _, _)| driving.vehicle == Some(e) && v.is_driver_seat(driving.seat));
     // (Hurt by a script just now, as a player would it gets out without
@@ -3264,18 +3297,25 @@ fn run_story(
         // (Long stuck with only a trigger of the mission's own it learned to
         // leave alone: that one again. A death an earlier run put down to
         // HUR_050_B90C's "Go speak to Hurk" kept the campaign there for good.)
+        // (A death volume, by its name, last: BAM_040's elevator, learned
+        // to leave alone in a run long gone, waited behind the shaft's
+        // death volume, which was tried first and killed the player.)
+        let deadly = |id: u64| data.name_of(id).is_some_and(|n| n.to_ascii_lowercase().contains("death"));
         let next = next.or_else(|| {
-            focused.iter().find(|w| {
-                host.quiet > FATAL_RETRY_AFTER
-                    && !awaiting_rock
-                    && !vines.autopilot_climbing()
-                    && !leading
-                    && near_companion(w.2)
-                    && w.3
-                    && !host.used.contains(&(w.0, w.1.clone()))
-                    && host.fatal.contains(&(w.0, w.1.clone()))
-                    && (!p.driving || matches!(w.1.as_str(), "Enter" | "EnterFOV"))
-            })
+            focused
+                .iter()
+                .filter(|w| {
+                    host.quiet > FATAL_RETRY_AFTER
+                        && !awaiting_rock
+                        && !vines.autopilot_climbing()
+                        && !leading
+                        && near_companion(w.2)
+                        && w.3
+                        && !host.used.contains(&(w.0, w.1.clone()))
+                        && host.fatal.contains(&(w.0, w.1.clone()))
+                        && (!p.driving || matches!(w.1.as_str(), "Enter" | "EnterFOV"))
+                })
+                .min_by_key(|w| deadly(w.0))
         });
         // (In the stall report: the triggers it may step into and what holds
         // each back.)
@@ -3954,6 +3994,7 @@ fn run_story(
                             // (Some kill a while on: JAS_020's escape shoots
                             // one who lingers 2 s by the camp.)
                             if pawn == fc3_story::PLAYER && amount >= KILLING_BLOW {
+                                host.script_killed = true;
                                 if let Some((id, event, _)) = host.culprit(now, SCRIPT_KILL_WITHIN) {
                                     info!("story autopilot: {event} {} killed the player; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
                                     learn_fatal(&mut host.fatal, id, event, None);
@@ -4692,6 +4733,26 @@ fn run_story(
                             .map(|(_, g)| g);
                         if let Some(g) = gesture {
                             fp.gesture = Some(g);
+                        }
+                    }
+                    // A move on a character (`pawn, move's path id, layer,
+                    // ...`: JAS_030's first struggle's pirate after it, a
+                    // warrior's guard loop, Riley after her torture).
+                    "CAPI_Pawn.PlayAnimation" => {
+                        if let Ok(pawn) = a(0).parse::<u64>() {
+                            host.actor_moves.push((pawn, a(1)));
+                        }
+                    }
+                    // A character set at an anchor (`pawn, anchor`), for the
+                    // move he plays there.
+                    "CAPI_Pawn.AttachAnchor" => {
+                        let anchor = a(1).parse::<u64>().ok().and_then(|id| data.entities.get(&id)).map(|e| Transform {
+                            translation: to_bevy(e.pos),
+                            rotation: Quat::from_array(fc3_formats::world::angles_to_bevy_quat(e.angles)),
+                            scale: Vec3::ONE,
+                        });
+                        if let (Ok(pawn), Some(at)) = (a(0).parse::<u64>(), anchor) {
+                            placements.place(pawn, at);
                         }
                     }
                     // The player turned to look at an entity.
@@ -5457,10 +5518,30 @@ const NEAR_AGAIN: f32 = 20.0;
 /// autopilot's focus beside the missions running.
 const BRIEF_NEAR: f32 = 20.0;
 
+/// How long (s) after a reload that followed a scripted kill the autopilot
+/// goes on at once, without stopping to fight.
+const HURRY_FOR: f32 = 10.0;
+
 /// A man set behind for a takedown this many times within this long (s)
 /// won't hold still, and is left a while.
 const CHASE_MOST: u32 = 4;
 const CHASE_WINDOW: f32 = 3.0;
+
+/// One more time the player is set by a man (`chased`: the man, since when,
+/// how often): whether that's `CHASE_MOST` within `CHASE_WINDOW` (then the
+/// count starts over).
+fn chase_trips(chased: &mut (u64, f32, u32), id: u64, now: f32) -> bool {
+    if chased.0 == id && now - chased.1 < CHASE_WINDOW {
+        chased.2 += 1;
+        if chased.2 >= CHASE_MOST {
+            *chased = (0, 0.0, 0);
+            return true;
+        }
+    } else {
+        *chased = (id, now, 1);
+    }
+    false
+}
 
 /// How long (s) the autopilot's trigger step waits on the player being set
 /// down after a step before going on regardless.
@@ -6537,6 +6618,10 @@ fn autopilot_loot(
     if health.dead || player.spawning || (player.driving && !player.armed_passenger) || landing_awaited(&host, &player, &at, &heights) {
         return;
     }
+    // (Not stopping to fight while hurrying on after a scripted kill.)
+    if time.elapsed_secs() < host.hurry_until {
+        return;
+    }
     if host.reload_at.is_some() {
         return;
     }
@@ -7201,6 +7286,17 @@ fn autopilot_loot(
                     *shooting = None;
                     return;
                 }
+                // (Nor one set beside again and again, out of reach still:
+                // JAS_030's helicopter crew over the jungle, gone after with
+                // the machete, had the player set under one every frame for
+                // five minutes.)
+                if chase_trips(&mut chased, actor.id, now) {
+                    info!("story autopilot: {} out of the machete's reach; another for a while", actor.id);
+                    skipped.insert(actor.id, now + 20.0);
+                    *shooting = None;
+                    *last = None;
+                    return;
+                }
                 if *last != Some((actor.id, "machete")) {
                     info!("story autopilot: dry; the machete for {}", actor.id);
                     *last = Some((actor.id, "machete"));
@@ -7463,17 +7559,11 @@ fn autopilot_loot(
             // carried along, a helicopter's crew in the air over HUR_040's
             // beach, had the player set behind him every frame till he fell
             // to his death. Another for a while.)
-            if chased.0 == actor.id && now - chased.1 < CHASE_WINDOW {
-                chased.2 += 1;
-                if chased.2 >= CHASE_MOST {
-                    info!("story autopilot: {} won't hold still; another for a while", actor.id);
-                    skipped.insert(actor.id, now + 20.0);
-                    *chased = (0, 0.0, 0);
-                    *last = None;
-                    return;
-                }
-            } else {
-                *chased = (actor.id, now, 1);
+            if chase_trips(&mut chased, actor.id, now) {
+                info!("story autopilot: {} won't hold still; another for a while", actor.id);
+                skipped.insert(actor.id, now + 20.0);
+                *last = None;
+                return;
             }
             let mut feet = behind;
             let his_feet = nt.translation.y - crate::player::HALF_HEIGHT;

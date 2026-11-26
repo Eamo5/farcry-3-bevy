@@ -3766,6 +3766,35 @@ in order. One spot on the shelf after the first ladder, a
 steep crease at (-1987, -2456), can wedge the capsule; the route keeps to x
 -1986 there.
 
+## JAS_020's escape and JAS_030's first struggle
+
+* **Moves on characters.** `CAPI_Pawn.PlayAnimation <pawn> <move's path id>`
+  on anyone but the player (16 calls: a warrior's guard loop, a drinker,
+  Riley leaving her torture, JAS_030's pirate after the struggle) now plays
+  the move's third-person clip (`MoveTable`, by `fc3_domino::path_id` of the
+  move's name) as the character's idle (`story_actors::play_actor_moves`),
+  and `CAPI_Pawn.AttachAnchor <pawn> <anchor>` sets him at the anchor
+  entity first. A fighter whose physics the script turned off before the
+  move is out of the fight, the move his end: B12's pirate, the player's
+  knife in him after the struggle (`Ex_PostStruggle_NPC`), plays it once as
+  he dies. He had got up and fought on, bullets passing through him.
+* **What a pawn drops.** A story pawn whose `CPawn`'s `DropInfos` drop
+  nothing (`bDropPrimary` 0: the `NoDrops` pirates of the escape and the
+  struggle) keeps his gun as he dies (`npc::KeepsWeapon`); the first
+  struggle had left the player an AK-74M by the body.
+* **Shot by the escape, on at once.** The escape kills a player who lingers
+  2 s in the trigger by the camp (a `HealthModifier` blow), and after each
+  reload the autopilot, set down there, turned on the henchman by it and
+  was shot again. A scripted killing blow now has the autopilot go on at
+  once after the reload, for 10 s, without stopping to fight (`HURRY_FOR`),
+  and a reload forgets the steps of the life before (a death soon after was
+  put down to the jump at the escape's end, and the escape could never
+  end). The escape now completes on the first reload.
+* **Out of the machete's reach.** With no rounds left, the autopilot set
+  the player under one of JAS_030's helicopter crew every frame for five
+  minutes, the machete never in reach. One set by four times in 3 s is
+  left 20 s, for the machete as for a takedown (`chase_trips`).
+
 ## DEN_020: the radio operators (B10)
 
 B10 sends the player after three patrolling radio operators
@@ -4792,6 +4821,11 @@ there checkpoint after checkpoint for an hour:
   though not the editor's own numbering (`ProximityTrigger_31`)
   (`fatal_namesakes`). With the path left alone it went to the way out
   (`MB07_finished`), and BAM_040 completed.
+* **The elevator.** A later run had B55's elevator triggers (`elevator`,
+  `dialog_elevator`) learned to leave alone, with the shaft's death volume
+  (`ProximityTrigger_b55_deathVolume01`, 40 m square under them), and the
+  retry of such a trigger after 150 s quiet took the death volume first.
+  A trigger named as a death volume is tried last of those now.
 * **Hot water.** BAM_055's tomb has pools that scald whoever stands in
   them (`SHA_Fire_DangerZone`, `BAM_055_B20_DangerZone`), and the
   autopilot stepped into them one after another. A hazard's graph

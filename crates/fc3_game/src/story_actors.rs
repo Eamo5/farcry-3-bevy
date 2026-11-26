@@ -53,7 +53,7 @@ impl Plugin for StoryActorsPlugin {
             .init_resource::<CalledIn>()
             .init_resource::<Startled>()
             .init_resource::<MetaCharacters>()
-            .add_systems(Update, (startle, dress_meta_characters, simple_animation_idles).run_if(in_state(crate::menu::GameState::Playing)))
+            .add_systems(Update, (startle, dress_meta_characters, simple_animation_idles, play_actor_moves).chain().run_if(in_state(crate::menu::GameState::Playing)))
             .add_systems(
                 Update,
                 (
@@ -188,6 +188,78 @@ fn simple_animation_idles(
         set.clips.insert(AnimKind::Idle, server.load(crate::cache_assets::cache_path(&fc3_formats::cache::anim_rel(&animation))));
         rig.set_clips(std::sync::Arc::new(set));
     }
+}
+
+/// Moves scripts play on characters (`CAPI_Pawn.PlayAnimation`, the move by
+/// its name's path id): the move's third-person clip loops for the
+/// character's idle. A fighter whose physics the script has turned off
+/// first is out of the fight, the move his end: JAS_030's first struggle's
+/// pirate, set at its anchor after the struggle with the player's knife in
+/// him, plays it once as he dies (rather than getting up to fight on,
+/// bullets passing through him). One not in the world yet is waited for a
+/// while.
+#[allow(clippy::too_many_arguments)]
+fn play_actor_moves(
+    host: Option<NonSendMut<StoryHost>>,
+    time: Res<Time>,
+    table: Res<crate::qte::MoveTable>,
+    server: Res<AssetServer>,
+    placements: Res<crate::story::EntityPlacements>,
+    actors: Query<(Entity, &StoryActor, Has<crate::npc::Npc>)>,
+    mut rigs: Query<&mut crate::characters::CharacterRig>,
+    mut pending: Local<Vec<(u64, String, f32)>>,
+    mut commands: Commands,
+    mut damage: MessageWriter<crate::combat::DamageEvent>,
+) {
+    let Some(mut host) = host else { return };
+    let now = time.elapsed_secs();
+    pending.extend(std::mem::take(&mut host.actor_moves).into_iter().map(|(pawn, id)| (pawn, id, now)));
+    if pending.is_empty() {
+        return;
+    }
+    pending.retain(|(pawn, id, since)| {
+        let Some((e, mut rig, fighter, dead)) =
+            actors.iter().find(|(_, a, _)| a.id == *pawn).and_then(|(e, a, f)| Some((e, rigs.get_mut(a.rig?).ok()?, f, a.dead)))
+        else {
+            return now - since < 10.0;
+        };
+        let Some((name, states)) = table.0.iter().find(|(name, _)| fc3_domino::path_id(name) == *id) else {
+            debug!("story actor {pawn}: move {id} unknown");
+            return false;
+        };
+        // (Its third-person clip: not a first-person or multiplayer one.)
+        let third = states.iter().map(|(_, c)| c).find(|c| {
+            let f = c.rsplit('\\').next().unwrap_or(c).to_ascii_lowercase();
+            !f.starts_with("1st") && !f.starts_with("mul")
+        });
+        let Some(clip) = third else {
+            debug!("story actor {pawn}: move {name} has no clip of its own");
+            return false;
+        };
+        let ending = fighter && !dead && placements.physics_off(*pawn);
+        info!("story actor {pawn}: plays {name}{}", if ending { " as his end" } else { "" });
+        let handle = server.load(crate::cache_assets::cache_path(&fc3_formats::cache::anim_rel(clip)));
+        let mut set = crate::characters::ClipSet::clone(rig.clips());
+        set.clips.insert(AnimKind::Idle, handle.clone());
+        set.clips.insert(AnimKind::Death, handle);
+        rig.set_clips(std::sync::Arc::new(set));
+        // (Not its own simple animation over it.)
+        commands.entity(e).insert(OwnLoop);
+        if ending {
+            // (A blade's death, which keeps the clip given, by no one: no
+            // kill to the player's name.)
+            damage.write(crate::combat::DamageEvent {
+                target: e,
+                amount: 1.0e6,
+                kind: crate::combat::DamageKind::Melee,
+                source: None,
+                instigator: None,
+                headshot: false,
+                hit: crate::combat::Hit::Whole,
+            });
+        }
+        false
+    });
 }
 
 /// How near (m) a shot's impact startles one who doesn't fight, a blast's,
@@ -914,6 +986,12 @@ fn spawn_actors(
             commands.entity(root).insert(npc);
             if f.scripted {
                 commands.entity(root).insert(crate::npc::Scripted);
+            }
+            // (One whose pawn drops nothing as he dies: the "NoDrops"
+            // pirates, JAS_020's escape's and JAS_030's first struggle's.)
+            let drops = e.component("CPawn").and_then(|c| c.child("DropInfos")).and_then(|d| d.bool("bDropPrimary"));
+            if drops == Some(false) {
+                commands.entity(root).insert(crate::npc::KeepsWeapon);
             }
         }
         if field.is_some() {

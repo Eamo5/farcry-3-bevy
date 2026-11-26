@@ -3431,7 +3431,7 @@ fn react_to_death(
     mut died: MessageReader<Died>,
     mut director: ResMut<NpcDirector>,
     mut commands: Commands,
-    npcs: Query<(&Npc, &Transform)>,
+    npcs: Query<(&Npc, &Transform, Has<KeepsWeapon>)>,
     players: Query<Entity, With<Player>>,
     mut rng: ResMut<Rng>,
     mut anims: Query<&mut AnimRequest>,
@@ -3447,7 +3447,7 @@ fn react_to_death(
     // The blow that killed each (its origin and whether it was to the head).
     let blows: std::collections::HashMap<Entity, (Option<Vec3>, bool, DamageKind)> = hits.read().map(|h| (h.target, (h.source, h.headshot, h.kind))).collect();
     for d in died.read() {
-        let Ok((npc, t)) = npcs.get(d.entity) else { continue };
+        let Ok((npc, t, keeps_weapon)) = npcs.get(d.entity) else { continue };
         // A death that fits: running, walking, standing or down in cover; shot
         // in the head, body or legs; from the front, back or a side. (Takedowns
         // and burning keep their own.)
@@ -3481,7 +3481,7 @@ fn react_to_death(
         }
         // His gun falls from his hand, by his feet (a flamer's goes up with
         // his tank).
-        if let Some(gun) = crate::pickups::carried_weapon(npc.faction, npc.role).filter(|_| npc.role != Role::Flamer) {
+        if let Some(gun) = crate::pickups::carried_weapon(npc.faction, npc.role).filter(|_| npc.role != Role::Flamer && !keeps_weapon) {
             let feet = t.translation - Vec3::Y * crate::player::HALF_HEIGHT + side * 0.7;
             crate::pickups::drop_weapon(&mut commands, gun, feet, rng.range(0.0, std::f32::consts::TAU));
             if let Some(r) = npc.rig.and_then(|r| rigs.get(r).ok()) {
@@ -3594,6 +3594,11 @@ fn ledge_falls(
 /// Marks an NPC that takes no AI decisions (debug poses).
 #[derive(Component)]
 pub struct Frozen;
+
+/// Marks an NPC whose gun doesn't fall from his hand as he dies (his pawn's
+/// `DropInfos` drop nothing).
+#[derive(Component)]
+pub struct KeepsWeapon;
 
 fn npc_test_spawn(
     args: Res<crate::Args>,
