@@ -3251,7 +3251,19 @@ fn run_story(
         } else if let Some((id, at)) = destructible {
             info!("story autopilot: breaking {}", data.name_of(id).unwrap_or("?"));
             host.used.insert((id, "destroy".into()));
-            teleport(&mut t, &mut p, at, 0.0);
+            // (From well off, on ground about as high, as one shoots it: put
+            // on it or beside it, under BAM_040's falling stone covers, the
+            // stone's death trigger killed him as it came down.)
+            let base = to_bevy(at);
+            let toward = (t.translation - base).with_y(0.0).normalize_or(Vec3::X);
+            let off = (0..8)
+                .flat_map(|k| [14.0f32, 18.0, 10.0].map(|r| base + Quat::from_rotation_y(k as f32 * std::f32::consts::FRAC_PI_4) * toward * r))
+                .find_map(|s| {
+                    let [x, y, _] = to_dunia(s);
+                    let g = ground_under(&spatial, &heights, x, y, at[2] + 3.0)?;
+                    ((g - at[2]).abs() < 3.0).then_some([x, y, g])
+                });
+            teleport(&mut t, &mut p, off.unwrap_or(at), 0.0);
             breaks.break_now(id);
             host.reset_quiet();
         } else if let Some((id, event, point, _)) = next {

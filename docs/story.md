@@ -6150,6 +6150,13 @@ to SQC_080, each a brief at its giver then its blocks):
   while it turns his view to something, and pops it after; it had gone
   unplayed, and he could walk off mid-turn. While one is pushed he now
   stands still (`ScriptedPlayer::observers`).
+* **Out from under the stone.** BAM_040's breakable pillars hold up falling
+  stone covers (`Prefab_FallingStoneCover`): broken, the stone comes down
+  and kills whoever is in its death trigger. The autopilot broke each one a
+  script watched for from right beside it, and died under it every time,
+  learning the bridge assault fatal. It now breaks such a thing from well
+  off (10 to 18 m, on ground about as high), as a player shoots it; BAM_040
+  went on past the bridge.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.
