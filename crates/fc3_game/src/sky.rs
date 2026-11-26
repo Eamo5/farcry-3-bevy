@@ -41,7 +41,14 @@ fn indoors(
     cams: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
     players: Query<Entity, With<crate::player::Player>>,
     mut indoors: ResMut<Indoors>,
+    probes: Option<Res<crate::probes::ProbesLive>>,
 ) {
+    // (Left to the game's own light probes and eye where they light the
+    // shade: `probes`.)
+    if probes.is_some_and(|p| p.0) {
+        indoors.0 += (0.0 - indoors.0) * (time.delta_secs() * 2.5).min(1.0);
+        return;
+    }
     let Ok(cam) = cams.single() else { return };
     let eye = cam.translation();
     let filter = avian3d::prelude::SpatialQueryFilter::from_excluded_entities(players.iter());

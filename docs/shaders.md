@@ -1008,6 +1008,11 @@ game's, where the environment map lit everything as if under open sky, and
 the undersides of things take the ground's bounce (warm, and weak off the
 black volcanic sand) instead of a dimmed horizon. `FC3_PROBES=0` leaves them
 out; `FC3_PROBE_DEBUG` logs the probe nearest the camera as it is relit.
+While the volume lights the shade the shelter overhead's stand-in
+(`sky::Indoors`: rays up and round from the eye, which dimmed and warmed the
+sky's light and opened the exposure up under a roof) is left out: the
+probes darken the shelter and the eye adapts to it, and the landscape seen
+from a doorway is no longer dimmed with the room.
 
 Not yet: the interior volumes (`CInteriorVolumeComponent`) that give a room
 a probe of its own; the top-down sky occlusion the game uses past the

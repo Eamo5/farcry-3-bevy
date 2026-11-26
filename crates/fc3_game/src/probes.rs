@@ -37,9 +37,15 @@ pub struct ProbesPlugin;
 
 impl Plugin for ProbesPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ProbeField>().add_systems(PostUpdate, (stream_probes, relight, rebuild).chain());
+        app.init_resource::<ProbeField>().init_resource::<ProbesLive>().add_systems(PostUpdate, (stream_probes, relight, rebuild).chain());
     }
 }
+
+/// Whether the probes' volume lights the shade about the camera: then the
+/// shelter overhead's stand-ins (`sky::Indoors`: the sky's light dimmed and
+/// warmed, the exposure opened) are left to the probes and the eye.
+#[derive(Resource, Default)]
+pub struct ProbesLive(pub bool);
 
 /// The voxels along x, y (up) and z.
 const RES: [usize; 3] = [48, 12, 48];
@@ -350,7 +356,11 @@ fn rebuild(
     cams: Query<(&GlobalTransform, Option<&bevy::light::GeneratedEnvironmentMapLight>), With<PlayerCamera>>,
     indoors: Res<crate::sky::Indoors>,
     mut volumes: Query<(&mut Transform, &mut IrradianceVolume)>,
+    mut live: ResMut<ProbesLive>,
 ) {
+    if live.0 != field.volume.is_some() {
+        live.0 = field.volume.is_some();
+    }
     let Ok((cam, env_light)) = cams.single() else { return };
     // The finished build, put in place.
     if let Some(mut task) = field.task.take() {
