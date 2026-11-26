@@ -963,6 +963,56 @@ scripted walk. `FC3_BURST=<dir>,<seconds>[,<step>]` captures 24 frames 40 ms
 (or `step` seconds) apart from that long after start (real time), for what
 lasts a moment.
 
+## Light probes (`fc3_game/src/probes.rs`)
+
+The game's ambient light comes from its light probes, "Deferred Radiance
+Transfer Volumes" (Gilabert and Stefanov, GDC 2012). Each sector's
+`lightprobes_<sector>` entity has a `CLightProbesComponent` with about seventy
+probes, laid every 8 m over the ground and over the trees' bounds
+(`fc3_formats::light_probes`). Each probe stores, as 16-bit fixed point
+(1.0 = 256), a 4 × 4 transfer matrix per colour channel and the sky's
+visibility in four basis directions: three tilted 35 degrees up, a third of a
+turn apart, and one straight down (its visibility always 0). A matrix row is a
+second-order spherical harmonic (L00, then L1 along Dunia y, z and x) that,
+dotted with the sun's or the sky's own harmonic, gives the light bounced to
+the probe from that side. Open sky reads 1619 (2π of solid angle). Read
+statistically over 27,000 probes this layout holds: the down direction's
+transfer is four times the others' and its z term (light from above) the
+largest, and each upward direction's x and y terms lean away from where it
+faces, as light reaching the surfaces it sees must. The matrices' green is
+the strongest on average (the jungle) and blue the weakest. The 12 values of
+"static irradiance" between are 0 in the shipped world, and the 32 × 32 × 4
+`grid` (each cell the index of the nearest probe) isn't needed. The converter
+writes each sector's probes to `probes/<sector>.bin`.
+
+At run time (`probes.rs`) the probes of the 5 × 5 sectors about the camera
+are relit as the hour, the weather and the light change: the sun's bounce
+(its light as a harmonic, times the presets' probe scale and multiplier) and
+the sky's (its colours as they light the open, `sky_probe::sky_colour`,
+above the horizon only) through each basis direction's transfer. A volume of
+48 × 12 × 48 voxels of 3 m follows the camera (the game's is 96 × 96 × 16).
+Each voxel takes from the probes within 10 m, the nearest the most, the light
+on each of its six sides: the sky's light from above (as the environment map
+gives it in the open) times how much sky the probes see that way, plus the
+bounce, the basis directions weighed by the game's own ambient weights
+(`max(n·b, 0)²` for the three upward, `n·b / 2 + 1/2` for the down one).
+Where no probe is near (in the air) a voxel takes the environment map's light.
+The volume is built off the main thread whenever the camera moves a voxel or
+the probes are relit, and Bevy shades with it as an irradiance volume
+(ambient cubes) in place of the sky's environment map. Bevy took a view's
+diffuse indirect light from its irradiance volumes alone once it had any, so
+what lay beyond the volume went unlit; the vendored `bevy_pbr` lets the
+environment map light what the volume leaves, across its edge too
+(`vendor/README.md`). So shade under trees and roofs is shade, as the
+game's, where the environment map lit everything as if under open sky, and
+the undersides of things take the ground's bounce (warm, and weak off the
+black volcanic sand) instead of a dimmed horizon. `FC3_PROBES=0` leaves them
+out; `FC3_PROBE_DEBUG` logs the probe nearest the camera as it is relit.
+
+Not yet: the interior volumes (`CInteriorVolumeComponent`) that give a room
+a probe of its own; the top-down sky occlusion the game uses past the
+volume; the PC's local radiance transfer from the dynamic lights.
+
 ## Post-effects (`fc3_game/src/post_effects.rs`)
 
 The game's screen effects are sequences in `cinema_postfx.xml` (305 of them),

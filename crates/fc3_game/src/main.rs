@@ -98,6 +98,7 @@ mod setup;
 mod shadow_lod;
 mod sky;
 mod sky_probe;
+mod probes;
 mod sound;
 mod sound_source;
 mod splines;
@@ -446,6 +447,7 @@ fn main() {
         ))
         .add_plugins((
             grade::GradePlugin,
+            probes::ProbesPlugin,
             dof::DofPlugin,
             bloom::GameBloomPlugin,
             upload_budget::UploadBudgetPlugin,

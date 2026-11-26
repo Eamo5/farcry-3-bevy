@@ -2213,6 +2213,18 @@ fn main() -> Result<()> {
                     let mut out = String::new();
                     fc3_formats::fcb::dump(&e, &names, 64, &mut out);
                     println!("== {name}\n{out}");
+                    // FC3_DUMP_RAW=<dir>: its long fields written whole, a
+                    // file each (<entity>_<field>.bin), to look into.
+                    if let Some(dir) = std::env::var_os("FC3_DUMP_RAW") {
+                        let dir = std::path::PathBuf::from(dir);
+                        std::fs::create_dir_all(&dir)?;
+                        let entity = e.str("hidName").unwrap_or_default().replace(['/', '\\', ':'], "_");
+                        e.walk(&mut |o, _| {
+                            for (h, v) in o.fields.iter().filter(|(_, v)| v.len() > 24) {
+                                let _ = std::fs::write(dir.join(format!("{entity}_{}.bin", names.get(*h))), v);
+                            }
+                        });
+                    }
                     n += 1;
                     if n >= max {
                         break 'files;

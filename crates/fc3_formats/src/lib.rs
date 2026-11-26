@@ -39,6 +39,7 @@ pub mod material;
 pub mod menu_views;
 pub mod original;
 pub mod lights;
+pub mod light_probes;
 pub mod outposts;
 pub mod nav;
 pub mod oasis;

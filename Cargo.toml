@@ -22,6 +22,9 @@ flate2 = "1"
 # Bevy's mesh crate with a streaming fix (see vendor/README.md).
 [patch.crates-io]
 bevy_mesh = { path = "vendor/bevy_mesh" }
+# Bevy's PBR crate letting the environment map light what irradiance volumes
+# leave (see vendor/README.md).
+bevy_pbr = { path = "vendor/bevy_pbr" }
 
 # Ruffle's AGAL shader compiler at naga 29, to match the vendored renderer,
 # its playerglobal builder reading a pre-built ABC instead of running Java,

@@ -96,48 +96,21 @@ fn update_probe(
     }
     probe.drawn = Some(now);
     let Some(mut image) = images.get_mut(&probe.image) else { return };
-    // With the game's grade, as bright as the game's probes make it.
+    image.data = Some(draw(e, tod.hours / 24.0, tod.sun_dir(), storm, indoors.0, sky_to_luminance(&scene, &weather)));
+}
+
+/// What the sky's colours (linear) are multiplied by for the light they give,
+/// in cd/m² before the camera's exposure: with the game's grade, as bright as
+/// the game's probes make it.
+pub(crate) fn sky_to_luminance(scene: &crate::sky::SceneExposure, weather: &Weather) -> f32 {
+    let ev100 = scene.ev100 - weather.exposure_shift();
     let gain = std::env::var("FC3_SKY_PROBE_GAIN").ok().and_then(|v| v.parse().ok()).or(scene.sky_light_factor()).unwrap_or(GAIN);
-    image.data = Some(draw(e, tod.hours / 24.0, tod.sun_dir(), storm, indoors.0, gain / exposure_scale(ev100)));
+    gain / exposure_scale(ev100)
 }
 
 /// The cubemap's texels (faces +X, -X, +Y, -Y, +Z, -Z), in cd/m².
 fn draw(env: &Environment, t: f32, sun: Vec3, storm: f32, inside: f32, to_luminance: f32) -> Vec<u8> {
-    // The two gradients sampled once along their length, as light: the
-    // colours as picked (linear), not pushed through the inverse tone
-    // mapping the visible dome uses, which oversaturates them for lighting.
-    const STEPS: usize = 16;
-    let side = |k: &fc3_formats::environment::KeyedGradient| -> [Vec3; STEPS] {
-        std::array::from_fn(|i| {
-            let c = k.at(t, i as f32 / (STEPS - 1) as f32);
-            Color::srgb(c[0], c[1], c[2]).to_linear().to_vec3()
-        })
-    };
-    let (near, far) = (side(&env.sky_sun_side), side(&env.sky_far_side));
-    // The sky's light is less saturated than the sky (the presets' sky
-    // light saturation: 0.65 by day, 1 at night).
-    let saturation = env.sky_saturation.0.is_empty().then_some(1.0).unwrap_or_else(|| env.sky_saturation.at(t));
-    let toward = Vec2::new(sun.x, sun.z).normalize_or(Vec2::X);
-    let colour = |dir: Vec3| -> Vec3 {
-        // As the cloud dome draws it (`dome` in `clouds.wgsl`).
-        let elevation = dir.y.clamp(-1.0, 1.0).asin();
-        let p = (1.0 - elevation.max(0.0) / std::f32::consts::FRAC_PI_2).clamp(0.0, 1.0) * (STEPS - 1) as f32;
-        let (i, f) = (p.floor() as usize, p.fract());
-        let j = (i + 1).min(STEPS - 1);
-        let bearing = Vec2::new(dir.x, dir.z).normalize_or(Vec2::X);
-        let mix = bearing.dot(toward) * 0.5 + 0.5;
-        let c = far[i].lerp(far[j], f).lerp(near[i].lerp(near[j], f), mix);
-        let grey = c.dot(Vec3::new(0.2126, 0.7152, 0.0722));
-        let c = Vec3::splat(grey).lerp(c, saturation).lerp(Vec3::splat(grey * 0.55), storm);
-        // Under a roof, what light gets in is mostly warm bounce off the
-        // ground (as the ambient light, `clouds::weather_light`).
-        let c = c.lerp(Vec3::new(1.0, 0.86, 0.7) * grey, inside * 0.8);
-        if dir.y < 0.0 {
-            c * GROUND
-        } else {
-            c
-        }
-    };
+    let colour = sky_colour(env, t, sun, storm, inside);
     let mut out = Vec::with_capacity((SIZE * SIZE * 6 * 8) as usize);
     for face in 0..6 {
         for y in 0..SIZE {
@@ -162,4 +135,45 @@ fn draw(env: &Environment, t: f32, sun: Vec3, storm: f32, inside: f32, to_lumina
         }
     }
     out
+}
+
+/// The sky's colour (linear, before `sky_to_luminance`) the way it lights the
+/// scene, by direction (Bevy space): the dome's gradients, less saturated, a
+/// dimmed horizon colour standing for the ground below it.
+pub(crate) fn sky_colour(env: &Environment, t: f32, sun: Vec3, storm: f32, inside: f32) -> impl Fn(Vec3) -> Vec3 {
+    // The two gradients sampled once along their length, as light: the
+    // colours as picked (linear), not pushed through the inverse tone
+    // mapping the visible dome uses, which oversaturates them for lighting.
+    const STEPS: usize = 16;
+    let side = |k: &fc3_formats::environment::KeyedGradient| -> [Vec3; STEPS] {
+        std::array::from_fn(|i| {
+            let c = k.at(t, i as f32 / (STEPS - 1) as f32);
+            Color::srgb(c[0], c[1], c[2]).to_linear().to_vec3()
+        })
+    };
+    let (near, far) = (side(&env.sky_sun_side), side(&env.sky_far_side));
+    // The sky's light is less saturated than the sky (the presets' sky
+    // light saturation: 0.65 by day, 1 at night).
+    let saturation = env.sky_saturation.0.is_empty().then_some(1.0).unwrap_or_else(|| env.sky_saturation.at(t));
+    let toward = Vec2::new(sun.x, sun.z).normalize_or(Vec2::X);
+    move |dir: Vec3| -> Vec3 {
+        // As the cloud dome draws it (`dome` in `clouds.wgsl`).
+        let elevation = dir.y.clamp(-1.0, 1.0).asin();
+        let p = (1.0 - elevation.max(0.0) / std::f32::consts::FRAC_PI_2).clamp(0.0, 1.0) * (STEPS - 1) as f32;
+        let (i, f) = (p.floor() as usize, p.fract());
+        let j = (i + 1).min(STEPS - 1);
+        let bearing = Vec2::new(dir.x, dir.z).normalize_or(Vec2::X);
+        let mix = bearing.dot(toward) * 0.5 + 0.5;
+        let c = far[i].lerp(far[j], f).lerp(near[i].lerp(near[j], f), mix);
+        let grey = c.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+        let c = Vec3::splat(grey).lerp(c, saturation).lerp(Vec3::splat(grey * 0.55), storm);
+        // Under a roof, what light gets in is mostly warm bounce off the
+        // ground (as the ambient light, `clouds::weather_light`).
+        let c = c.lerp(Vec3::new(1.0, 0.86, 0.7) * grey, inside * 0.8);
+        if dir.y < 0.0 {
+            c * GROUND
+        } else {
+            c
+        }
+    }
 }

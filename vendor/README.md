@@ -11,6 +11,17 @@ streamed in. The common attribute sizes (4, 8, 12 and 16 bytes) are copied as
 fixed-size arrays, which inline, rather than with a `memcpy` call per vertex
 and attribute.
 
+`bevy_pbr` is Bevy's 0.19.1 PBR crate (MIT or Apache-2.0, licence files
+alongside) with one change, marked `fc3 patch` in
+`src/light_probe/irradiance_volume.wgsl` and `src/render/pbr_functions.wgsl`:
+`irradiance_volume_light` returns how much the volumes cover the fragment (the
+summed falloff weights, at most 1) beside their light, and the environment
+map's diffuse light makes up the rest. Upstream, once a view has any
+irradiance volume, every fragment of it takes its diffuse indirect light from
+the volumes alone, so whatever lies outside them goes without. The game's
+light probes (`fc3_game::probes`) fill a volume that follows the camera, and
+the sky's environment map lights the land beyond it.
+
 `ruffle_render_wgpu`, `naga-agal` and `naga-pixelbender` are Ruffle's wgpu
 renderer and its AGAL and Pixel Bender shader compilers (MIT or Apache-2.0,
 `LICENSE.md` alongside), from Ruffle at

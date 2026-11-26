@@ -3354,7 +3354,16 @@ fn convert_sector(job: &Job, id: u32, refresh_realtrees: bool, reorder: bool) ->
     if !job.vfs.exists(&path) {
         return Ok(None);
     }
-    let data = fw::parse_sector(&job.vfs.read(&path)?)?;
+    let bytes = job.vfs.read(&path)?;
+    let data = fw::parse_sector(&bytes)?;
+    // Its light probes (an empty file where it has none, not looked for
+    // again).
+    let probes_rel = fc3_formats::light_probes::cache_rel(id);
+    if job.should_write(&probes_rel) {
+        let start = bytes.windows(4).position(|w| w == b"nbCF").unwrap_or(0);
+        let probes = fc3_formats::fcb::parse(&bytes[start..]).map(|root| fc3_formats::light_probes::from_sector(&root)).unwrap_or_default();
+        write_atomic(job.root(), &probes_rel, &fc3_formats::light_probes::to_bytes(&probes), job.ctx)?;
+    }
     let mut s = CachedSector { sector_id: id, ..Default::default() };
     let mut model_index: HashMap<String, u32> = HashMap::new();
     let mut set_index: HashMap<Vec<String>, u32> = HashMap::new();
