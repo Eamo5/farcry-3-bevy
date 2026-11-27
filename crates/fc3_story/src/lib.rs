@@ -3451,6 +3451,31 @@ mod tests {
         assert!(story.watched_loot_filters().is_empty());
     }
 
+    /// A mission bomb's dynamite and remote, spawned from their archetypes
+    /// one after the other, each tell their spawn listener they're in.
+    #[test]
+    fn spawned_entities_tell_their_spawn_listeners() {
+        let mut story = empty_story();
+        story.domino().lua().load(r#"
+            local callbacks = CScriptCallbackSystem_GetInstance()
+            local Bomb = {}
+            function Bomb:IEDLoaded()
+                callbacks:RemoveCallback(self.ied, self.callidIED); self.callidIED = nil; self.iedLoaded = true
+            end
+            function Bomb:RemoteLoaded()
+                callbacks:RemoveCallback(self.remote, self.callidRemote); self.callidRemote = nil; self.remoteLoaded = true
+            end
+            bomb = { _type = Bomb }
+            bomb.ied = SpawnEntityFromArchetype("FC3_Graphics:Singleplayer:Exotic:MissionExplosives:IED_Dynamite_01", 1, 2, 3, 0, 0, 0)
+            bomb.callidIED = callbacks:RegisterOnSpawnCallback(bomb.ied, bomb, "IEDLoaded")
+            bomb.remote = SpawnEntityFromArchetype("weapons:FC3/IED_remote.MissionBombRemote", 1, 2, 3, 0, 0, 0)
+            bomb.callidRemote = callbacks:RegisterOnSpawnCallback(bomb.remote, bomb, "RemoteLoaded")
+        "#).exec().unwrap();
+        story.update(0.1, View::default());
+        let (ied, remote): (bool, bool) = story.domino().lua().load("return bomb.iedLoaded == true, bomb.remoteLoaded == true").eval().unwrap();
+        assert!(ied && remote, "dynamite told {ied}, remote told {remote}");
+    }
+
     #[test]
     fn native_player_queries_follow_host_updates() {
         let mut story = empty_story();

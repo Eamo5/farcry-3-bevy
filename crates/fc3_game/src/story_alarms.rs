@@ -233,6 +233,7 @@ fn autopilot_alarms(
     mut players: Query<(&mut Transform, &mut Player)>,
     mut actions: ResMut<crate::controls::ActionState>,
     mut tries: Local<std::collections::HashMap<u64, u32>>,
+    action_maps: Res<crate::controls::ScriptActionMaps>,
 ) {
     let _slow = crate::story::Slow::new("autopilot_alarms");
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() {
@@ -241,6 +242,11 @@ fn autopilot_alarms(
     let Some(mut host) = host else { return };
     // (Not while tailing a character: he'd see the player go.)
     if host.quiet() < 6.0 || host.autopilot_held() || !host.story.awaits_group_event("Alarm_Disabled") || !host.story.tail_targets().is_empty() {
+        return;
+    }
+    // (Nor while a script holds him where he stands: SAM_015's first bomb
+    // was being planted when he was carried off to the depot's alarm.)
+    if !action_maps.lets("move") {
         return;
     }
     if cinema.view.is_some() || cinema.plays_player() {

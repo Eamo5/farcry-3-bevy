@@ -5722,6 +5722,16 @@ its four key areas, its alarms to be switched off first.
   what the exit step gets out for. The four areas went up, and SAM_015
   and HOY_040 completed.
 
+* **Held while planting.** In a later run the alarm step carried the
+  player off to the depot's alarm while the first bomb was being planted
+  (`MissionBomb` holds him in place, `narrative_interact` pushed, till the
+  charge and its remote are in and he faces the spot), and the bomb's
+  remote never reported in: B20 waited 15 minutes. The alarm step, as the
+  trigger step, takes no step while the map in force takes away moving;
+  from that checkpoint B20 to B50C and SAM_015 completed. A script's
+  errors are logged as warnings now (they had been debug lines only), as
+  one in a box's callback leaves its graph waiting for good.
+
 ## HOY_040: Hoyt's poker table
 
 HOY_040 sits the player at Hoyt's poker table (`CPokerMiniGame_JAS_220_

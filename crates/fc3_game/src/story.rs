@@ -5246,7 +5246,11 @@ fn run_story(
     // (`FC3_STORY_CONSOLE`, tests: the scripts' own console lines too.)
     let console = std::env::var_os("FC3_STORY_CONSOLE").is_some();
     for line in host.story.take_log() {
-        if !line.starts_with("console:") {
+        // (A script's error said aloud: one in a box's callback leaves its
+        // graph waiting for good, as SAM_015's bomb's remote did.)
+        if line.starts_with("script error") {
+            warn!("story: {line}");
+        } else if !line.starts_with("console:") {
             debug!("story: {line}");
         } else if console {
             info!("story {line}");
