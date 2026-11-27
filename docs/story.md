@@ -5087,7 +5087,13 @@ there checkpoint after checkpoint for an hour:
   5 ms on. A failure is put down to going after a vehicle only after 3 s of
   it (doing it no harm, not the chase itself); now its very first step too
   (within 0.5 s, `WRECK_AT_ONCE`), and that vehicle is left alone under the
-  objective.
+  objective. In the fourth line the leave step took the player off the
+  tower ("Left the vantage point.") 23 s after every reload, a dozen times:
+  a failure at the instant of a step that leaves a trigger was passed over
+  for the step before (right for a death, which a leaving can't cause at
+  once). For a mission failed, leaving counts at once as entering and using
+  do (`StoryHost::failure_culprit`); the leave was learned after its first
+  failure and CIT_020 completed.
 
 ## BNG_030 to CIT_020: the cave, the convoy's fire, Willis's tracker
 

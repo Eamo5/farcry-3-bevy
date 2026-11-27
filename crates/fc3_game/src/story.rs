@@ -1246,11 +1246,23 @@ impl StoryHost {
     /// then the walk to the next marker begun as he died, and the mission
     /// stood still for good.)
     fn culprit(&mut self, now: f32, within: f32) -> Option<(u64, String, f32)> {
+        self.culprit_of(now, within, false)
+    }
+
+    /// As `culprit`, for a mission failed: leaving a trigger fails one at
+    /// once (CIT_020 B20's water tower, "Left the vantage point.", left
+    /// again by the leave step 23 s after every reload).
+    fn failure_culprit(&mut self, now: f32, within: f32) -> Option<(u64, String, f32)> {
+        self.culprit_of(now, within, true)
+    }
+
+    fn culprit_of(&mut self, now: f32, within: f32, failed: bool) -> Option<(u64, String, f32)> {
         let last = self.last_step.as_ref()?;
         // (A use acts at once too: JAS_060's Amanaki, used as the map was to
         // be opened, set the player in B40's failing zone, which failed the
         // mission 30 ms on, reload after reload.)
-        if now - last.2 < CULPRIT_AT_ONCE && last.1 != "Enter" && last.1 != "Use" {
+        let at_once = last.1 == "Enter" || last.1 == "Use" || (failed && last.1 == "Leave");
+        if now - last.2 < CULPRIT_AT_ONCE && !at_once {
             if self.prev_step.as_ref().is_some_and(|p| now - p.2 < within + CULPRIT_AT_ONCE) {
                 self.last_step = None;
                 return self.prev_step.take();
@@ -3866,7 +3878,7 @@ fn run_story(
                 }
                 // (A few seconds on too: CIT_060's brief fails one stepped
                 // into its stuck-below region after a 4 s warning.)
-                if let Some((id, event, _)) = host.culprit(now, FAILED_WITHIN) {
+                if let Some((id, event, _)) = host.failure_culprit(now, FAILED_WITHIN) {
                     info!("story autopilot: {event} {} failed the mission; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
                     learn_fatal(&mut host.fatal, id, event, host.objective_before);
                 }
