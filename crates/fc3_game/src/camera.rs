@@ -22,6 +22,32 @@ impl Plugin for ScreenshotPlugin {
         if std::env::var_os("FC3_ASSET_CHURN").is_some() {
             app.add_systems(Last, asset_churn);
         }
+        if std::env::var_os("FC3_HIERARCHY_CHECK").is_some() {
+            app.add_systems(Last, hierarchy_check);
+        }
+    }
+}
+
+/// `FC3_HIERARCHY_CHECK`: the first few entities shown in the world whose
+/// parent isn't (Bevy's B0004, which names no one), with both's components,
+/// so whatever hangs a visible child off a bare entity can be found.
+fn hierarchy_check(world: &mut World, mut told: Local<u32>) {
+    if *told >= 6 {
+        return;
+    }
+    let mut q = world.query_filtered::<(Entity, &ChildOf), With<InheritedVisibility>>();
+    let bad: Vec<(Entity, Entity)> = q
+        .iter(world)
+        .filter(|(_, c)| world.get::<InheritedVisibility>(c.parent()).is_none())
+        .map(|(e, c)| (e, c.parent()))
+        .take(6 - *told as usize)
+        .collect();
+    for (child, parent) in bad {
+        *told += 1;
+        let names = |e: Entity| -> Vec<String> {
+            world.inspect_entity(e).map(|it| it.map(|i| i.name().shortname().to_string()).collect()).unwrap_or_default()
+        };
+        warn!("hierarchy: {child:?} {:?} {:?} under {parent:?} {:?} {:?}", world.get::<Name>(child), names(child), world.get::<Name>(parent), names(parent));
     }
 }
 

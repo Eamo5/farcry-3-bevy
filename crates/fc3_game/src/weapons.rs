@@ -2793,7 +2793,8 @@ fn spawn_view_model_parts(
     let at_front = |p: &Vec3| p.cmpge(mn - Vec3::splat(0.05)).all() && p.cmple(mx + Vec3::splat(0.05)).all() && p.z < mn.z + (mx.z - mn.z) * 0.25;
     let front = Vec3::new((mn.x + mx.x) * 0.5, mn.y + (mx.y - mn.y) * 0.62, mn.z);
     let muzzle = node_pose(model, "FX_FIRE").map(|t| t.translation).filter(at_front).unwrap_or(front);
-    commands.spawn((Muzzle, Transform::from_translation(muzzle), ChildOf(root)));
+    // (Shown with the gun: the flash's light, its child, goes with it.)
+    commands.spawn((Muzzle, Transform::from_translation(muzzle), Visibility::default(), ChildOf(root)));
     v.shown = Some(def_index);
     v.shown_attachments = fitted;
     v.shown_paint = paint;

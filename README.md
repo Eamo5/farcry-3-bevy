@@ -453,6 +453,9 @@ radar and maps look up every second (a 39 ms frame each time).
 Bevy look over every material's entities again for their pipelines (some 3 ms a frame at Badtown,
 where the authored effects' meshes change every frame). The decals' meshes are now built again only
 when a decal comes, goes or fades, or the camera has moved 25 m.
+`FC3_HIERARCHY_CHECK` names the first entities shown in the world whose parent isn't, with both's
+components (Bevy's B0004 warning names neither; with `--features profile` the components have
+names): the gun's muzzle, a bare transform, had the authored muzzle flashes and their lights under it.
 
 ## Debug and test flags
 
