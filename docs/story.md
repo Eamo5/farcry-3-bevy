@@ -4253,6 +4253,19 @@ starts.
   now walks into a door a script waits on (`Story::awaited_doors`): set
   down before its front, facing it, walking forward
   (`doors::autopilot_doors`).
+* **Mid-briefing.** After the shack, Willis's loop plays until his hut's
+  secret door slides; the brief then waits for the door to spawn (it is a
+  sector's, in the world only with Badtown streamed in) to say "Go talk to
+  Willis.". In the fourth line HUR_020's brief was up too: with nothing of
+  WIL_020's to step into, the autopilot went to HUR_020's briefing spot
+  across the island, Badtown streamed out, and after BNG_010 it went back
+  and forth between the doctor's cave and boat through their teleports for
+  half an hour. Two changes: while a briefing is in focus, only its own
+  spots are gone near (until its focus is given up, 4 min); and a mission in
+  focus with nothing of its own left, waiting on something of a sector to
+  spawn, has the player taken within 60 m of it (`Story::awaited_spawns_of`,
+  `SPAWN_WALK_NEAR`). From the JAS_140_B20 checkpoint after, WIL_020's
+  brief and fields went through in four minutes.
 * **Weapons by family.** Scripts hand weapons over by library archetype
   (`weapons:FC3/<family>.<variant>`), which doesn't always share a name with
   ours. A weapon not found by name is now found by the folder of the model

@@ -2059,6 +2059,27 @@ impl Story {
         out
     }
 
+    /// The world entities these missions' graphs (by their names' stem) wait
+    /// to see spawn, not in the world yet, and where they are placed: one
+    /// of a sector comes in as the player nears it (WIL_020's brief waits on
+    /// the door of Willis's hut to show him the way in).
+    pub fn awaited_spawns_of(&self, missions: &[String]) -> Vec<(u64, [f32; 3])> {
+        let c = self.core.borrow();
+        let mut out: Vec<(u64, [f32; 3])> = c
+            .listeners
+            .values()
+            .filter_map(|l| match l.on {
+                Listen::Spawn(id) if !c.item_ids.contains_key(&id) && !c.is_loaded(id) && of_missions(&c, &l.callback.target, missions) => {
+                    Some((id, c.data.entities.get(&id)?.pos))
+                }
+                _ => None,
+            })
+            .collect();
+        out.sort_by_key(|s| s.0);
+        out.dedup_by_key(|s| s.0);
+        out
+    }
+
     /// The doors scripts wait to be pushed or pulled open (a `Door` box's
     /// `Push` / `Pull`: a hut to leave by).
     pub fn awaited_doors(&self) -> Vec<u64> {

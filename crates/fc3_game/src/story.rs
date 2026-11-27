@@ -3184,7 +3184,12 @@ fn run_story(
         // Expedition's isn't one while the autopilot leaves them be.)
         let skip_dlc = std::env::var_os("FC3_STORY_AUTOPILOT_DLC").is_none();
         let mission_on = host.story.mission_in_progress().is_some_and(|m| !(skip_dlc && dlc_mission(&m)));
-        let in_focus: std::collections::HashSet<u64> = if mission_on { host.story.watched_proximity_of_missions(&focus).into_iter().collect() } else { Default::default() };
+        // (Nor in the middle of a briefing: WIL_020's, Willis's loop playing
+        // as he waited for his hut's secret door, was left for HUR_020's
+        // briefing spot across the island, and never went on.)
+        let briefing = focus.iter().any(|m| m.ends_with("_BRIEF"));
+        let in_focus: std::collections::HashSet<u64> =
+            if mission_on || briefing { host.story.watched_proximity_of_missions(&focus).into_iter().collect() } else { Default::default() };
         // (The story's own missions before side ones, a lost expedition's or
         // a supply run's: WIL_020's boat got away while the autopilot went
         // through a lab's triggers across the island.)
@@ -3301,6 +3306,21 @@ fn run_story(
                         && !host.used.contains(&(*id, "go to".to_string()))
                         && !host.fatal.contains(&(*id, "go to".to_string()))
                 })
+                .min_by(|a, b| a.1.distance(t.translation).total_cmp(&b.1.distance(t.translation)))
+        });
+        // (A mission in focus with nothing of its own left, waiting on
+        // something of a sector far off to come into the world: on to it, as
+        // a player would go to the mission's giver. WIL_020's brief waits on
+        // the door of Willis's hut; after BNG_010 the player, left by the
+        // doctor's boat, went back and forth between its cave and the boat
+        // through their teleports for half an hour.)
+        let marker_walk = marker_walk.or_else(|| {
+            host.story
+                .awaited_spawns_of(&focus)
+                .into_iter()
+                .filter(|_| !focus.is_empty() && !own_left && (host.quiet > MARKER_WALK_AFTER || focus_stuck))
+                .map(|(id, p)| (id, to_bevy(p)))
+                .filter(|(id, at)| at.with_y(0.0).distance(t.translation.with_y(0.0)) > SPAWN_WALK_NEAR && !host.used.contains(&(*id, "go to".to_string())) && !host.fatal.contains(&(*id, "go to".to_string())))
                 .min_by(|a, b| a.1.distance(t.translation).total_cmp(&b.1.distance(t.translation)))
         });
         if marker_walk.is_some() {
@@ -3612,7 +3632,7 @@ fn run_story(
             // (Not another's while a mission is in progress, as with its
             // triggers: HUR_020's briefing spot, gone to just as WIL_050 put
             // the player at its sniper rifle, left him held 1.5 km from it.)
-            .filter(|w| !mission_on || in_focus.contains(&w.0))
+            .filter(|w| (!mission_on && !(briefing && !given_up)) || in_focus.contains(&w.0))
             // (Again a while later, gone out of its radius since: HOY_010's
             // Sam, defusing a bomb with the player kept near him; by the
             // feet, as the scripts measure: after following Sam to the end,
@@ -5574,6 +5594,9 @@ const FAILED_WITHIN: f32 = 6.0;
 const MARKER_WALK_AFTER: f32 = 30.0;
 const MARKER_WALK_NEAR: f32 = 30.0;
 const MARKER_WALK_SHORT: f32 = 8.0;
+/// How near (m) the autopilot goes to something a mission waits on to come
+/// into the world before it waits for it there.
+const SPAWN_WALK_NEAR: f32 = 60.0;
 /// The map markers' kinds that aren't objectives: activities, shops, the
 /// challenge boards, missions' and quests' givers.
 const NOT_OBJECTIVES: [u64; 5] = [0x058d_6bbd, 0x1350_8ab1, 0x0375_88d5, 0x82ca_abbe, 0x7d8e_4092];
