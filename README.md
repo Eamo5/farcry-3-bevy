@@ -315,11 +315,16 @@ sequences, facial animation, Bink videos and quick-time events. The scripts read
 inventory, money, health, difficulty and time of day. Tutorials display the current keyboard or
 gamepad bindings; visible mission timers follow the story clock and pause with the game.
 
-Campaign support is still in development. End-to-end completion of every mission and side activity
-has not been verified, and specific gameplays other than `QTEGSF` (including minigames) still need
-host implementations. The skill tree, crafting and weapon tuning also retain sandbox rules. Full
-visual, gameplay and UX parity with the original is the target, not a completed claim. See
-[`docs/story.md`](docs/story.md) for the current runtime and test tools.
+Campaign support is still in development. The story autopilot (`FC3_STORY_AUTOPILOT`) has played
+the whole campaign from JAS_020 to the end credits, and a second time from JAS_060 with nothing
+learned in advance, resuming from checkpoints where it stalled until each stall was fixed; manual
+play of every mission and side activity has not been recorded. The specific gameplays the scripts
+start are the host's own: QTEs, the sniping challenge, poker, knife throwing, the races, the
+shooting galleries, the drinking game, the Ink Monster, being drunk, button prompts, the chopper
+ride, the vines and JAS_130's climb; those not yet played end a second after they start. The skill
+tree, crafting and the weapons follow the game's own data (its abilities and bonus plans, recipes,
+and weapon and damage tables). Full visual, gameplay and UX parity with the original is the target,
+not a completed claim. See [`docs/story.md`](docs/story.md) for the current runtime and test tools.
 
 Options can select a free-roam new game, adjust music volume and toggle subtitles.
 `FC3_STORY=0/1` overrides the new-game mode for testing.
