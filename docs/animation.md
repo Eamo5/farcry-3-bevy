@@ -713,7 +713,12 @@ has the component. A placed object whose entry names both is drawn by a
 rig of its own model, loaded skinned, looping that clip; its static meshes
 are hidden (`prop_anims`). One whose model has no bones stays as it was.
 Seen: an outpost's flag at (-1420.7, 2712.3) changes shape from frame to
-frame over ten seconds, where it had hung stiff.
+frame over ten seconds, where it had hung stiff. The entity table came only
+from the running story, so in a free-roam game (or a test at a place) no
+prop moved, and the flags didn't show at all: a skinned model's meshes
+drawn without a rig don't appear, and the poles stood bare. Without a story
+the table is read for itself, in the background (443 animated props), and
+the props already in the world are rigged once it is in.
 
 The same component on the kit-dressed `Animated_Mesh` figures names what
 each one does where it's placed: some 500 of the story's entities, Bangkok's

@@ -2310,6 +2310,11 @@ fn open_story(root: &std::path::Path, save: Option<&fc3_story::save::StorySave>)
 
 /// Starts the story with the game (once, when asked for): from its save
 /// when the session continues one.
+/// No story runs in this game (a free-roam one, or a test at a place): what
+/// needs the story's entity table reads it for itself.
+#[derive(Resource)]
+pub struct NoStory;
+
 fn start_story(world: &mut World, mut tried: Local<bool>) {
     if *tried {
         return;
@@ -2325,6 +2330,7 @@ fn start_story(world: &mut World, mut tried: Local<bool>) {
         }
     };
     if !wanted {
+        world.insert_resource(NoStory);
         return;
     }
     let Some(root) = world.get_resource::<CacheInfo>().map(|c| c.root.clone()) else { return };
