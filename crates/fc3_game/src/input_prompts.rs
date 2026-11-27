@@ -28,6 +28,9 @@ pub struct InputPrompts {
     up_for: f32,
     /// Gameplays the autopilot has chosen for.
     chosen: Vec<u64>,
+    /// The button last chosen, till a gameplay of the game's own takes it
+    /// (the drinking game's drink or leave).
+    picked: Option<usize>,
 }
 
 impl InputPrompts {
@@ -52,6 +55,12 @@ impl InputPrompts {
     pub fn reset(&mut self) {
         self.active.clear();
         self.chosen.clear();
+        self.picked = None;
+    }
+
+    /// The button chosen since last asked, by its number.
+    pub fn take_choice(&mut self) -> Option<usize> {
+        self.picked.take()
     }
 
     /// The button chosen now, if any: the first whose action was just
@@ -96,6 +105,7 @@ fn show(
         info!("input prompts: button {i} chosen");
         host.story.message(&format!("GSFInputManager_Choice_{i}"));
         prompts.chosen.push(id);
+        prompts.picked = Some(i);
     }
     let strings = &host.story.data().strings;
     let line: Vec<String> = buttons

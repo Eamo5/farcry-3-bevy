@@ -3,8 +3,9 @@
 //! the named move database, and the move's own data runs it.
 //!
 //! A QTE move is a tree of states. Each state names the QTE results it
-//! plays under (`QTEn_Result`, n the QTE's id plus one, equal to one of the
-//! values it lists: 3 none, 0 in progress, 1 failed, 2 succeeded); a group
+//! plays under (`QTEn_Result`, n the QTE's id plus one, equal to a value it
+//! lists: 3 none, 0 in progress, 1 failed, 2 succeeded; any one listed will
+//! do); a group
 //! state's children play only under its own conditions too, and a group
 //! with no child to play plays its own clip. The first state in order whose
 //! conditions hold plays ([`select`]): the escape's crawl, for one, is
@@ -61,8 +62,8 @@ pub struct QteState {
     /// Nesting: 1 for the move's own states, 2 for a group's, ...
     pub depth: u8,
     pub name: String,
-    /// The results it plays under: (QTE id, result). For each QTE it names,
-    /// the result must be one of the values listed for it.
+    /// The results it plays under: (QTE id, result). Any one of them will
+    /// do (none listed: always).
     pub conds: Vec<(u8, u8)>,
     /// Its clip (archive path), if it has one.
     pub clip: Option<String>,
@@ -75,10 +76,15 @@ pub struct QteState {
 }
 
 impl QteState {
-    /// Its own conditions hold for these results.
+    /// Its own conditions hold for these results: any one listed. (Not one
+    /// per QTE named: the moves' first states would play under none at the
+    /// start, the tree trap's `Hang` (QTE 0 none or in progress, or QTE 1 or
+    /// 2 failed) and the knife fight's `Stab` among them; Hoyt's fight fails
+    /// on any of its QTEs failing, not all four; and the dance's `OutIdle`
+    /// plays on its Exit or on the script's word, either.)
     pub fn holds(&self, results: &[u8]) -> bool {
         let result = |id: u8| results.get(id as usize).copied().unwrap_or(NONE);
-        self.conds.iter().all(|&(id, _)| self.conds.iter().any(|&(i, v)| i == id && v == result(id)))
+        self.conds.is_empty() || self.conds.iter().any(|&(i, v)| v == result(i))
     }
 
     /// The QTEs' progress is within its ranges.
@@ -586,6 +592,25 @@ mod tests {
         // A state under a group holds only while the group's does.
         assert!(holds_within(&s, 3, &[SUCCEEDED, NONE, IN_PROGRESS]));
         assert!(!holds_within(&s, 3, &[SUCCEEDED, NONE, SUCCEEDED]));
+    }
+
+    #[test]
+    fn any_listed_result_will_do() {
+        // The tree trap: hanging from the start, till a grab or the exit.
+        let trap = vec![
+            state(1, "Hang", &[(0, NONE), (0, IN_PROGRESS), (1, FAILED), (2, FAILED)], true),
+            state(1, "GrabHold", &[(1, SUCCEEDED)], true),
+            state(1, "Exit", &[(2, SUCCEEDED)], true),
+        ];
+        let name = |r: [u8; 3]| select(&trap, &r, &[]).map(|i| trap[i].name.as_str());
+        assert_eq!(name([NONE, NONE, NONE]), Some("Hang"));
+        assert_eq!(name([SUCCEEDED, SUCCEEDED, NONE]), Some("GrabHold"));
+        assert_eq!(name([SUCCEEDED, FAILED, NONE]), Some("Hang"));
+        // The dance: out on its Exit (QTE 5) or the script's word (QTE 4).
+        let out = state(1, "OutIdle", &[(4, SUCCEEDED), (5, SUCCEEDED)], true);
+        assert!(out.holds(&[NONE, NONE, NONE, NONE, IN_PROGRESS, SUCCEEDED]));
+        assert!(out.holds(&[NONE, NONE, NONE, NONE, SUCCEEDED, IN_PROGRESS]));
+        assert!(!out.holds(&[NONE, NONE, NONE, NONE, IN_PROGRESS, IN_PROGRESS]));
     }
 
     #[test]

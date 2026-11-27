@@ -101,6 +101,11 @@ const SLOTS: usize = 8;
 /// How long the story autopilot takes to answer a QTE.
 const AUTOPILOT_ANSWER: f32 = 0.3;
 
+/// A QTE's way out ("Exit"), and how long into the move the autopilot
+/// leaves it unanswered.
+const EXIT_PROMPT: u32 = 149209;
+const EXIT_AFTER: f32 = 25.0;
+
 /// How long a posed clip (a state played from a time in a longer clip, the
 /// mass grave's reaches) plays before the state is chosen again.
 const POSED_FOR: f32 = 2.0;
@@ -457,7 +462,11 @@ fn run_qtes(
         let acts = answers(a.input);
         let pressed = acts.iter().any(|&x| actions.just_pressed(x));
         let held = acts.iter().any(|&x| actions.pressed(x));
-        let outcome = a.answer(dt, pressed, held, autopilot, &mut qt.results[id]);
+        // (A way out on offer, "Exit", taken only after a while: BNG_010's
+        // dance ends on it, or on the script's own word 20 s in, and the
+        // autopilot, taking it at once, never danced.)
+        let leaving = a.prompt == Some(EXIT_PROMPT) && qt.age < EXIT_AFTER;
+        let outcome = a.answer(dt, pressed, held, autopilot && !leaving, &mut qt.results[id]);
         qt.progress[id] = match a.kind {
             Kind::Mash => a.progress / a.values[0].max(1.0),
             Kind::Hold => a.progress / a.values[0].max(0.01),

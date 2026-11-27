@@ -756,6 +756,12 @@ is the story's own:
   playing under QTE results (`QTEn_Result`, n the QTE's id plus one: 3 none,
   0 in progress, 1 failed, 2 succeeded); the first in order whose conditions
   (and its groups') hold plays, a group with no child to play its own clip.
+  Any one of a state's listed results will do, across QTEs too: the tree
+  trap's `Hang` (QTE 0 none or in progress, or QTE 1 or 2 failed) and the
+  knife fight's `Stab` play from the start, Hoyt's fight fails on any of
+  its four QTEs failing, the dialogue's `Out` on either choice, and the
+  dance's `OutIdle` on its Exit or the script's word. (We had asked for one
+  per QTE named, under which those first states played under none.)
   The QTEs are events in the clips (`QuickTimeEvent*`): a press, a hold or a
   mash asks for an input (`selInputs`, the engine's own names: `Button_1`,
   `RT`, `LT`, `LeftStickLeft`...; the controls answer them, e.g. the triggers
@@ -4932,6 +4938,19 @@ there checkpoint after checkpoint for an hour:
   names no anchor, and its moves played at the world's origin, out at sea,
   where the player drowned. A QTE with none plays where the player stands,
   facing his way.
+* **Dancing again.** The dance's trigger is set usable again as each dance
+  ends (`DancingJason`'s Out goes back to its In), and the script's
+  20 s timer that decides the zombie QTE 4 runs only once (a `OnceOnly`),
+  so a second dance went on to the QTE's 300 s guard. The dance's
+  `OutIdle` plays on either QTE 4 or QTE 5, the "Exit" prompt (Button 4),
+  open the whole dance (see "Quick-time events"); the autopilot leaves an
+  Exit unanswered the first 25 s (`EXIT_AFTER`), so the first dance ends on
+  the script's word and later ones on the Exit.
+* **The bar.** The drinking game read only Interact and Escape, and the
+  autopilot chooses the scripts' "Buy drink" button without a press: the
+  player was held at the bar for good. The button chosen
+  (`InputPrompts::take_choice`) now drinks (1) or leaves (2) too; three
+  drinks, the player left drunk, and the club's triggers on to Raiden.
 
 ## BAM_055's escape and BAM_060's door
 
@@ -5240,8 +5259,9 @@ shown and lets it fire, and the original HUD stays up.
 
 **The drinking game** (`CDrinkingMiniGame`, `drinking`). Only BNG_010's
 bar block (B30) starts it (`CDrinkingMiniGame_Bangkok`, once the bar's
-trigger is used), and nothing starts B30: BNG_010's mission script goes
-from B20C to B90, so B30 and B40C are cut. The game is the engine's all
+trigger is used). BNG_010's own mission script goes from B20C to B90; B30
+comes later, run by BNG_020 after its B05 (the pills), the club's search
+for Riley. The game is the engine's all
 the same (`gsf::DrinkingSettings`: a drink's price, how many, what each
 does to him, the levels at which he's drunk and passes out, the moves by
 stage and the bartender's lines). The player takes his place at the bar

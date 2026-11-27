@@ -348,9 +348,16 @@ fn run(
         Stage::Start if g.scene_over() => g.enter(Stage::StartWait),
         Stage::StartWait | Stage::Wait => {
             test.0 += dt;
+            // (Or the prompts' buttons chosen: the autopilot chooses "Buy
+            // drink" without a press, and BNG_010's bar had waited on it for
+            // good, the player held at the bar.)
+            let picked = prompts.take_choice();
             let (drink, leave) = match test_drinks {
                 Some(n) if test.0 > TEST_WAIT => (g.drinks < n, g.drinks >= n),
-                _ => (actions.just_pressed(crate::controls::Action::Interact), keys.just_pressed(KeyCode::Escape)),
+                _ => (
+                    actions.just_pressed(crate::controls::Action::Interact) || picked == Some(1),
+                    keys.just_pressed(KeyCode::Escape) || picked == Some(2),
+                ),
             };
             if leave {
                 prompts.reset();
