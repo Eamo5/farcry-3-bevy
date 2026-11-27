@@ -54,9 +54,7 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     })?;
     r.f(&m("MissionComplete"), |c, (owner, text): (Text, Num)| c.mission_complete(owner.id().unwrap_or(0), text.0.filter(|&t| t >= 0.0).map(|t| t as u32)))?;
     r.f(&m("MissionCompleteNotify"), |c, (owner, text): (Text, Num)| {
-        let name = c.missions.main_of(owner.id().unwrap_or(0)).map(|m| m.name.clone()).unwrap_or_default();
-        let text = text.0.and_then(|t| c.data.strings.get(t as u32)).map(str::to_string);
-        c.emit(Command::Native { name: "MissionCompleteNotify".into(), args: vec![name, text.unwrap_or_default()] });
+        c.mission_complete_notify(owner.id().unwrap_or(0), text.0.filter(|&t| t >= 0.0).map(|t| t as u32))
     })?;
     r.f(&m("MissionFail"), |c, (owner, text): (Text, Num)| c.mission_fail(owner.id().unwrap_or(0), text.0.filter(|&t| t >= 0.0).map(|t| t as u32)))?;
     r.f(&m("MissionAcknowledged"), |c, (owner, save): (Text, Flag)| c.acknowledge(owner.id().unwrap_or(0), save.0))?;

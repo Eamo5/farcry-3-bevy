@@ -422,6 +422,24 @@ impl Core {
             self.warn(format!("MissionComplete from {owner}, which runs no mission"));
             return;
         };
+        if !self.completion_told.remove(&m.name) {
+            self.tell_complete(&m, text);
+        }
+        self.finish_mission(&m.id, State::Completed);
+        self.emit(Command::Checkpoint);
+    }
+
+    /// `MissionCompleteNotify(owner, text)`: a main mission told complete
+    /// (its card, its reward) ahead of its end, which a closing scene may
+    /// keep a while yet (JAS_220's chopper away, WIL_050's boat off).
+    pub fn mission_complete_notify(&mut self, owner: u64, text: Option<u32>) {
+        let Some(m) = self.missions.main_of(owner).cloned() else { return };
+        if self.completion_told.insert(m.name.clone()) {
+            self.tell_complete(&m, text);
+        }
+    }
+
+    fn tell_complete(&mut self, m: &Mission, text: Option<u32>) {
         let reward = self.data.rewards.get(&m.name.to_ascii_lowercase()).copied().unwrap_or_default();
         let title = m.objective.and_then(|o| self.data.strings.get(o)).map(str::to_string);
         self.emit(Command::MissionComplete {
@@ -433,8 +451,6 @@ impl Core {
             screen: m.end_screen,
             quest: m.quest(),
         });
-        self.finish_mission(&m.id, State::Completed);
-        self.emit(Command::Checkpoint);
     }
 
     /// `MissionFail(owner, text)`.

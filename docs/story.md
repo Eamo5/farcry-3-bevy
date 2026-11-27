@@ -90,6 +90,10 @@ as the class table itself. Every call from the engine goes through the class
   the blocks it references (shared `*_common` content), and starts the script
   of its zone entity.
 * Completion and failure come back to the boxes listening on the mission.
+* A main mission can be told complete ahead of its end
+  (`MissionCompleteNotify`, the box of that name: JAS_130, WIL_050,
+  BAM_060, JAS_220): its card and reward come then, and its end, a closing
+  scene later, doesn't tell them again (`Core::completion_told`).
 * Mission layers have four states (disabled, enabled, active, deactivated);
   the host shows the present ones.
 * **Abandoning.** The mission the player took on last (acknowledged anew,

@@ -180,6 +180,9 @@ pub struct Core {
     /// Entities the script step being run was told are loaded
     /// (`IsEntityLoaded`).
     pub told_loaded: HashSet<u64>,
+    /// Main missions already told complete ahead of their end
+    /// (`MissionCompleteNotify`): their end doesn't tell it again.
+    pub completion_told: HashSet<String>,
     /// Group membership scripts changed: (group text, entity) added / removed.
     pub group_added: HashSet<(String, u64)>,
     pub group_removed: HashSet<(String, u64)>,
@@ -296,6 +299,7 @@ impl Core {
             leaving: Vec::new(),
             step_listeners: Vec::new(),
             told_loaded: HashSet::new(),
+            completion_told: HashSet::new(),
             group_added: HashSet::new(),
             group_removed: HashSet::new(),
             trigger_contacts: HashMap::new(),
