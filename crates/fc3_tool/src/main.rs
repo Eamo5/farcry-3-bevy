@@ -3294,6 +3294,9 @@ fn main() -> Result<()> {
                 let entry = data.entities.get(&id);
                 let shape = entry.and_then(fc3_story::triggers::shape_of);
                 println!("{id} {:?} at {:?} marker {:?}: {shape:?}", data.name_of(id), data.position(id), data.markers.get(&id).map(|m| m.kind));
+                if let Some(b) = data.blocks.get(&id) {
+                    println!("  block {} base {} layers {:?} zone {:?}", b.name, b.base, b.layers, b.zone);
+                }
             }
         }
         "story-entities" => {
