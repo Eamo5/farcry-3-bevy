@@ -449,6 +449,10 @@ that look the story's characters and its streamed graphs up twice a second went 
 its entities each time (some 20 ms a time); each now keeps its list, as do the safe houses the
 radar and maps look up every second (a 39 ms frame each time).
 `--tour` with `FC3_TOUR_SPEED=25` drives the route. `FC3_PERF`, `FC3_GPU_TIMING`, `FC3_MESH_DEBUG` and `--features profile` (below) measure all this.
+`FC3_ASSET_CHURN` logs how many meshes change a frame and which: any mesh changed in a frame has
+Bevy look over every material's entities again for their pipelines (some 3 ms a frame at Badtown,
+where the authored effects' meshes change every frame). The decals' meshes are now built again only
+when a decal comes, goes or fades, or the camera has moved 25 m.
 
 ## Debug and test flags
 

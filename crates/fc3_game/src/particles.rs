@@ -232,10 +232,18 @@ struct Decal {
 #[derive(Resource, Default)]
 pub struct Decals {
     list: VecDeque<Decal>,
+    /// Counts each decal laid or gone, so their meshes are built again only
+    /// then (`build_batches`).
+    version: u64,
 }
 
 const MAX_DECALS: usize = 400;
 const DECAL_LIFE: f32 = 120.0;
+/// The last seconds of a decal's life, over which it fades.
+const DECAL_FADE: f32 = 10.0;
+/// How far (m) the camera goes before the decals' meshes are built again
+/// about it (they reach 150 m).
+const DECAL_REBASE: f32 = 25.0;
 
 impl Decals {
     /// Lays a decal on a surface; `spin` (0..1) picks its rotation and frame.
@@ -253,6 +261,7 @@ impl Decals {
             self.list.pop_front();
         }
         self.list.push_back(Decal { sheet, pos, normal, tangent, size, frame: ((spin * 997.0) as u32) % frames, age: 0.0, tint });
+        self.version += 1;
     }
 }
 
@@ -487,6 +496,7 @@ fn simulate(time: Res<Time>, mut particles: ResMut<Particles>, mut decals: ResMu
     }
     while decals.list.front().is_some_and(|d| d.age > DECAL_LIFE) {
         decals.list.pop_front();
+        decals.version += 1;
     }
 }
 
@@ -546,8 +556,9 @@ fn build_batches(
     decals: Res<Decals>,
     daylight: Res<crate::clouds::Daylight>,
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
-    mut batches: Query<(&Batch, &Mesh3d, &mut Transform, &mut Visibility)>,
+    mut batches: Query<(Entity, &Batch, &Mesh3d, &mut Transform, &mut Visibility)>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut built: Local<std::collections::HashMap<Entity, (u64, Vec3)>>,
 ) {
     let Ok(cam) = cameras.single() else { return };
     let origin = cam.translation();
@@ -557,7 +568,20 @@ fn build_batches(
     // Smoke and dust follow the light level; fire doesn't.
     let ambient = 0.12 + 0.88 * daylight.0;
     let sprites = std::mem::take(&mut particles.sprites);
-    for (batch, mesh, mut tr, mut vis) in &mut batches {
+    let fading = decals.list.iter().any(|d| d.age > DECAL_LIFE - DECAL_FADE);
+    for (e, batch, mesh, mut tr, mut vis) in &mut batches {
+        // (A decals' mesh stays as it was built, about where the camera was
+        // then, until a decal comes or goes or fades, or the camera has gone
+        // a way off: changing a mesh every frame has every material's
+        // entities looked over again, some 3 ms a frame.)
+        if let Batch::Decals(_) = batch {
+            if let Some(&(version, anchor)) = built.get(&e) {
+                if version == decals.version && !fading && anchor.distance(origin) < DECAL_REBASE {
+                    continue;
+                }
+            }
+            built.insert(e, (decals.version, origin));
+        }
         tr.translation = origin;
         let mut quads = Quads::default();
         match batch {
@@ -593,7 +617,7 @@ fn build_batches(
                     let half = dc.size * 0.5;
                     let x = dc.tangent * half;
                     let y = dc.normal.cross(dc.tangent) * half;
-                    let fade = 1.0 - smoothstep(DECAL_LIFE - 10.0, DECAL_LIFE, dc.age);
+                    let fade = 1.0 - smoothstep(DECAL_LIFE - DECAL_FADE, DECAL_LIFE, dc.age);
                     quads.push(dc.pos + dc.normal * 0.012 - origin, x, y, frame_uv(dc.frame, frames, 1), dc.normal, Vec4::new(dc.tint, dc.tint, dc.tint, fade));
                 }
             }

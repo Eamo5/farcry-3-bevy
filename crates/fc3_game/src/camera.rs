@@ -19,7 +19,53 @@ impl Plugin for ScreenshotPlugin {
         if std::env::var_os("FC3_GROUND_MAP").is_some() {
             app.add_systems(Update, ground_map);
         }
+        if std::env::var_os("FC3_ASSET_CHURN").is_some() {
+            app.add_systems(Last, asset_churn);
+        }
     }
+}
+
+/// `FC3_ASSET_CHURN`: every five seconds, how many meshes were added and
+/// changed a frame, and the meshes changed most often. (Any mesh changed in
+/// a frame has every material's entities looked over again for their
+/// pipelines, `check_entities_needing_specialization`.)
+fn asset_churn(
+    time: Res<Time<Real>>,
+    mut events: MessageReader<AssetEvent<Mesh>>,
+    mut counts: Local<(f32, u32, u32, u32, std::collections::HashMap<AssetId<Mesh>, u32>, u32)>,
+    parents: Query<(Entity, &Mesh3d, Option<&Name>)>,
+) {
+    let (since, frames, added, modified, by_mesh, frames_with) = &mut *counts;
+    *since += time.delta_secs();
+    *frames += 1;
+    let mut any = false;
+    for ev in events.read() {
+        match ev {
+            AssetEvent::Added { .. } => *added += 1,
+            AssetEvent::Modified { id } => {
+                *modified += 1;
+                *by_mesh.entry(*id).or_default() += 1;
+            }
+            _ => continue,
+        }
+        any = true;
+    }
+    *frames_with += u32::from(any);
+    if *since < 5.0 {
+        return;
+    }
+    let mut top: Vec<(AssetId<Mesh>, u32)> = by_mesh.drain().collect();
+    top.sort_by(|a, b| b.1.cmp(&a.1));
+    let named: Vec<String> = top
+        .iter()
+        .take(6)
+        .map(|(id, n)| {
+            let who = parents.iter().find(|(_, m, _)| m.id() == *id).map(|(e, _, name)| format!("{e:?} {}", name.map(|n| n.as_str()).unwrap_or(""))).unwrap_or_default();
+            format!("{id:?} x{n} {who}")
+        })
+        .collect();
+    info!("asset churn over {frames} frames: {frames_with} with a mesh event, {added} added, {modified} changed; most changed {named:?}");
+    (*since, *frames, *added, *modified, *frames_with) = (0.0, 0, 0, 0, 0);
 }
 
 /// `FC3_GROUND_MAP=<x>,<z>,<half>,<step>,<top>,<secs>` (Bevy, metres;
