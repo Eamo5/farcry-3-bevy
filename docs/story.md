@@ -5490,7 +5490,12 @@ way out.
   step, and the objective is kept as one to creep through (`0 provoke` in
   the fatal list, under it): the autopilot keeps the player crouched and
   shoots only foes already fighting while it's up. From the B10 and B20
-  checkpoints both blocks and JAS_190 completed.
+  checkpoints both blocks and JAS_190 completed. A failure can be put down
+  to a shot by mistake: JAS_220's runway ("Clear the area so Riley can
+  reach the chopper safely.") failed 1.3 s after a shot at a far, idle
+  pirate, and was learned as one to creep through, so its last pirate,
+  idle, was never shot and B30 waited for good. Holding fire now lasts only
+  while the story has gone quiet less than a minute (`HOLD_FIRE_GIVE_UP`).
 
 ## The privateer's uniform
 

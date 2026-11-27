@@ -5542,6 +5542,9 @@ const PROVOKED_WITHIN: f32 = 3.0;
 /// mission failing is put down to his being seen.
 const SPOTTED_WITHIN: f32 = 1.5;
 const SPOTTED_FROM: f32 = 80.0;
+/// How long (s) the story may go quiet before the autopilot, creeping
+/// through, shoots foes not yet fighting after all.
+const HOLD_FIRE_GIVE_UP: f32 = 60.0;
 /// What the fatal list keeps for an objective to creep through (shooting
 /// foes not yet fighting, or being seen, failed it).
 const PROVOKE: u64 = 0;
@@ -7122,8 +7125,11 @@ fn autopilot_loot(
         feet
     };
     // (Under an objective where shooting a foe not yet fighting failed the
-    // mission, only those already fighting: JAS_190's cave, crept through.)
-    let hold_fire = host.fatal.contains(&(PROVOKE, PROVOKE_EVENT.to_string()));
+    // mission, only those already fighting: JAS_190's cave, crept through.
+    // Not once the story has long gone nowhere: a failure put down to a
+    // shot by mistake, JAS_220's runway with Riley to be kept safe, left
+    // its last pirate, idle, unshot for good.)
+    let hold_fire = host.fatal.contains(&(PROVOKE, PROVOKE_EVENT.to_string())) && host.quiet < HOLD_FIRE_GIVE_UP;
     let quest = quest.or_else(|| {
         if alarm_first {
             return None;
