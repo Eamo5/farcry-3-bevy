@@ -6376,6 +6376,12 @@ to SQC_080, each a brief at its giver then its blocks):
   went on past the bridge. Nor does it go up to within 6 m of a flamer it
   can't hit from where it is: his tank goes up as he falls, and BAM_040's,
   shot from 2 m, took the player with him.
+* **A break learned fatal too.** In a later run the spot found 10 to 18 m
+  off a dynamic-cover pillar (`bam_040_b30_dynamiccover_breakablepillar`)
+  was on the walkway its breaking brought down, and the player fell into
+  the temple's pit, reload after reload. Breaking a watched thing is now a
+  step like the others (`StoryHost::stepped`): a death soon after is put
+  down to it, and it and its namesakes are left alone from then on.
 * **Off the gun when put elsewhere.** A mounted gun holds its gunner at
   its seat every frame, so a teleport (the autopilot's, a script's, a
   checkpoint's) was undone at once while he was on one. After HOY_010's

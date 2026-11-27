@@ -3328,7 +3328,7 @@ fn run_story(
             .story
             .watched_destructibles()
             .into_iter()
-            .filter(|(id, _)| !host.used.contains(&(*id, "destroy".to_string())))
+            .filter(|(id, _)| !host.used.contains(&(*id, "destroy".to_string())) && !host.fatal.contains(&(*id, "destroy".to_string())))
             .find(|(_, at)| to_bevy(*at).distance(here) < DESTROY_REACH);
         // A region a running mission waits for the player to leave, him in
         // it (JAS_220's start: out of Hoyt's compound for the airport), the
@@ -3511,6 +3511,10 @@ fn run_story(
         } else if let Some((id, at)) = destructible {
             info!("story autopilot: breaking {}", data.name_of(id).unwrap_or("?"));
             host.used.insert((id, "destroy".into()));
+            // (A step like any, a death soon after put down to it: BAM_040's
+            // dynamic-cover pillar, broken, brought the walkway down under
+            // the player, into the temple's pit, checkpoint after checkpoint.)
+            host.stepped(id, "destroy", now);
             // (From well off, on ground about as high, as one shoots it: put
             // on it or beside it, under BAM_040's falling stone covers, the
             // stone's death trigger killed him as it came down.)
