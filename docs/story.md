@@ -5053,6 +5053,17 @@ there checkpoint after checkpoint for an hour:
   player was held at the bar for good. The button chosen
   (`InputPrompts::take_choice`) now drinks (1) or leaves (2) too; three
   drinks, the player left drunk, and the club's triggers on to Raiden.
+* **Raiden from the bar stool.** In the fourth line, after the credits, the
+  trigger step went to Raiden's trigger while the drinking game still held
+  the player at the bar, so he never got there; the trigger counted as
+  used, and the club never went quiet enough (its lights' scenes and its
+  dancers' actions stir it every few seconds) for used triggers to go
+  again. Now no step is taken while a minigame holds the player
+  (`StoryHost::minigame_holds`, set by the drinking game), and with the
+  missions in focus gone nowhere 90 s though the story stirs, the places
+  stepped into (not the things used: the dance and the bar would take each
+  go) go again (`USED_RETRY_AFTER`). From the club's checkpoint Riley was
+  found in two minutes and BNG_020 and BNG_030 completed.
 
 ## BAM_055's escape and BAM_060's door
 

@@ -1156,6 +1156,12 @@ pub struct StoryHost {
     /// panels', Bevy space: `HideRadioTowerObjectiveMarker`, JAS_060's
     /// tower while the mission's own marker leads to it), left off the map.
     pub hidden_towers: std::collections::HashMap<u64, Vec3>,
+    /// A minigame holds the player where it plays (the drinking game at the
+    /// bar): the autopilot takes no step meanwhile.
+    pub minigame_holds: bool,
+    /// When the autopilot last tried its used triggers again, the story
+    /// stirring but going nowhere (`USED_RETRY_AFTER`).
+    used_retried_at: f32,
     /// The share of their harm companions deal, as scripts set it
     /// (`CAPI_Companion.CompanionSetDamage`).
     pub companion_damage: HashMap<u64, f32>,
@@ -1334,7 +1340,7 @@ impl StoryHost {
     /// The autopilot's: one of its steps that holds the player a while
     /// (burning a field, going after a vehicle) is under way.
     pub fn autopilot_held(&self) -> bool {
-        self.autopilot_burning || self.autopilot_wrecking
+        self.autopilot_burning || self.autopilot_wrecking || self.minigame_holds
     }
 
     /// The autopilot's: something a running mission offers to use that it
@@ -1526,6 +1532,8 @@ impl StoryHost {
             gameplay_params: Default::default(),
             holstered: Default::default(),
             hidden_towers: Default::default(),
+            minigame_holds: false,
+            used_retried_at: f32::MIN,
             companion_damage: HashMap::new(),
             cautious: Default::default(),
             actor_moves: Vec::new(),
@@ -3330,8 +3338,21 @@ fn run_story(
             host.used_since = host.last_completed.clone();
         }
         // Stuck: triggers stepped into before they were armed go again.
+        // (Or the missions in focus gone nowhere a long while though the
+        // story stirs: BNG_010's club, its lights' scenes looping and its
+        // dancers' actions switching every few seconds, was never quiet,
+        // and Raiden's trigger, stepped into while the bar held the player,
+        // was never stepped into again.)
+        let long_stuck = host.focus_since.as_ref().is_some_and(|(_, since)| now - since > USED_RETRY_AFTER) && now - host.used_retried_at > USED_RETRY_AFTER;
+        if long_stuck {
+            host.used_retried_at = now;
+        }
         if host.quiet > 25.0 {
             host.used.retain(|u| !focused.iter().chain(watched.iter()).any(|w| w.0 == u.0 && w.1 == u.1));
+        } else if long_stuck {
+            // (Only places to go: the club's dance and its bar, used again
+            // every time, took most of each go.)
+            host.used.retain(|u| u.1 != "Enter" || !focused.iter().chain(watched.iter()).any(|w| w.0 == u.0 && w.1 == u.1));
         }
         // On a mission with nothing of its own left to step into, gone
         // nowhere a while: on to its objective's marker, as a player follows
@@ -5926,6 +5947,10 @@ const HURRY_FOR: f32 = 10.0;
 /// How long (s) after a reload, and how near (m) where a step got the
 /// player killed, the autopilot goes on at once.
 const HURRY_NEAR_FOR: f32 = 120.0;
+/// How long (s) the missions in focus may go nowhere, the story stirring all
+/// the while, before the triggers stepped into go again (and between such
+/// goes).
+const USED_RETRY_AFTER: f32 = 90.0;
 const HURRY_NEAR: f32 = 60.0;
 
 /// A man set behind for a takedown this many times within this long (s)

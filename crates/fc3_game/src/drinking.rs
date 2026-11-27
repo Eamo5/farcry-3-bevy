@@ -157,6 +157,10 @@ fn run(
     let Some(mut host) = host else { return };
     let dt = time.delta_secs();
     let drinking = &mut *drinking;
+    // (The autopilot steps nowhere while he's held at the bar: BNG_010's
+    // Raiden trigger, stepped into from the bar stool, never had him there,
+    // and was never stepped into again.)
+    host.minigame_holds = drinking.game.is_some();
     // The drink wears off.
     if drinking.drunk_left > 0.0 {
         drinking.drunk_left -= dt;
