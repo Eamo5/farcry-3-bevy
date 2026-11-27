@@ -1059,6 +1059,9 @@ pub struct StoryHost {
     /// Since when the companion has kept the player, dry, from going after
     /// the foes with the machete.
     dry_leashed: Option<f32>,
+    /// When the player, dry, last went after a foe beyond the companion's
+    /// leash, it let go.
+    leash_let_go: Option<f32>,
     fatal: Fatal,
     /// Radio towers' panels whose camera flight plays (panel, scene, file):
     /// each is done once its flight is over.
@@ -1443,6 +1446,7 @@ impl StoryHost {
             ai_seen: Default::default(),
             creeping: false,
             dry_leashed: None,
+            leash_let_go: None,
             fatal: fatal_learned(),
             tower_flights: Vec::new(),
             objective_before: None,
@@ -5553,6 +5557,9 @@ const MACHETE_REACH: f32 = 1.8;
 /// How long (s) the companion's leash keeps the player, dry, from going
 /// after foes beyond it with the machete.
 const DRY_LEASH_FOR: f32 = 45.0;
+/// How long (s) after going after a foe beyond the leash the companion step
+/// leaves the player be.
+const LEASH_LET_GO_FOR: f32 = 5.0;
 /// A pawn put to another action within this (s) of its last is on its
 /// rounds: the story isn't stirred by it.
 const ROUNDS_WITHIN: f32 = 180.0;
@@ -7070,8 +7077,10 @@ fn autopilot_loot(
             let fight =
                 npcs.iter().any(|q| !q.1.dead && q.5.hostile() && q.5.state != crate::npc::NpcState::Idle && q.0.translation.distance(at.translation) < 80.0);
             let keep = if fight { ESCORT_IN_FIGHT.min(distance) } else { distance.min(12.0) };
-            // (Not while it's gone after foes, dry, the leash let go.)
-            let let_go = fight && host.dry_leashed.is_some_and(|since| time.elapsed_secs() - since >= DRY_LEASH_FOR);
+            // (Not while it's gone after foes, dry, the leash let go: a fight
+            // or not, JAS_100's pirates gone back to their posts had the
+            // player set by one and back by Dennis every frame.)
+            let let_go = host.leash_let_go.is_some_and(|at| time.elapsed_secs() - at < LEASH_LET_GO_FOR);
             if flat.length() > keep && !let_go {
                 if *last != Some((id, "escort")) {
                     info!("story autopilot: keep up with {}", host.story.data().name_of(id).unwrap_or("?"));
@@ -7585,7 +7594,9 @@ fn autopilot_loot(
                     *shooting = None;
                     return;
                 }
-                if !leashed(feet) {
+                if leashed(feet) {
+                    host.leash_let_go = Some(now);
+                } else {
                     host.dry_leashed = None;
                 }
                 // (Nor one set beside again and again, out of reach still:

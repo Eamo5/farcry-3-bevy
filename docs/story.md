@@ -3869,7 +3869,11 @@ steep crease at (-1987, -2456), can wedge the capsule; the route keeps to x
   and the outpost was never taken. The leash now holds a dry player back
   only 45 s (`DRY_LEASH_FOR`); after that the machete goes after them and
   the companion step stops calling him back until one is in reach within
-  the leash again. JAS_100 completed.
+  the leash again. JAS_100 completed. In the fourth line the pirates had
+  gone back to their posts: with no fight on the companion step pulled the
+  player back to Dennis every frame the machete step set him by a pirate,
+  for half an hour. It now leaves him be for 5 s after each such step
+  (`LEASH_LET_GO_FOR`), fight or not; JAS_100 completed.
 * **A use fails at once.** With the reload forgetting the steps before,
   JAS_060's B40 failed and reloaded every 12 s: the autopilot used Amanaki
   as the map was to be opened, which set the player in the block's failing
