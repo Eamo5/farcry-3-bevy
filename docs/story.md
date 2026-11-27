@@ -167,7 +167,10 @@ is the story's own:
   such as `[Interact]` and `[ThrowRock]` use the current device's bindings.
   Holding the close control does not dismiss the next queued tutorial.
 * **Teleports**: a teleported player is followed by `DominoGameReady`, which
-  boxes behind a loading screen wait for.
+  boxes behind a loading screen wait for. The co-op box's
+  `CoopTeleportPlayer <player> <destination>` (DEN_060's drop start,
+  DOC_020's trip transition, JAS_240's last scene) teleports as
+  `CAPI_Entity.TeleportEntity` does; it had gone unplayed.
 * **Safehouse travel**: full-map destinations join `CSafeHouseComponent` to
   `entMarkerEntity` and the marker's `entSpawnPointEntity`. Arrival uses that
   spawn point's position and heading, not the outpost centre. Authored initial

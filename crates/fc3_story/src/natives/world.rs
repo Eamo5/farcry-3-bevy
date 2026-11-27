@@ -418,6 +418,15 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
     // round them: `DominoGameReady` comes once it has had time to stream.
     r.f("CAPI_Entity.TeleportEntity", |c, args: mlua::Variadic<Text>| {
         let (Some(entity), Some(destination)) = (args.first().and_then(Text::id), args.get(1).and_then(Text::id)) else { return };
+        teleport_entity(c, entity, destination);
+    })?;
+    // (The co-op box's, `player, destination`: DEN_060's drop, DOC_020's
+    // transition, JAS_240's last block.)
+    r.f("CoopTeleportPlayer", |c, args: mlua::Variadic<Text>| {
+        let (Some(entity), Some(destination)) = (args.first().and_then(Text::id), args.get(1).and_then(Text::id)) else { return };
+        teleport_entity(c, entity, destination);
+    })?;
+    fn teleport_entity(c: &mut Core, entity: u64, destination: u64) {
         let Some(pose) = c.pose(destination) else { return };
         c.poses.insert(entity, pose);
         // Queries made later in this same script call see the new position.
@@ -431,7 +440,7 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
             c.world_ready_at = Some(c.time + 1.0);
         }
         c.emit(Command::Teleport { entity, pose });
-    })?;
+    }
     // An entity set where a script says, or turned as it says (`{x, y, z}`
     // tables: a mission's bomb put down where it goes, `MissionBomb`).
     fn place(c: &mut Core, entity: u64, position: Option<[f32; 3]>, angles: Option<[f32; 3]>) {

@@ -5427,6 +5427,9 @@ fn run_story(
                     // (The engine's own budgets and streaming: nothing here
                     // limits entities or pauses the world's loading.)
                     "EnableHighPerfEntityLimiter" | "IgnoreEntityLimiter" | "WorldLoaderPause" => {}
+                    // (No HUD movie listens for the Bangkok flashbacks' own
+                    // event: BNG_010's and BNG_030's `ShowBangkok`.)
+                    "UISendEventToPlayer" if a(1) == "ShowBangkok" => {}
                     // (A minigame's resources, loaded with its keeper: the
                     // race and the table are the host's own.)
                     "CreateSpecificGameplay" if a(1).ends_with("ResourceContainer") => {}
