@@ -5552,6 +5552,12 @@ of Sam's, 28 m near and 32 m far, that warns on the screen).
   player off Sam. It now burns only with a flamethrower or molotovs, and
   leaves a field that didn't catch for two minutes (`BURN_AGAIN`).
 
+* **No rocket inside its own blast.** In a later run B30's last rocket man
+  fired at the player 5 m off and both went up, reload after reload. A
+  rocket man no longer fires at a target nearer than 8 m
+  (`ROCKET_MIN_FIRE`: the rocket's 5 m blast and some); his role keeps
+  him backing off to 18 m meanwhile.
+
 * **The last pirates.** After the last bomb B30 counts its last pirates
   down with Sam told to wait (`CompanionSetWait`), and the leash kept the
   autopilot off them for good. A waiting companion holds the fight by him

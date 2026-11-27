@@ -3185,6 +3185,12 @@ fn shoot(
     if !tgt.seen || npc.fire_cooldown > 0.0 || dist_to_player > stats.reach {
         return;
     }
+    // (No rocket at a target inside its own blast: he backs off first, as
+    // his role's distance has him. HOY_010's last rocket man fired at the
+    // player 5 m off, and both went up, reload after reload.)
+    if npc.role == Role::Rocket && dist_to_player < ROCKET_MIN_FIRE {
+        return;
+    }
     if npc.burst_left == 0 {
         let (lo, hi) = stats.burst;
         npc.burst_left = lo + (rng.f32() * (hi - lo + 1) as f32) as u32;
@@ -4321,6 +4327,9 @@ const STRIKE_LEAD: f32 = 0.5;
 const CHARGE_SPEED: f32 = 5.5;
 /// How fast (m/s) one runs to the fight a script gives him, straight there.
 const RUN_TO_FIGHT: f32 = 4.2;
+/// The nearest (m) a rocket man fires at his target: his rocket's blast
+/// (5 m) and some.
+const ROCKET_MIN_FIRE: f32 = 8.0;
 /// How lately (s) one was hit to be hard pressed (`Progression`).
 const HARD_PRESSED_FOR: f32 = 5.0;
 
