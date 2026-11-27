@@ -5895,6 +5895,16 @@ the airport where Riley is held, within twelve minutes.
 
 ## JAS_240: the end credits
 
+* **The ceremonial knife.** On the walk up the burning temple in B30E the
+  scene's setup puts the guns away (`SetNoWeaponMode`), then
+  `PMSValuesModifier` sets the player's `IsChineseSwordEquipped` (and his
+  weapon slots to the blade's), and he draws the knife and holds it up
+  until the burning-knife scene. Unplayed, his hands were empty all the
+  way. The flag now draws the melee blade (the machete's moves) with the
+  Chinese knife's model (`weapons::BladeSwap`, `ScriptedPlayer::
+  ceremonial_knife`), shown through the scene's no-weapon mode, and put back
+  when the scene's end clears it.
+
 JAS_240's last scene, at its `RollCreditsOnFrame` frame, asks for the end
 credits (`EndGame.lua`'s `PopUpEndOfGame`) and waits for the engine to say
 they're over (`CreditsFinished`) before it fades to black, puts the player

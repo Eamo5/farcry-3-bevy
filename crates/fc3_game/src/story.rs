@@ -69,10 +69,17 @@ impl Plugin for StoryPlugin {
                 matches!(state.get(), GameState::Playing | GameState::Paused | GameState::Map | GameState::Journal | GameState::Shop)
             }))
             .add_systems(Update, show_story_ui)
-            .add_systems(Update, (apply_sides, apply_tags, scripted_controls, scripted_ambience, apply_damage_rates, script_sounds, holster_characters).after(StorySet));
+            .add_systems(Update, (apply_sides, apply_tags, scripted_controls, scripted_ambience, apply_damage_rates, script_sounds, holster_characters, swap_blade).after(StorySet));
         if std::env::var_os("FC3_STORY_RETRY_TEST").is_some() {
             app.add_systems(Update, retry_inventory_test.after(StorySet).run_if(in_state(GameState::Playing)));
         }
+    }
+}
+
+/// The melee blade drawn as the ceremonial knife while a script has it so.
+fn swap_blade(scripted: Res<ScriptedPlayer>, server: Res<AssetServer>, mut blade: ResMut<crate::weapons::BladeSwap>) {
+    if scripted.ceremonial_knife != blade.0.is_some() {
+        blade.0 = scripted.ceremonial_knife.then(|| crate::weapons::model_handle(&server, crate::weapons::CHINESE_KNIFE));
     }
 }
 
@@ -1622,6 +1629,9 @@ pub struct ScriptedPlayer {
     /// The "observer" beautifiers pushed on the player: while any is, he
     /// stands still.
     pub observers: u32,
+    /// The machete drawn as the ceremonial knife (`IsChineseSwordEquipped`:
+    /// JAS_240's hallucination, `weapons::BladeSwap`).
+    pub ceremonial_knife: bool,
     /// Black over the screen: (now, target, seconds to get there).
     pub fade: (f32, f32, f32),
     /// Seconds the screen has been held black (a scene lifts it; this is
@@ -1727,6 +1737,7 @@ impl Default for ScriptedPlayer {
             hud_hidden: false,
             message: None,
             observers: 0,
+            ceremonial_knife: false,
             fade: (0.0, 0.0, 0.0),
             black_for: 0.0,
             backup: None,
@@ -5319,6 +5330,29 @@ fn run_story(
                         scripted.camera_drawn = false;
                         scripted.redraw = true;
                     }
+                    // The machete drawn as JAS_240's ceremonial knife (`player,
+                    // IsChineseSwordEquipped, on`: the hallucination's
+                    // burning knife, drawn and held up), and put back. The
+                    // weapon slots the same scene sets (`equippedweapon`,
+                    // `desiredweapon` 0) are the blade's.
+                    "CAPI_Pawn.SetPMSValueBool" if a(0) == fc3_story::PLAYER.to_string() && a(1) == "IsChineseSwordEquipped" => {
+                        scripted.ceremonial_knife = a(2) == "true" || a(2) == "1";
+                        debug!("story: the ceremonial knife {}", if scripted.ceremonial_knife { "in hand" } else { "put away" });
+                        if scripted.ceremonial_knife {
+                            if let Ok(mut inv) = inventory.single_mut() {
+                                let blade = inv.slots.iter().position(|s| inv.defs[s.def].class == crate::weapons::WeaponClass::Melee);
+                                if let Some(i) = blade.filter(|i| *i != inv.current) {
+                                    let away = inv.def().holster;
+                                    inv.current = i;
+                                    inv.reloading = 0.0;
+                                    inv.switching = away + inv.def().draw;
+                                    inv.cooldown = inv.cooldown.max(inv.switching);
+                                    scripted.redraw = true;
+                                }
+                            }
+                        }
+                    }
+                    "CAPI_Pawn.SetPMSValueEnum" if a(0) == fc3_story::PLAYER.to_string() && matches!(a(1).as_str(), "equippedweapon" | "desiredweapon") => {}
                     // (A pawn made usable or not: kept by the story, its
                     // `use_target`s.)
                     "SendCommandEventToEntity" if a(1) == "SetUsability" => {}

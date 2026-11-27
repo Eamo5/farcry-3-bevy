@@ -22,6 +22,7 @@ impl Plugin for WeaponsPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Rng::seeded(0x9E37_79B9_7F4A_7C15))
             .init_resource::<PaintTable>()
+            .init_resource::<BladeSwap>()
             .init_resource::<TestScript>()
             .init_resource::<ScopeSway>()
             .init_resource::<UnlimitedAmmo>()
@@ -972,13 +973,23 @@ impl Inventory {
 #[derive(Component)]
 pub struct ViewModel {
     /// Which slot's model is currently attached, and with which attachments
-    /// and paint.
+    /// and paint, and whether the melee blade wore another model.
     shown: Option<usize>,
     shown_attachments: u32,
     shown_paint: Option<u8>,
+    shown_blade: bool,
     bob_phase: f32,
     sway: Vec2,
 }
+
+/// The model the melee blade is drawn with in place of its own, while a
+/// script has it so (JAS_240's ceremonial knife: `IsChineseSwordEquipped`,
+/// the machete's moves with the Chinese knife in hand).
+#[derive(Resource, Default)]
+pub struct BladeSwap(pub Option<Handle<Fc3Model>>);
+
+/// The ceremonial knife's model.
+pub const CHINESE_KNIFE: &str = r"graphics\__fc3_graphics\_common\weapons\chineseknife\chineseknife.xbg";
 
 impl ViewModel {
     /// Rebuilds the weapon model (it moves between the arms and the plain view).
@@ -1192,7 +1203,7 @@ fn give_player_loadout(
     }
     for cam in &cameras {
         commands.spawn((
-            ViewModel { shown: None, shown_attachments: 0, shown_paint: None, bob_phase: 0.0, sway: Vec2::ZERO },
+            ViewModel { shown: None, shown_attachments: 0, shown_paint: None, shown_blade: false, bob_phase: 0.0, sway: Vec2::ZERO },
             Transform::default(),
             Visibility::Visible,
             ChildOf(cam),
@@ -2628,10 +2639,11 @@ fn update_view_model(
     // Swimming and driving put the weapon away; the arms may still show what they're doing.
     // (And at a poker table, or a minigame unless the arms play its part:
     // the knife thrower's.)
-    // (And while a scene has it put away.)
+    // (And while a scene has it put away; but not the ceremonial knife a
+    // scene puts in his hand, JAS_240's, its guns put away.)
     let busy = ((player.swimming || (player.driving && !player.armed_passenger) || minigame.is_some_and(|m| m.holds_player())) && !fp.in_context())
         || poker.is_some_and(|p| p.holds_player())
-        || story_player.as_ref().is_some_and(|s| s.no_weapon || s.weapon_hidden);
+        || story_player.as_ref().is_some_and(|s| (s.no_weapon && !(s.ceremonial_knife && d.class == WeaponClass::Melee)) || s.weapon_hidden);
     *vis = if in_menu || health.dead || player.noclip || busy || bino.blend > 0.5 || inv.scoped() { Visibility::Hidden } else { Visibility::Visible };
     let speed = Vec2::new(player.velocity.x, player.velocity.z).length();
     if player.grounded {
@@ -2707,16 +2719,20 @@ fn spawn_view_model_parts(
     mut vm: Query<(Entity, &mut ViewModel)>,
     parts: Query<Entity, Or<(With<ViewModelPart>, With<Muzzle>)>>,
     fp: Res<crate::fp::FpState>,
+    blade: Res<BladeSwap>,
 ) {
     let Ok(inv) = players.single() else { return };
     let Ok((view, mut v)) = vm.single_mut() else { return };
     let def_index = inv.slot().def;
     let fitted = inv.attachments.get(def_index).copied().unwrap_or(0);
     let paint = inv.paints.get(def_index).copied().flatten();
-    if v.shown == Some(def_index) && v.shown_attachments == fitted && v.shown_paint == paint {
+    // (The melee blade drawn as another, while a script has it so.)
+    let swapped = blade.0.as_ref().filter(|_| inv.defs[def_index].class == WeaponClass::Melee);
+    if v.shown == Some(def_index) && v.shown_attachments == fitted && v.shown_paint == paint && v.shown_blade == swapped.is_some() {
         return;
     }
-    let Some(model) = models.get(&inv.models[def_index]) else { return };
+    let Some(model) = models.get(swapped.unwrap_or(&inv.models[def_index])) else { return };
+    v.shown_blade = swapped.is_some();
     for e in &parts {
         commands.entity(e).despawn();
     }
