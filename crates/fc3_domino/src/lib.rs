@@ -51,6 +51,80 @@ pub fn control_outs(text: &str) -> Vec<String> {
     outs
 }
 
+/// A graph's stateless uses of a box (`l0 = Boxes[GetPathID("...")];`, its
+/// `_graph` set, its outputs plugged) with the outputs the box declares that
+/// the use leaves unplugged plugged to `DummyFunction`, as the use's own
+/// (none when nothing needs it). The class is shared: an output a graph
+/// compiled before the box grew it never plugs kept whatever the last user
+/// plugged, which then ran with this graph as its `_graph`
+/// (base_c4_amanakitown_main's MissionGetState, Acknowledged, after a side
+/// quest's `SideQuestAcknowledge`). Plugging and calling may be apart (a
+/// graph's `en_<n>` plugs, a later `l0:In()` calls), so only the plugging
+/// block is touched.
+pub fn plug_stateless(text: &str, mut declared: impl FnMut(&str) -> Vec<String>) -> Option<String> {
+    struct Block {
+        var: String,
+        path: String,
+        graph_line: Option<usize>,
+        assigned: Vec<String>,
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let mut inserts: Vec<(usize, String)> = Vec::new();
+    let mut open: Option<Block> = None;
+    let mut close = |b: Block, inserts: &mut Vec<(usize, String)>| {
+        let Some(at) = b.graph_line else { return };
+        let missing: Vec<String> = declared(&b.path).into_iter().filter(|o| !b.assigned.iter().any(|a| a == o)).collect();
+        if !missing.is_empty() {
+            let indent: String = lines[at].chars().take_while(|c| c.is_whitespace()).collect();
+            let add = missing.iter().map(|o| format!("{indent}{}.{o} = DummyFunction;", b.var)).collect::<Vec<_>>().join("\n");
+            inserts.push((at, add));
+        }
+    };
+    for (i, raw) in lines.iter().enumerate() {
+        let line = raw.trim();
+        if let Some(b) = open.as_mut() {
+            let field = line.strip_prefix(b.var.as_str()).and_then(|r| r.strip_prefix('.'));
+            if let Some(rest) = field {
+                let name: String = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                if name == "_graph" && rest[name.len()..].trim_start().starts_with('=') {
+                    b.graph_line = Some(i);
+                } else if !name.is_empty() {
+                    b.assigned.push(name);
+                }
+                continue;
+            }
+            if let Some(b) = open.take() {
+                close(b, &mut inserts);
+            }
+        }
+        // `l0 = Boxes[GetPathID("Domino/System/X.lua")];`
+        if let Some((var, rest)) = line.split_once(" = Boxes[GetPathID(\"") {
+            if let Some(path) = rest.strip_suffix("\")];") {
+                if var.starts_with('l') && var[1..].chars().all(|c| c.is_ascii_digit()) {
+                    open = Some(Block { var: var.to_string(), path: path.to_string(), graph_line: None, assigned: Vec::new() });
+                }
+            }
+        }
+    }
+    if let Some(b) = open.take() {
+        close(b, &mut inserts);
+    }
+    if inserts.is_empty() {
+        return None;
+    }
+    let mut out = String::with_capacity(text.len() + inserts.len() * 40);
+    let mut next = inserts.iter().peekable();
+    for (i, line) in lines.iter().enumerate() {
+        out.push_str(line);
+        out.push('\n');
+        while let Some((_, add)) = next.next_if(|(at, _)| *at == i) {
+            out.push_str(add);
+            out.push('\n');
+        }
+    }
+    Some(out)
+}
+
 /// The entity id that stands for none.
 pub const INVALID_ID: &str = "18446744073709551615";
 
@@ -109,11 +183,20 @@ impl Domino {
         g.set("GetPathID", lua.create_function(|_, path: String| Ok(path_id(&path)))?)?;
         let source = Rc::new(source);
         let s = state.clone();
+        let outs_by_path: RefCell<std::collections::HashMap<String, Vec<String>>> = RefCell::default();
         g.set(
             "__domino_load",
             lua.create_function(move |lua, path: String| match source.script(&path) {
                 Some(text) => {
                     let outs = lua.create_sequence_from(control_outs(&text))?;
+                    let declared = |box_path: &str| {
+                        outs_by_path
+                            .borrow_mut()
+                            .entry(box_path.to_ascii_lowercase())
+                            .or_insert_with(|| source.script(box_path).map(|t| control_outs(&t)).unwrap_or_default())
+                            .clone()
+                    };
+                    let text = plug_stateless(&text, declared).unwrap_or(text);
                     lua.load(text).set_name(path).exec().map(|()| (true, Some(outs)))
                 }
                 None => {
@@ -388,6 +471,75 @@ mod tests {
             .unwrap();
         assert!(ran);
         assert_eq!(control_outs("\n-- <ControlOut Name=\"A\"/>\n-- <ControlOut Name=\"B\" Delayed=\"true\">\nx = 1\n-- <ControlOut Name=\"C\"/>"), ["A", "B"]);
+    }
+
+    /// A box used statelessly by one graph and then by another that doesn't
+    /// plug an output: the output does nothing, not the first graph's.
+    #[test]
+    fn stateless_outputs_are_unplugged_for_each_user() {
+        let mut m = scripts().0;
+        m.insert(
+            "test/getstate.lua".into(),
+            r#"
+            -- <ControlOut Name="Running" />
+            -- <ControlOut Name="Acknowledged" />
+            G = {};
+            function G:Get() self:Acknowledged(); self:Running() end
+            export = G; G = nil;
+            "#
+            .into(),
+        );
+        // (The graphs as the generator writes them; the second, compiled
+        // before the box had Acknowledged, plugs Running alone.)
+        m.insert(
+            "test/first.lua".into(),
+            r#"
+            export = {};
+            function export:Go()
+                local l0;
+                l0 = Boxes[GetPathID("Test/GetState.lua")];
+                l0._graph = self;
+                l0.Running = function() calls = calls .. "r1" end;
+                l0.Acknowledged = function() calls = calls .. "a1" end;
+                l0:Get();
+            end;
+            "#
+            .into(),
+        );
+        m.insert(
+            "test/second.lua".into(),
+            r#"
+            export = {};
+            function export:Go()
+                local l0;
+                l0 = Boxes[GetPathID("Test/GetState.lua")];
+                l0._graph = self;
+                l0.Running = function() calls = calls .. "r2" end;
+                l0:Get();
+            end;
+            "#
+            .into(),
+        );
+        let d = Domino::new(Scripts(m)).unwrap();
+        let calls: String = d
+            .lua()
+            .load(
+                r#"
+                calls = ""
+                __domino_class("Test/GetState.lua")
+                __domino_class("Test/First.lua"):Go()
+                __domino_class("Test/Second.lua"):Go()
+                return calls
+                "#,
+            )
+            .eval()
+            .unwrap();
+        assert_eq!(calls, "a1r1r2");
+        // (Plugged in one place and called in another, it keeps its plugs.)
+        let text = "function export:en_10()\n    local l0;\n    l0 = Boxes[GetPathID(\"Test/GetState.lua\")];\n    l0._graph = self;\n    l0.Running = self.f;\nend;\nfunction export:g()\n    l0 = Boxes[GetPathID(\"Test/GetState.lua\")];\n    l0:Get();\nend;\n";
+        let out = plug_stateless(text, |_| vec!["Running".into(), "Acknowledged".into()]).unwrap();
+        assert!(out.contains("    l0._graph = self;\n    l0.Acknowledged = DummyFunction;\n    l0.Running = self.f;"), "{out}");
+        assert_eq!(out.matches("DummyFunction").count(), 1);
     }
 
     /// The id the game gives `Domino/System/Print_v2.lua`.

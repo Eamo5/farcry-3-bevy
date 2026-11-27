@@ -84,6 +84,16 @@ the dynamic ones) starts as `DummyFunction` on its class, so an output no
 graph plugs does nothing: base_c4_amanakitown_main was compiled before
 `MissionGetState` had `Acknowledged`, leaves it unset, and calling it raised
 an error that cut the graph's `In` short (its second trigger never enabled).
+That wasn't the end of it: a box used statelessly is its class, shared, so
+the output kept whatever the last graph had plugged; after a side quest's
+`SideQuestAcknowledge` plugged its own, Amanaki's graph called that
+callback with itself as the `_graph`, and JAS_170 raised "attempt to call
+method 'Acknowledged'". Loading a script now plugs, in each of its
+stateless uses (`l0 = Boxes[...]`, its `_graph` set and outputs plugged),
+the outputs the box declares that the use leaves out to `DummyFunction`
+(`fc3_domino::plug_stateless`; only the plugging block, as a graph may
+plug in one function and call in another), and a box created for a graph
+starts with them so, not falling back on its class's.
 
 ## The mission system
 

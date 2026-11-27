@@ -283,7 +283,7 @@ mod tests {
         let mut view = crate::View { player: [-465.0, 2883.0, 101.0], ..Default::default() };
         story.update(0.0, view.clone());
         assert!(story.fast_travel_tutorial());
-        assert!(story.waiting_on().iter().any(|w| w.contains("jas_080_fast_travel")));
+        assert!(story.waiting_on().iter().any(|w| w.contains("jas_080_fast_travel")), "{:?}", story.take_log());
         assert!(story.fast_travel_enabled());
         assert!(story.fast_travel(0).is_none());
         assert!(story.fast_travel_tutorial());

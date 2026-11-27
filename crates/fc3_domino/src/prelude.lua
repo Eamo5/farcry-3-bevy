@@ -11,6 +11,10 @@
 -- hasn't provided resolve to logging stand-ins.
 
 Boxes = {}
+-- The control outputs each class's header declares that it doesn't define
+-- itself, by path id: an instance starts with them doing nothing, not with
+-- whatever a stateless use last plugged into its class.
+local box_outs = {}
 Globals = {}
 if PersistentGlobals == nil then
     PersistentGlobals = {}
@@ -69,11 +73,15 @@ function __domino_class(path)
         -- Every output its header declares does nothing until a graph
         -- plugs it (a graph compiled before the box grew an output leaves
         -- it unset: base_c4_amanakitown_main's MissionGetState, Acknowledged).
+        -- (Not one the box defines itself, a method of the same name.)
+        local plugged = {}
         for _, name in ipairs(outs or {}) do
             if rawget(class, name) == nil then
                 rawset(class, name, DummyFunction)
+                plugged[#plugged + 1] = name
             end
         end
+        box_outs[id] = plugged
     end
     rawset(_G, "export", nil)
     rawset(_G, "_compilerVersion", nil)
@@ -125,6 +133,9 @@ function Instance:CreateBox(path)
     local class = __domino_class(path)
     local box = setmetatable({}, class._meta)
     box._type = class
+    for _, name in ipairs(box_outs[GetPathID(path)] or {}) do
+        rawset(box, name, DummyFunction)
+    end
     if class.Init ~= nil then
         class.Init(box, self)
     end
