@@ -1015,6 +1015,9 @@ pub struct StoryHost {
     /// stopping to fight.
     script_killed: bool,
     hurry_until: f32,
+    /// When that blow was dealt (the autopilot takes no step for a moment
+    /// after, the death still to land).
+    killing_blow_at: f32,
     fatal: Fatal,
     /// Radio towers' panels whose camera flight plays (panel, scene, file):
     /// each is done once its flight is over.
@@ -1386,6 +1389,7 @@ impl StoryHost {
             prev_step: None,
             script_killed: false,
             hurry_until: f32::MIN,
+            killing_blow_at: f32::MIN,
             fatal: fatal_learned(),
             tower_flights: Vec::new(),
             objective_before: None,
@@ -3036,6 +3040,11 @@ fn run_story(
     // B20 has him cover Oliver from it on his way to the boat.)
     if gameplay
         && health.as_ref().is_none_or(|h| !h.dead)
+        // (Nor once a script has dealt the killing blow, the death still to
+        // land: BAM_030's death area struck, the autopilot stepped into the
+        // next trigger in the moment before the player fell, and that was
+        // learned as the death's, the way on left alone for good.)
+        && now - host.killing_blow_at > KILLING_BLOW_HOLD
         && (!p.driving || at_wheel)
         && !sniping.holds_player()
         && !boss_fight.holds_player()
@@ -3310,11 +3319,15 @@ fn run_story(
         // to leave alone in a run long gone, waited behind the shaft's
         // death volume, which was tried first and killed the player.)
         let deadly = |id: u64| data.name_of(id).is_some_and(|n| n.to_ascii_lowercase().contains("death"));
+        // (Or the missions long gone nowhere though not quiet: BAM_030's
+        // ledge, stepped into again every 25 s to no end, kept the story
+        // from ever being quiet that long, its way on left alone.)
+        let long_nowhere = host.focus_since.as_ref().is_some_and(|(_, since)| now - since > FATAL_RETRY_AFTER * 2.0);
         let next = next.or_else(|| {
             focused
                 .iter()
                 .filter(|w| {
-                    host.quiet > FATAL_RETRY_AFTER
+                    (host.quiet > FATAL_RETRY_AFTER || long_nowhere)
                         && !awaiting_rock
                         && !vines.autopilot_climbing()
                         && !leading
@@ -4004,6 +4017,7 @@ fn run_story(
                             // one who lingers 2 s by the camp.)
                             if pawn == fc3_story::PLAYER && amount >= KILLING_BLOW {
                                 host.script_killed = true;
+                                host.killing_blow_at = now;
                                 if let Some((id, event, _)) = host.culprit(now, SCRIPT_KILL_WITHIN) {
                                     info!("story autopilot: {event} {} killed the player; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
                                     learn_fatal(&mut host.fatal, id, event, None);
@@ -5550,6 +5564,9 @@ const BRIEF_NEAR: f32 = 20.0;
 
 /// How near (m) a flying helicopter a foe is shot rather than taken down.
 const HELI_KEEP_OFF: f32 = 10.0;
+
+/// How long (s) after a script's killing blow the autopilot takes no step.
+const KILLING_BLOW_HOLD: f32 = 3.0;
 
 /// How long (s) after a reload that followed a scripted kill the autopilot
 /// goes on at once, without stopping to fight.

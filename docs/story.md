@@ -4826,6 +4826,16 @@ carried him to an outpost's alarm box across the island, every 6 s. That
 step now waits, as the trigger step does, while a scene holds the view or
 plays the player, and only goes for a box within `ALARM_REACH` (150 m).
 
+In a later run B60's escape stood still: its death area struck the player
+and the autopilot stepped into the next trigger (`ObjectiveUpdate_B60_0`,
+the way on) in the moment before he fell, so that step was learned as the
+death's; and the ledge before it, stepped into again every 25 s to no end,
+kept the story from ever being quiet the 150 s after which a trigger left
+alone is tried again. The autopilot now takes no step for 3 s after a
+script's killing blow (`KILLING_BLOW_HOLD`), and tries a trigger left alone
+once its missions have gone nowhere 300 s as well as after 150 s quiet.
+From that checkpoint B60 and BAM_030 completed and BAM_040 began.
+
 ## BAM_040's collapsing path and BAM_055's hot pools
 
 From BAM_020's flooded hold the autopilot ran BAM_020 out, BAM_030 and
