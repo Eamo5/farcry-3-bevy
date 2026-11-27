@@ -4971,6 +4971,13 @@ there checkpoint after checkpoint for an hour:
   and the door, walked into once, wasn't gone to again: B10C waited for its
   `Push` for good. A door the story still waits on 20 s after a walk into
   it is walked into again, up to four times (`DOOR_AGAIN`, `DOOR_TRIES`).
+* **The water tower kept.** CIT_020 B20 has the player wait on the water
+  tower while the convoy is ambushed; the wreck step went after the
+  convoy's lead 4x4 from there, the vantage point was left and B20 failed
+  5 ms on. A failure is put down to going after a vehicle only after 3 s of
+  it (doing it no harm, not the chase itself); now its very first step too
+  (within 0.5 s, `WRECK_AT_ONCE`), and that vehicle is left alone under the
+  objective.
 
 ## BNG_030 to CIT_020: the cave, the convoy's fire, Willis's tracker
 

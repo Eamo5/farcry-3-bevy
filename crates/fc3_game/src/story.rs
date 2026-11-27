@@ -3722,7 +3722,10 @@ fn run_story(
                     info!("story autopilot: {event} {} failed the mission; left alone from now", host.story.data().name_of(id).unwrap_or("?"));
                     learn_fatal(&mut host.fatal, id, event, host.objective_before);
                 }
-                if let Some((id, ..)) = host.last_wreck.take_if(|w| now - w.2 < FAILED_WITHIN && now - w.1 > WRECK_BLAMED_AFTER) {
+                // (Or at once, its first step the failure: CIT_020's convoy,
+                // gone after from the water tower, took the player off the
+                // vantage point he was to keep, failing B20 as it began.)
+                if let Some((id, ..)) = host.last_wreck.take_if(|w| now - w.2 < FAILED_WITHIN && (now - w.1 > WRECK_BLAMED_AFTER || now - w.1 < WRECK_AT_ONCE)) {
                     info!("story autopilot: going after {} failed the mission; left alone under it from now", host.story.data().name_of(id).unwrap_or("?"));
                     learn_fatal(&mut host.fatal, id, "wreck".into(), host.objective_before);
                 }
@@ -5415,6 +5418,9 @@ fn area_subtypes() -> &'static std::collections::HashSet<u64> {
 /// How long (s) the autopilot has gone after a vehicle before a mission
 /// failing is put down to it.
 const WRECK_BLAMED_AFTER: f32 = 3.0;
+/// How soon (s) after the autopilot first goes after a vehicle a mission
+/// failing is put down to that first step.
+const WRECK_AT_ONCE: f32 = 0.5;
 /// How long the story is quiet before the autopilot leaves a region a
 /// mission waits for the player to leave (short of the 25 s after which
 /// it steps into triggers it used again).
