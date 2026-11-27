@@ -198,6 +198,10 @@ fn push_doors(
 #[allow(clippy::type_complexity)]
 /// How near (m) an awaited door a thing to use holds it back.
 const DOOR_USE_NEAR: f32 = 20.0;
+/// How long (s) after walking into a door the story still waits on it is
+/// walked into again, and how many times.
+const DOOR_AGAIN: f32 = 20.0;
+const DOOR_TRIES: u32 = 4;
 
 fn autopilot_doors(
     host: Option<NonSendMut<crate::story::StoryHost>>,
@@ -209,6 +213,7 @@ fn autopilot_doors(
     mut doors: ResMut<Doors>,
     mut walking: Local<Option<f32>>,
     mut far_tried: Local<HashSet<u64>>,
+    mut retried: Local<std::collections::HashMap<u64, (u32, f32)>>,
 ) {
     let _slow = crate::story::Slow::new("autopilot_doors");
     if std::env::var("FC3_STORY_AUTOPILOT").is_err() {
@@ -239,6 +244,21 @@ fn autopilot_doors(
         return;
     }
     let awaited = host.story.awaited_doors();
+    // (A door walked into that the story still waits on, a while on, is
+    // walked into again, a few times: BAM_060's, walked into as the player
+    // was still being set down, never opened, and Buck's scene never came.)
+    let now = time.elapsed_secs();
+    let walked: Vec<u64> = awaited.iter().copied().filter(|id| doors.walked.contains(id)).collect();
+    for id in &walked {
+        let (tries, at) = retried.entry(*id).or_insert((0, now));
+        if now - *at > DOOR_AGAIN && *tries < DOOR_TRIES {
+            *tries += 1;
+            *at = now;
+            doors.walked.remove(id);
+            far_tried.remove(id);
+            info!("story autopilot: door {id} still awaited; again");
+        }
+    }
     let Some((door, object, global, t)) = placed.iter().find(|(d, ..)| awaited.contains(&d.id) && !doors.walked.contains(&d.id)) else {
         // One not in the world near him (BAM_060's, across the island from
         // the last mission): beside it first, so that it streams in.

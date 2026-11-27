@@ -4966,6 +4966,11 @@ there checkpoint after checkpoint for an hour:
     reload off by 6 s. A death no longer puts off one pending, and a
     script's harm to the player waiting to be taken back to his checkpoint
     is dropped.
+* **Buck's door again.** In a later run the walk into Buck's door, made as
+  the player was still being set down beside it, never pushed it open,
+  and the door, walked into once, wasn't gone to again: B10C waited for its
+  `Push` for good. A door the story still waits on 20 s after a walk into
+  it is walked into again, up to four times (`DOOR_AGAIN`, `DOOR_TRIES`).
 
 ## BNG_030 to CIT_020: the cave, the convoy's fire, Willis's tracker
 
