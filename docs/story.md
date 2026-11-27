@@ -5420,6 +5420,19 @@ way out.
   rifle on its back. It now draws the gun that harms the foe most from
   where it stands (damage over the interval between shots), of those that
   reach him.
+* **Creeping through.** B10 ("Infiltrate the cave without being spotted.")
+  and B20 fail the moment the privateers are alerted. In a later run the
+  autopilot shot a guard who had grown suspicious, the mission failed, and
+  the trigger stepped into 5 s before was blamed and left alone, the way
+  on with it; in B20 a dock guard saw the player set down by its first
+  trigger, and that trigger was blamed in turn. A failure within 3 s of
+  shooting at a foe not yet fighting (`PROVOKED_WITHIN`), or within 1.5 s of
+  a foe within 80 m going from unaware to fighting (`SPOTTED_WITHIN`, the
+  first time under that objective), is now put down to that instead of the
+  step, and the objective is kept as one to creep through (`0 provoke` in
+  the fatal list, under it): the autopilot keeps the player crouched and
+  shoots only foes already fighting while it's up. From the B10 and B20
+  checkpoints both blocks and JAS_190 completed.
 
 ## The privateer's uniform
 

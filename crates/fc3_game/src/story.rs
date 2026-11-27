@@ -1018,6 +1018,15 @@ pub struct StoryHost {
     /// When that blow was dealt (the autopilot takes no step for a moment
     /// after, the death still to land).
     killing_blow_at: f32,
+    /// The last time the autopilot shot at a foe not yet fighting (him and
+    /// when): a mission failing at once after is put down to that.
+    provoked: Option<(u64, f32)>,
+    /// The last foe near who went from unaware to fighting (him and when),
+    /// and each story fighter's state as scripts last knew it.
+    spotted: Option<(u64, f32)>,
+    ai_seen: std::collections::HashMap<u64, u8>,
+    /// The autopilot has the player crouched, creeping through.
+    creeping: bool,
     fatal: Fatal,
     /// Radio towers' panels whose camera flight plays (panel, scene, file):
     /// each is done once its flight is over.
@@ -1390,6 +1399,10 @@ impl StoryHost {
             script_killed: false,
             hurry_until: f32::MIN,
             killing_blow_at: f32::MIN,
+            provoked: None,
+            spotted: None,
+            ai_seen: Default::default(),
+            creeping: false,
             fatal: fatal_learned(),
             tower_flights: Vec::new(),
             objective_before: None,
@@ -2820,6 +2833,11 @@ fn run_story(
             Some(crate::npc::NpcState::Combat) => 3,
             _ => 0,
         };
+        // (A foe near, unaware till now, fighting: the player spotted.)
+        let was = host.ai_seen.insert(a.id, ai_state);
+        if ai_state == 3 && matches!(was, Some(0 | 1)) && npc.is_some_and(|n| n.hostile()) && at.translation.distance(t.translation) < SPOTTED_FROM {
+            host.spotted = Some((a.id, now));
+        }
         view.spawned.insert(
             a.id,
             fc3_story::Live { pos: to_dunia(at.translation - Vec3::Y * crate::player::HALF_HEIGHT), alive: !a.dead, health: 1.0, max_health: 1.0, ai_state },
@@ -3036,6 +3054,17 @@ fn run_story(
     // from ever doing so. BAM_055's trap room sets the floor alight under
     // the sarcophagus, and the autopilot stood there till it died.)
     let scorched = now - host.hurt_at < SCORCHED_FOR && !p.spawning;
+    // (Where being seen or shooting first failed the objective, crouched,
+    // as a player creeping through would be; up again once it's another.)
+    if gameplay && std::env::var_os("FC3_STORY_AUTOPILOT").is_some() {
+        let creep = host.fatal.contains(&(PROVOKE, PROVOKE_EVENT.to_string())) && !p.swimming && !p.driving;
+        if creep && !p.crouching {
+            scripted.stance = Some(true);
+        } else if !creep && host.creeping {
+            scripted.stance = Some(false);
+        }
+        host.creeping = creep;
+    }
     // (Not while a sniping challenge holds the player at its rifle: WIL_050's
     // B20 has him cover Oliver from it on his way to the boat.)
     if gameplay
@@ -3715,6 +3744,28 @@ fn run_story(
                 // (The mission's own scripts failing it as it's given up.)
                 if !reload && host.abandoned_at.is_some_and(|at| now - at < 2.0) {
                     continue;
+                }
+                // (Shots at a foe not yet fighting, just now and after the
+                // last step: those, not the step, failed it. JAS_190's cave,
+                // "Infiltrate the cave without being spotted.", failed as
+                // the autopilot shot a guard who had grown suspicious, and
+                // the trigger stepped into 5 s before was left alone, the
+                // way on with it. Under that objective, only foes already
+                // fighting are shot.)
+                // (Or a foe who saw him, the first time under it: then the
+                // autopilot creeps, crouched, and the step that brought him
+                // into view is tried again so. JAS_190's dock guard saw him
+                // set down by B20's first trigger.)
+                let step_at = host.last_step.as_ref().map_or(f32::MIN, |s| s.2);
+                let creeping = host.fatal.contains(&(PROVOKE, PROVOKE_EVENT.to_string()));
+                let provoked = host.provoked.take().filter(|(_, at)| now - at < PROVOKED_WITHIN && *at > step_at);
+                let spotted = host.spotted.take().filter(|(_, at)| now - at < SPOTTED_WITHIN && !creeping);
+                if let Some((foe, _)) = provoked.or(spotted) {
+                    let how = if provoked.is_some() { "shot at, not yet fighting," } else { "seeing the player" };
+                    info!("story autopilot: {foe} {how} failed the mission; creeping, only those fighting shot, under it from now");
+                    learn_fatal(&mut host.fatal, PROVOKE, PROVOKE_EVENT.into(), host.objective_before);
+                    host.last_step = None;
+                    host.prev_step = None;
                 }
                 // (A few seconds on too: CIT_060's brief fails one stepped
                 // into its stuck-below region after a 4 s warning.)
@@ -5421,6 +5472,17 @@ const WRECK_BLAMED_AFTER: f32 = 3.0;
 /// How soon (s) after the autopilot first goes after a vehicle a mission
 /// failing is put down to that first step.
 const WRECK_AT_ONCE: f32 = 0.5;
+/// How soon (s) after the autopilot shot at a foe not yet fighting a
+/// mission failing is put down to that.
+const PROVOKED_WITHIN: f32 = 3.0;
+/// How soon (s) after a foe near saw the player, and how near (m), a
+/// mission failing is put down to his being seen.
+const SPOTTED_WITHIN: f32 = 1.5;
+const SPOTTED_FROM: f32 = 80.0;
+/// What the fatal list keeps for an objective to creep through (shooting
+/// foes not yet fighting, or being seen, failed it).
+const PROVOKE: u64 = 0;
+const PROVOKE_EVENT: &str = "provoke";
 /// How long the story is quiet before the autopilot leaves a region a
 /// mission waits for the player to leave (short of the 25 s after which
 /// it steps into triggers it used again).
@@ -6994,6 +7056,9 @@ fn autopilot_loot(
         }
         feet
     };
+    // (Under an objective where shooting a foe not yet fighting failed the
+    // mission, only those already fighting: JAS_190's cave, crept through.)
+    let hold_fire = host.fatal.contains(&(PROVOKE, PROVOKE_EVENT.to_string()));
     let quest = quest.or_else(|| {
         if alarm_first {
             return None;
@@ -7008,6 +7073,7 @@ fn autopilot_loot(
                     && (!actor.seated || counted.contains(&actor.id))
                     && !skipped.contains_key(&actor.id)
                     && npc.hostile()
+                    && (!hold_fire || matches!(npc.state, crate::npc::NpcState::Combat | crate::npc::NpcState::Search))
                     // (Not one it threw a rock to lure off, gone to look:
                     // JAS_020's guard by the window; nor, a while after a
                     // throw, any other the rock drew. Only those who fight.)
@@ -7260,6 +7326,9 @@ fn autopilot_loot(
     }
     if fixed || stubborn || sniping {
         let Some((nt, nh, _, _, actor, foe, head)) = quest.filter(|q| (stubborn || sniping || host.quiet > 3.0) && !q.1.dead) else { return };
+        if matches!(foe.state, crate::npc::NpcState::Idle | crate::npc::NpcState::Suspicious) {
+            host.provoked = Some((actor.id, now));
+        }
         if *last != Some((actor.id, "shoot")) {
             info!("story autopilot: shoot {} ({})", host.story.data().name_of(actor.id).unwrap_or("?"), actor.id);
             *last = Some((actor.id, "shoot"));
