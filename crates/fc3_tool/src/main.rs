@@ -2650,6 +2650,13 @@ fn main() -> Result<()> {
                 if f.len() >= 3 {
                     histogram[(((f[0] + f[1] + f[2]) / 3.0).clamp(0.0, 2.0) * 10.0) as usize] += 1;
                 }
+                // (A single float: its value, in tenths up to 2.)
+                if f.len() == 1 {
+                    histogram[(f[0].clamp(0.0, 2.0) * 10.0) as usize] += 1;
+                    if f[0] != 0.0 && samples.len() < 30 {
+                        samples.push((m.shader.clone(), name.clone(), [f[0], 0.0, 0.0, 0.0]));
+                    }
+                }
                 if f.len() >= 3 && f[..3].iter().any(|v| (v - 1.0).abs() > 0.02) {
                     e.2 += 1;
                     if samples.len() < 30 {
@@ -4379,6 +4386,26 @@ fn main() -> Result<()> {
                 println!("; {:08x} kind {:2} reg {:3}.{} rows {} cols {}", b.name_hash, b.kind, b.register, b.component, b.rows, b.columns);
             }
             print!("{}", obj.program);
+        }
+        "shaders-with" => {
+            // The shader objects whose constant tables bind a parameter (by
+            // its name's hash), with the register: shaders-with <hex hash> [max]
+            let hash = u32::from_str_radix(args.get(1).context("usage: shaders-with <hex hash> [max]")?.trim_start_matches("0x"), 16)?;
+            let max: usize = args.get(2).map(|s| s.parse()).transpose()?.unwrap_or(20);
+            let mut found = 0usize;
+            for a in vfs.archives.iter().filter(|a| a.name == "shadersobj" || a.name == "patch") {
+                for e in &a.fat.entries {
+                    let Ok(d) = a.read(e) else { continue };
+                    let Ok(obj) = fc3_formats::d3d9::parse_object(&d) else { continue };
+                    let Some(b) = obj.bindings.iter().find(|b| b.name_hash == hash) else { continue };
+                    found += 1;
+                    if found <= max {
+                        let program = obj.program.to_string();
+                        println!("{:016x} {} reg {}.{}", e.name_hash, program.lines().next().unwrap_or(""), b.register, b.component);
+                    }
+                }
+            }
+            println!("{found} shader objects bind {hash:08x}");
         }
         "shader-survey" => {
             use fc3_formats::d3d9::{self, Op};

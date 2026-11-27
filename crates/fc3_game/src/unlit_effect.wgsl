@@ -45,6 +45,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     }
     let base = pbr_input.material.base_color;
     var out: FragmentOutput;
-    out.color = main_pass_post_lighting_processing(pbr_input, vec4<f32>(base.rgb * effect.shade.x * fade, base.a));
+    if effect.scroll.z > 0.5 {
+        // Blending by its alpha: the fade takes that.
+        out.color = main_pass_post_lighting_processing(pbr_input, vec4<f32>(base.rgb * effect.shade.x, base.a * fade));
+    } else {
+        out.color = main_pass_post_lighting_processing(pbr_input, vec4<f32>(base.rgb * effect.shade.x * fade, base.a));
+    }
     return out;
 }

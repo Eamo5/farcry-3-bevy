@@ -102,7 +102,8 @@ pub type UnlitEffect = ExtendedMaterial<StandardMaterial, UnlitEffectExt>;
 pub struct UnlitEffectParams {
     /// `HDRMul`, `NormalAttenuationPower`, `AnimType`, `AngularSpeed`.
     pub shade: Vec4,
-    /// `USpeed`, `VSpeed`.
+    /// `USpeed`, `VSpeed`, and 1 when it blends by its alpha (the fade
+    /// takes its alpha, not its light).
     pub scroll: Vec4,
 }
 
@@ -119,9 +120,13 @@ impl MaterialExtension for UnlitEffectExt {
 }
 
 /// An `Unlit` material's effect figures, when it blends (additive or
-/// premultiplied) rather than standing as a surface.
+/// premultiplied) rather than standing as a surface; or blends by its alpha
+/// as an effect does, fading toward grazing angles or moving its map (a
+/// mine's light beam: drawn as a plain see-through slab, it showed its hard
+/// edges as a teal wall across the cave).
 pub(crate) fn effect_params(cm: &CachedMaterial) -> Option<UnlitEffectParams> {
-    if !matches!(crate::cache_assets::unlit_blend(&cm.shader, &cm.params), Some(AlphaMode::Add | AlphaMode::Premultiplied)) {
+    let blend = crate::cache_assets::unlit_blend(&cm.shader, &cm.params);
+    if !matches!(blend, Some(AlphaMode::Add | AlphaMode::Premultiplied | AlphaMode::Blend)) {
         return None;
     }
     if cm.flags & fc3_formats::cache::mat_flags::ALPHA_TEST != 0 {
@@ -130,10 +135,12 @@ pub(crate) fn effect_params(cm: &CachedMaterial) -> Option<UnlitEffectParams> {
     let raw = |name: &str| cm.params.iter().find(|(h, v)| *h == name_hash(name) && v.len() == 4).map(|(_, v)| <[u8; 4]>::try_from(&v[..4]).unwrap());
     let float = |name: &str, default: f32| raw(name).map_or(default, f32::from_le_bytes);
     let int = |name: &str, default: u32| raw(name).map_or(default, u32::from_le_bytes);
-    Some(UnlitEffectParams {
+    let params = UnlitEffectParams {
         shade: Vec4::new(float("HDRMul", 1.0), float("NormalAttenuationPower", 0.0), int("AnimType", 1) as f32, float("AngularSpeed", 0.0)),
-        scroll: Vec4::new(float("USpeed", 0.0), float("VSpeed", 0.0), 0.0, 0.0),
-    })
+        scroll: Vec4::new(float("USpeed", 0.0), float("VSpeed", 0.0), if blend == Some(AlphaMode::Blend) { 1.0 } else { 0.0 }, 0.0),
+    };
+    let effect_like = params.shade.y > 0.0 || params.scroll.x != 0.0 || params.scroll.y != 0.0 || params.shade.w != 0.0;
+    (blend != Some(AlphaMode::Blend) || effect_like).then_some(params)
 }
 
 /// Puts parts whose standard material is an unlit additive one on the effect
@@ -159,7 +166,7 @@ fn swap_effects(
     pending.retain(|&e| {
         let Ok(m) = current.get(e) else { return false };
         let Some(base) = standard.get(&m.0) else { return true };
-        if !base.unlit || !matches!(base.alpha_mode, AlphaMode::Add | AlphaMode::Premultiplied) {
+        if !base.unlit || !matches!(base.alpha_mode, AlphaMode::Add | AlphaMode::Premultiplied | AlphaMode::Blend) {
             made.insert(m.0.id(), None);
             return false;
         }
@@ -230,5 +237,22 @@ mod tests {
         assert!(effect_params(&CachedMaterial { params: opaque, ..shaft.clone() }).is_none());
         assert!(effect_params(&CachedMaterial { flags: fc3_formats::cache::mat_flags::ALPHA_TEST, ..shaft.clone() }).is_none());
         assert!(effect_params(&CachedMaterial { shader: "Generic_FC3".into(), ..shaft }).is_none());
+    }
+
+    /// A beam blending by its alpha (a mine's) is an effect for its grazing
+    /// fade, marked so the fade takes its alpha; a plain see-through one
+    /// stays a surface.
+    #[test]
+    fn an_alpha_blended_beam_fades_by_its_alpha() {
+        let f = |name: &str, v: f32| (name_hash(name), v.to_le_bytes().to_vec());
+        let i = |name: &str, v: u32| (name_hash(name), v.to_le_bytes().to_vec());
+        let beam = CachedMaterial { shader: "Unlit".into(), params: vec![i("BlendingType", 1), f("NormalAttenuationPower", 2.0)], ..Default::default() };
+        let p = effect_params(&beam).expect("an effect");
+        assert_eq!(p.shade.y, 2.0);
+        assert_eq!(p.scroll.z, 1.0);
+        let pane = CachedMaterial { params: vec![i("BlendingType", 1), f("NormalAttenuationPower", 0.0)], ..beam.clone() };
+        assert!(effect_params(&pane).is_none());
+        let scrolling = CachedMaterial { params: vec![i("BlendingType", 1), f("USpeed", 0.1)], ..beam };
+        assert!(effect_params(&scrolling).is_some());
     }
 }

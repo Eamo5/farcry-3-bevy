@@ -903,6 +903,13 @@ additive and premultiplied `Unlit` ones then go onto their own material
 - moved by `AnimType`: 1 and 2 scroll at `USpeed`/`VSpeed`, 3 goes back and
   forth, 4 turns at `AngularSpeed`.
 
+The alpha-blended `Unlit` ones that fade toward grazing angles or move their
+map are effects too, their fade taking their alpha rather than their light;
+the rest (panes, screens) stay plain see-through surfaces. The mines' light
+beams (`tomb_lightbeam_unlit.xbg`, "SHA_Lightbeam_Mines01_Only": alpha
+blended, attenuation 2) were drawn as see-through slabs, their hard edges a
+teal wall across the cave at (3711, -4505); they now fall off softly.
+
 They cast no shadow. The multiplier is taken as it is, as the other
 self-lit materials take their maps; the eye's adaptation (`grade.rs`) scales
 them with the rest of the frame.
