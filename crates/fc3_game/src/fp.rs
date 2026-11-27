@@ -722,6 +722,21 @@ fn gesture_props(
     });
 }
 
+/// A double takedown from below's clips (the player's, and the victim's
+/// half `target` 1 or 2): the two side by side on a ledge (2 to the right of
+/// 1, 1.2 m apart), facing the player or away; from the water, the
+/// player's own half by the way they face.
+pub(crate) fn below_double_clips(front: bool, water: bool, target: u32) -> (String, String) {
+    let side = if front { "fw" } else { "bk" };
+    let mine = if water {
+        format!(r"melee\takedown\1stge_fulb_waterledgedoubletakedown_var{}_+000fw_nowep.mab", if front { 1 } else { 2 })
+    } else {
+        format!(r"melee\takedown\1stge_fulb_ledgedoubletakedown_{side}_var1_+000fw_nowep.mab")
+    };
+    let w = if water { "water" } else { "" };
+    (mine, format!(r"melee\takedown\3rdge_fulb_{w}ledgedoubletakedown_{side}_var1_+000fw_target_{target}.mab"))
+}
+
 /// The paired clips (player, victim) under `ANIM_ROOT`.
 fn takedown_clips(style: TakedownStyle, heavy: bool, variant: u32) -> (String, String) {
     let pair = |dir: &str, a: String, b: String| (format!(r"melee\{dir}\{a}"), format!(r"melee\{dir}\{b}"));
@@ -913,15 +928,18 @@ fn start_takedowns(
     for ev in events.read() {
         let Ok(npc) = npcs.get(ev.victim) else { continue };
         *variant += 1;
-        let double = ev.second.filter(|_| matches!(ev.style, TakedownStyle::Above { .. }) && !npc.role.armoured());
-        let (mine, theirs) = match double {
+        let double = ev.second.filter(|_| matches!(ev.style, TakedownStyle::Above { .. } | TakedownStyle::Below { .. }) && !npc.role.armoured());
+        let (mine, theirs) = match (double, ev.style) {
+            // From below, the two side by side on the ledge (the second to
+            // the right of the first), facing the player or away.
+            (Some(_), TakedownStyle::Below { front, water }) => below_double_clips(front, water, 1),
             // Both from the front, the second to one side.
-            Some((_, left)) => {
+            (Some((_, left)), _) => {
                 let side = if left { "lt" } else { "rt" };
                 let name = |who: &str| format!(r"melee\stealthtakedown_above\{who}_fulb_doubletakedownfront_{side}_var1_+000fw_");
                 (format!("{}hhmac.mab", name("1stge")), format!("{}target_1.mab", name("3rdge")))
             }
-            None => takedown_clips(ev.style, npc.role.armoured(), *variant),
+            (None, _) => takedown_clips(ev.style, npc.role.armoured(), *variant),
         };
         let ground = matches!(ev.style, TakedownStyle::Back | TakedownStyle::Front);
         let chain = ev.chain.filter(|_| ground && !npc.role.armoured());
@@ -957,7 +975,10 @@ fn start_takedowns(
         // The second victim's half, the same way.
         let second = double.and_then(|(e2, left)| {
             let side = if left { "lt" } else { "rt" };
-            let theirs2 = format!(r"melee\stealthtakedown_above\3rdge_fulb_doubletakedownfront_{side}_var1_+000fw_target_2.mab");
+            let theirs2 = match ev.style {
+                TakedownStyle::Below { front, water } => below_double_clips(front, water, 2).1,
+                _ => format!(r"melee\stealthtakedown_above\3rdge_fulb_doubletakedownfront_{side}_var1_+000fw_target_2.mab"),
+            };
             let clip = load(&theirs2);
             let n2 = npcs.get(e2).ok()?;
             if let (Some(lib), Some(mut face)) = (library.as_mut(), n2.rig.and_then(|r| faces.get_mut(r).ok())) {
@@ -986,7 +1007,11 @@ fn start_takedowns(
             (Some(_), _) => chain_clips(ev.style, *variant).iter().map(|(a, b)| (load(a), load(b))).collect(),
             _ => Vec::new(),
         };
-        let time = if second.is_some() {
+        let time = if second.is_some() && matches!(ev.style, TakedownStyle::Below { water: true, .. }) {
+            BELOW_DOUBLE_WATER_TIME
+        } else if second.is_some() && matches!(ev.style, TakedownStyle::Below { .. }) {
+            BELOW_DOUBLE_TIME
+        } else if second.is_some() {
             DOUBLE_TIME
         } else if drag {
             // Until the grip; the drag then holds it open.
@@ -1371,7 +1396,7 @@ fn drive_takedown(
             let (kind, time) = r.playing();
             td.victim_clip.as_ref().and_then(|h| clips.get(h)).is_some_and(|c| crate::characters::clip_time(kind, time, c.0.duration) >= c.0.duration - 0.05)
         });
-    if over && !td.dropped && !td.water {
+    if over && !td.dropped && !td.water && td.second.is_none() {
         td.dropped = true;
         let out = start(&td.clip).zip(td.victim_clip.as_ref().and_then(start)).map(|(p, v)| frame * (p - v)).unwrap_or(Vec3::ZERO);
         // Past the player's shoulder, to the side his half pulls him.
@@ -1390,7 +1415,28 @@ fn drive_takedown(
     }
     // A double takedown's second victim stands where his half starts, beside
     // the first (their halves' first root keys give the offset).
-    if let Some((e2, clip2)) = td.second.clone() {
+    // (From below he too starts up on the ledge, is pulled to its edge by his
+    // half and goes over it, as the first does.)
+    if let Some((e2, clip2)) = td.second.clone().filter(|_| td.below) {
+        let rig2 = npcs.get(e2).ok().and_then(|(_, n)| n.rig);
+        let lift2 = start(&clip2).zip(start(&td.clip)).map(|(v, p)| frame * (v - p)).unwrap_or(Vec3::ZERO);
+        let turn2 = clips.get(&clip2).map_or(0.0, |c| Quat::from_array(c.0.reference_rotation).to_euler(EulerRot::YXZ).0);
+        let sampled = rig2.and_then(|r| rigs.get(r).ok()).map(|r| r.playing()).and_then(|(kind, time)| {
+            let c = clips.get(&clip2)?;
+            let rm = c.0.root_motion.as_ref()?;
+            let (moved, turned) = rm.sample(crate::characters::clip_time(kind, time, c.0.duration));
+            Some((Quat::from_array(rm.start_rotation) * Vec3::from_array(moved), Quat::from_array(turned).to_euler(EulerRot::YXZ).0))
+        });
+        // (Neither goes over the edge: the double's halves stab them where
+        // they stand, and they fold up on the ledge.)
+        if let Some((moved, turned)) = sampled {
+            if let Ok((mut nt, mut npc)) = npcs.get_mut(e2) {
+                npc.yaw = a.yaw + turn2 + turned;
+                nt.translation = a.origin + lift2 + frame * moved + Vec3::Y * HALF_HEIGHT;
+                nt.rotation = Quat::from_rotation_y(npc.yaw);
+            }
+        }
+    } else if let Some((e2, clip2)) = td.second.clone() {
         let starts = |h: &Handle<Fc3Clip>| {
             clips.get(h).and_then(|c| c.0.root_motion.as_ref().map(|r| (Vec3::from_array(r.start_translation), Quat::from_array(c.0.reference_rotation))))
         };
@@ -1420,6 +1466,10 @@ const MACHETE_PROP: u32 = 0x744C_BC42;
 const TAKEDOWN_TIME: f32 = 2.1;
 /// A double takedown's hold (its clip runs 3.8 s).
 pub const DOUBLE_TIME: f32 = 3.4;
+/// A double takedown from below's (the ledge's clips run 3.0 s, the
+/// water's 2.43 s: held to their ends, where the victims go over).
+pub const BELOW_DOUBLE_TIME: f32 = 3.05;
+pub const BELOW_DOUBLE_WATER_TIME: f32 = 2.5;
 
 /// Actions and the clip names that provide them, best first.
 const ACTIONS: &[(AnimKind, &[&str])] = &[

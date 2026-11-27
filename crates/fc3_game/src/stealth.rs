@@ -164,8 +164,10 @@ const CHAIN_REACH: f32 = 10.0;
 const CHAIN_RANGE: f32 = 15.0;
 /// How far the pistol takedown reaches.
 const PISTOL_RANGE: f32 = 30.0;
-/// How near the first a second enemy must stand for a double takedown.
+/// How near the first a second enemy must stand for a double takedown (from
+/// below, on the ledge beside him: the clips put them 1.2 m apart).
 const DOUBLE_REACH: f32 = 4.5;
+const BELOW_DOUBLE_REACH: f32 = 2.5;
 /// How far ahead the grenade takedown's kick lands, and how near it two
 /// others must stand.
 const GRENADE_KICK: f32 = 6.0;
@@ -1047,31 +1049,76 @@ fn takedown(
             })
             .min_by(|a, b| a.1.distance(pt.translation).total_cmp(&b.1.distance(pt.translation)));
         if let Some((target, at, yaw)) = above {
+            // With the skill, a second beside him on the ledge goes too
+            // (the regular build only, as the clips are): the two side by
+            // side, the first the one on the left as seen from below.
+            let second = npcs
+                .iter()
+                .filter(|(e, t, n, h)| {
+                    perks.below_double
+                        && *e != target
+                        && !takeable(n, h)
+                        && !n.role.armoured()
+                        && n.state != NpcState::Combat
+                        && n.awareness < 1.0
+                        && Vec2::new(t.translation.x - at.x, t.translation.z - at.z).length() < BELOW_DOUBLE_REACH
+                        && (t.translation.y - at.y).abs() < 0.6
+                })
+                .filter(|_| npcs.get(target).is_ok_and(|(_, _, n, _)| !n.role.armoured()))
+                .min_by(|a, b| a.1.translation.distance(at).total_cmp(&b.1.translation.distance(at)))
+                .map(|(e, t, _, _)| (e, t.translation));
             td.candidate = Some(target);
-            td.kind = TakedownKind::Below;
+            td.kind = if second.is_some() { TakedownKind::Double } else { TakedownKind::Below };
             if actions.just_pressed(Action::Melee) {
                 actions.consume(Action::Melee);
-                // Square up under him, a step back from the edge.
-                let flat = Vec3::new(at.x - pt.translation.x, 0.0, at.z - pt.translation.z).normalize_or(fwd);
-                pt.translation = Vec3::new(at.x, pt.translation.y, at.z) - flat * 1.0;
+                let mid = second.map_or(at, |(_, at2)| (at + at2) * 0.5);
+                // Square up under him (them), a step back from the edge.
+                let flat = Vec3::new(mid.x - pt.translation.x, 0.0, mid.z - pt.translation.z).normalize_or(fwd);
+                pt.translation = Vec3::new(mid.x, pt.translation.y, mid.z) - flat * 1.0;
                 p.yaw = (-flat.x).atan2(-flat.z);
                 p.pitch = 0.3;
                 p.velocity = Vec3::ZERO;
                 let facing = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
                 let front = facing.dot(flat) < -0.3;
-                strike(&mut td, &mut inv, target, pe, at, &mut damage, &mut sfx);
-                stats.write(crate::progression::StatGain { stat: crate::progression::stat::TAKEDOWNS_FROM_BELOW, amount: 1 });
+                // (The first half is the left one's.)
+                let right = Vec3::new(-flat.z, 0.0, flat.x);
+                let (first, first_at, other) = match second {
+                    Some((e2, at2)) if (at2 - at).dot(right) < 0.0 => (e2, at2, Some((target, at))),
+                    other => (target, at, other),
+                };
+                strike(&mut td, &mut inv, first, pe, first_at, &mut damage, &mut sfx);
+                let n = if other.is_some() { 2 } else { 1 };
+                stats.write(crate::progression::StatGain { stat: crate::progression::stat::TAKEDOWNS_FROM_BELOW, amount: n });
                 let below = if p.swimming { crate::statistics::stat::WATER_TAKEDOWNS } else { crate::statistics::stat::LEDGE_TAKEDOWNS };
-                stats.write(crate::progression::StatGain { stat: below, amount: 1 });
-                rewards.0.insert(target, if p.swimming { "TakedownFromWater" } else { "TakedownFromLedge" });
-                debug!("takedown from below ({} m up, front {front}, water {})", at.y - crate::player::HALF_HEIGHT - feet, p.swimming);
+                stats.write(crate::progression::StatGain { stat: below, amount: n });
+                let reward = match (p.swimming, other.is_some()) {
+                    (true, true) => "TakedownFromWaterDouble",
+                    (false, true) => "TakedownFromLedgeDouble",
+                    (true, false) => "TakedownFromWater",
+                    (false, false) => "TakedownFromLedge",
+                };
+                rewards.0.insert(first, reward);
+                if let Some((e2, at2)) = other {
+                    rewards.0.insert(e2, reward);
+                    damage.write(DamageEvent {
+                        target: e2,
+                        amount: 10_000.0,
+                        kind: DamageKind::Melee,
+                        source: Some(at2),
+                        instigator: Some(pe),
+                        headshot: false,
+                        hit: crate::combat::Hit::Whole,
+                    });
+                    td.timer = if p.swimming { crate::fp::BELOW_DOUBLE_WATER_TIME } else { crate::fp::BELOW_DOUBLE_TIME } + 0.1;
+                }
+                debug!("takedown from below ({} m up, front {front}, water {}, double {})", at.y - crate::player::HALF_HEIGHT - feet, p.swimming, other.is_some());
                 anims.write(crate::fp::TakedownAnim {
-                    victim: target,
+                    victim: first,
                     style: crate::fp::TakedownStyle::Below { front, water: p.swimming },
                     chain: None,
                     grenade: None,
                     drag: false,
-                    second: None,
+                    second: other.map(|(e2, _)| (e2, false)),
                     pistol: [None; 3],
                 });
             }
@@ -1618,13 +1665,33 @@ pub fn below_test(
     mut players: Query<(&mut Transform, &mut Player), Without<Npc>>,
     mut npcs: Query<(Entity, &mut Transform, &Health, &mut Npc), Without<Player>>,
     mut commands: Commands,
+    mut placed: Local<bool>,
 ) {
     let Ok(mode) = std::env::var("FC3_TAKEDOWN_MODE") else { return };
     if !args.takedown_test || !mode.starts_with("below") {
         return;
     }
-    let water = mode == "below_water";
+    let water = mode.starts_with("below_water");
+    // (`below_double`, `below_water_double`: the second guard beside the
+    // first, for the double takedown from below.)
+    let double = mode.ends_with("_double");
     let Ok((mut pt, mut p)) = players.single_mut() else { return };
+    if state.0 == 1 && double && !*placed {
+        *placed = true;
+        let mut guards: Vec<(Entity, u64)> = npcs.iter().filter(|(_, _, _, n)| n.marker_id >= u64::MAX - 4).map(|(e, _, _, n)| (e, n.marker_id)).collect();
+        guards.sort_by_key(|g| std::cmp::Reverse(g.1));
+        if let [(first, _), (second, _), ..] = guards[..] {
+            let at = npcs.get(first).map(|(_, t, _, n)| (t.translation, n.yaw)).ok();
+            if let (Some((at, yaw)), Ok((e2, mut t2, _, mut n2))) = (at, npcs.get_mut(second)) {
+                let right = Vec3::new(yaw.cos(), 0.0, -yaw.sin());
+                t2.translation = at + right * 1.2;
+                n2.yaw = yaw;
+                t2.rotation = Quat::from_rotation_y(yaw);
+                commands.entity(e2).insert(crate::npc::Frozen);
+                info!("takedown-test: a second guard beside him");
+            }
+        }
+    }
     if p.spawning {
         return;
     }

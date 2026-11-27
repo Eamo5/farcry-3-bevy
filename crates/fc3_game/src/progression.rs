@@ -382,6 +382,7 @@ fn legacy_skill(name: &str) -> Vec<&'static str> {
         "death_from_above" => "SP_DeathFromAboveSingle",
         "double_takedown" => "SP_DeathFromAboveDouble",
         "death_from_below" => "SP_TakedownFromBelowSingle",
+        "below_double" => "SP_TakedownFromBelowDouble",
         "heavy_takedown" => "SP_HeavyUnitTakedown",
         "chain_takedown" => "SP_ChainTakedown",
         "knife_throw_takedown" => "SP_TakedownKnifeThrow",
@@ -821,6 +822,9 @@ pub struct Perks {
     pub takedown_drag: bool,
     pub double_takedown: bool,
     pub death_from_below: bool,
+    /// Two pulled down from a ledge or a dock at once
+    /// (`SP_TakedownFromBelowDouble`).
+    pub below_double: bool,
     pub tag_range: f32,
     pub medkit_cap: u32,
     pub medkit_full_heal: bool,
@@ -964,6 +968,7 @@ impl Perks {
             takedown_drag: learned("SP_DragBackTakedown"),
             double_takedown: learned("SP_DeathFromAboveDouble"),
             death_from_below: learned("SP_TakedownFromBelowSingle"),
+            below_double: learned("SP_TakedownFromBelowDouble"),
             tag_range: 1.0,
             medkit_cap: 3 + p.upgrade("syringe_kit") as u32,
             medkit_full_heal: false,

@@ -806,6 +806,18 @@ half `1stge_fulb_<name>.mab` and the victim's `3rdge_fulb_<name>.mab`, e.g.
   root motion, turn included. After a ledge half he tips over the edge and drops to the
   ground past the player's shoulder, on the side his half pulled him (`npc::LedgeFall`).
   From the water, only this takedown is open while swimming.
+* Dual death from below (`SP_TakedownFromBelowDouble`) uses
+  `1stge_fulb_ledgedoubletakedown_{fw,bk}_var1_+000fw_nowep` with `3rdge_..._target_{1,2}`
+  (3.0 s), or from the water `1stge_fulb_waterledgedoubletakedown_var{1,2}_+000fw_nowep`
+  (var1 taken for `fw`, var2 for `bk`) with `3rdge_fulb_waterledgedoubletakedown_{fw,bk}_..._target_{1,2}`
+  (2.43 s). The two stand side by side, target 2 1.2 m to the right of target 1 (x -0.6 and
+  +0.6, z -0.58), the player's root starting 1.75 m below between them. Neither goes over the
+  edge on the ledge: their roots stay put and their hips sink 0.73 m as they fold up where
+  they stand, while the player's root rises 0.9 m to reach them. So both are placed as the
+  single's victim is (the first-key offset, then their root motion), the first the one on the
+  left as seen from below, and neither is handed to `LedgeFall`. `fc3tool clip-bone <clip>
+  <bone> [t..]` prints a bone's model-space place over a clip. `FC3_TAKEDOWN_MODE=below_double`
+  (or `below_water_double`) puts the test's second guard beside the first.
 * In the game (`fc3_game::fp`), the scene stays where it started. The victim stands on the
   origin and the camera follows the player clip's `Camera` bone, eased in from the view over
   0.3 s. The player can't move or look until the clip ends. For a chain, the scene swings round

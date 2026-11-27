@@ -3450,6 +3450,40 @@ fn main() -> Result<()> {
             std::fs::write(out, &swf)?;
             println!("{} bytes, {found} images embedded, {} missing {:?}", swf.len(), missing.len(), missing.iter().take(5).collect::<Vec<_>>());
         }
+        "clip-bone" => {
+            // Where a clip puts a bone (model space, the clip's root at the
+            // origin) at a few times: clip-bone <archive clip> <bone> [t...]
+            use fc3_formats::anim;
+            let path = args.get(1).context("usage: clip-bone <archive clip> <bone> [t...]")?;
+            let bone = args.get(2).context("usage: clip-bone <archive clip> <bone> [t...]")?;
+            let clip = anim::parse_clip(&vfs.read(path)?)?;
+            let skel = anim::parse_skeleton(&vfs.read(r"graphics\actors_\_skeleton_master\hips_ref.skeleton")?)?;
+            let nodes: Vec<anim::Node> = skel
+                .bones
+                .iter()
+                .enumerate()
+                .map(|(i, b)| anim::Node {
+                    name: b.name.clone(),
+                    name_hash: b.name_hash,
+                    parent: b.parent,
+                    first_child: -1,
+                    next_sibling: -1,
+                    translation: b.translation,
+                    rotation: b.rotation,
+                    scale: [1.0; 3],
+                    bind_index: i as i32,
+                })
+                .collect();
+            let times: Vec<f32> = if args.len() > 3 { args[3..].iter().filter_map(|s| s.parse().ok()).collect() } else { (0..=4).map(|k| clip.duration * k as f32 / 4.0).collect() };
+            let ident = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+            let i = skel.find(bone).context("no such bone")?;
+            for t in times {
+                let locals = anim::pose_locals(&nodes, &skel, &clip, t.clamp(0.0, clip.duration));
+                let worlds = anim::compose_worlds(&nodes, &locals, &ident);
+                let m = worlds[i];
+                println!("t {t:5.2}: {bone} at [{:7.3}, {:7.3}, {:7.3}]", m[12], m[13], m[14]);
+            }
+        }
         "clip-hands" => {
             // Where a first-person clip puts the hands, seen from its camera
             // bone (x right, y up, -z ahead): clip-hands <archive clip> [t]

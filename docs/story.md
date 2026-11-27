@@ -593,6 +593,10 @@ is the story's own:
   pushed toward another foe within 10 m (or the takedown key with one
   ahead) closes on him and takes him down too, and so on while foes are
   near (`TakedownChain`, ten times). Both count in the statistics.
+  `SP_TakedownFromBelowDouble` ("Dual Death from Below") takes down a
+  second foe standing beside the first on the ledge or dock above
+  (`TakedownFromLedgeDouble`/`TakedownFromWaterDouble`, the game's "Dual
+  death from below" under the XP).
 * **The handbook's statistics** (`statistics`; the page in `docs/ui.md`):
   the engine's counters by their numbers (`enumStatisticType`, kept in
   `Progress::stats`, saved with it), counted as they happen:
