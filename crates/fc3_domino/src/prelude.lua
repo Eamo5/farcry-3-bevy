@@ -129,12 +129,23 @@ end
 local Instance = {}
 Instance.__index = Instance
 
+-- Data a box needs that the graphs compiled before it grew the input never
+-- set (our own choice of value): `PlayRandomDialog`'s gap between lines,
+-- which 43 of its 53 users (the random encounters' chatter, a cave's) leave
+-- out, and `math.random(nil, nil)` failed the graph's call.
+local data_defaults = {
+    ["domino/system/playrandomdialog.lua"] = { minTime = 3, maxTime = 6 },
+}
+
 function Instance:CreateBox(path)
     local class = __domino_class(path)
     local box = setmetatable({}, class._meta)
     box._type = class
     for _, name in ipairs(box_outs[GetPathID(path)] or {}) do
         rawset(box, name, DummyFunction)
+    end
+    for name, value in pairs(data_defaults[string.lower(path)] or {}) do
+        rawset(box, name, value)
     end
     if class.Init ~= nil then
         class.Init(box, self)

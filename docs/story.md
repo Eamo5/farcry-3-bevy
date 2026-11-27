@@ -94,6 +94,12 @@ the outputs the box declares that the use leaves out to `DummyFunction`
 (`fc3_domino::plug_stateless`; only the plugging block, as a graph may
 plug in one function and call in another), and a box created for a graph
 starts with them so, not falling back on its class's.
+Inputs can be missing the same way: 43 of `PlayRandomDialog`'s 53 users
+(the random encounters' chatter, a cave's) never set its `minTime` and
+`maxTime`, and its `math.random(nil, nil)` failed the call, cutting the
+rest of the graph's handler short. A box created for a graph starts with
+our own values for those (3 to 6 s between lines; the prelude's
+`data_defaults`), which a graph that sets them overrides.
 
 ## The mission system
 
