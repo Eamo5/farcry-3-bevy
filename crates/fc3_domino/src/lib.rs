@@ -25,6 +25,32 @@ pub trait ScriptSource {
     fn script(&self, path: &str) -> Option<String>;
 }
 
+/// The control outputs a box's reflection header declares
+/// (`-- <ControlOut Name="Acknowledged"/>`), but not the dynamic ones (a
+/// table of numbered outputs the graph fills in).
+pub fn control_outs(text: &str) -> Vec<String> {
+    let mut outs = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_start();
+        if !line.starts_with("--") {
+            if !line.is_empty() {
+                break;
+            }
+            continue;
+        }
+        let Some(at) = line.find("<ControlOut") else { continue };
+        let tag = &line[at..];
+        if tag.to_ascii_lowercase().contains("dynamic=\"true\"") {
+            continue;
+        }
+        let Some(name) = tag.split("Name=\"").nth(1).and_then(|r| r.split('"').next()) else { continue };
+        if !name.is_empty() && !outs.iter().any(|o| o == name) {
+            outs.push(name.to_string());
+        }
+    }
+    outs
+}
+
 /// The entity id that stands for none.
 pub const INVALID_ID: &str = "18446744073709551615";
 
@@ -86,10 +112,13 @@ impl Domino {
         g.set(
             "__domino_load",
             lua.create_function(move |lua, path: String| match source.script(&path) {
-                Some(text) => lua.load(text).set_name(path).exec().map(|()| true),
+                Some(text) => {
+                    let outs = lua.create_sequence_from(control_outs(&text))?;
+                    lua.load(text).set_name(path).exec().map(|()| (true, Some(outs)))
+                }
                 None => {
                     s.borrow_mut().log.push(format!("missing script {path}"));
-                    Ok(false)
+                    Ok((false, None))
                 }
             })?,
         )?;
@@ -322,6 +351,43 @@ mod tests {
         let d = Domino::new(scripts()).unwrap();
         let graph = d.create("Test/Graph.lua").unwrap();
         d.call(&graph, "OnLeaveZone").unwrap();
+    }
+
+    /// An output a box's header declares but its graph never plugs does
+    /// nothing when called; a dynamic one is left for the graph to fill in.
+    #[test]
+    fn unplugged_outputs_do_nothing() {
+        let mut m = scripts().0;
+        m.insert(
+            "test/getstate.lua".into(),
+            r#"
+            -- DOMINO REFLECTION BOX START
+            -- <ControlOut Name="Running" />
+            -- <ControlOut Name="Acknowledged" />
+            -- <ControlOut Name="Out" Dynamic="True"/>
+            -- DOMINO REFLECTION BOX END
+            G = {};
+            function G:Get() self:Acknowledged(); self:Running() end
+            export = G; G = nil;
+            "#
+            .into(),
+        );
+        let d = Domino::new(Scripts(m)).unwrap();
+        let ran: bool = d
+            .lua()
+            .load(
+                r#"
+                local c = __domino_class("Test/GetState.lua")
+                local ran = false
+                c.Running = function() ran = true end
+                c:Get()
+                return ran and c.Out == nil
+                "#,
+            )
+            .eval()
+            .unwrap();
+        assert!(ran);
+        assert_eq!(control_outs("\n-- <ControlOut Name=\"A\"/>\n-- <ControlOut Name=\"B\" Delayed=\"true\">\nx = 1\n-- <ControlOut Name=\"C\"/>"), ["A", "B"]);
     }
 
     /// The id the game gives `Domino/System/Print_v2.lua`.

@@ -57,13 +57,22 @@ function __domino_class(path)
         return class
     end
     rawset(_G, "export", nil)
-    if not __domino_load(path) then
+    local loaded, outs = __domino_load(path)
+    if not loaded then
         -- A missing script: an empty class, so its users still load.
         class = {}
     else
         class = rawget(_G, "export")
         if type(class) ~= "table" then
             class = {}
+        end
+        -- Every output its header declares does nothing until a graph
+        -- plugs it (a graph compiled before the box grew an output leaves
+        -- it unset: base_c4_amanakitown_main's MissionGetState, Acknowledged).
+        for _, name in ipairs(outs or {}) do
+            if rawget(class, name) == nil then
+                rawset(class, name, DummyFunction)
+            end
         end
     end
     rawset(_G, "export", nil)

@@ -79,6 +79,11 @@ dependencies (boxes, globals scripts, libraries, resources). Instances are
 `setmetatable(t, class._meta)` with `Init(t, cbox)`; stateless boxes are used
 as the class table itself. Every call from the engine goes through the class
 (`inst._type[method]`). Entity ids cross as decimal strings of the 64-bit id.
+Each output a box's reflection header declares (`<ControlOut Name=...>`, not
+the dynamic ones) starts as `DummyFunction` on its class, so an output no
+graph plugs does nothing: base_c4_amanakitown_main was compiled before
+`MissionGetState` had `Acknowledged`, leaves it unset, and calling it raised
+an error that cut the graph's `In` short (its second trigger never enabled).
 
 ## The mission system
 
