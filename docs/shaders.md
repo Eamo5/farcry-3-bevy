@@ -832,7 +832,11 @@ Runtime glue:
   house). `fc3tool fcm-tris <file.fcm> <x,y,z> <r>` lists a converted model's
   triangles round a point, with each corner's attributes; `FC3_VIEW_MESH_DEBUG`
   also names how each mesh on the crosshair is drawn, and the GPU-only meshes
-  whose bounds it crosses.
+  whose bounds it crosses; `FC3_VIEW_MESH_DEBUG_AT=<x>,<y>` aims it through
+  another point of the view (-1..1 rightward and upward) and reaches 2 km.
+  (A white sawtooth crescent seen in many test shots so found to be nothing
+  in the world: it is the HUD's own hit indicator, the noclip camera shot at
+  by an outpost's guards, or, riding behind one, a gull's wings.)
 - Vertex colours (blend weights, baked occlusion) are passed as a custom
   attribute that standard materials ignore.
 - Self-lit materials (`Unlit`, `EffectLit`: signs, lamp glass, screens) show

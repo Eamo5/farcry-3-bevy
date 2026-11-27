@@ -86,17 +86,28 @@ fn ground_map_at(
 /// One-shot crosshair inspection of CPU render triangles, including meshes
 /// without physics colliders. The value is elapsed gameplay seconds.
 fn view_mesh_debug(time: Res<Time>, mut done: Local<bool>, server: Res<AssetServer>, meshes: Res<Assets<Mesh>>,
-    cameras: Query<&GlobalTransform, With<crate::player::PlayerCamera>>,
+    cameras: Query<(&GlobalTransform, &Projection), With<crate::player::PlayerCamera>>,
     parts: Query<(Entity, &Mesh3d, &GlobalTransform, &InheritedVisibility)>,
     owners: Query<(Option<&crate::objects::PlacedId>, Option<&ChildOf>)>,
     kinds: Query<DrawnAs>,
     aabbs: Query<&bevy::camera::primitives::Aabb>) {
     let Some(at) = std::env::var("FC3_VIEW_MESH_DEBUG").ok().and_then(|s| s.parse::<f32>().ok()).filter(|v| v.is_finite()) else { return };
     if *done || time.elapsed_secs() < at { return; }
-    let Ok(camera) = cameras.single() else { return };
+    let Ok((camera, projection)) = cameras.single() else { return };
     *done = true;
     let origin = camera.translation();
-    let direction = camera.forward().as_vec3();
+    // (`FC3_VIEW_MESH_DEBUG_AT=<x>,<y>`: through that point of the view
+    // instead, -1..1 rightward and upward; GPU-only meshes by their bounds
+    // out to 2 km then.)
+    let at: Vec<f32> = std::env::var("FC3_VIEW_MESH_DEBUG_AT").unwrap_or_default().split(',').filter_map(|v| v.trim().parse().ok()).collect();
+    let (direction, reach) = match at[..] {
+        [x, y] => {
+            let world_from_clip = camera.to_matrix() * projection.get_clip_from_view().inverse();
+            let point = |z: f32| world_from_clip.project_point3(Vec3::new(x, y, z));
+            ((point(0.01) - point(1.0)).normalize(), 2000.0)
+        }
+        _ => (camera.forward().as_vec3(), 10.0),
+    };
     let mut hits = Vec::new();
     let mut inspected = 0;
     let mut boxed = Vec::new();
@@ -111,7 +122,7 @@ fn view_mesh_debug(time: Res<Time>, mut done: Local<bool>, server: Res<AssetServ
                 let (lo, hi) = (Vec3::from(aabb.center - aabb.half_extents), Vec3::from(aabb.center + aabb.half_extents));
                 let (t1, t2) = ((lo - o) / d, (hi - o) / d);
                 let (near, far) = (t1.min(t2).max_element(), t1.max(t2).min_element());
-                if near <= far && far >= 0.0 && near < 10.0 {
+                if near <= far && far >= 0.0 && near < reach {
                     boxed.push((near.max(0.0), entity, server.get_path(handle.0.id()).map(|p| p.to_string())));
                 }
             }
@@ -125,7 +136,7 @@ fn view_mesh_debug(time: Res<Time>, mut done: Local<bool>, server: Res<AssetServ
         let d = inverse.transform_vector3(direction);
         if !o.is_finite() || !d.is_finite() { continue; }
         let indices: Vec<usize> = mesh.indices().map(|i| i.iter().collect()).unwrap_or_else(|| (0..positions.len()).collect());
-        let mut closest = 10.0f32;
+        let mut closest = reach;
         let mut triangle = None;
         for tri in indices.chunks_exact(3) {
             let [a, b, c] = [Vec3::from_array(positions[tri[0]]), Vec3::from_array(positions[tri[1]]), Vec3::from_array(positions[tri[2]])];
@@ -169,7 +180,7 @@ fn view_mesh_debug(time: Res<Time>, mut done: Local<bool>, server: Res<AssetServ
         info!("view mesh inspection: {hit:?} {kinds}");
     }
     boxed.sort_by(|a, b| a.0.total_cmp(&b.0));
-    for (near, e, path) in boxed.iter().take(12) {
+    for (near, e, path) in boxed.iter().take(if reach > 10.0 { 40 } else { 12 }) {
         let kinds = kinds.get(*e).map(|(s, o, _, l, t)| format!("standard {s} original {o} layers {l:?} at {:?}", t.translation())).unwrap_or_default();
         info!("view mesh inspection: bounds from {near:.2} m: {e:?} {path:?} {kinds}");
     }
@@ -539,6 +550,7 @@ fn auto_screenshot(
     time: Res<Time<Real>>,
     mut taken: Local<bool>,
     mut quit_at: Local<Option<f32>>,
+    mut burst_taken: Local<u32>,
     terrain: Res<crate::terrain::TerrainStreamer>,
     objects: Res<crate::objects::ObjectStreamer>,
     vegetation: Res<crate::vegetation::VegStreamer>,
@@ -553,6 +565,21 @@ fn auto_screenshot(
         return;
     }
     if let Some(t) = *quit_at {
+        // FC3_SHOT_BURST=<count>,<every s> (tests): that many more shots
+        // after the first, `<stem>_burstN.png`, to see what moves.
+        let burst: Vec<f32> = std::env::var("FC3_SHOT_BURST").unwrap_or_default().split(',').filter_map(|v| v.trim().parse().ok()).collect();
+        if let [count, every] = burst[..] {
+            let n = ((time.elapsed_secs() - (t - 2.0)) / every.max(0.05)) as u32;
+            if n >= 1 && n <= count as u32 && *burst_taken < n {
+                *burst_taken = n;
+                let stem = path.strip_suffix(".png").unwrap_or(&path);
+                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(format!("{stem}_burst{n}.png")));
+            }
+            if time.elapsed_secs() > t - 2.0 + count * every.max(0.05) + 2.0 {
+                exit.write(AppExit::Success);
+            }
+            return;
+        }
         if time.elapsed_secs() > t {
             exit.write(AppExit::Success);
         }

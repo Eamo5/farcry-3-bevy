@@ -372,9 +372,12 @@ fn fly_birds(
 fn bird_test(time: Res<Time>, mut last: Local<f32>, birds: Query<(&Bird, &Transform), Without<Player>>, mut players: Query<(&mut Transform, &mut Player)>) {
     let Ok(mode) = std::env::var("FC3_BIRD_TEST") else { return };
     let Ok((mut pt, mut p)) = players.single_mut() else { return };
-    // `close`: ride along 8 m behind the first bird (with --noclip).
-    if mode == "close" {
-        if let Some((b, t)) = birds.iter().next() {
+    // `close`: ride along 8 m behind the first bird (with --noclip);
+    // `close:vulture` (`eagle`, `gull`) the first of its kind.
+    if let Some(kind) = mode.strip_prefix("close") {
+        let kind = kind.trim_start_matches(':').to_ascii_lowercase();
+        let first = birds.iter().find(|(b, _)| kind.is_empty() || format!("{:?}", BIRDS[b.def].kind).to_ascii_lowercase() == kind);
+        if let Some((b, t)) = first {
             let tangent = Vec3::new(-b.angle.sin(), 0.0, b.angle.cos()) * b.dir;
             pt.translation = t.translation - tangent * 8.0 + Vec3::Y * 1.5;
         }
