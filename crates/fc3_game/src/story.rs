@@ -69,10 +69,43 @@ impl Plugin for StoryPlugin {
                 matches!(state.get(), GameState::Playing | GameState::Paused | GameState::Map | GameState::Journal | GameState::Shop)
             }))
             .add_systems(Update, show_story_ui)
-            .add_systems(Update, (apply_sides, apply_tags, scripted_controls, scripted_ambience, apply_damage_rates, script_sounds, holster_characters, swap_blade).after(StorySet));
+            .add_systems(Update, (apply_sides, apply_tags, scripted_controls, scripted_ambience, apply_damage_rates, script_sounds, holster_characters, swap_blade, (tracker_test, put_tracker_away).chain()).after(StorySet));
         if std::env::var_os("FC3_STORY_RETRY_TEST").is_some() {
             app.add_systems(Update, retry_inventory_test.after(StorySet).run_if(in_state(GameState::Playing)));
         }
+    }
+}
+
+/// Tests: `FC3_TRACKER_TEST=<metres>` puts the tracking device in hand a few
+/// seconds into play, tracking a point that far ahead (redone every 10 s,
+/// for screenshots).
+fn tracker_test(time: Res<Time>, players: Query<&GlobalTransform, With<Player>>, mut scripted: ResMut<ScriptedPlayer>, mut next: Local<f32>) {
+    let Some(metres) = std::env::var("FC3_TRACKER_TEST").ok().and_then(|v| v.parse::<f32>().ok()) else { return };
+    if time.elapsed_secs() < 3.0 || time.elapsed_secs() < *next {
+        return;
+    }
+    let Ok(p) = players.single() else { return };
+    *next = time.elapsed_secs() + 10.0;
+    scripted.gadgets.insert("weapons:FC3/GPS".into());
+    scripted.tracker_drawn = true;
+    scripted.tracked = Some(p.translation() + p.forward().as_vec3() * metres);
+    info!("tracker test: tracking {metres} m ahead");
+}
+
+/// The tracking device put away as the player takes up a weapon, the camera
+/// or a throw, and when it's no longer carried.
+fn put_tracker_away(actions: Res<crate::controls::ActionState>, mut scripted: ResMut<ScriptedPlayer>) {
+    use crate::controls::Action as A;
+    if !scripted.tracker_drawn {
+        return;
+    }
+    let taken_up = [A::Fire, A::Aim, A::Melee, A::NextWeapon, A::PrevWeapon, A::Tag, A::Grenade, A::Molotov, A::ThrowRock, A::Reload]
+        .into_iter()
+        .find(|a| actions.just_pressed(*a));
+    let carried = scripted.gadgets.iter().any(|g| g.to_ascii_lowercase().ends_with("/gps"));
+    if taken_up.is_some() || !carried {
+        debug!("story: the tracking device put away ({taken_up:?}, carried {carried})");
+        scripted.tracker_drawn = false;
     }
 }
 
@@ -1648,6 +1681,12 @@ pub struct ScriptedPlayer {
     /// The machete drawn as the ceremonial knife (`IsChineseSwordEquipped`:
     /// JAS_240's hallucination, `weapons::BladeSwap`).
     pub ceremonial_knife: bool,
+    /// The tracking device (`weapons:FC3/GPS`, WIL_010's) in hand: drawn by
+    /// a script (`tracking_device`), put away as another weapon or the
+    /// camera is taken up; and where what it tracks lies
+    /// (`UpdateDeviceToTrack`: a package to photograph), Bevy space.
+    pub tracker_drawn: bool,
+    pub tracked: Option<Vec3>,
     /// Black over the screen: (now, target, seconds to get there).
     pub fade: (f32, f32, f32),
     /// Seconds the screen has been held black (a scene lifts it; this is
@@ -1754,6 +1793,8 @@ impl Default for ScriptedPlayer {
             message: None,
             observers: 0,
             ceremonial_knife: false,
+            tracker_drawn: false,
+            tracked: None,
             fade: (0.0, 0.0, 0.0),
             black_for: 0.0,
             backup: None,
@@ -4611,6 +4652,7 @@ fn run_story(
                     }
                     "CAPI_Pawn.Holster" | "CAPI_Pawn.ForceHolster" if a(0) == fc3_story::PLAYER.to_string() => {
                         scripted.camera_drawn = false;
+                        scripted.tracker_drawn = false;
                         scripted.holstered = true;
                     }
                     // A weapon drawn by a script (`WieldInventory`'s
@@ -4619,7 +4661,18 @@ fn run_story(
                     // category. (JAS_130's ride hands the player the GM-94
                     // so, for the trucks behind; it had stayed on whatever
                     // was in hand.)
+                    // The tracking device taken out (WIL_010's, once picked
+                    // up: `tracking_device`, forced), if it's carried.
+                    "CAPI_Pawn.DrawWeapon" if a(0) == fc3_story::PLAYER.to_string() && a(1).eq_ignore_ascii_case("tracking_device") => {
+                        scripted.tracker_drawn = scripted.gadgets.iter().any(|g| g.to_ascii_lowercase().ends_with("/gps"));
+                        debug!("story: the tracking device {}", if scripted.tracker_drawn { "in hand" } else { "not carried" });
+                    }
+                    // What it tracks (`player, entity`; none for nothing).
+                    "CAPI_Player.UpdateDeviceToTrack" if a(0) == fc3_story::PLAYER.to_string() => {
+                        scripted.tracked = a(1).parse::<u64>().ok().and_then(|id| data.entities.get(&id)).map(|e| to_bevy(e.pos));
+                    }
                     "CAPI_Pawn.DrawWeapon" if a(0) == fc3_story::PLAYER.to_string() => {
+                        scripted.tracker_drawn = false;
                         if let Ok(mut inv) = inventory.single_mut() {
                             let named = Some(a(3)).filter(|n| !n.is_empty()).and_then(|n| weapon_def(&inv, &n, &host.story.data()));
                             let kind = |c: crate::weapons::WeaponClass| {

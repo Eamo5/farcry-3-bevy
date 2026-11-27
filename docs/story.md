@@ -5122,6 +5122,19 @@ there checkpoint after checkpoint for an hour:
   none of the game's), any other the mission's own item
   (`PickupKind::Mission`), taken for the scripts (`PickupPicked`) with
   nothing kept.
+* **The tracking device in hand.** Once picked up, B10 gives the player
+  `weapons:FC3/GPS` and draws it (`WieldInventory`, category
+  `tracking_device`, forced), and points it at each package in turn
+  (`CAPI_Player.UpdateDeviceToTrack`). Neither was played; his hands kept
+  the gun. Now the arms take it up as a context of their own
+  (`fp::Context::Tracker`: the GPS clips' draw, then their idle), the
+  device (`gps_01.xbg`) in the right hand on its clips' prop track, and its
+  two proximity lights (its `IED_C4_LightStatus` slots) blink, lit a third
+  of each beat, from every 2 s at 200 m or more from what it tracks to
+  every 0.15 s at hand (`fp::blink_tracker`). Taking up a weapon, the
+  camera or a throw, or a script's holster, puts it away
+  (`story::put_tracker_away`). `FC3_TRACKER_TEST=<metres>` puts it in hand,
+  tracking a point that far ahead.
 * **A pickup across the island.** The autopilot only picked up what was in
   the world near the player. One a script waits for, not in the world after
   20 s of quiet, is now gone to first so that it streams in, once, and not

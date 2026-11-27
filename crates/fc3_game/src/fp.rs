@@ -42,7 +42,7 @@ impl Plugin for FpPlugin {
                 PostUpdate,
                 (drive_takedown, wingsuit_membrane, align_arms).chain().after(crate::characters::animate_characters).before(TransformSystems::Propagate),
             )
-            .add_systems(Update, live_grenades);
+            .add_systems(Update, (live_grenades, blink_tracker));
     }
 }
 
@@ -106,6 +106,8 @@ enum Context {
     Repair,
     /// Raising the camera to tag (then looking through it).
     Camera,
+    /// The tracking device held up (WIL_010's GPS).
+    Tracker,
     /// At the knife thrower's game, the knife in hand.
     Knife(KnifeArms),
 }
@@ -168,6 +170,7 @@ impl Context {
             Context::Skydive => r"vehicles\other\wingsuit\1stge_fulb_skydivefalling_nodir_nowep_wingsuit.mab",
             Context::Repair => r"weapons\special\repairtool\1stge_uppb_canrepairshootcycle_+000fw_sprt.mab",
             Context::Camera => r"weapons\camera\1stge_uppb_iron_+000fw_eqcam.mab",
+            Context::Tracker => r"weapons\special\gps\1stge_uppb_breatheaimslow_+000fw_gps.mab",
             Context::Knife(KnifeArms::Ready) => KNIFE_READY,
             Context::Knife(KnifeArms::Charging) => KNIFE_HELD,
             Context::Knife(KnifeArms::Throwing) => KNIFE_THROW,
@@ -184,6 +187,7 @@ impl Context {
             Context::Skydive => Some((r"vehicles\other\wingsuit\1stge_fulb_jump2skydive_nodir_nowep_wingsuit.mab", 1.0)),
             Context::Repair => Some((r"weapons\special\repairtool\1stge_uppb_transitionaim2canrepair_+000fw_sprt.mab", 0.333)),
             Context::Camera => Some((r"weapons\camera\1stge_uppb_draw_+000fw_eqcam.mab", 0.567)),
+            Context::Tracker => Some((r"weapons\special\gps\1stge_uppb_draw_+000fw_gps.mab", 0.5)),
             Context::Knife(KnifeArms::Ready) => Some((KNIFE_DRAW, 0.833)),
             _ => None,
         }
@@ -424,10 +428,25 @@ const PROPS: &[(&str, &str)] = &[
     // The tagging camera (its clips call it the monocular).
     ("monocular", r"graphics\__fc3_graphics\_common\props\equipment\camera.xbg"),
     ("npc_knife_3", r"graphics\__fc3_graphics\_common\weapons\npcknife\npc_knife_3.xbg"),
+    // The tracking device (`weapons:FC3/GPS`).
+    ("gps_01", r"graphics\__fc3_graphics\_common\props\equipment\gps_01.xbg"),
 ];
 
 /// The tagging camera's prop skeleton in its clips (a single bone).
 const CAMERA_PROP: u32 = 0xA4E2_1CF2;
+
+/// The tracking device's prop skeleton in its clips (its frame and two
+/// proximity lights).
+const GPS_PROP: u32 = 0x42EF_96E1;
+
+/// The tracking device's proximity lights (its first two material slots,
+/// `IED_C4_LightStatus`): they blink, faster the nearer what it tracks,
+/// from once every `TRACKER_SLOWEST` s at `TRACKER_FAR` m or more to every
+/// `TRACKER_FASTEST` s at hand; lit a third of each beat.
+const TRACKER_LIGHT_SLOTS: [u32; 2] = [0, 1];
+const TRACKER_FAR: f32 = 200.0;
+const TRACKER_SLOWEST: f32 = 2.0;
+const TRACKER_FASTEST: f32 = 0.15;
 
 /// The welding torch's prop skeleton in the repair tool's clips.
 const TORCH_PROP: u32 = 0x7DEA_9E33;
@@ -481,19 +500,63 @@ fn place_props(
 
 /// A prop model's meshes under a new root on `joint`.
 fn spawn_prop(model: &Fc3Model, joint: Entity, commands: &mut Commands) -> Entity {
+    spawn_prop_marking(model, joint, commands, &[])
+}
+
+/// A prop on a joint, the parts of these material slots marked as the
+/// tracking device's lights.
+fn spawn_prop_marking(model: &Fc3Model, joint: Entity, commands: &mut Commands, lights: &[u32]) -> Entity {
     let root = commands.spawn((Transform::default(), Visibility::Inherited, ChildOf(joint))).id();
     if let Some(lod) = model.lods.first() {
         for part in &lod.parts {
-            commands.spawn((
-                Mesh3d(part.mesh.clone()),
-                MeshMaterial3d(part.material.clone()),
-                NotShadowCaster,
-                crate::original_shaders::PropPart,
-                ChildOf(root),
-            ));
+            let e = commands
+                .spawn((
+                    Mesh3d(part.mesh.clone()),
+                    MeshMaterial3d(part.material.clone()),
+                    NotShadowCaster,
+                    crate::original_shaders::PropPart,
+                    ChildOf(root),
+                ))
+                .id();
+            if lights.contains(&part.slot) {
+                commands.entity(e).insert((TrackerLight, Visibility::Hidden));
+            }
         }
     }
     root
+}
+
+/// A light of the tracking device in hand.
+#[derive(Component)]
+struct TrackerLight;
+
+/// The tracking device's lights blink, faster the nearer what it tracks
+/// (dark with nothing tracked).
+fn blink_tracker(
+    time: Res<Time>,
+    scripted: Option<Res<crate::story::ScriptedPlayer>>,
+    players: Query<&GlobalTransform, With<Player>>,
+    mut lights: Query<&mut Visibility, With<TrackerLight>>,
+    mut phase: Local<f32>,
+) {
+    if lights.is_empty() {
+        return;
+    }
+    let near = scripted.as_ref().and_then(|s| s.tracked).zip(players.single().ok()).map(|(at, p)| at.distance(p.translation()));
+    let lit = match near {
+        Some(d) => {
+            let beat = TRACKER_FASTEST + (TRACKER_SLOWEST - TRACKER_FASTEST) * (d / TRACKER_FAR).clamp(0.0, 1.0);
+            *phase = (*phase + time.delta_secs() / beat).fract();
+            *phase < 1.0 / 3.0
+        }
+        None => false,
+    };
+    for mut v in &mut lights {
+        let want = if lit { Visibility::Inherited } else { Visibility::Hidden };
+        if *v != want {
+            *v = want;
+        }
+    }
 }
 
 /// Starts an action on the arms: its clip, the weapon put away, its props
@@ -1547,6 +1610,8 @@ pub struct FpState {
     camera: Option<Entity>,
     /// The thrower's knife in hand.
     knife: Option<Entity>,
+    /// The tracking device in hand.
+    gps: Option<Entity>,
     /// The pawn whose arms are on (none: the player's own, `ARMS`), the
     /// player's pawns' arms by pawn (lower case; read once one is switched
     /// to), and the arms loading for the pawn wanted.
@@ -1802,12 +1867,13 @@ fn drive_arms(
         Res<crate::traversal::Ways>,
         Res<SwimClips>,
     ),
-    (mut cinematic, mut busy, repairing, bino, knives): (
+    (mut cinematic, mut busy, repairing, bino, knives, scripted): (
         ResMut<Cinematic>,
         ResMut<HandsBusy>,
         Res<crate::vehicles::Repairing>,
         Res<crate::stealth::Binoculars>,
         Option<Res<crate::knives::KnifeGame>>,
+        Option<Res<crate::story::ScriptedPlayer>>,
     ),
     mut commands: Commands,
 ) {
@@ -1837,6 +1903,7 @@ fn drive_arms(
             }
             _ if repairing.vehicle.is_some() => Some(Context::Repair),
             crate::traversal::Mount::None if bino.held > 0.0 => Some(Context::Camera),
+            crate::traversal::Mount::None if scripted.as_ref().is_some_and(|s| s.tracker_drawn) && !p.swimming && !p.driving => Some(Context::Tracker),
             crate::traversal::Mount::Ladder { index, .. } => Some(
                 if ways.data.ladders.get(index).is_some_and(|l| l.animation_package == fc3_formats::traversal::VINE_ANIMATION_PACKAGE) {
                     if p.velocity.y > 0.01 { Context::VineClimb }
@@ -2109,6 +2176,20 @@ fn wingsuit_membrane(
         }
         _ => {}
     }
+    // The tracking device in hand, its lights marked to blink.
+    match (state.context == Some(Context::Tracker), state.gps) {
+        (true, None) => {
+            let hand = state.rig.and_then(|r| rigs.get(r).ok()).and_then(|r| r.joint(name_hash("RightHand"))).map(|(_, j)| j);
+            if let (Some(hand), Some(model)) = (hand, state.props.get("gps_01").and_then(|h| models.get(h))) {
+                state.gps = Some(spawn_prop_marking(model, hand, &mut commands, &TRACKER_LIGHT_SLOTS));
+            }
+        }
+        (false, Some(e)) => {
+            commands.entity(e).despawn();
+            state.gps = None;
+        }
+        _ => {}
+    }
     // The knife in hand at the knife thrower's game.
     match (matches!(state.context, Some(Context::Knife(_))), state.knife) {
         (true, None) => {
@@ -2210,6 +2291,12 @@ fn align_arms(state: Res<FpState>, clips: Res<Assets<Fc3Clip>>, rigs: Query<&Cha
             if state.context == Some(Context::Knife(KnifeArms::Throwing)) && t >= THROWN_KNIFE_RELEASE {
                 pt.scale = Vec3::ZERO;
             }
+        }
+    }
+    // The tracking device, by its frame's track.
+    if let (Some(e), Some(prop)) = (state.gps, clip.0.sub_clips.iter().find(|c| c.skeleton_id == GPS_PROP)) {
+        if let Ok(mut pt) = transforms.get_mut(e) {
+            *pt = pose(prop);
         }
     }
     // The welding torch, by its track (the hand's; the other is the left
