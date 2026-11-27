@@ -1206,7 +1206,11 @@ Everything else is the engine's to drive (`original_ui::drive_map_page`):
   `iAngle`, `bIsMarker`), here the player, objectives, radio towers taken
   or not, outposts held, safehouses and liberated outposts (both fast
   travel) and the waypoint. The types are the movie's `E_*` (player 0,
-  mission 1, safehouse 6/7, tower 8/9, marker 20, outpost 70).
+  mission 1, safehouse 6/7, tower 8/9, marker 20, outpost 70). A tower
+  whose marker a script hides (`HideRadioTowerObjectiveMarker <panel>
+  true`, the `RadioTowerModifier` box) is left off until shown again
+  (within 40 m of the panel, `StoryHost::hidden_towers`); the campaign
+  only ever shows JAS_100's again (chapter 2).
 * The story's map markers (`story/markers.fcb`) add the rest. Activities,
   shops and the social challenges' boards show as they stand: enabled in a
   layer that's in (an activity's comes with its country's outpost taken).

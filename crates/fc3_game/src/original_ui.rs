@@ -1054,6 +1054,10 @@ fn marker_icon(kind: u64, sub: u64) -> Option<f64> {
     })
 }
 
+/// How near (m, across the ground) a radio tower stands to the panel whose
+/// marker a script hid for it to be left off the map.
+const HIDDEN_TOWER_NEAR: f32 = 40.0;
+
 /// The markers scripts show, as what they are (a quest's giver, a
 /// mission's, else an objective: `map_icon::MISSION`), where they are now.
 fn scripted_markers(host: &crate::story::StoryHost) -> Vec<(f64, Vec3)> {
@@ -1261,7 +1265,13 @@ fn drive_map_page(
                         }
                     }
                 }
+                // (Not one whose marker a script hid: JAS_060's, its
+                // objective's marker leading there instead.)
+                let hidden: Vec<Vec3> = story.as_ref().map(|h| h.hidden_towers.values().copied().collect()).unwrap_or_default();
                 for (i, at) in ways.data.towers.iter().enumerate() {
+                    if hidden.iter().any(|p| p.with_y(0.0).distance(Vec3::from(*at).with_y(0.0)) < HIDDEN_TOWER_NEAR) {
+                        continue;
+                    }
                     let taken = progress.towers.contains(&(i as u32));
                     icon(if taken { map_icon::TOWER } else { map_icon::TOWER_LOCKED }, Vec3::from(*at), "", 0.0, false);
                 }

@@ -1147,6 +1147,10 @@ pub struct StoryHost {
     /// Characters whose weapons the scripts took away (a companion holstering
     /// for a talk: `CAPI_Pawn.RemoveAllWeapon`), till they give them back.
     pub holstered: std::collections::HashSet<u64>,
+    /// Where the radio towers whose markers a script hid stand (their
+    /// panels', Bevy space: `HideRadioTowerObjectiveMarker`, JAS_060's
+    /// tower while the mission's own marker leads to it), left off the map.
+    pub hidden_towers: std::collections::HashMap<u64, Vec3>,
     /// The share of their harm companions deal, as scripts set it
     /// (`CAPI_Companion.CompanionSetDamage`).
     pub companion_damage: HashMap<u64, f32>,
@@ -1514,6 +1518,7 @@ impl StoryHost {
             gsf_events: Vec::new(),
             gameplay_params: Default::default(),
             holstered: Default::default(),
+            hidden_towers: Default::default(),
             companion_damage: HashMap::new(),
             cautious: Default::default(),
             actor_moves: Vec::new(),
@@ -4666,6 +4671,19 @@ fn run_story(
                     "CAPI_Pawn.DrawWeapon" if a(0) == fc3_story::PLAYER.to_string() && a(1).eq_ignore_ascii_case("tracking_device") => {
                         scripted.tracker_drawn = scripted.gadgets.iter().any(|g| g.to_ascii_lowercase().ends_with("/gps"));
                         debug!("story: the tracking device {}", if scripted.tracker_drawn { "in hand" } else { "not carried" });
+                    }
+                    // A radio tower's marker hidden or shown again (`panel,
+                    // hide`: the `RadioTowerModifier` box).
+                    "HideRadioTowerObjectiveMarker" => {
+                        if let Ok(id) = a(0).parse::<u64>() {
+                            if a(1) == "true" || a(1) == "1" {
+                                if let Some(e) = data.entities.get(&id) {
+                                    host.hidden_towers.insert(id, to_bevy(e.pos));
+                                }
+                            } else {
+                                host.hidden_towers.remove(&id);
+                            }
+                        }
                     }
                     // What it tracks (`player, entity`; none for nothing).
                     "CAPI_Player.UpdateDeviceToTrack" if a(0) == fc3_story::PLAYER.to_string() => {
