@@ -3278,8 +3278,14 @@ fn run_story(
         } else {
             None
         };
+        // (Not while a script holds the player where he stands, its map in
+        // force taking away moving: HUR_050's second pillar was used while
+        // the first's bomb was still being placed, and its own bomb never
+        // came to hand.)
+        let held_still = !action_maps.lets("move");
         let next = focused.iter().chain(watched.iter()).find(|w| {
             !awaiting_rock
+                && !(held_still && to_bevy(w.2).distance(t.translation) > 3.0)
                 // (A vine being climbed: its gameplay goes on from the top.)
                 && !vines.autopilot_climbing()
                 // (Led, the leader's way is followed; but a while quiet, it

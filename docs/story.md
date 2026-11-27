@@ -5793,6 +5793,15 @@ as the autopilot stands: the charges planted on the pillars (B10, B20),
 the freight elevator (B30, B40C), the way out found (B50) and Hurk spoken
 to (B90C). HUR_050 completes; with it every main mission does.
 
+* **One bomb at a time.** Planting a pillar's bomb (`MissionBomb`) holds
+  the player in place for several seconds (`narrative_interact` pushed:
+  no moving), spawning the bomb and its remote and waiting for both to
+  load. The autopilot used the second pillar 6 s after the first, while
+  the first was still being placed; the second's bomb never came to hand
+  and B10 stood still for an hour. The trigger step now takes no step
+  more than 3 m off while the map in force takes away moving
+  (`ScriptActionMaps::lets`); B10 then completed in 19 s.
+
 ## Outposts, safe houses and the country's activities
 
 An outpost taken is a safe house unlocked: the engine unlocks the safe

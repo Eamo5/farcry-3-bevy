@@ -77,6 +77,12 @@ impl ScriptActionMaps {
         self.locked.as_ref().or(self.stack.last())
     }
 
+    /// Whether the map in force lets a signal through (`move`: whether a
+    /// script has the player held where he stands).
+    pub fn lets(&self, signal: &str) -> bool {
+        self.allowed().is_none_or(|s| s.contains(signal))
+    }
+
     /// The signals the map in force lets through (none set, or one the
     /// table lacks: everything).
     fn allowed(&self) -> Option<&BTreeSet<String>> {
