@@ -289,6 +289,17 @@ impl OwnLoot {
                 chance > 0.0 && groups.iter().any(|g| g.id == group && g.items.iter().any(|&(id, _)| name_of(id).is_some_and(|n| wanted.contains(&n))))
             })
     }
+
+    /// Whether one of its groups can give a mission's item (the catalog's
+    /// quest items), a script waiting for it or not.
+    pub fn gives_quest_item(&self, catalog: &crate::crafting::CraftCatalog) -> bool {
+        self.0.iter().any(|&(group, chance)| {
+            chance > 0.0
+                && catalog.groups.iter().any(|g| {
+                    g.id == group && g.items.iter().any(|&(id, _)| catalog.item(id).is_some_and(|i| i.key.starts_with(fc3_formats::progression::QUEST_ITEMS)))
+                })
+        })
+    }
 }
 
 /// A body the player has searched (the story hears it: `OnLooting`).
@@ -336,8 +347,12 @@ pub(crate) fn loot_bodies(
         return;
     };
     // (Swimming, only an animal to skin: a shark, as the game's own prompt
-    // has it. SQA_D7's maneater, dead in the sea, couldn't be skinned.)
-    if taken.is_none() && player.swimming && !body.skin {
+    // has it. SQA_D7's maneater, dead in the sea, couldn't be skinned. Or a
+    // body with a mission's item on it: JAS_200's boss, killed in his 4x4 as
+    // it went into the river, lay 1.3 m under the surface with the role
+    // sheet B50 waits for, and nothing could reach it.)
+    let mission_item = own.is_some_and(|o| crafting.as_ref().is_some_and(|c| o.gives_quest_item(c)));
+    if taken.is_none() && player.swimming && !body.skin && !mission_item {
         return;
     }
     if taken.is_none() {

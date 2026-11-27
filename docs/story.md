@@ -5709,6 +5709,18 @@ start, its crew seated, then driven along its way), and being seen fails it.
   carrying a mission's item no script waits for yet isn't searched for
   rounds now; JAS_200 and JAS_210 completed, and SAM_020 began.
 
+* **The boss in the river.** In the third campaign line the boss died in
+  his seat as his 4x4 blew up, two and a half minutes before B50 began.
+  A body was kept from sinking away only while a script listened for what
+  it carried, so his went, and B50 waited for good. A dead story character
+  carrying any mission's item (the catalog's quest items) is now kept
+  until searched, a script listening yet or not. Played again, he died in
+  the 4x4 as it went into the river, 1.3 m under the surface, and a swimmer
+  may search only an animal to skin; a body with a mission's item on it
+  can now be searched swimming too (`OwnLoot::gives_quest_item`), lest the
+  story lock. From the B40 checkpoint the sheet was taken and JAS_200
+  completed.
+
 * **Find an RPG.** Played again from HOY_010 (`full7`), B40 failed time
   after time: the sniper rifle was spent, the boss drove off in his 4x4,
   and the autopilot never took up the RPGs lying by the mine. Out of

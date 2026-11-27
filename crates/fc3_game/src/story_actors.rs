@@ -1559,11 +1559,16 @@ fn keep_watched_bodies(
     // (Asked of the scripts only when there is a body to ask about.)
     let mut wanted: Option<Vec<u32>> = None;
     for (e, a, kept, own, searched) in &actors {
-        let carries = |own: &crate::pickups::OwnLoot| {
+        let mut carries = |own: &crate::pickups::OwnLoot| {
             let wanted = wanted.get_or_insert_with(|| host.story.watched_loot_filters());
             crafting.as_ref().is_some_and(|c| own.gives(&c.groups, |id| c.item(id).map(|i| i.name_id), wanted))
         };
-        let keep = a.dead && (host.story.watches_entity(a.id) || (!searched && own.is_some_and(carries)));
+        // (Or any mission's item, a script listening for it or not yet:
+        // JAS_200's boss died in his wrecked 4x4 two minutes before B50
+        // listened for his role sheet, his body sank away meanwhile, and B50
+        // waited for good.)
+        let quest_item = |own: &crate::pickups::OwnLoot| crafting.as_ref().is_some_and(|c| own.gives_quest_item(c));
+        let keep = a.dead && (host.story.watches_entity(a.id) || (!searched && own.is_some_and(|o| quest_item(o) || carries(o))));
         if keep && !kept {
             commands.entity(e).insert(KeptBody);
         } else if !keep && kept {

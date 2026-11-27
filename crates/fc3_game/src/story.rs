@@ -7037,13 +7037,7 @@ fn autopilot_loot(
     // for rounds: JAS_200's boss was, before the next block listened for
     // his role sheet, and it never heard it taken.)
     let keeps_quest_item = |own: Option<&crate::pickups::OwnLoot>| {
-        let any_quest = |own: &crate::pickups::OwnLoot| {
-            crafting.as_ref().is_some_and(|c| {
-                let quest_name = |id| c.item(id).filter(|i| i.key.starts_with(fc3_formats::progression::QUEST_ITEMS)).map(|i| i.name_id);
-                own.0.iter().any(|&(group, chance)| chance > 0.0 && c.groups.iter().any(|g| g.id == group && g.items.iter().any(|&(id, _)| quest_name(id).is_some())))
-            })
-        };
-        own.is_some_and(|o| any_quest(o) && !carries_quest(o))
+        own.is_some_and(|o| crafting.as_ref().is_some_and(|c| o.gives_quest_item(c)) && !carries_quest(o))
     };
     let near = |t: &Transform| t.translation.distance(at.translation);
     // (Or one a script waits to see searched: HOY_020's VIPs. Not one it
