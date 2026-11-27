@@ -659,8 +659,11 @@ impl Story {
                     }
                 }
             }
-            for (_, cb) in due {
-                c.call(cb, vec![]);
+            // (Each told its own id, as the engine's delay manager does:
+            // `PawnDeathIntoParticle` keeps its victims by delay, and CIT_050's
+            // pirates, killed in Vaas's dream, were never turned to ink.)
+            for (id, cb) in due {
+                c.call(cb, vec![Arg::Num(id as f64)]);
             }
             let ticks: Vec<Callback> = c.ticks.values().cloned().collect();
             for cb in ticks {
@@ -3474,6 +3477,24 @@ mod tests {
             CScriptCallbackSystem_GetInstance():RemoveCallback("1", subscriptions[2])
         "#).exec().unwrap();
         assert!(story.watched_loot_filters().is_empty());
+    }
+
+    /// A delay calls back with its own id, which boxes keep their state by
+    /// (`PawnDeathIntoParticle`'s victims).
+    #[test]
+    fn a_delay_tells_its_callback_its_id() {
+        let mut story = empty_story();
+        story.domino().lua().load(r#"
+            local Box = {}
+            function Box:Done(id) self.heard = id end
+            box = { _type = Box }
+            local m = CDominoDelayManager_GetInstance()
+            box.id = m:CreateDelay(0.5, box, "Done")
+            m:SendCommand(box.id, "start")
+        "#).exec().unwrap();
+        story.update(1.0, View::default());
+        let (id, heard): (f64, Option<f64>) = story.domino().lua().load("return box.id, box.heard").eval().unwrap();
+        assert_eq!(heard, Some(id));
     }
 
     /// A graph stopped (its block done) hears nothing more: its boxes'

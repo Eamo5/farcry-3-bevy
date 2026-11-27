@@ -885,6 +885,11 @@ is the story's own:
 * **Scene lifetime**: sequences retain their meta-sequence owner; stopping
   that owner releases its looping scenes and character overrides, without
   stopping unrelated scenes or the host's QTE phases.
+* **Timers**: a `CDominoDelayManager` delay calls back with its own id, as
+  the engine's does. `PawnDeathIntoParticle` (CIT_050's dream: pirates
+  killed turn to ink and go) keeps each victim by the delay it started for
+  him; called with nothing, it raised "table index is nil" for every kill,
+  and the bodies stayed.
 * **Graph lifetime**: a graph stopped (a block done, its zone's script put
   away, a start-on-load entity's sector gone) is shut down, and the
   callbacks its boxes registered (listeners, timers, tick functions, calls
