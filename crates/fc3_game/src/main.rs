@@ -126,6 +126,7 @@ mod ui_nav;
 mod upload_budget;
 mod vegetation;
 mod vehicle_paths;
+mod underwater;
 mod vehicles;
 mod video;
 mod villagers;
@@ -449,7 +450,7 @@ fn main() {
         .add_plugins((
             grade::GradePlugin,
             (probes::ProbesPlugin, interiors::InteriorsPlugin),
-            dof::DofPlugin,
+            (dof::DofPlugin, underwater::UnderwaterPlugin),
             bloom::GameBloomPlugin,
             upload_budget::UploadBudgetPlugin,
             story::StoryPlugin,

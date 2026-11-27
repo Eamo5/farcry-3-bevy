@@ -766,6 +766,15 @@ const FOG_SHARE: f32 = 0.4;
 /// more at night), tinted like the sky and glowing toward the sun.
 /// `FC3_NO_FOG=1` (debug) leaves clear weather to the atmosphere alone.
 #[allow(clippy::too_many_arguments)]
+/// The fog under the water: its density and colour, blue-green in the sea,
+/// murkier and greener inland (rivers and lakes), darker as the daylight
+/// (0..1) goes (it had stayed as bright at midnight as at noon).
+pub fn underwater_fog(inland: bool, daylight: f32) -> (f32, Color) {
+    let (density, [r, g, b]) = if inland { (0.16, [0.05, 0.12, 0.08]) } else { (0.09, [0.03, 0.17, 0.2]) };
+    let light = 0.12 + 0.88 * daylight.clamp(0.0, 1.0);
+    (density, Color::srgb(r * light, g * light, b * light))
+}
+
 fn update_fog(
     mut commands: Commands,
     heights: Res<Heightfield>,
@@ -781,11 +790,8 @@ fn update_fog(
     let eye = gt.translation();
     let water = surface_at(eye, &heights);
     let wanted = if submerged(eye, &heights, 0.05) {
-        if water > ocean_level() {
-            Some((Color::srgb(0.05, 0.12, 0.08), FogFalloff::Exponential { density: 0.16 }))
-        } else {
-            Some((Color::srgb(0.03, 0.17, 0.2), FogFalloff::Exponential { density: 0.09 }))
-        }
+        let (density, colour) = underwater_fog(water > ocean_level(), daylight.0);
+        Some((colour, FogFalloff::Exponential { density }))
     } else if let Some((e, sky)) = env
         .0
         .as_ref()

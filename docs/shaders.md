@@ -1214,3 +1214,32 @@ the result saturated and multiplied by `y`, and the square root is written.
 At 50 each slider leaves the picture as it is. Here the post-effects pass
 does the same on its linear colour (`Settings::color_adjustment`), as the
 last step. It runs only when a slider is off 50. The UI isn't adjusted.
+
+## Under the water (`fc3_game/src/underwater.rs`)
+
+Below the surface the camera has the water's fog (`water::underwater_fog`:
+blue-green in the sea, density 0.09; greener and thicker inland, 0.16),
+which now darkens with the daylight (to 12% at night; it had been as bright
+at midnight as at noon). With High effects and up (the depth prepass) a
+full-screen pass on the HDR scene, before bloom and the sun shafts, adds
+the sunlight the water carries by day:
+
+* **Caustics** on whatever lies under the surface (the bed, rocks, wrecks):
+  each pixel's place is rebuilt from the depth, and the focused-light
+  pattern the surface shows on the bed from above (`water.wgsl`, here 3.5
+  times finer: cells a metre or two across) is taken where its sunlight came
+  through the surface, along the sun's slant. It brightens the pixel by up
+  to twice, fading over 10 m of depth and into the fog.
+* **Shafts**: 16 steps along the view ray (up to 40 m, each pixel's start
+  jittered) gather a pattern of soft bands a few metres apart on the
+  surface above each step, again along the sun's slant, so they streak
+  down toward the sun, faded by the fog behind them and over 30 m of depth,
+  brighter looking toward the sun, in the water's tint.
+* **The sky past the surface's edge.** The sky has no fog, and from below
+  it showed as a white band where the view met the surface beyond its
+  mesh (and below the bed's edge). Pixels with nothing drawn go to the fog
+  colour as far off as the ray meets the surface (30 to 90 m); this pass
+  runs by night too for it.
+
+`FC3_UNDERWATER=<caustics>,<shafts>` sets the gains (2 and 0.03; `0,0`
+leaves the pass off).
