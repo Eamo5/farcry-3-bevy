@@ -840,10 +840,22 @@ fn autopilot_drop(
         }
     }
     let here = to_dunia(t.translation);
-    let Some((id, at)) = host.story.objective_markers().into_iter().min_by(|a, b| {
-        let d = |m: &[f32; 3]| (m[0] - here[0]).hypot(m[1] - here[1]);
-        d(&a.1).total_cmp(&d(&b.1))
-    }) else {
+    // (An objective's marker, not a giver's or an activity's: DEN_060's
+    // dream drops the player 600 m over the start of its scene, with no
+    // marker up, and he was set down at a lost expedition's giver 1.6 km
+    // off. With none, he falls where he is, as a player would.)
+    let data = host.story.data();
+    let Some((id, at)) = host
+        .story
+        .objective_markers()
+        .into_iter()
+        .filter(|(id, _)| data.markers.get(id).is_none_or(|m| !NOT_OBJECTIVES.contains(&m.kind)))
+        .min_by(|a, b| {
+            let d = |m: &[f32; 3]| (m[0] - here[0]).hypot(m[1] - here[1]);
+            d(&a.1).total_cmp(&d(&b.1))
+        })
+    else {
+        *dropped = true;
         return;
     };
     *dropped = true;

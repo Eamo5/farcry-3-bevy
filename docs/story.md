@@ -5372,7 +5372,10 @@ off, fails it.
   listeners (the near radius that disarms "too far", then the landing that
   succeeds) are armed some 7 s after the jump, after a line of dialogue,
   and a landing before them went unheard. Meanwhile the autopilot glides,
-  held where it is, 30 s at most.
+  held where it is, 30 s at most. Only an objective's marker counts, not a
+  giver's or an activity's: DEN_060's dream drops the player 600 m over the
+  start of its scene with no marker up, and he was set down at a lost
+  expedition's giver 1.6 km off. With none, he falls where he is.
 * **Landing first.** While a script waits for the landing and the player
   is in the air, the autopilot's other steps wait too (`landing_awaited`):
   its fight step set the player down by a pirate mid-fall, and the drop
