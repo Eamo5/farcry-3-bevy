@@ -6286,6 +6286,11 @@ const TETHER_FROM: f32 = 45.0;
 /// Tests: how long (s) the story is quiet before a waiting companion no
 /// longer keeps the fight by it.
 const UNTETHER_AFTER: f32 = 30.0;
+/// Tests: how long (s) the story is quiet before any companion no longer
+/// does (JAS_220's Riley, waiting by the chopper for the area to be
+/// cleared: the last foes beyond the leash, the rifle dry and the rounds on
+/// the bodies beyond it too, the autopilot stood by him for an hour).
+const LEASH_GIVE_UP: f32 = 120.0;
 /// Tests: how near (m) an animal after the player is shot before anything
 /// else.
 const DEFEND_WITHIN: f32 = 20.0;
@@ -7018,7 +7023,7 @@ fn autopilot_loot(
     // the last bomb, and its last pirates, beyond the leash, were left for
     // good while the block counted them down.)
     let companions = host.story.companions();
-    let tethers = |id: u64| companions.iter().any(|c| c.0 == id && (c.1 != fc3_story::Companion::Wait || host.quiet < UNTETHER_AFTER));
+    let tethers = |id: u64| companions.iter().any(|c| c.0 == id && host.quiet < LEASH_GIVE_UP && (c.1 != fc3_story::Companion::Wait || host.quiet < UNTETHER_AFTER));
     let tether = story_actors
         .iter()
         .filter(|(t, a, _)| !a.dead && tethers(a.id) && t.translation.distance(at.translation) < TETHER_FROM)

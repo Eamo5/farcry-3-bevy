@@ -5702,6 +5702,13 @@ the airport where Riley is held, within twelve minutes.
   dropped gun of a kind it carries; the guards' rocket launchers, with no
   rockets to take for one carrying none, were gone to again and again. A
   gun stood on and still there is left a minute.
+* **Riley's leash.** In a later run B20 ("Clear the area so Riley can
+  reach the chopper safely.") stood still for an hour: the last foes were
+  beyond the leash a companion keeps the fight on, the rifle was dry, and
+  the bodies and guns with rounds were beyond it too. The leash now gives
+  way for any companion once the story has been quiet 120 s
+  (`LEASH_GIVE_UP`); from that checkpoint B20, B30 and JAS_220 completed
+  within five minutes.
 
 ## JAS_240: the end credits
 
