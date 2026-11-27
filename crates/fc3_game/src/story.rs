@@ -5303,6 +5303,22 @@ fn run_story(
                     | "CAPI_Pawn.AddWeapon"
                     | "CAPI_Player.SetCloseUpCamera"
                     | "CAPI_Player.ResetInputs" => {}
+                    // (The engine's own budgets and streaming: nothing here
+                    // limits entities or pauses the world's loading.)
+                    "EnableHighPerfEntityLimiter" | "IgnoreEntityLimiter" | "WorldLoaderPause" => {}
+                    // (A minigame's resources, loaded with its keeper: the
+                    // race and the table are the host's own.)
+                    "CreateSpecificGameplay" if a(1).ends_with("ResourceContainer") => {}
+                    // (A prop's own simple animation: already looping it
+                    // plays, `prop_anims`; the flag controller sets the
+                    // outpost's flag waving again.)
+                    "CAPI_Entity.PlaySimpleAnimation" => {}
+                    // The player's weapon drawn by a script (`WieldInventory`'s
+                    // LuaDraw): heard drawn again.
+                    "CAPI_Pawn.Draw" if a(0) == fc3_story::PLAYER.to_string() => {
+                        scripted.camera_drawn = false;
+                        scripted.redraw = true;
+                    }
                     // (A pawn made usable or not: kept by the story, its
                     // `use_target`s.)
                     "SendCommandEventToEntity" if a(1) == "SetUsability" => {}
