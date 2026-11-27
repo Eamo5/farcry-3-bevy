@@ -3362,7 +3362,10 @@ fn run_story(
             .story
             .awaited_doors()
             .into_iter()
-            .filter(|d| !doors.walked.contains(d))
+            // (Until it has swung open: walked into as the ground there was
+            // still coming in, BAM_060's didn't, and the trigger inside Buck's
+            // hut, stepped into past it, locked it for good.)
+            .filter(|d| !doors.through(*d))
             .filter_map(|d| data.entities.get(&d).map(|e| to_bevy(e.pos)))
             .collect();
         let past_door = |p: [f32; 3]| doors_ahead.iter().any(|d| d.distance(to_bevy(p)) < DOOR_REACH);

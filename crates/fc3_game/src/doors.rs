@@ -36,6 +36,18 @@ pub struct Doors {
     pub locked: HashSet<u64>,
     /// Tests (`FC3_STORY_AUTOPILOT`): doors the player was walked into.
     pub walked: HashSet<u64>,
+    /// Doors the player has swung open, and those the autopilot walked into
+    /// as often as it tries without one opening: what's past them is his to
+    /// step into.
+    pub opened: HashSet<u64>,
+    pub given_up: HashSet<u64>,
+}
+
+impl Doors {
+    /// Whether the way through a door is open to the autopilot.
+    pub fn through(&self, id: u64) -> bool {
+        self.opened.contains(&id) || self.given_up.contains(&id)
+    }
 }
 
 /// A placed swing door.
@@ -136,7 +148,7 @@ fn push_turn(hinge: Vec3, closed: Quat, width: f32, pos: Vec3, wish: Vec3) -> Op
 
 fn push_doors(
     mut commands: Commands,
-    doors: Res<Doors>,
+    mut doors: ResMut<Doors>,
     models: Res<Assets<crate::cache_assets::Fc3Model>>,
     actions: Res<crate::controls::ActionState>,
     players: Query<(&Transform, &Player), Without<Door>>,
@@ -179,6 +191,7 @@ fn push_doors(
         }
         let Some((turn, front)) = push_turn(hinge, closed, width, pt.translation, wish) else { continue };
         debug!("doors: {} swings {:.0} degrees", door.id, turn.to_degrees());
+        doors.opened.insert(door.id);
         if let Some(host) = host.as_mut() {
             host.story.entity_event(door.id, if front { "Push" } else { "Pull" }, vec![]);
         }
@@ -229,8 +242,11 @@ fn autopilot_doors(
         if !p.spawning {
             actions.movement = Vec2::Y;
         }
-        // (Set down, he may be a moment finding his feet.)
-        *left -= time.delta_secs();
+        // (Set down, he may be a moment finding his feet; the walk waits
+        // for them, a while: BAM_060's door, come to from the tomb across
+        // the island, was walked into while the ground there was still
+        // coming in, and never opened.)
+        *left -= time.delta_secs() * if p.spawning { 0.1 } else { 1.0 };
         if *left <= 0.0 {
             *walking = None;
         }
@@ -257,6 +273,8 @@ fn autopilot_doors(
             doors.walked.remove(id);
             far_tried.remove(id);
             info!("story autopilot: door {id} still awaited; again");
+        } else if now - *at > DOOR_AGAIN && doors.given_up.insert(*id) {
+            info!("story autopilot: door {id} never opened; past it");
         }
     }
     let Some((door, object, global, t)) = placed.iter().find(|(d, ..)| awaited.contains(&d.id) && !doors.walked.contains(&d.id)) else {

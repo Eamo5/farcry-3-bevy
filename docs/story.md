@@ -5073,6 +5073,14 @@ there checkpoint after checkpoint for an hour:
   and the door, walked into once, wasn't gone to again: B10C waited for its
   `Push` for good. A door the story still waits on 20 s after a walk into
   it is walked into again, up to four times (`DOOR_AGAIN`, `DOOR_TRIES`).
+  The fourth line still lost it: the walk, made as the ground by the hut
+  came in from across the island, didn't open the door; the door counted
+  as walked through, so the trigger step went on to the trigger inside the
+  hut, which locks the door behind the player, and every walk after met a
+  locked door. The walk now waits (mostly) while the player is being set
+  down, and the triggers past an awaited door wait until it has swung open
+  or the walks are given up (`Doors::through`). From BAM_055's last
+  checkpoint the door opened at the first walk and B10C's scene played.
 * **The water tower kept.** CIT_020 B20 has the player wait on the water
   tower while the convoy is ambushed; the wreck step went after the
   convoy's lead 4x4 from there, the vantage point was left and B20 failed
