@@ -451,7 +451,7 @@ radar and maps look up every second (a 39 ms frame each time).
 --pos x,y,z        start position in game coordinates (Z up)
 --yaw/--pitch deg  start view direction
 --noclip           fly freely (F2 toggles in game)
---underground      with --pos, start on the floor just below the given height (inside caves)
+--underground      with --pos, start on the floor just below the given height (inside caves; within 60 m, else the ground over it after 30 s)
 --screenshot file  capture once streaming settles, then exit (--menu keeps the menu up)
 --walk secs        scripted movement test, logging position each second
 --fire-test secs   scripted shooting test against a target

@@ -833,6 +833,9 @@ fn footsteps(
 /// Falls faster than this (m/s) land with a thump.
 const LANDING_HEARD: f32 = 4.0;
 
+/// How long (s into the game) `--underground` looks for a floor below.
+const UNDERGROUND_PATIENCE: f32 = 30.0;
+
 /// Drops the player onto the ground once the terrain under them has loaded.
 fn place_on_ground(
     time: Res<Time>,
@@ -856,9 +859,12 @@ fn place_on_ground(
     }
     // --underground: the floor just below the requested height (a cave), once
     // something is there to stand on.
-    if args.underground && p.spawned_at == 0.0 {
+    // (Any floor within 60 m below: a cave's may be well under the height
+    // given. With none after 30 s, the ground over it as for any spawn: a
+    // point in the rock waited behind the loading screen for good.)
+    if args.underground && p.spawned_at == 0.0 && time.elapsed_secs() < UNDERGROUND_PATIENCE {
         let filter = SpatialQueryFilter::from_excluded_entities([entity]);
-        let Some(h) = spatial.cast_ray(t.translation + Vec3::Y, Dir3::NEG_Y, 6.0, true, &filter) else { return };
+        let Some(h) = spatial.cast_ray(t.translation + Vec3::Y, Dir3::NEG_Y, 60.0, true, &filter) else { return };
         t.translation.y += 1.0 - h.distance + HALF_HEIGHT + 0.05;
         p.velocity = Vec3::ZERO;
         p.spawning = false;
