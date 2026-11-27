@@ -3879,7 +3879,9 @@ completes as the call ends. Four things were missing:
   point) first meets land toward the battlefield, searching toward the
   battlefield. Engine-spawned ids now count as loaded for the scripts until
   removed. (The boat ride came later: see "Reinforcements by vehicle"
-  under JAS_130.)
+  under JAS_130.) A wave called off before it has landed
+  (`CancelSpawnReinforcement <point>`) has its orders still waiting
+  dropped.
 * **The army's diary** (`LogEventInAIDiary` on a `CAIEventPoint`): for the
   event's lifetime (here 25 s), soldiers of its army (1, Red: pirates and
   privateers) within its reach (150 m) take its state about its threat

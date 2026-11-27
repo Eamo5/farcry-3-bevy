@@ -3971,6 +3971,13 @@ fn run_story(
                             }
                         }
                     }
+                    // A wave called off before it has come (`point`): its
+                    // orders still waiting to land are dropped.
+                    "CancelSpawnReinforcement" => {
+                        if let Ok(point) = a(0).parse::<u64>() {
+                            host.reinforcements.retain(|r| r.point != point);
+                        }
+                    }
                     // `point, mode, battlefield, vehicle id=archetype (or
                     // nothing), id=archetype...` (the mercs)
                     "SpawnReinforcement" => {
