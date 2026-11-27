@@ -317,6 +317,9 @@ pub struct Recipe {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct LootGroup {
     pub id: u32,
+    /// Its name (`MISSION_rendezvousnote`), by which scripts change its
+    /// chance on a character (`UpdateLootItemDropPercentage`).
+    pub name: String,
     /// Percent chance of cash, and its least and most (dollars).
     pub cash: (f32, u32, u32),
     /// (item id, percent chance).
@@ -744,6 +747,7 @@ pub fn crafting(f: &CraftingFiles, strings: &dyn Fn(u32) -> String) -> Crafting 
     for g in f.loot_groups.children_named("Groups").flat_map(|g| g.children_named("Group")) {
         let mut group = LootGroup {
             id: u32f(g, "hidID"),
+            name: text(g, "name"),
             cash: (g.f32("cashPercent").unwrap_or(0.0), num(g, "cashMin"), num(g, "cashMax")),
             items: g
                 .child("Items")
@@ -1066,8 +1070,10 @@ impl Handbook {
 // ------------------------------------------------------------ text form ---
 
 const SKILLS_MAGIC: &str = "fc3-skills 1";
-const RECIPES_MAGIC: &str = "fc3-recipes 9";
-/// The form before the recipes' icons (read the same, without them).
+const RECIPES_MAGIC: &str = "fc3-recipes 10";
+/// The forms before the loot groups' names and the recipes' icons (read
+/// the same, without them).
+const RECIPES_MAGIC_9: &str = "fc3-recipes 9";
 const RECIPES_MAGIC_8: &str = "fc3-recipes 8";
 
 /// A string as one tab-free, newline-free field.
@@ -1286,13 +1292,14 @@ impl Crafting {
         }
         for g in &self.groups {
             s += &format!(
-                "group\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "group\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 g.id,
                 g.cash.0,
                 g.cash.1,
                 g.cash.2,
                 g.items.iter().map(|(i, p)| format!("{i}:{p}")).collect::<Vec<_>>().join(","),
-                g.supplies.iter().map(|(i, p, lo, hi)| format!("{i}:{p}:{lo}:{hi}")).collect::<Vec<_>>().join(",")
+                g.supplies.iter().map(|(i, p, lo, hi)| format!("{i}:{p}:{lo}:{hi}")).collect::<Vec<_>>().join(","),
+                esc(&g.name)
             );
         }
         for src in &self.sources {
@@ -1318,7 +1325,7 @@ impl Crafting {
 
     pub fn from_text(text: &str) -> Result<Crafting> {
         let mut lines = text.lines();
-        if !matches!(lines.next().map(str::trim), Some(RECIPES_MAGIC | RECIPES_MAGIC_8)) {
+        if !matches!(lines.next().map(str::trim), Some(RECIPES_MAGIC | RECIPES_MAGIC_9 | RECIPES_MAGIC_8)) {
             bail!("not a recipes table");
         }
         let mut c = Crafting::default();
@@ -1411,6 +1418,7 @@ impl Crafting {
                             Some((v.first()?.parse().ok()?, v.get(1)?.parse().ok()?, v.get(2)?.parse().ok()?, v.get(3)?.parse().ok()?))
                         })
                         .collect(),
+                    name: f.get(7).map(|v| unesc(v)).unwrap_or_default(),
                 }),
                 _ => {}
             }
@@ -1809,6 +1817,10 @@ end;
         let g = c.groups.iter().find(|g| g.id == 9).unwrap();
         assert_eq!((g.cash, g.supplies.clone()), ((100.0, 3, 20), vec![(40, 33.0, 4, 12)]));
         assert_eq!(Crafting::from_text(&c.to_text()).unwrap(), c);
+        // A group's name (scripts change its chance by it) comes back too.
+        let mut named = c.clone();
+        named.groups[0].name = "MISSION_rendezvousnote".into();
+        assert_eq!(Crafting::from_text(&named.to_text()).unwrap(), named);
     }
 
     #[test]

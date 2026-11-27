@@ -5532,6 +5532,18 @@ is now marked (`pickups::Searched`) and the story hears `OnLooting` on its
 character (`story_searches`); the autopilot takes down, then searches,
 the characters a script waits to see searched.
 
+* **The note on one of them.** The VIPs' own loot names the rendezvous
+  note's group (`MISSION_rendezvousnote`) at 0%, and B10's loot graph picks
+  one VIP at random and sets his chance of it to 100
+  (`UpdateLootItemDropPercentage <entity> <group name> <percent>`, the
+  `LootItemModifier` box; also DEN_020's codes and key, JAS_080's). It went
+  unplayed, so no VIP carried the note. The converter now keeps each loot
+  group's name (`LootGroup::name`, the recipes table's form 10), the story
+  keeps the chances scripts set by character and group (cleared on a
+  reload, when the scripts set them again), and the character's own loot
+  takes them (`story_actors::apply_loot_chances`). From the HOY_020_B10
+  checkpoint the third VIP searched gave the "Rendez-vous Note".
+
 ## HOY_010: Sam and the bombs
 
 HOY_010 has Sam lead the player from bomb to bomb, defusing each while

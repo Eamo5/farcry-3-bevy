@@ -476,7 +476,7 @@ mod tests {
         let catalog = CraftCatalog {
             sources: vec![source("Merc/Base.Pirate.Coop", vec![(2, 100.0)]), source("Merc/Base.Pirate", vec![(1, 100.0), (2, 0.0)])],
             groups: vec![
-                LootGroup { id: 1, cash: (100.0, 3, 20), items: vec![(50, 100.0), (51, 0.0)], supplies: vec![(60, 100.0, 4, 12)] },
+                LootGroup { id: 1, cash: (100.0, 3, 20), items: vec![(50, 100.0), (51, 0.0)], supplies: vec![(60, 100.0, 4, 12)], ..default() },
                 LootGroup { id: 2, cash: (100.0, 500, 500), ..default() },
             ],
             ..default()

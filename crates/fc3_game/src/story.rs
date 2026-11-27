@@ -1137,6 +1137,9 @@ pub struct StoryHost {
     /// (`SetProgressionMode`: 0 straight, 1 shooting when hard pressed, 2
     /// shooting always, 3 straight without stopping), by id.
     pub progression: HashMap<u64, u8>,
+    /// The chances (percent) scripts set on characters' own loot groups,
+    /// by character and group name (`UpdateLootItemDropPercentage`).
+    pub loot_chances: HashMap<(u64, String), f32>,
     /// Whom scripts set characters against or beside
     /// (`PawnRelationshipModifier`), by id.
     pub relations: HashMap<u64, crate::npc::Relations>,
@@ -1467,6 +1470,7 @@ impl StoryHost {
             damages: Vec::new(),
             impaired: HashMap::new(),
             progression: HashMap::new(),
+            loot_chances: HashMap::new(),
             relations: HashMap::new(),
             battlefield_posts: HashMap::new(),
             combat_areas: HashMap::new(),
@@ -2662,6 +2666,7 @@ fn run_story(
             host.near_at.clear();
             host.impaired.clear();
             host.progression.clear();
+            host.loot_chances.clear();
             host.relations.clear();
             host.battlefield_posts.clear();
             host.combat_areas.clear();
@@ -4987,6 +4992,13 @@ fn run_story(
                         for id in host.story.group_members(&a(0)) {
                             debug!("story: {id} impaired {state}");
                             host.impaired.insert(id, state);
+                        }
+                    }
+                    // A character's own loot group's chance (`entity, group
+                    // name, percent`: HOY_020's VIP who has the note).
+                    "CAPI_Entity.UpdateLootItemDropPercentage" => {
+                        if let (Ok(pawn), Ok(percent)) = (a(0).parse::<u64>(), a(2).parse::<f32>()) {
+                            host.loot_chances.insert((pawn, a(1)), percent);
                         }
                     }
                     // How a group makes its way to its fight

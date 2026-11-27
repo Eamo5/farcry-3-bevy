@@ -68,7 +68,7 @@ impl Plugin for StoryActorsPlugin {
                     actor_idle,
                     actor_health,
                     actor_deaths,
-                    keep_watched_bodies,
+                    (apply_loot_chances, keep_watched_bodies),
                 )
                     .chain()
                     .in_set(ActorSet)
@@ -1538,6 +1538,35 @@ fn actor_health(
                 None => ("Generic", None),
             };
             host.story.health_changed(id, before, now.max(0.0), fc3_story::PLAYER, source, emitter);
+        }
+    }
+}
+
+/// The chances scripts set on characters' own loot groups, by name
+/// (`UpdateLootItemDropPercentage`): HOY_020 has one of its three VIPs, at
+/// random, carry the rendezvous note (`MISSION_rendezvousnote`, 0 on each
+/// in the data), and none had.
+fn apply_loot_chances(
+    host: Option<NonSend<StoryHost>>,
+    crafting: Option<Res<crate::crafting::CraftCatalog>>,
+    mut actors: Query<(&StoryActor, &mut crate::pickups::OwnLoot)>,
+) {
+    let (Some(host), Some(crafting)) = (host, crafting) else { return };
+    if host.loot_chances.is_empty() {
+        return;
+    }
+    for (a, mut own) in &mut actors {
+        for ((pawn, name), &percent) in &host.loot_chances {
+            if *pawn != a.id {
+                continue;
+            }
+            let Some(group) = crafting.groups.iter().find(|g| g.name.eq_ignore_ascii_case(name)).map(|g| g.id) else { continue };
+            let percent = percent.clamp(0.0, 100.0);
+            match own.0.iter().position(|&(g, _)| g == group) {
+                Some(i) if own.0[i].1 != percent => own.0[i].1 = percent,
+                Some(_) => {}
+                None => own.0.push((group, percent)),
+            }
         }
     }
 }
