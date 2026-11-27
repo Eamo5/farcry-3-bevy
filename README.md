@@ -316,8 +316,8 @@ inventory, money, health, difficulty and time of day. Tutorials display the curr
 gamepad bindings; visible mission timers follow the story clock and pause with the game.
 
 Campaign support is still in development. The story autopilot (`FC3_STORY_AUTOPILOT`) has played
-the whole campaign from JAS_020 to the end credits, and a second time from JAS_060 with nothing
-learned in advance, resuming from checkpoints where it stalled until each stall was fixed; manual
+the whole campaign from JAS_020 to the end credits three times (the second from JAS_060), each
+with nothing learned in advance, resuming from checkpoints where it stalled until each stall was fixed; manual
 play of every mission and side activity has not been recorded. The specific gameplays the scripts
 start are the host's own: QTEs, the sniping challenge, poker, knife throwing, the races, the
 shooting galleries, the drinking game, the Ink Monster, being drunk, button prompts, the chopper

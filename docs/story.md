@@ -1531,7 +1531,12 @@ run resumed from its last checkpoint), now plays every main mission through
 to JAS_240's end credits; a second line, begun at JAS_060 with no triggers
 learned to leave alone, has played through to the end credits the same way
 (the second island, JAS_190's cave crept through, BNG's club, SAM_015's
-depot, HOY_040 and JAS_220), and on into the side missions after.
+depot, HOY_040 and JAS_220), and on into the side missions after. A
+third, begun again at JAS_020 with nothing learned (2026-11-27/28, with
+stopped graphs' callbacks dropped and delays told their ids), reached the
+end credits too; its stalls (JAS_100's dry leash, HUR_050's marker walk,
+BAM_040's fatal break, CIT_050's ink, HOY_010's point-blank rockets,
+JAS_200's sunken boss, JAS_220's held fire) are under each mission.
 The fixes along the way are under each mission's heading. What the runs
 still stand in for: the autopilot sets the player down where a player would
 walk, and skips scenes; manual play of whole missions isn't recorded here.
