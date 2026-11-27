@@ -602,6 +602,9 @@ pub struct Npc {
     /// off, as if held by the script) or minimally (held at gunpoint: the
     /// player seen and interesting sounds go unnoticed).
     pub impaired: Impaired,
+    /// How it makes its way to the fight a script gives it, from outside
+    /// (`SetProgressionMode`).
+    pub progression: Progression,
     /// Its army and whom it fights and spares (its faction's, or a story
     /// pawn's own), and what scripts changed of that.
     pub armies: Armies,
@@ -677,6 +680,8 @@ pub struct Npc {
     vantage_search: f32,
     /// Seconds left of a flinch from a hit.
     flinch: f32,
+    /// Seconds since he was last hit.
+    since_hit: f32,
     /// Seconds left of getting up from a guard spot, startled (its move's
     /// abort clip, in the hit's slot): he stands where he is meanwhile.
     pub(crate) breaking_off: f32,
@@ -685,6 +690,44 @@ pub struct Npc {
     /// fought): no relaxing at the guard spots, and the senses of one who
     /// suspects something.
     pub cautious: bool,
+}
+
+/// How an NPC sent to a fight makes its way there (`SetProgressionMode`'s
+/// 0 to 3, the box's notes: "when going over a long distance he would
+/// shoot or not at cover"): straight there, running; shooting when hard
+/// pressed (shot at lately), or always, from cover on the way; or straight
+/// there without stopping at all, not even to shoot.
+/// Unset, it fights its way there as its own AI does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Progression {
+    #[default]
+    Own,
+    Straight,
+    ShootWhenBadMood,
+    ShootAlways,
+    StraightNoStopping,
+}
+
+impl Progression {
+    pub fn from_mode(n: u8) -> Progression {
+        match n {
+            0 => Progression::Straight,
+            1 => Progression::ShootWhenBadMood,
+            2 => Progression::ShootAlways,
+            3 => Progression::StraightNoStopping,
+            _ => Progression::Own,
+        }
+    }
+
+    /// Whether it stops on the way, for cover or to fight, given whether
+    /// it has been shot at lately.
+    pub fn stops(self, hard_pressed: bool) -> bool {
+        match self {
+            Progression::Straight | Progression::StraightNoStopping => false,
+            Progression::ShootWhenBadMood => hard_pressed,
+            Progression::Own | Progression::ShootAlways => true,
+        }
+    }
 }
 
 /// A script's hold on an NPC's senses (`SetImpairedState`'s 0, 1, 2).
@@ -867,6 +910,7 @@ fn hit_reactions(
             continue;
         }
         let Ok((t, mut npc, h)) = npcs.get_mut(ev.target) else { continue };
+        npc.since_hit = 0.0;
         if h.dead || npc.flinch > 0.0 {
             continue;
         }
@@ -1737,6 +1781,7 @@ pub(crate) fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker
         faction,
         neutral: false,
         impaired: Impaired::Not,
+        progression: Progression::default(),
         armies: Armies::of(faction),
         relations: Relations::default(),
         role,
@@ -1786,6 +1831,7 @@ pub(crate) fn new_npc(faction: Faction, role: Role, feet: Vec3, yaw: f32, marker
         vantage: None,
         vantage_search: rng.range(2.0, 4.0),
         flinch: 0.0,
+        since_hit: f32::MAX,
         breaking_off: 0.0,
         cautious: false,
     }
@@ -2511,10 +2557,19 @@ fn act(
                 let to = tgt.pos - pos;
                 face = Some(yaw_to(to));
                 let dist = to.length();
+                // (On his way to the fight a script gives him, from outside
+                // it, as his progression mode says: straight there, running,
+                // or stopping for cover and to fight on the way.)
+                let away = npc.combat_area.as_ref().is_some_and(|a| !a.holds(crate::data::to_dunia(pos), 0.0, fc3_story::triggers::BODY_HALF_HEIGHT));
+                let on_the_way = away && !npc.progression.stops(npc.since_hit < HARD_PRESSED_FOR);
+                if on_the_way {
+                    npc.cover = None;
+                    npc.vantage = None;
+                }
                 // Riflemen, snipers and rocket and firebomb throwers take cover
                 // when they can; shotgunners, heavies, flamers and chargers
                 // keep coming.
-                let takes_cover = !matches!(npc.role, Role::Shotgunner | Role::Heavy | Role::Flamer | Role::Charger) && tgt.seen;
+                let takes_cover = !matches!(npc.role, Role::Shotgunner | Role::Heavy | Role::Flamer | Role::Charger) && tgt.seen && !on_the_way;
                 npc.cover_search -= dt;
                 if takes_cover && npc.cover.is_none() && npc.cover_search <= 0.0 && dist > 9.0 && nav.ready() {
                     npc.cover_search = rng.range(2.5, 4.5);
@@ -2586,7 +2641,7 @@ fn act(
                 // No line of fire on the player: to a spot near with one (kept
                 // to his area), as the game's fighters shift to see their
                 // target.
-                if npc.cover.is_none() && !tgt.seen && tgt.is_player && npc.hostile() && nav.ready() {
+                if npc.cover.is_none() && !tgt.seen && tgt.is_player && npc.hostile() && nav.ready() && !on_the_way {
                     npc.vantage_search -= dt;
                     if npc.vantage.is_none() && npc.vantage_search <= 0.0 {
                         npc.vantage_search = rng.range(3.0, 5.0);
@@ -2632,39 +2687,44 @@ fn act(
                     if rng.f32() < dt * 0.4 {
                         npc.strafe_dir = -npc.strafe_dir;
                     }
-                    if tgt.is_player {
+                    if tgt.is_player && !on_the_way {
                         throw(&mut npc, e, pos, tgt.pos, &spare, dt, &mut rng, &fx, &mut commands, &mut throw_clock);
                     }
-                    shoot(
-                        &mut npc,
-                        e,
-                        pos,
-                        &tgt,
-                        pt.translation,
-                        dt,
-                        &mut rng,
-                        &spatial,
-                        &fx,
-                        &mut shot_fx,
-                        &mut commands,
-                        &mut damage,
-                        &mut noises,
-                        &mut loops,
-                        &mut sfx,
-                        lap.as_ref(),
-                        &spare,
-                        &is_vehicle,
-                    );
+                    // (Straight there firing on the run; without stopping,
+                    // not even for that.)
+                    if !on_the_way || npc.progression == Progression::Straight {
+                        shoot(
+                            &mut npc,
+                            e,
+                            pos,
+                            &tgt,
+                            pt.translation,
+                            dt,
+                            &mut rng,
+                            &spatial,
+                            &fx,
+                            &mut shot_fx,
+                            &mut commands,
+                            &mut damage,
+                            &mut noises,
+                            &mut loops,
+                            &mut sfx,
+                            lap.as_ref(),
+                            &spare,
+                            &is_vehicle,
+                        );
+                    }
                 }
                 // (Kept to the area a script gives his fight: a move that
                 // would take him out of it goes back in, toward its middle,
-                // instead; one already out of it walks back.)
+                // instead; one already out of it walks back, or runs, on his
+                // way there.)
                 if let Some(area) = npc.combat_area.clone() {
                     let inside = |p: Vec3| area.holds(crate::data::to_dunia(p), 0.0, fc3_story::triggers::BODY_HALF_HEIGHT);
                     if goal.is_some_and(|g| !inside(g)) || (goal.is_none() && !inside(pos)) {
                         if let Some(mid) = area_middle(&area) {
                             goal = Some(crate::data::to_bevy(mid).with_y(pos.y));
-                            speed = speed.max(2.6);
+                            speed = speed.max(if on_the_way { RUN_TO_FIGHT } else { 2.6 });
                         }
                     }
                 }
@@ -2862,6 +2922,7 @@ fn act(
         }
         t.rotation = Quat::from_rotation_y(npc.yaw);
         npc.since_fired += dt;
+        npc.since_hit += dt;
         if let Some(mut req) = npc.rig.and_then(|r| anims.get_mut(r).ok()) {
             let speed = Vec2::new(npc.velocity.x, npc.velocity.z).length();
             npc.flinch = (npc.flinch - dt).max(0.0);
@@ -4180,6 +4241,23 @@ mod tests {
     }
 
     #[test]
+    fn progression_modes_stop_on_the_way_as_their_box_says() {
+        // Straight there, with or without firing on the run: never stops.
+        for mode in [0, 3] {
+            let p = Progression::from_mode(mode);
+            assert!(!p.stops(false) && !p.stops(true), "{p:?}");
+        }
+        // Shooting when hard pressed: only after a hit.
+        let bad_mood = Progression::from_mode(1);
+        assert!(!bad_mood.stops(false) && bad_mood.stops(true));
+        // Shooting always: stops for cover whatever.
+        assert!(Progression::from_mode(2).stops(false));
+        // Unset or unknown: its own AI's way, fighting as it goes.
+        assert_eq!(Progression::default(), Progression::Own);
+        assert!(Progression::from_mode(9).stops(false));
+    }
+
+    #[test]
     fn encounter_pawns_take_their_archetypes_side_and_role() {
         for (name, want) in [
             ("Merc/BaseMerc_FC3.Privateer_Defender_23", Some((Faction::Privateer, Role::Shotgunner))),
@@ -4241,6 +4319,10 @@ const STIM_HEALTH: f32 = 0.5;
 const STRIKE_LEAD: f32 = 0.5;
 /// A charger's rush where the game's data has no speed for him.
 const CHARGE_SPEED: f32 = 5.5;
+/// How fast (m/s) one runs to the fight a script gives him, straight there.
+const RUN_TO_FIGHT: f32 = 4.2;
+/// How lately (s) one was hit to be hard pressed (`Progression`).
+const HARD_PRESSED_FOR: f32 = 5.0;
 
 /// A role's strike from the game's data (its archetype's personality).
 fn strike(table: &crate::combat::DamageTable, faction: Faction, role: Role) -> Option<fc3_formats::counters::Melee> {

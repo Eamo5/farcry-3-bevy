@@ -348,8 +348,17 @@ is the story's own:
 * **Cover looked for afresh.** `SetAIFactBool <group> ReEvaluateCover`
   (the `SetReEvaluateCover` box, 47 graphs: a fight moved on) has a group
   give up the cover it holds and look again (`npc::Npc::reevaluate_cover`).
-  The progression modes (`perProgressionMode`: running straight, shooting
-  on the way) aren't played.
+* **Making their way to the fight.** `SetAIFactInt <group>
+  perProgressionMode <n>` (the `SetProgressionMode` box, 88 graphs: SAM_015's
+  reinforcements, SAM_020's, the waves sent to their posts) says how a
+  group crosses to the fight a script gives it (`npc::Progression`): 0
+  straight there, running and firing on the run; 1 the same unless hit in
+  the last 5 s, when it fights its way on from cover; 2 always from cover
+  to cover; 3 straight there without stopping, not even to fire. A fighter
+  outside his combat region (`SetBattlefields` kind 3) on a straight way
+  runs for it (4.2 m/s) without looking for cover, a spot to see from or
+  throwing; one with no mode set fights his way back as before. A reload
+  lets them go.
 * **Weapons by their models' names.** Scripts name weapons by library
   archetype; JAS_130 takes back its `weapons:FC3/GM-94`, which our
   `GL-94` (`gm94grenadelauncher\gm94.xbg`) didn't answer to, so the empty

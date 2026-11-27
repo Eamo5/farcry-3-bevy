@@ -225,6 +225,16 @@ fn apply_sides(
             }
         }
     }
+    // How they make their way to the fight a script gives them.
+    if !host.progression.is_empty() {
+        for (actor, mut npc) in &mut npcs {
+            let Some(&mode) = host.progression.get(&actor.id) else { continue };
+            let mode = crate::npc::Progression::from_mode(mode);
+            if npc.progression != mode {
+                npc.progression = mode;
+            }
+        }
+    }
     // Senses a script holds: a captive tied up forgets the fight.
     if !host.impaired.is_empty() {
         for (actor, mut npc) in &mut npcs {
@@ -1111,6 +1121,10 @@ pub struct StoryHost {
     pub damages: Vec<(u64, f32)>,
     /// Characters' senses as scripts hold them (`SetImpairedState`), by id.
     pub impaired: HashMap<u64, u8>,
+    /// How characters make their way to the fight a script gives them
+    /// (`SetProgressionMode`: 0 straight, 1 shooting when hard pressed, 2
+    /// shooting always, 3 straight without stopping), by id.
+    pub progression: HashMap<u64, u8>,
     /// Whom scripts set characters against or beside
     /// (`PawnRelationshipModifier`), by id.
     pub relations: HashMap<u64, crate::npc::Relations>,
@@ -1440,6 +1454,7 @@ impl StoryHost {
             end_of_game: false,
             damages: Vec::new(),
             impaired: HashMap::new(),
+            progression: HashMap::new(),
             relations: HashMap::new(),
             battlefield_posts: HashMap::new(),
             combat_areas: HashMap::new(),
@@ -2634,6 +2649,7 @@ fn run_story(
             host.focus_since = None;
             host.near_at.clear();
             host.impaired.clear();
+            host.progression.clear();
             host.relations.clear();
             host.battlefield_posts.clear();
             host.combat_areas.clear();
@@ -4943,6 +4959,14 @@ fn run_story(
                         for id in host.story.group_members(&a(0)) {
                             debug!("story: {id} impaired {state}");
                             host.impaired.insert(id, state);
+                        }
+                    }
+                    // How a group makes its way to its fight
+                    // (`SetProgressionMode`: `group, perProgressionMode, n`).
+                    "SetAIFactInt" if a(1) == "perProgressionMode" => {
+                        let mode = a(2).parse::<f32>().unwrap_or(1.0) as u8;
+                        for id in host.story.group_members(&a(0)) {
+                            host.progression.insert(id, mode);
                         }
                     }
                     // Tagging allowed on a character (1) or not (0, its tag
