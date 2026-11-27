@@ -875,6 +875,18 @@ is the story's own:
 * **Scene lifetime**: sequences retain their meta-sequence owner; stopping
   that owner releases its looping scenes and character overrides, without
   stopping unrelated scenes or the host's QTE phases.
+* **Graph lifetime**: a graph stopped (a block done, its zone's script put
+  away, a start-on-load entity's sector gone) is shut down, and the
+  callbacks its boxes registered (listeners, timers, tick functions, calls
+  queued) go with it, a sub-graph's too (each box's `_graph`, followed to
+  the top), as the engine's go with the boxes it frees. Boxes whose own
+  `ShutDown` doesn't unregister (an event callback, a message listener) had
+  gone on being called after their block was over. (JAS_240_B10's "Meet
+  Citra" marker at the temple door stayed on the map after the campaign:
+  the block swaps it for the one inside as the player comes within 12 m of
+  the door, and the autopilot, set down in the trigger beyond, never walked
+  through it; a player does.) `fc3tool trigger-shape <id>...` prints a
+  trigger's shape, an entity's place and a marker's kind.
 * **Videos** (`video`, decoded by `fc3_bink`): full screen when the screen is
   the player (or names no material); else on the screen entity itself: the
   converter indexes the materials scripts name for screens (`BinkPlayer`'s
@@ -3826,6 +3838,13 @@ steep crease at (-1987, -2456), can wedge the capsule; the route keeps to x
   the player under one of JAS_030's helicopter crew every frame for five
   minutes, the machete never in reach. One set by four times in 3 s is
   left 20 s, for the machete as for a takedown (`chase_trips`).
+* **Dry, and held back by the companion.** In a later run JAS_100's pirates
+  stood beyond Dennis's leash (`ESCORT_IN_FIGHT`) with the player out of
+  rounds: each was left as "too far from the companion for the machete",
+  and the outpost was never taken. The leash now holds a dry player back
+  only 45 s (`DRY_LEASH_FOR`); after that the machete goes after them and
+  the companion step stops calling him back until one is in reach within
+  the leash again. JAS_100 completed.
 * **A use fails at once.** With the reload forgetting the steps before,
   JAS_060's B40 failed and reloaded every 12 s: the autopilot used Amanaki
   as the map was to be opened, which set the player in the block's failing

@@ -1027,6 +1027,9 @@ pub struct StoryHost {
     ai_seen: std::collections::HashMap<u64, u8>,
     /// The autopilot has the player crouched, creeping through.
     creeping: bool,
+    /// Since when the companion has kept the player, dry, from going after
+    /// the foes with the machete.
+    dry_leashed: Option<f32>,
     fatal: Fatal,
     /// Radio towers' panels whose camera flight plays (panel, scene, file):
     /// each is done once its flight is over.
@@ -1403,6 +1406,7 @@ impl StoryHost {
             spotted: None,
             ai_seen: Default::default(),
             creeping: false,
+            dry_leashed: None,
             fatal: fatal_learned(),
             tower_flights: Vec::new(),
             objective_before: None,
@@ -5419,6 +5423,9 @@ const CULPRIT_AT_ONCE: f32 = 0.25;
 const SCRIPT_KILL_WITHIN: f32 = 5.0;
 /// How near (m) the autopilot swings the machete from (its reach is 2.4).
 const MACHETE_REACH: f32 = 1.8;
+/// How long (s) the companion's leash keeps the player, dry, from going
+/// after foes beyond it with the machete.
+const DRY_LEASH_FOR: f32 = 45.0;
 /// A pawn put to another action within this (s) of its last is on its
 /// rounds: the story isn't stirred by it.
 const ROUNDS_WITHIN: f32 = 180.0;
@@ -6933,7 +6940,9 @@ fn autopilot_loot(
             let fight =
                 npcs.iter().any(|q| !q.1.dead && q.5.hostile() && q.5.state != crate::npc::NpcState::Idle && q.0.translation.distance(at.translation) < 80.0);
             let keep = if fight { ESCORT_IN_FIGHT.min(distance) } else { distance.min(12.0) };
-            if flat.length() > keep {
+            // (Not while it's gone after foes, dry, the leash let go.)
+            let let_go = fight && host.dry_leashed.is_some_and(|since| time.elapsed_secs() - since >= DRY_LEASH_FOR);
+            if flat.length() > keep && !let_go {
                 if *last != Some((id, "escort")) {
                     info!("story autopilot: keep up with {}", host.story.data().name_of(id).unwrap_or("?"));
                     *last = Some((id, "escort"));
@@ -7439,11 +7448,18 @@ fn autopilot_loot(
             if Vec2::new(delta.x, delta.z).length() > MACHETE_REACH || delta.y.abs() > 1.5 {
                 let mut feet = nt.translation - delta.with_y(0.0).normalize_or(Vec3::Z) * (MACHETE_REACH - 0.4);
                 feet.y = feet_near(&spatial, &heights, me, feet, nt.translation.y - crate::player::HALF_HEIGHT);
-                if leashed(feet) {
+                // (Kept by the companion only so long, every foe beyond him:
+                // JAS_100's pirates stood out past Dennis, the player dry,
+                // and the outpost was never taken.)
+                let held_back = host.dry_leashed.get_or_insert(now);
+                if leashed(feet) && now - *held_back < DRY_LEASH_FOR {
                     info!("story autopilot: {} too far from the companion for the machete; another for a while", actor.id);
                     skipped.insert(actor.id, now + 20.0);
                     *shooting = None;
                     return;
+                }
+                if !leashed(feet) {
+                    host.dry_leashed = None;
                 }
                 // (Nor one set beside again and again, out of reach still:
                 // JAS_030's helicopter crew over the jungle, gone after with

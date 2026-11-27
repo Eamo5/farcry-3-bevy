@@ -2329,6 +2329,18 @@ impl Story {
             if let Err(e) = self.domino.call(&instance, "ShutDown") {
                 self.error(format!("ShutDown on {owner}: {e}"));
             }
+            // (Its boxes' callbacks go with it, as the engine's go with the
+            // boxes it frees: JAS_240_B10's radius listener, its block done,
+            // put the "Meet Citra" marker back up after the trigger that
+            // ended the block had taken it down, and it stayed on the map
+            // past the end credits.)
+            let graph = instance.to_pointer();
+            let of = |t: &Table| graph_root(t) == graph;
+            let mut c = self.core.borrow_mut();
+            c.listeners.retain(|_, l| !of(&l.callback.target));
+            c.delays.retain(|_, d| !of(&d.callback.target));
+            c.ticks.retain(|_, cb| !of(&cb.target));
+            c.actions.retain(|a| !matches!(a, Action::Call(cb, _) if of(&cb.target)));
         }
     }
 
@@ -2425,6 +2437,19 @@ pub fn standing_layers(pack: &ScriptPack, data: &StoryData, gameplays: &[u8]) ->
         out.entry(l.block).or_default().push(l.id);
     }
     out
+}
+
+/// The graph a box belongs to at the top (its `_graph`, and that one's, as
+/// far as they go), by its address: the box itself where it has none.
+fn graph_root(t: &Table) -> *const std::ffi::c_void {
+    let mut t = t.clone();
+    for _ in 0..64 {
+        match t.raw_get::<mlua::Value>("_graph") {
+            Ok(mlua::Value::Table(g)) if g.to_pointer() != t.to_pointer() => t = g,
+            _ => break,
+        }
+    }
+    t.to_pointer()
 }
 
 fn in_sectors(e: &data::Entry, sectors: Option<&HashSet<u32>>) -> bool {
@@ -3449,6 +3474,51 @@ mod tests {
             CScriptCallbackSystem_GetInstance():RemoveCallback("1", subscriptions[2])
         "#).exec().unwrap();
         assert!(story.watched_loot_filters().is_empty());
+    }
+
+    /// A graph stopped (its block done) hears nothing more: its boxes'
+    /// timers and listeners go with it, a sub-graph's too.
+    #[test]
+    fn a_stopped_graph_hears_nothing_more() {
+        let graph = r#"
+            export = {};
+            function export:Create(cbox) cbox:RegisterBox("Test/Wait.lua"); cbox:RegisterBox("Test/Sub.lua") end;
+            function export:Init(cbox)
+                self[1] = cbox:CreateBox("Test/Wait.lua"); self[1]._graph = self;
+                self[2] = cbox:CreateBox("Test/Sub.lua"); self[2]._graph = self;
+            end;
+            function export:In() self[1]:Start(); self[2]:In() end;
+        "#;
+        let sub = r#"
+            export = {};
+            function export:Create(cbox) cbox:RegisterBox("Test/Wait.lua") end;
+            function export:Init(cbox) self[1] = cbox:CreateBox("Test/Wait.lua"); self[1]._graph = self end;
+            function export:In() self[1]:Start() end;
+        "#;
+        let wait = r#"
+            Wait = {};
+            function Wait:Start()
+                local m = CDominoDelayManager_GetInstance()
+                self.timer = m:CreateDelay(1, self, "Fire")
+                m:SendCommand(self.timer, "start")
+                CScriptCallbackSystem_GetInstance():RegisterEventCallback("1", self, "Fire", "SomeEvent")
+            end
+            function Wait:Fire() fired = (fired or 0) + 1 end
+            export = Wait; Wait = nil;
+        "#;
+        let scripts: Vec<(String, Vec<u8>)> = [("Test/Graph.lua", graph), ("Test/Sub.lua", sub), ("Test/Wait.lua", wait)].iter().map(|(p, s)| (p.to_string(), s.as_bytes().to_vec())).collect();
+        let mut story = Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&scripts)).unwrap(), StoryData::default()).unwrap();
+        let owner = 77;
+        story.core.borrow_mut().running.insert(owner);
+        story.core.borrow_mut().actions.push_back(Action::Start { script: "Test/Graph.lua".into(), owner, prefab: None, inputs: vec![], entries: vec!["In"] });
+        story.update(0.1, View::default());
+        assert_eq!(story.core.borrow().listeners.len(), 2, "both boxes listen");
+        story.core.borrow_mut().actions.push_back(Action::Stop(owner));
+        story.update(2.0, View::default());
+        story.update(2.0, View::default());
+        let fired: Option<i64> = story.domino().lua().globals().get("fired").unwrap();
+        assert_eq!(fired, None);
+        assert!(story.core.borrow().listeners.is_empty() && story.core.borrow().delays.is_empty());
     }
 
     /// A mission bomb's dynamite and remote, spawned from their archetypes

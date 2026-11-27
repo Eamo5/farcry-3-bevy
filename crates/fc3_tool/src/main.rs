@@ -3284,6 +3284,18 @@ fn main() -> Result<()> {
                 }
             }
         }
+        "trigger-shape" => {
+            // A story trigger's shape and where it stands (Dunia), and a
+            // marker's place: trigger-shape <id>...
+            let root = fc3_formats::cache::default_cache_root();
+            let story = fc3_story::Story::open(&root)?;
+            let data = story.data();
+            for id in args.iter().skip(1).filter_map(|a| a.parse::<u64>().ok()) {
+                let entry = data.entities.get(&id);
+                let shape = entry.and_then(fc3_story::triggers::shape_of);
+                println!("{id} {:?} at {:?} marker {:?}: {shape:?}", data.name_of(id), data.position(id), data.markers.get(&id).map(|m| m.kind));
+            }
+        }
         "story-entities" => {
             // Searches the cache's story entity table by name, class, id,
             // layer or component: story-entities [text] (no text: a summary)
