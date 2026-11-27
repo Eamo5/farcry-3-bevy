@@ -5612,6 +5612,14 @@ the characters a script waits to see searched.
   reload, when the scripts set them again), and the character's own loot
   takes them (`story_actors::apply_loot_chances`). From the HOY_020_B10
   checkpoint the third VIP searched gave the "Rendez-vous Note".
+* **A VIP out of reach.** In the fourth line the second VIP stood where
+  nothing behind him took the player's feet ("off the ground"), or moved
+  each time the player was set behind him. Either left him for 20 s, but
+  the step picking whom to search or take down doesn't heed that (a VIP is
+  his script's to search, which nothing else goes after), so it chose him
+  again every frame for twenty minutes. Such a one is now shot instead
+  (unless he's a wanted poster's, blade only), then searched where he
+  fell; B10 completed.
 
 ## HOY_010: Sam and the bombs
 

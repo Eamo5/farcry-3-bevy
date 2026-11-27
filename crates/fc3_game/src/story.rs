@@ -7963,10 +7963,24 @@ fn autopilot_loot(
             // carried along, a helicopter's crew in the air over HUR_040's
             // beach, had the player set behind him every frame till he fell
             // to his death. Another for a while.)
+            // (One a script waits to search, a mission's VIP, is shot
+            // instead: being his to search, nothing else goes after him, and
+            // HOY_020's second VIP, on a ledge with nothing to stand on behind
+            // him, was gone for every frame for twenty minutes.)
+            let shoot_instead = |last: &mut Option<(u64, &'static str)>| {
+                if !nh.dead && !wanted.contains(&actor.id) {
+                    *last = Some((actor.id, "shoot"));
+                    true
+                } else {
+                    false
+                }
+            };
             if chase_trips(&mut chased, actor.id, now) {
                 info!("story autopilot: {} won't hold still; another for a while", actor.id);
-                skipped.insert(actor.id, now + 20.0);
-                *last = None;
+                if !shoot_instead(&mut *last) {
+                    skipped.insert(actor.id, now + 20.0);
+                    *last = None;
+                }
                 set_down_if_aloft(&spatial, &heights, me, &mut at, &mut player);
                 return;
             }
@@ -7976,9 +7990,11 @@ fn autopilot_loot(
             // helicopter's crewman coming down to the beach. Not followed
             // into the air.)
             if !nh.dead && floor_near(&spatial, &heights, me, feet, his_feet).is_none() {
-                info!("story autopilot: {} is off the ground; another for a while", actor.id);
-                skipped.insert(actor.id, now + 20.0);
-                *last = None;
+                info!("story autopilot: {} is off the ground; shot instead", actor.id);
+                if !shoot_instead(&mut *last) {
+                    skipped.insert(actor.id, now + 20.0);
+                    *last = None;
+                }
                 set_down_if_aloft(&spatial, &heights, me, &mut at, &mut player);
                 return;
             }
