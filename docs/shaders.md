@@ -835,8 +835,12 @@ Runtime glue:
   whose bounds it crosses; `FC3_VIEW_MESH_DEBUG_AT=<x>,<y>` aims it through
   another point of the view (-1..1 rightward and upward) and reaches 2 km.
   (A white sawtooth crescent seen in many test shots so found to be nothing
-  in the world: it is the HUD's own hit indicator, the noclip camera shot at
-  by an outpost's guards, or, riding behind one, a gull's wings.)
+  in the world: it is the HUD's stealth indicator, `StealthIndicator_<n>`,
+  turned toward an enemy beginning to notice the player (shown from 2 %
+  awareness, white while he suspects, red once he has spotted the player;
+  `original_ui::drive_stealth`), or, riding behind one, a gull's wings.
+  It sits at the same place in shot after shot because the posed or nearby
+  enemies stand ahead of the camera.)
 - Vertex colours (blend weights, baked occlusion) are passed as a custom
   attribute that standard materials ignore.
 - Self-lit materials (`Unlit`, `EffectLit`: signs, lamp glass, screens) show
