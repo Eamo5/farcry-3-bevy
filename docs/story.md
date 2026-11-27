@@ -1492,6 +1492,17 @@ is the story's own:
 Validation currently focuses on single-player: the campaign, open world and
 side activities, including their visuals and UX.
 
+**Status (2026-11-27).** A fresh campaign, begun at JAS_020 and carried on
+from checkpoint to checkpoint by the autopilot (each stall fixed and the
+run resumed from its last checkpoint), now plays every main mission through
+to JAS_240's end credits; a second line, begun at JAS_060 with no triggers
+learned to leave alone, has run on into the second island (CIT_030's Ink
+Monster) the same way.
+The fixes along the way are under each mission's heading. What the runs
+still stand in for: the autopilot sets the player down where a player would
+walk, and skips scenes; manual play of whole missions isn't recorded here.
+The history below is kept as it was written.
+
 The live campaign smoke test reaches the map-pickup objective in `JAS_020_B10`
 and advances into `JAS_020_B15`. Tracing confirmed the guard's `CA_Start`
 callback is delivered. Implementing non-player teleports fixes Grant's reload
