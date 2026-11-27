@@ -3643,7 +3643,10 @@ fn run_story(
             info!("story autopilot: end gameplay {name}");
             host.story.gameplay_ended(id);
             host.reset_quiet();
-        } else if let Some((id, at)) = marker_walk {
+        } else if let Some((id, at)) = marker_walk.filter(|_| !held_still) {
+            // (Not while a script holds the player still: HUR_050's first
+            // pillar's bomb was being placed when he was sent on to the
+            // next marker, and the bomb's remote never reported in.)
             info!("story autopilot: go to the marker {}", data.name_of(id).unwrap_or("?"));
             host.used.insert((id, "go to".into()));
             // (One that fails the mission is left alone under its objective:
@@ -3652,7 +3655,16 @@ fn run_story(
             host.stepped(id, "go to", now);
             let side = (t.translation - at).with_y(0.0).normalize_or(Vec3::Z);
             let mut stand = at + side * MARKER_WALK_SHORT;
-            stand.y = heights.height_at(stand).unwrap_or(at.y);
+            // (On the floor by a marker under the ground, not the ground
+            // over it: HUR_050's pillars stand in the sub pen 90 m down.)
+            let terrain = heights.height_at(stand);
+            let top = at.y + 2.0;
+            let floor = spatial.cast_ray(stand.with_y(top), Dir3::NEG_Y, 6.0, true, &avian3d::prelude::SpatialQueryFilter::default()).map(|h| top - h.distance);
+            stand.y = match (terrain, floor) {
+                (Some(g), Some(f)) if g > at.y + 3.0 => f,
+                (Some(g), _) => g,
+                (None, f) => f.unwrap_or(at.y),
+            };
             teleport(&mut t, &mut p, to_dunia(stand), 0.0);
             host.reset_quiet();
         } else if let Some(at) = host

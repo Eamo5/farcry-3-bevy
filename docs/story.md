@@ -5930,6 +5930,14 @@ to (B90C). HUR_050 completes; with it every main mission does.
   and B10 stood still for an hour. The trigger step now takes no step
   more than 3 m off while the map in force takes away moving
   (`ScriptActionMaps::lets`); B10 then completed in 19 s.
+* **The marker walk too.** In a later run the marker walk (the step that
+  goes to an objective's marker once nothing else is left) sent the player
+  on to the next pillar's marker while the first bomb was being placed,
+  and onto the ground 90 m over the sub pen at that: it stood the player on
+  the terrain under each marker. It now waits too while moving is taken
+  away, and stands him on the floor by a marker under the ground (the
+  surface within a few metres under it, where the terrain is more than
+  3 m above it). B10 to B90C and HUR_050 completed.
 
 ## Outposts, safe houses and the country's activities
 
