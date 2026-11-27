@@ -5013,6 +5013,27 @@ fn run_story(
                         }
                     }
                     "CAPI_Pawn.BackupInventory" => {}
+                    // A character's weapon put away or hidden (`pawn, on`, and
+                    // `pawn, visible`: WIL_050's Oliver, a prisoner, unarmed
+                    // in the convoy), as when they're taken from him.
+                    "CAPI_Pawn.SetNoWeaponMode" => {
+                        if let Ok(pawn) = a(0).parse::<u64>() {
+                            if a(1) == "true" || a(1) == "1" {
+                                host.holstered.insert(pawn);
+                            } else {
+                                host.holstered.remove(&pawn);
+                            }
+                        }
+                    }
+                    "CAPI_Pawn.SetWeaponVisibility" => {
+                        if let Ok(pawn) = a(0).parse::<u64>() {
+                            if a(1) == "false" || a(1) == "0" {
+                                host.holstered.insert(pawn);
+                            } else {
+                                host.holstered.remove(&pawn);
+                            }
+                        }
+                    }
                     // A group at ease or on its guard at its posts (`group,
                     // 0|1`: an outpost's defenders turn cautious once they
                     // fight, 35 graphs).

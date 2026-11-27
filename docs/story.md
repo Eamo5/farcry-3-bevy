@@ -6314,7 +6314,10 @@ to SQC_080, each a brief at its giver then its blocks):
   (`NarrativeHolsterWeaponNPCCompanion`: `CAPI_Pawn.BackupInventory`,
   `RemoveAllWeapon`, later `RestoreBackupInventory`); only the player's were
   played. A character's now leave his hand (hidden) till they're given back,
-  and a checkpoint's reload gives them back.
+  and a checkpoint's reload gives them back. A character's no-weapon mode
+  and weapon visibility (`CAPI_Pawn.SetNoWeaponMode`,
+  `SetWeaponVisibility`: WIL_050's Oliver, a prisoner in the convoy) put
+  his gun away the same way; only the player's had been played.
 * **Seen.** With the island opened (`FC3_LIBERATE_ALL`) from the campaign's
   end: SQC_010, SQC_040 and SQC_060's stashes; with them SQS_G4, SQS_D5,
   SQS_C7 and SQS_D7, SQW_G4, SQW_D4B and SQW_D7, SQH_010 and SQH_040.
