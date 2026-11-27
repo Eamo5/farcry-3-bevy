@@ -4696,6 +4696,14 @@ about as non-fighters and the first wave never emptied.
   and B30 completes. (A stalled path driver logs what its hull overlaps and
   touches, `held up against` / `in contact with`; `fc3tool terrain-height`
   gives the converted ground under Dunia points.)
+* **A wave that never landed.** In a later run B20 stood still for twenty
+  minutes, the guards' group counted with three reinforcements in it that
+  never came into the world: a wave without a ride in reach comes ashore
+  along from the end of its way toward its battlefield, and found nowhere
+  (the ground there not loaded, or no dry ground within reach of it), and
+  waited for good. After 5 s it is now placed at the end of its way
+  (`LANDING_PATIENCE`), to come into the world as the player nears; from
+  that checkpoint B20, B30 and WIL_050 completed.
 
 ## DOC_040 to Buck: the activities on the way
 

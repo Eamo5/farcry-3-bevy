@@ -326,6 +326,10 @@ pub struct Arrivals(pub Vec<(fc3_story::data::Entry, Option<Vec3>)>);
 #[derive(Resource, Default)]
 struct CalledIn(HashMap<u64, fc3_story::data::Entry>);
 
+/// How long (s) a reinforcement waits for somewhere to come ashore before
+/// it is placed at the end of its way.
+const LANDING_PATIENCE: f32 = 5.0;
+
 /// Where a reinforcement comes ashore: along from the end of the point's
 /// vehicle path (or the point itself) toward the battlefield, the first spot
 /// whose ground stands clear of the sea. None while that ground isn't loaded.
@@ -352,6 +356,7 @@ fn land_reinforcements(
     mut arrivals: ResMut<Arrivals>,
     (mut rides, mut flights, server): (ResMut<crate::story_rides::Rides>, ResMut<crate::story_helis::Flights>, Res<AssetServer>),
     players: Query<&Transform, With<Player>>,
+    (time, mut since): (Res<Time>, Local<HashMap<u64, f32>>),
 ) {
     let Some(mut host) = host else { return };
     if host.reinforcements.is_empty() {
@@ -438,10 +443,24 @@ fn land_reinforcements(
             continue;
         }
         let start = points.last().copied().unwrap_or_else(|| to_bevy(point.pos));
-        let Some(ashore) = landing(start, field, |p| heights.height_at(p)) else {
-            waiting.push(order);
-            continue;
+        // (Not for good: a wave whose way ends out of the loaded world, or
+        // nowhere dry toward its battlefield, came after a while to where
+        // its way ends, and is placed there to come into the world as the
+        // player nears. WIL_050's fail-proof wave never landed, and B20
+        // counted it for good.)
+        let waited = time.elapsed_secs() - *since.entry(order.point).or_insert(time.elapsed_secs());
+        let ashore = match landing(start, field, |p| heights.height_at(p)) {
+            Some(a) => a,
+            None if waited > LANDING_PATIENCE => {
+                info!("story: reinforcement at {} found nowhere to come ashore; at the end of its way {start:.0}", order.point);
+                start.with_y(heights.height_at(start).unwrap_or(start.y).max(crate::sky::SEA_LEVEL))
+            }
+            None => {
+                waiting.push(order);
+                continue;
+            }
         };
+        since.remove(&order.point);
         let face = field.map(|f| f - ashore).filter(|d| d.with_y(0.0).length() > 0.5).map_or(0.0, |d| (-d.x).atan2(-d.z));
         let side = Vec3::new(face.cos(), 0.0, -face.sin());
         for (i, (id, ark)) in order.mercs.iter().enumerate() {
