@@ -3744,6 +3744,37 @@ mod skill_tests {
         assert!((perks.max_health - none.max_health - crate::combat::HEALTH_SEGMENT).abs() < 1e-3);
     }
 
+    /// Installed data: each skill applied by its bonuses' attributes moves
+    /// the perk it is for, on the game's own skill tree.
+    #[test]
+    #[ignore]
+    fn installed_skills_move_their_perks() {
+        let text = std::fs::read_to_string(fc3_formats::cache::default_cache_root().join(fc3_formats::progression::SKILLS_REL)).expect("skill tree in the cache");
+        let skills = Skills(fc3_formats::progression::SkillTree::from_text(&text).unwrap());
+        let base = Perks::from_progress(&Progress::default(), &skills);
+        let with = |id: &str| {
+            let mut p = Progress::default();
+            p.skills.insert(id.to_string());
+            Perks::from_progress(&p, &skills)
+        };
+        let checks: [(&str, fn(&Perks, &Perks) -> bool); 12] = [
+            ("SP_QuickReloadA", |a, b| a.reload_speed > b.reload_speed),
+            ("SP_QuickReloadB", |a, b| a.reload_speed > b.reload_speed),
+            ("SP_FasterWeaponHandling", |a, b| a.swap_speed > b.swap_speed),
+            ("SP_SwimSprint", |a, b| a.swim > b.swim),
+            ("SP_SniperHoldBreathA", |a, b| a.scope_breath > b.scope_breath),
+            ("SP_SniperHoldBreathB", |a, b| a.scope_breath > b.scope_breath),
+            ("SP_ExtendPotionDurationA", |a, b| a.potion_duration > b.potion_duration),
+            ("SP_ReducedFallDamage", |a, b| a.fall_damage < b.fall_damage),
+            ("SP_AddHealthSlotB", |a, b| a.max_health > b.max_health),
+            ("SP_IncreaseManualHealA", |a, b| a.manual_heal_bars > b.manual_heal_bars),
+            ("SP_IncreaseMedkitHealA", |a, b| a.medkit_bonus > b.medkit_bonus),
+            ("SP_IncreaseLootSalePrice", |a, b| a.sale_price > b.sale_price),
+        ];
+        let failed: Vec<&str> = checks.iter().filter(|(id, moved)| !moved(&with(id), &base)).map(|(id, _)| *id).collect();
+        assert!(failed.is_empty(), "skills that move nothing: {failed:?}");
+    }
+
     #[test]
     fn progress_lines_keep_story_unlocks_and_stats() {
         let mut p = Progress::default();

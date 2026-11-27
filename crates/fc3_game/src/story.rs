@@ -5521,6 +5521,9 @@ const NEAR_AGAIN: f32 = 20.0;
 /// autopilot's focus beside the missions running.
 const BRIEF_NEAR: f32 = 20.0;
 
+/// How near (m) a flying helicopter a foe is shot rather than taken down.
+const HELI_KEEP_OFF: f32 = 10.0;
+
 /// How long (s) after a reload that followed a scripted kill the autopilot
 /// goes on at once, without stopping to fight.
 const HURRY_FOR: f32 = 10.0;
@@ -5529,6 +5532,19 @@ const HURRY_FOR: f32 = 10.0;
 /// won't hold still, and is left a while.
 const CHASE_MOST: u32 = 4;
 const CHASE_WINDOW: f32 = 3.0;
+
+/// The player, set by a foe a moment ago on what has since gone from under
+/// him (a helicopter he stood on lifting off from HUR_040's beach), put down
+/// on the ground below rather than left to fall 20 m to his death, as the
+/// foe is given up on.
+fn set_down_if_aloft(spatial: &avian3d::prelude::SpatialQuery, heights: &crate::terrain::Heightfield, me: Entity, at: &mut Transform, player: &mut Player) {
+    let mine = at.translation.y - crate::player::HALF_HEIGHT;
+    if let Some(ground) = heights.height_at(at.translation).filter(|g| mine - g > 3.0) {
+        let below = floor_near(spatial, heights, me, at.translation.with_y(mine), mine - 2.0).filter(|f| mine - f < 2.5).unwrap_or(ground);
+        let down = to_dunia(at.translation.with_y(below));
+        teleport(at, player, down, 0.0);
+    }
+}
 
 /// One more time the player is set by a man (`chased`: the man, since when,
 /// how often): whether that's `CHASE_MOST` within `CHASE_WINDOW` (then the
@@ -6474,12 +6490,13 @@ fn autopilot_loot(
     scripted: Res<ScriptedPlayer>,
     catalog: Res<crate::progression::LootCatalog>,
     progress: Res<crate::progression::Progress>,
-    (heights, stims, fires, startled, mut chased): (
+    (heights, stims, fires, startled, mut chased, helis): (
         Res<crate::terrain::Heightfield>,
         Res<crate::stims::Stims>,
         Res<crate::fire::Fires>,
         Res<crate::story_actors::Startled>,
         Local<(u64, f32, u32)>,
+        Query<(&GlobalTransform, &crate::story_helis::Heli)>,
     ),
     mut players: Query<(Entity, &mut Transform, &mut Player, &crate::combat::Health, &crate::weapons::Inventory, Option<&crate::combat::PlayerStats>)>,
     animals: Query<(Entity, &Transform, &crate::wildlife::WildAnimal, &crate::combat::Health, Option<&crate::wildlife::Carcass>, Option<&crate::story_actors::StoryActor>), Without<Player>>,
@@ -7018,6 +7035,10 @@ fn autopilot_loot(
                 // beach, had the player set behind one in the air each frame
                 // till he fell to his death.)
                 || q.4.seated
+                // (Nor one by a helicopter in the air, come into the world
+                // there before he's boarded: set behind him, the player stood
+                // on its body and fell 20 m as it moved off.)
+                || helis.iter().any(|(ht, h)| h.flying() && ht.translation().distance(q.0.translation) < HELI_KEEP_OFF)
                 || (*last == Some((q.4.id, "take down")) && shooting.is_some_and(|(id, _, since)| id == q.4.id && now - since > TAKEDOWN_PATIENCE)))
     });
     // Riding as a passenger: the foe nearest is shot from the seat, gun in
@@ -7566,6 +7587,7 @@ fn autopilot_loot(
                 info!("story autopilot: {} won't hold still; another for a while", actor.id);
                 skipped.insert(actor.id, now + 20.0);
                 *last = None;
+                set_down_if_aloft(&spatial, &heights, me, &mut at, &mut player);
                 return;
             }
             let mut feet = behind;
@@ -7577,6 +7599,7 @@ fn autopilot_loot(
                 info!("story autopilot: {} is off the ground; another for a while", actor.id);
                 skipped.insert(actor.id, now + 20.0);
                 *last = None;
+                set_down_if_aloft(&spatial, &heights, me, &mut at, &mut player);
                 return;
             }
             feet.y = feet_near(&spatial, &heights, me, feet, his_feet).max(his_feet - 0.5);

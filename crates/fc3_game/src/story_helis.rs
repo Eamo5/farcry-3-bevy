@@ -176,6 +176,13 @@ pub struct Heli {
     power: f32,
 }
 
+impl Heli {
+    /// Under way, its rotors turning (not set down, wrecked or burnt out).
+    pub fn flying(&self) -> bool {
+        self.power > 0.5
+    }
+}
+
 /// A rotor, turning about its axis (model space).
 #[derive(Component)]
 struct Rotor {

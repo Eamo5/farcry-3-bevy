@@ -1467,7 +1467,7 @@ const WRECK_RETREAT: f32 = 30.0;
 fn autopilot_wreck(
     host: Option<NonSendMut<crate::story::StoryHost>>,
     time: Res<Time>,
-    (heights, nav): (Res<crate::terrain::Heightfield>, Res<crate::nav::NavMesh>),
+    (heights, nav, area): (Res<crate::terrain::Heightfield>, Res<crate::nav::NavMesh>, Res<crate::story::MissionArea>),
     spatial: SpatialQuery,
     mut actions: ResMut<ActionState>,
     mut players: Query<(Entity, &mut Transform, &mut Player, &crate::weapons::Inventory), Without<Vehicle>>,
@@ -1630,6 +1630,10 @@ fn autopilot_wreck(
                 (ground > crate::water::surface(p.with_y(ground), heights.height_at(p)) + 0.3).then(|| (p.with_y(ground).distance(ahead), p.with_y(ground)))
             })
             .filter(|(_, s)| !wet.iter().any(|w| w.distance(*s) < 2.0))
+            // (Not out of the mission's zone: HUR_040 B40's boats, gone
+            // after up the shore, took the player out of the beach's zone
+            // and failed the block.)
+            .filter(|(_, s)| !area.contains(t.translation) || area.contains(*s))
             .collect();
         spots.sort_by(|a, b| a.0.total_cmp(&b.0));
         let Some(&(_, feet)) = spots.get(state.3 as usize % spots.len().max(1)) else {

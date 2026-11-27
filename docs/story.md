@@ -6249,6 +6249,16 @@ to SQC_080, each a brief at its giver then its blocks):
   the beach, had the player set behind one in the air each frame till he
   fell to his death. And one set behind four times in 3 s won't hold still
   and is left 20 s (`CHASE_MOST`), whatever carries him.
+* **Still falling off the helicopter.** A fresh run from B40 still died
+  three times: a crewman come into the world by the hovering helicopter,
+  not yet boarded, was taken down from its body, and given up on the
+  player was left standing on it as it moved off. One within 10 m of a
+  flying story helicopter is shot now (`HELI_KEEP_OFF`), and a foe given up
+  on that way sets the player down on the ground below if he's been left
+  over 3 m above it (`set_down_if_aloft`). Then the boats' crews were gone
+  after up the shore, out of the beach's zone, and the block failed: the
+  wreck step no longer stands the player outside the mission's zone while
+  he's in it (`MissionArea`). B40 then completed first time, no deaths.
 * **The club.** BNG_010's dance at the club ends 20 s after the player's
   first good move, when its script sends `QTESETRESULT 4 SUCCESS` to the
   dance's zombie QTE. The host matched `QteSetResult` as written, and the
