@@ -854,6 +854,7 @@ mod tests {
                 p.plants[crate::syringes::Plant::SacredLotus.index()] = 2;
                 p.pawn = Some("player:MainCharacter/PawnPlayer.PawnPlayer_Privateer".into());
                 p.tutorials.insert("WANTED Dead".into());
+                p.burnt_regions.insert(2075406596879419402);
                 p
             },
             backup: Some(SavedBackup {

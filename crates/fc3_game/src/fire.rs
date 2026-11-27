@@ -34,7 +34,7 @@ impl Plugin for FirePlugin {
             .init_resource::<Regions>()
             .init_resource::<FireEffects>()
             .add_systems(Startup, (load_fire_effects, load_fire_profiles))
-            .add_systems(Update, (ignite, spread, burn_regions, burn_effects, burn_damage, fire_lights).chain())
+            .add_systems(Update, (ignite, spread, burn_regions, keep_burnt_ground, burn_effects, burn_damage, fire_lights).chain())
             .add_systems(
                 PreUpdate,
                 autopilot_burn
@@ -365,6 +365,8 @@ struct Region {
 pub struct Regions {
     list: Option<Vec<Region>>,
     next: f32,
+    /// The cells of the regions a script saved as burnt, kept bare.
+    kept: HashSet<Cell>,
 }
 
 impl Regions {
@@ -419,6 +421,7 @@ fn burn_regions(
     heights: Res<crate::terrain::Heightfield>,
     mut decals: ResMut<crate::particles::Decals>,
     mut host: Option<NonSendMut<crate::story::StoryHost>>,
+    progress: Res<crate::progression::Progress>,
 ) {
     let Some(host) = host.as_mut() else { return };
     if regions.list.is_none() {
@@ -431,7 +434,15 @@ fn burn_regions(
         return;
     }
     regions.next = 0.4;
-    let Some(list) = regions.list.as_mut() else { return };
+    let Regions { list, kept, .. } = &mut *regions;
+    let Some(list) = list.as_mut() else { return };
+    // (One a script saved as burnt is out for good, all of it burnt.)
+    for r in list.iter_mut().filter(|r| r.state != RegionState::Out && progress.burnt_regions.contains(&r.id)) {
+        debug!("fire: region {} kept burnt", r.id);
+        r.state = RegionState::Out;
+        r.burnt.extend(r.cells.iter().copied());
+        kept.extend(r.cells.iter().copied());
+    }
     for r in list.iter_mut().filter(|r| r.state != RegionState::Out) {
         let burning: Vec<Cell> = r.cells.iter().copied().filter(|c| fires.burning.contains_key(c)).collect();
         // Cells whose fire has gone out are burnt (and scorched).
@@ -471,6 +482,50 @@ fn burn_regions(
             host.story.entity_event(r.id, "FireStopped", vec![]);
             r.state = if r.state == RegionState::AlmostOut { RegionState::Out } else { RegionState::Unlit };
         }
+    }
+}
+
+/// The regions a script saved as burnt stay so (`SaveBurnedRegionEntity`,
+/// "to make sure it is still burned after reload"): their plants, streamed
+/// in again or there when the save is loaded, go, and the ground under them
+/// is scorched once a session.
+fn keep_burnt_ground(
+    regions: Res<Regions>,
+    added: Query<(Entity, &GlobalTransform), Added<Flammable>>,
+    plants: Query<(Entity, &GlobalTransform), With<Flammable>>,
+    mut decals: ResMut<crate::particles::Decals>,
+    mut rng: ResMut<Rng>,
+    mut commands: Commands,
+    mut scorched: Local<HashSet<Cell>>,
+    mut known: Local<usize>,
+) {
+    if regions.kept.is_empty() {
+        return;
+    }
+    // (Every plant when cells were added, else those just in.)
+    let fresh = regions.kept.len() != *known;
+    *known = regions.kept.len();
+    let before = scorched.len();
+    let mut take = |e: Entity, at: Vec3| {
+        let c = cell_of(at);
+        if !regions.kept.contains(&c) {
+            return;
+        }
+        commands.entity(e).despawn();
+        if scorched.insert(c) {
+            decals.add_tinted(crate::particles::DecalSheet::Sand, cell_centre(c, at.y), Vec3::Y, CELL * 1.4, rng.f32(), 0.12);
+        }
+    };
+    let plants: Vec<(Entity, Vec3)> = if fresh {
+        plants.iter().map(|(e, t)| (e, t.translation())).collect()
+    } else {
+        added.iter().map(|(e, t)| (e, t.translation())).collect()
+    };
+    for (e, at) in plants {
+        take(e, at);
+    }
+    if scorched.len() != before || fresh {
+        debug!("fire: {} cells kept burnt, {} scorched", regions.kept.len(), scorched.len());
     }
 }
 

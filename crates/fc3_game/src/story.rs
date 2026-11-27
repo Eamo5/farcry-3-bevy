@@ -5000,6 +5000,13 @@ fn run_story(
                             host.impaired.insert(id, state);
                         }
                     }
+                    // A burnable region kept burnt from now on (WIL_020's
+                    // fields, through a reload; `fire::keep_burnt_ground`).
+                    "CAPI_Entity.SaveBurnedRegionEntity" => {
+                        if let Ok(id) = a(0).parse::<u64>() {
+                            progress.burnt_regions.insert(id);
+                        }
+                    }
                     // A character's own loot group's chance (`entity, group
                     // name, percent`: HOY_020's VIP who has the note).
                     "CAPI_Entity.UpdateLootItemDropPercentage" => {

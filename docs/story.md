@@ -4264,6 +4264,16 @@ starts.
   autopilot burns a region a script waits on: from a few metres off one of
   its cells, the flamethrower out and firing, or a molotov
   (`fire::autopilot_burn`).
+* **Kept burnt.** B10's and B30's `BurnableRegionSave` graphs save their
+  fields as burnt (`CAPI_Entity.SaveBurnedRegionEntity`, "to make sure it is
+  still burned after reload"). It went unplayed, and a field's plants came
+  back whenever its sector streamed in again or a checkpoint was loaded.
+  The saved regions are kept with the progress (`burntregion` lines,
+  `Progress::burnt_regions`); such a region is out for good, and its plants
+  are taken away as they come in, the ground under them scorched once a
+  session (`fire::keep_burnt_ground`). From a WIL_020_B30 checkpoint taken
+  after B10, its two fields were bare again (254 of their 287 cells had
+  plants come in, and lost them).
 
 WIL_020 then completes (its fields each catching at the first try once the
 flamethrower is in hand), and WIL_010's and WIL_040's briefings start.

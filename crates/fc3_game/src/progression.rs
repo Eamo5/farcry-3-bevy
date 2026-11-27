@@ -470,6 +470,9 @@ pub struct Progress {
     pub costume: bool,
     /// The tutorials shown (by their titles): each queued one comes once.
     pub tutorials: std::collections::BTreeSet<String>,
+    /// Burnable regions a script saved as burnt (`SaveBurnedRegionEntity`:
+    /// WIL_020's fields), which stay burnt.
+    pub burnt_regions: std::collections::BTreeSet<u64>,
 }
 
 impl Default for Progress {
@@ -510,6 +513,7 @@ impl Default for Progress {
             pawn: None,
             costume: false,
             tutorials: Default::default(),
+            burnt_regions: Default::default(),
         }
     }
 }
@@ -649,6 +653,9 @@ impl Progress {
         for title in &self.tutorials {
             s += &format!("tutorial {title}\n");
         }
+        for id in &self.burnt_regions {
+            s += &format!("burntregion {id}\n");
+        }
         s
     }
 
@@ -745,6 +752,11 @@ impl Progress {
             }
             "removedplan" => {
                 self.removed_plans.insert(rest.trim().to_ascii_lowercase());
+            }
+            "burntregion" => {
+                if let Ok(id) = rest.trim().parse() {
+                    self.burnt_regions.insert(id);
+                }
             }
             "loot" => {
                 if let (Some(id), Some(n)) = (it.next().and_then(|v| v.parse().ok()), it.next().and_then(|v| v.parse().ok())) {
