@@ -4974,7 +4974,13 @@ there checkpoint after checkpoint for an hour:
   its layer within 150 m: its prefab's copies and a numbered run of it,
   though not the editor's own numbering (`ProximityTrigger_31`)
   (`fatal_namesakes`). With the path left alone it went to the way out
-  (`MB07_finished`), and BAM_040 completed.
+  (`MB07_finished`), and BAM_040 completed. In the fourth line that took
+  twenty minutes of deaths: after each reload the 10 s hurry ran out on
+  the way back to the path, and its steps, 6 s apart, were each still on
+  the path as it fell. Now the place of a death soon after a step is kept,
+  and after the reload the autopilot goes on at once within 60 m of it for
+  two minutes (`HURRY_NEAR`, `HURRY_NEAR_FOR`); from B70's checkpoint the
+  path was crossed in 12 s at the first try after the death volumes.
 * **The elevator.** A later run had B55's elevator triggers (`elevator`,
   `dialog_elevator`) learned to leave alone, with the shaft's death volume
   (`ProximityTrigger_b55_deathVolume01`, 40 m square under them), and the

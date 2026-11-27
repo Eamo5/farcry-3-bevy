@@ -1077,6 +1077,11 @@ pub struct StoryHost {
     /// stopping to fight.
     script_killed: bool,
     hurry_until: f32,
+    /// Where the player last died soon after a step (a fall, a script's
+    /// blow), and, after the reload, until when the autopilot goes on at
+    /// once near there.
+    died_after_step: Option<Vec3>,
+    hurry_near: Option<(Vec3, f32)>,
     /// When that blow was dealt (the autopilot takes no step for a moment
     /// after, the death still to land).
     killing_blow_at: f32,
@@ -1489,6 +1494,8 @@ impl StoryHost {
             prev_step: None,
             script_killed: false,
             hurry_until: f32::MIN,
+            died_after_step: None,
+            hurry_near: None,
             killing_blow_at: f32::MIN,
             provoked: None,
             spotted: None,
@@ -2670,6 +2677,10 @@ fn run_story(
             for i in ids {
                 learn_fatal(&mut host.fatal, i, event.clone(), None);
             }
+            host.died_after_step = Some(t.translation);
+        }
+        if host.script_killed {
+            host.died_after_step.get_or_insert(t.translation);
         }
     }
     host.was_dead = dead;
@@ -2736,6 +2747,11 @@ fn run_story(
                 host.hurry_until = now + HURRY_FOR;
                 info!("story autopilot: killed by a script last time; on at once for {HURRY_FOR} s");
             }
+            // (And near where a step got him killed, a while longer: on
+            // BAM_040's falling temple path, the steps across, 6 s apart
+            // once the hurry after the reload had run out on the way there,
+            // were each still on the path as it fell, for twenty minutes.)
+            host.hurry_near = host.died_after_step.take().map(|at| (at, now + HURRY_NEAR_FOR));
             // (What the autopilot did since is to do again, but for what
             // failed the mission: JAS_020 B15's guard, lured off before the
             // reload, was never lured again.)
@@ -3162,7 +3178,8 @@ fn run_story(
         .and_then(|s| s.parse::<f32>().ok()).filter(|s| s.is_finite())
         .unwrap_or(6.0).max(0.5);
     // (On at once after a reload that followed a scripted kill.)
-    let autopilot_delay = if now < host.hurry_until { 0.5 } else { autopilot_delay };
+    let near_death = host.hurry_near.is_some_and(|(at, until)| now < until && at.distance(t.translation) < HURRY_NEAR);
+    let autopilot_delay = if now < host.hurry_until || near_death { 0.5 } else { autopilot_delay };
     // (At the wheel, the autopilot drives into the boxes scripts wait on.)
     let at_wheel = p.driving && vehicle_views.iter().any(|(e, v, _, _)| driving.vehicle == Some(e) && v.is_driver_seat(driving.seat));
     // (Hurt by a script just now, as a player would it gets out without
@@ -5906,6 +5923,10 @@ const KILLING_BLOW_HOLD: f32 = 3.0;
 /// How long (s) after a reload that followed a scripted kill the autopilot
 /// goes on at once, without stopping to fight.
 const HURRY_FOR: f32 = 10.0;
+/// How long (s) after a reload, and how near (m) where a step got the
+/// player killed, the autopilot goes on at once.
+const HURRY_NEAR_FOR: f32 = 120.0;
+const HURRY_NEAR: f32 = 60.0;
 
 /// A man set behind for a takedown this many times within this long (s)
 /// won't hold still, and is left a while.
