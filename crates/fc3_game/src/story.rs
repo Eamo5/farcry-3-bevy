@@ -1162,6 +1162,10 @@ pub struct StoryHost {
     /// When the autopilot last tried its used triggers again, the story
     /// stirring but going nowhere (`USED_RETRY_AFTER`).
     used_retried_at: f32,
+    /// The objective the player took up a mounted gun under, and when the
+    /// autopilot last got him off one.
+    mounted_under: Option<Option<u32>>,
+    off_gun_at: f32,
     /// The share of their harm companions deal, as scripts set it
     /// (`CAPI_Companion.CompanionSetDamage`).
     pub companion_damage: HashMap<u64, f32>,
@@ -1534,6 +1538,8 @@ impl StoryHost {
             hidden_towers: Default::default(),
             minigame_holds: false,
             used_retried_at: f32::MIN,
+            mounted_under: None,
+            off_gun_at: f32::MIN,
             companion_damage: HashMap::new(),
             cautious: Default::default(),
             actor_moves: Vec::new(),
@@ -5951,6 +5957,9 @@ const HURRY_NEAR_FOR: f32 = 120.0;
 /// the while, before the triggers stepped into go again (and between such
 /// goes).
 const USED_RETRY_AFTER: f32 = 90.0;
+/// How far (m) an objective's marker leads from a mounted gun taken up
+/// under another objective for the autopilot to get off it.
+const OFF_GUN_FOR_MARKER: f32 = 30.0;
 const HURRY_NEAR: f32 = 60.0;
 
 /// A man set behind for a takedown this many times within this long (s)
@@ -7063,6 +7072,25 @@ fn autopilot_loot(
     // hand, or on a mounted gun (HUR_040's barge).
     // (Or with a rifle lent where it was taken: a sniping challenge's.)
     let fixed = player.armed_passenger || inventory.mounted_from.is_some();
+    // (On a mounted gun taken up under one objective, the next leading
+    // elsewhere: off it, as a player would. HUR_040's "Go help the Rakyat on
+    // the beach.", the barge's gun manned against its helicopter's crew,
+    // failed with the player still on it.)
+    let objective = host.story.objective_in_progress();
+    match (player.mounted.is_some(), host.mounted_under) {
+        (true, None) => host.mounted_under = Some(objective),
+        (false, Some(_)) => host.mounted_under = None,
+        _ => {}
+    }
+    if host.mounted_under.is_some_and(|o| o != objective) && time.elapsed_secs() - host.off_gun_at > 3.0 {
+        let far = host.story.objective_markers().into_iter().any(|(_, p)| to_bevy(p).with_y(0.0).distance(at.translation.with_y(0.0)) > OFF_GUN_FOR_MARKER);
+        if far {
+            host.off_gun_at = time.elapsed_secs();
+            info!("story autopilot: off the mounted gun, the objective gone on");
+            actions.press(crate::controls::Action::Interact);
+            return;
+        }
+    }
     // (Held up where a high trigger was stepped into, the player may still
     // go after a character: getting there sets him down.)
     if health.dead || player.spawning || (player.driving && !player.armed_passenger) || landing_awaited(&host, &player, &at, &heights) {

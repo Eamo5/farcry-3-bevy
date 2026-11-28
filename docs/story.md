@@ -6290,7 +6290,13 @@ to SQC_080, each a brief at its giver then its blocks):
   dead (no armour figure of ours: health 0) and went up, then capsized;
   a vehicle made from its kind now has the fallback health. The gun is
   taken from up to 2 m below its seat (the barge lists in the shallows).
-  HUR_040 completed.
+  HUR_040 completed. After the fourth line's credits B40 failed again: when
+  "Go help the Rakyat on the beach." followed the gun's objective, the
+  autopilot kept shooting from the barge's gun, the fight never letting the
+  story go quiet for the walk to the marker. A mounted gun taken up under
+  one objective is now left (Interact) once another's marker leads over
+  30 m off (`OFF_GUN_FOR_MARKER`, `StoryHost::mounted_under`); from B40's
+  checkpoint the player was off the gun as the objective changed.
 * **Spent weapons.** SQA_D6's hunt asks for a bow, and with its arrows
   spent the autopilot reloaded it for good: each step to the spare arrows
   laid out, the hunt took the player back. With the weapon asked for
