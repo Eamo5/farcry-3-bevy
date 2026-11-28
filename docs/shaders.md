@@ -745,7 +745,18 @@ Each span between keys is a cubic Bézier through the handles (their `dx`
 kept within the span), as the editor draws it, solved for its time by
 halving (`vine_puff::curve`; the vine puff's travel integrals stay
 piecewise linear). Joined linearly, a fireball's quick rise and slow fade
-had been straight ramps. `FC3_AUTHORED_FX=<name>[,<metres>]` plays one as an impact, on the ground
+had been straight ramps.
+
+Sounds. 21 emitters name a sound (`SoundEffectFile`, the event's id in
+decimal; -1 for none): falling dust and rock crumbling (`0x000d35e9`), the
+ULC cinematics' lightning, the bulb's sparks in Q1, the thunder of JAS_240's
+sky and Citra's storm, the cavern's flying mushrooms. It plays where the
+emitter is as each particle is born (`SoundEffectOnEveryEmit`: each flash a
+thunderclap), where each particle dies (`...OnEveryDeath`: the mushrooms
+coming down), or, with neither, once as the emitter starts; no closer than
+0.15 s apart for one emitter of one effect (`SOUND_GAP`: the repair tool's
+dust puffs five a second, each with it). `SoundEffectStopFile` is -1 and
+`SoundDelay` 0 for all of them. `FC3_AUTHORED_FX=<name>[,<metres>]` plays one as an impact, on the ground
 4 m (or that far) in front of the player, once he has stood 15 s.
 `FC3_AUTHORED_FX_SHOTS=<dir>` then captures the screen 0.05, 0.2, 0.5, 1, 2
 and 4 s in.

@@ -38,7 +38,8 @@
 //! lattice or ring whose points a burst goes round in turn.
 //!
 //! Curves are Béziers through their keys' handles
-//! (`vine_puff::curve`). Not played (yet): sounds.
+//! (`vine_puff::curve`). An emitter's sound plays as its particles are
+//! born, as they die, or once as it starts (see [`FxSound`]).
 
 use std::collections::HashMap;
 
@@ -496,7 +497,33 @@ struct Compiled {
     /// eye (a flamethrower's flames, fires' smoke, the sea's motes).
     camera_scale: Option<(f32, f32)>,
     light: Option<(Vec3, f32, f32, f32, f32)>,
+    /// Its sound (`SoundEffectFile`, the event's id): 21 emitters have one.
+    sound: Option<FxSound>,
 }
+
+/// An emitter's sound, played where it emits as each particle is born
+/// (`SoundEffectOnEveryEmit`: falling dust, lightning's crackle, thunder
+/// with each flash), where each dies (`...OnEveryDeath`: the cavern's flying
+/// mushrooms coming down), or with neither, once as it starts (a bulb's
+/// sparks).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FxSound {
+    event: u32,
+    on_emit: bool,
+    on_death: bool,
+}
+
+impl FxSound {
+    /// (The file is the event's id in decimal; -1 for none.)
+    fn of(file: Option<&str>, on_emit: bool, on_death: bool) -> Option<FxSound> {
+        let event = file?.trim().parse::<i64>().ok().filter(|&f| f > 0 && f <= u32::MAX as i64)? as u32;
+        Some(FxSound { event, on_emit, on_death })
+    }
+}
+
+/// The least time (s) between one emitter's sounds in one effect (a
+/// repair tool's dust puffs five a second, each authored with it).
+const SOUND_GAP: f32 = 0.15;
 
 fn dunia(v: &str) -> Vec3 {
     let p: Vec<f32> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
@@ -663,6 +690,7 @@ impl Compiled {
                 let colour = dunia_colour(s.attr("LightColor").unwrap_or("1,1,1")).unwrap_or(Vec3::ONE);
                 (colour, f("LightIntensity", 1.0), f("LightOuterRadius", 2.0), f("LightFlickeringFrequency", 0.0), f("LightFlickeringAmplitude", 0.0))
             }),
+            sound: FxSound::of(s.attr("SoundEffectFile"), on("SoundEffectOnEveryEmit"), on("SoundEffectOnEveryDeath")),
         }
     }
 }
@@ -770,9 +798,22 @@ struct Library {
     /// Mesh particles' models (by cache path), each with the entities that
     /// show them (as many as have lived at once; hidden when not needed).
     meshes: HashMap<String, (Handle<crate::cache_assets::Fc3Model>, Vec<Entity>)>,
+    /// When each effect's emitter last sounded (`SOUND_GAP`).
+    sounded: HashMap<(Entity, usize), f32>,
 }
 
 impl Library {
+    /// An emitter's sound at `at`, unless it sounded just now.
+    fn sound(&mut self, owner: Entity, emitter: usize, at: Vec3, now: f32, sfx: &mut MessageWriter<crate::sound::PlaySfx>) {
+        let Some(sound) = self.emitters[emitter].sound else { return };
+        let last = self.sounded.entry((owner, emitter)).or_insert(f32::MIN);
+        if now - *last < SOUND_GAP {
+            return;
+        }
+        *last = now;
+        sfx.write(crate::sound::PlaySfx { event: sound.event, at: Some(at), volume: 1.0 });
+    }
+
     fn effect(&mut self, name: &'static str) -> Option<&Vec<usize>> {
         if !self.effects.contains_key(name) {
             let path = fc3_formats::cache::default_cache_root().join(fc3_formats::particle_effects::authored_rel(name));
@@ -925,10 +966,16 @@ fn emit(
     mut lights: Query<&mut PointLight, With<FxLight>>,
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
     mut commands: Commands,
+    mut sfx: MessageWriter<crate::sound::PlaySfx>,
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {
         return;
+    }
+    let now = time.elapsed_secs();
+    // (Those of effects gone, and long quiet, forgotten.)
+    if library.sounded.len() > 64 {
+        library.sounded.retain(|_, at| now - *at < 2.0);
     }
     // (Shapes facing the camera: its right, its way back, its up.)
     let facing = cameras.single().map_or(Mat3::IDENTITY, |c| Mat3::from_cols(c.right().as_vec3(), c.back().as_vec3(), c.up().as_vec3()));
@@ -967,7 +1014,7 @@ fn emit(
             if !clock.active[k] {
                 continue;
             }
-            let (spawn, light) = {
+            let (spawn, light, started) = {
                 let em = &library.emitters[id];
                 let t = clock.age - em.delay;
                 if t < 0.0 {
@@ -976,6 +1023,7 @@ fn emit(
                 let running = looping(em) || t <= em.duration;
                 let phase = if looping(em) { (t % em.duration) / em.duration } else { (t / em.duration).min(1.0) };
                 let mut n = 0;
+                let started = !clock.burst[k];
                 if !clock.burst[k] {
                     clock.burst[k] = true;
                     n += em.burst_range.map_or(em.burst, |[lo, hi]| (lo + (rng.f32() * (hi - lo + 1) as f32) as u32).min(hi));
@@ -987,8 +1035,16 @@ fn emit(
                         n += 1;
                     }
                 }
-                (n, em.light.filter(|_| running))
+                (n, em.light.filter(|_| running), started)
             };
+            // Its sound, where it emits: with what it emits now, else as it
+            // starts.
+            if let Some(sound) = library.emitters[id].sound {
+                if (sound.on_emit && spawn > 0) || (started && !sound.on_emit && !sound.on_death) {
+                    let from = place + turn * library.emitters[id].offset;
+                    library.sound(entity, id, from, now, &mut sfx);
+                }
+            }
             // The emitter's light (the effect's child: it goes with it),
             // flickering as authored.
             if let Some((colour, intensity, radius, freq, amp)) = light.filter(|_| !unlit) {
@@ -1071,6 +1127,9 @@ fn emit(
         }
     }
     for (cid, owner, at, velocity, n) in born {
+        if library.emitters[cid].sound.is_some_and(|s| s.on_emit) {
+            library.sound(owner, cid, at, now, &mut sfx);
+        }
         // (As many as its pool holds for each of its parent's.)
         let alive = library.particles.iter().filter(|p| p.emitter == cid && p.owner == owner).count();
         let room = (library.emitters[cid].max * CHILD_POOLS).saturating_sub(alive);
@@ -1092,7 +1151,7 @@ const CHILD_POOLS: usize = 8;
 /// An authored light's intensity (the engine's units) in ours.
 const LIGHT_SCALE: f32 = 2.0e4;
 
-fn simulate(time: Res<Time>, mut library: ResMut<Library>, effects: Query<&AuthoredFx>, mut last: Local<f32>) {
+fn simulate(time: Res<Time>, mut library: ResMut<Library>, effects: Query<&AuthoredFx>, mut last: Local<f32>, mut sfx: MessageWriter<crate::sound::PlaySfx>) {
     // `FC3_FX_DEBUG`: how many effects play and particles live, each 2 s.
     if std::env::var_os("FC3_FX_DEBUG").is_some() && time.elapsed_secs() - *last > 2.0 {
         *last = time.elapsed_secs();
@@ -1109,10 +1168,15 @@ fn simulate(time: Res<Time>, mut library: ResMut<Library>, effects: Query<&Autho
     if dt <= 0.0 {
         return;
     }
+    let mut died = Vec::new();
     let Library { emitters, particles, .. } = &mut *library;
     particles.retain_mut(|p| {
         p.age += dt;
         if p.age >= p.life {
+            // (Its emitter's sound where it dies, the mushrooms' thud.)
+            if emitters[p.emitter].sound.is_some_and(|s| s.on_death) {
+                died.push((p.owner, p.emitter, p.world_pos()));
+            }
             return false;
         }
         let em = &emitters[p.emitter];
@@ -1122,6 +1186,10 @@ fn simulate(time: Res<Time>, mut library: ResMut<Library>, effects: Query<&Autho
         p.rot += p.spin * em.part_spin.at(t) * dt;
         true
     });
+    let now = time.elapsed_secs();
+    for (owner, emitter, at) in died {
+        library.sound(owner, emitter, at, now, &mut sfx);
+    }
 }
 
 fn load_sheet(server: &AssetServer, rel: &str) -> Handle<Image> {
@@ -1397,6 +1465,15 @@ fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An emitter's sound is its event's id in decimal; -1 is none.
+    #[test]
+    fn emitter_sounds_are_events_by_id() {
+        assert_eq!(FxSound::of(Some("865769"), true, false), Some(FxSound { event: 0x000d_35e9, on_emit: true, on_death: false }));
+        assert_eq!(FxSound::of(Some("-1"), true, false), None);
+        assert_eq!(FxSound::of(None, false, true), None);
+        assert_eq!(FxSound::of(Some(""), false, false), None);
+    }
 
     /// The volume's type picks which of its sizes count; plotted rings and
     /// lattices go round their points in turn.
