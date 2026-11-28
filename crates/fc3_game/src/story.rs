@@ -2384,7 +2384,9 @@ pub(crate) fn timer_text(timer: &fc3_story::Timer) -> String {
 }
 
 /// Opens the story from the cache, from a save when given one.
-fn open_story(root: &std::path::Path, save: Option<&fc3_story::save::StorySave>) -> Option<Story> {
+/// The story opened, from a save or new; `ids_from`, the last id the story it
+/// replaces gave out (0 for the session's first), for its own to go on past.
+fn open_story(root: &std::path::Path, save: Option<&fc3_story::save::StorySave>, ids_from: u64) -> Option<Story> {
     let mut story = match Story::open(root) {
         Ok(s) => s,
         Err(e) => {
@@ -2392,6 +2394,7 @@ fn open_story(root: &std::path::Path, save: Option<&fc3_story::save::StorySave>)
             return None;
         }
     };
+    story.continue_ids(ids_from);
     if let Ok(p) = std::env::var("FC3_STORY_TRACE") {
         let _ = story.domino().trace_calls(&p);
     }
@@ -2448,7 +2451,7 @@ fn start_story(world: &mut World, mut tried: Local<bool>) {
         return;
     }
     let started = std::time::Instant::now();
-    let Some(story) = open_story(&root, saved.as_ref()) else { return };
+    let Some(story) = open_story(&root, saved.as_ref(), 0) else { return };
     if let Some(mut menu) = world.get_resource_mut::<crate::progression::PauseMenu>() {
         let previous = std::mem::replace(&mut *menu, crate::progression::PauseMenu::from_story(&story));
         if continued {
@@ -2701,7 +2704,9 @@ fn run_story(
     if host.reload_at.is_some_and(|at| now >= at) && !dead {
         host.reload_at = None;
         let checkpoint = host.checkpoint.clone();
-        if let Some(story) = open_story(&info.root, checkpoint.as_ref()) {
+        // (Its ids go on past the last story's: the world keeps that one's
+        // called-in men by theirs, their bodies, and the places they fight.)
+        if let Some(story) = open_story(&info.root, checkpoint.as_ref(), host.story.last_id()) {
             info!("story: back to the last checkpoint");
             host.story = story;
             // (The scripts say again whether saving is off, and which
@@ -5541,6 +5546,8 @@ fn run_story(
         // graph waiting for good, as SAM_015's bomb's remote did.)
         if line.starts_with("script error") {
             warn!("story: {line}");
+        } else if line.starts_with("called-in") {
+            info!("story: {line}");
         } else if !line.starts_with("console:") {
             debug!("story: {line}");
         } else if console {

@@ -337,6 +337,14 @@ impl Core {
         self.next_id
     }
 
+    pub fn last_id(&self) -> u64 {
+        self.next_id
+    }
+
+    pub fn continue_ids(&mut self, last: u64) {
+        self.next_id = self.next_id.max(last);
+    }
+
     pub fn listen(&mut self, on: Listen, callback: Callback) -> u64 {
         let id = self.next_id();
         self.listeners.insert(id, Listener { on, callback });

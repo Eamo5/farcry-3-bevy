@@ -520,10 +520,16 @@ impl Story {
         // started again, and the hunt failed on every reload.)
         let running: HashSet<u64> =
             c.missions.by_id.values().filter(|m| m.state == missions::State::Running).filter_map(|m| m.block.as_ref().map(|b| b.block)).collect();
+        // (Neither keeps what the story spawned: a checkpoint held in memory,
+        // never written out, had kept them, and after a death the story
+        // opened again from it gave the same ids to its own reinforcements,
+        // born removed: WIL_040_B40's second wave never came.)
         let dead: Vec<u64> = sorted(&c.dead)
             .into_iter()
+            .filter(|id| !spawned_id(*id))
             .filter(|id| c.data.layer_of(*id).and_then(|l| c.data.layers.get(&l)).is_none_or(|l| !running.contains(&l.block)))
             .collect();
+        let removed: Vec<u64> = sorted(&c.removed).into_iter().filter(|id| !spawned_id(*id)).collect();
         save::StorySave {
             missions,
             layers,
@@ -531,7 +537,7 @@ impl Story {
             safehouses: sorted(&c.safehouses_unlocked),
             radio_towers: sorted(&c.radio_towers_unlocked),
             tags,
-            removed: sorted(&c.removed),
+            removed,
             dead,
             chapter: c.missions.chapter,
             respawn: c.respawn,
@@ -839,6 +845,19 @@ impl Story {
     /// present, not removed by a script).
     pub fn is_loaded(&self, id: u64) -> bool {
         self.core.borrow().is_loaded(id)
+    }
+
+    /// The last id the story gave out (to listeners, and to what it spawned).
+    pub fn last_id(&self) -> u64 {
+        self.core.borrow().last_id()
+    }
+
+    /// Gives out ids only past `last` from now: a story opened again from a
+    /// checkpoint, in the same session, goes on from the one it replaces,
+    /// so that what it spawns isn't taken for what the other did (whose
+    /// bodies, places and fights the world still keeps by id).
+    pub fn continue_ids(&mut self, last: u64) {
+        self.core.borrow_mut().continue_ids(last)
     }
 
     /// A mission block by its name (case aside): its id and its zone (the
@@ -2582,6 +2601,32 @@ mod tests {
 
     fn empty_story() -> Story {
         Story::new(ScriptPack::from_bytes(&fc3_formats::scripts::pack(&[])).unwrap(), StoryData::default()).unwrap()
+    }
+
+    /// A story opened again from a checkpoint spawns under ids past the one
+    /// it replaces, never under one the world still keeps for the other's.
+    #[test]
+    fn a_story_opened_again_spawns_past_the_last_ones_ids() {
+        let spawn = |s: &Story| s.domino().lua().load(r#"return SpawnEntityFromArchetype("1", 0, 0, 0, 0, 0, 0)"#).eval::<String>().unwrap().parse::<u64>().unwrap();
+        let first = empty_story();
+        let a = spawn(&first);
+        let b = spawn(&first);
+        let mut again = empty_story();
+        again.continue_ids(first.last_id());
+        let c = spawn(&again);
+        assert!(spawned_id(a) && spawned_id(c));
+        assert!(c > b && c != a, "{a} {b} {c}");
+    }
+
+    /// A checkpoint kept in memory keeps nothing the story spawned among the
+    /// removed (the story opened from it would count its ids afresh).
+    #[test]
+    fn a_checkpoint_in_memory_keeps_no_spawned_ids() {
+        let story = empty_story();
+        let lua = story.domino().lua().clone();
+        let id = lua.load(r#"local id = SpawnEntityFromArchetype("1", 0, 0, 0, 0, 0, 0); CAPI_Entity.RemoveEntity(id); CAPI_Entity.RemoveEntity("7"); return id"#).eval::<String>().unwrap();
+        assert!(!story.is_loaded(id.parse().unwrap()));
+        assert_eq!(story.save().removed, vec![7]);
     }
 
     /// A character the host stops reporting (a body taken away) is still

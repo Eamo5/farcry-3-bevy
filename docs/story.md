@@ -4517,7 +4517,15 @@ about as non-fighters and the first wave never emptied.
   spawns (`SPAWNED_IDS`) count up again from each load, but saves kept them
   among the removed and the dead, so after a load new reinforcements were
   born "removed": never in the world, never counted. Saves now leave them
-  out, and loads drop them from older saves.
+  out, and loads drop them from older saves. (The fifth autopilot line hit
+  it again: died at B40, it went back to a checkpoint held in memory, never
+  written out, and so never filtered; the story opened from it counted ids
+  from 1 again, and B40's second wave, `974` to `977`, were among the old
+  story's removed. The snapshot itself now leaves them out, and a story
+  opened again in the same session goes on past the last one's ids,
+  `Story::continue_ids`, since the world keeps that one's men, bodies and
+  fighting areas by theirs. A script removing called-in men still alive is
+  logged with where in the scripts it did.)
 * **Near again, nearer.** Once the waves are beaten, Rongo hands over what
   he found when the player comes within 2 m of him (a
   `ProximityRadiusListener` on him). The autopilot had already gone "near"

@@ -23,6 +23,19 @@ pub(crate) fn read_vec3(v: &Value) -> [f32; 3] {
     }
 }
 
+/// Tells (as a warning) a script removing characters it called in, alive,
+/// with where in the scripts it did so: rare, and a wave gone before it
+/// came leaves its block waiting for good (WIL_040_B40's second wave).
+fn note_called_in_removal(lua: &mlua::Lua, c: &mut Core, ids: &[u64]) {
+    let called: Vec<u64> = ids.iter().copied().filter(|i| crate::spawned_id(*i) && c.spawned.contains_key(i) && !c.dead.contains(i) && !c.removed.contains(i)).collect();
+    if called.is_empty() {
+        return;
+    }
+    let trace = lua.load("return debug.traceback()").eval::<String>().unwrap_or_default();
+    let at: Vec<&str> = trace.lines().map(str::trim).filter(|l| l.contains("Domino/user") || l.contains("Domino/System")).take(3).collect();
+    c.warn(format!("called-in {called:?} removed by a script ({})", at.join(" <- ")));
+}
+
 impl Core {
     /// The members of a group: a `#hash` name (its members as the editor
     /// placed them, with the changes scripts made), or a single id.
@@ -366,15 +379,20 @@ pub(super) fn register(r: &Reg) -> mlua::Result<()> {
         c.emit(Command::Native { name: "SpawnEntityFromArchetype".into(), args: vec![id.to_string(), archetype.0, f(x), f(y), f(z), f(ax), f(ay), f(az)] });
         id.to_string()
     })?;
-    r.f("CAPI_Entity.RemoveEntity", |c, id: Text| {
+    r.lua("CAPI_Entity.RemoveEntity", |lua, c, id: Text| {
         if let Some(i) = id.id() {
+            note_called_in_removal(lua, c, &[i]);
             c.remove_entity(i)
         }
+        Ok(())
     })?;
-    r.f("RemoveEntityOrGroup", |c, group: Text| {
-        for e in c.groups(&group) {
+    r.lua("RemoveEntityOrGroup", |lua, c, group: Text| {
+        let members = c.groups(&group);
+        note_called_in_removal(lua, c, &members);
+        for e in members {
             c.remove_entity(e);
         }
+        Ok(())
     })?;
     // Objective markers (shown by the host where `Story::objective_markers`
     // says) and entities riding on others.
