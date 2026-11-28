@@ -721,7 +721,22 @@ each parent particle's in the engine. Here an effect may have eight pools of
 a child's particles at once. The converter caches children's sheets with
 their parents'.
 
-Not yet: the plotted discs. Curves are joined linearly between knots. `FC3_AUTHORED_FX=<name>[,<metres>]` plays one as an impact, on the ground
+Emission volumes. An emitter's `EmitFlag` is a bit field (1 heading out
+from the volume's surface, 2 its boundary, 4 smooth, 256 facing the
+camera) whose bits 3..5 are the volume's type; every emitter keeps all the
+volume sizes (`EmitVolRadius`, `EmitVolHalfSize...`, `EmitVolPlotTri...`,
+`EmitVolPlotDisc...`), so the type picks which count. By the 4,058 emitters'
+names and sizes: 0 a point (393 of them keep a radius, and had spread as
+spheres), 1 a sphere (bubbles, chunks, cloud banks), 2 and 3 a box (3's
+mostly flat), 4 a level disc of the radius (the "Planar" and "Smoke_Hori"
+sheets, a ground fire's flames, falling leaves), 5 a box too, 6 a plotted
+lattice and 7 a plotted ring. The ring is `EmitVolPlotDiscCount` points
+round a level circle of `EmitVolPlotDiscRadius`, which a burst goes round
+in turn: a grenade's smoke shock wave, its puffs heading out from it. The
+lattice is level rows `EmitVolPlotTriX` apart and `...Y` between rows, the
+first `...Base` points and each next one more, `...Rows` of them, about the
+emitter (stood up, a frag grenade's core put a fireball 6 m over the
+blast). Curves are joined linearly between knots. `FC3_AUTHORED_FX=<name>[,<metres>]` plays one as an impact, on the ground
 4 m (or that far) in front of the player, once he has stood 15 s.
 `FC3_AUTHORED_FX_SHOTS=<dir>` then captures the screen 0.05, 0.2, 0.5, 1, 2
 and 4 s in.

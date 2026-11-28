@@ -33,8 +33,12 @@
 //! particles as an emitter would, its clock the particle's age, heading
 //! about the way the particle goes and taking on its speed.
 //!
-//! Not played (yet): plotted emission volumes and sounds; curves are joined
-//! linearly between their knots.
+//! Particles are born in the emitter's volume as its `EmitFlag`'s type says
+//! (see [`Volume`]): a point, a sphere, a box, a level disc, or a plotted
+//! lattice or ring whose points a burst goes round in turn.
+//!
+//! Not played (yet): sounds; curves are joined linearly between their
+//! knots.
 
 use std::collections::HashMap;
 
@@ -593,16 +597,13 @@ impl Compiled {
             axis_spread: f("EmitDirAxisSpread", 0.0).to_radians(),
             plane_angle: f("EmitDirPlaneAngle", 0.0).to_radians(),
             plane_spread: f("EmitDirPlaneSpread", 0.0).to_radians(),
-            volume: if f("EmitVolRadius", 0.0) > 0.0 {
-                Volume::Sphere(f("EmitVolRadius", 0.0))
-            } else {
-                let half = Vec3::new(f("EmitVolHalfSizeX", 0.0), f("EmitVolHalfSizeY", 0.0), f("EmitVolHalfSizeZ", 0.0));
-                if half.max_element() > 0.0 {
-                    Volume::Box(half)
-                } else {
-                    Volume::Point
-                }
-            },
+            volume: Volume::of(
+                (f("EmitFlag", 0.0) as u32 >> 3) & 7,
+                f("EmitVolRadius", 0.0),
+                Vec3::new(f("EmitVolHalfSizeX", 0.0), f("EmitVolHalfSizeY", 0.0), f("EmitVolHalfSizeZ", 0.0)),
+                [f("EmitVolPlotTriX", 0.0), f("EmitVolPlotTriY", 0.0), f("EmitVolPlotTriBase", 0.0), f("EmitVolPlotTriRows", 0.0)],
+                [f("EmitVolPlotDiscRadius", 0.0), f("EmitVolPlotDiscCount", 0.0)],
+            ),
             toward_camera: s.child("EmitFlag").is_some_and(|e| e.bool("ShapeTowardCamera") == Some(true)),
             from_surface: s.child("EmitFlag").is_some_and(|e| e.bool("DirFromVolumeSurface") == Some(true)),
             rate: Ranged::of(e, "EmitRateKF"),
@@ -666,17 +667,54 @@ impl Compiled {
     }
 }
 
-/// An emitter's volume (Dunia axes, metres).
-#[derive(Clone, Copy)]
+/// An emitter's volume (Dunia axes, metres), by the type its `EmitFlag`
+/// carries in bits 3..5 (the other bits: 1 heading out from the volume's
+/// surface, 2 its boundary, 4 smooth, 256 facing the camera). The volume's
+/// sizes are left as they were for every type, so the type picks which
+/// count: 0 a point (393 of them keep a radius), 1 a sphere (`EmitVolRadius`:
+/// bubbles, chunks, clouds), 2 and 3 a box (`EmitVolHalfSize...`, 3's
+/// mostly flat), 4 a level disc (the radius: the "Planar" and "Smoke_Hori"
+/// sheets, a ground fire's flames, falling leaves), 5 a box as well, 6 a
+/// plotted lattice of rows (`EmitVolPlotTri...`: an explosion's core) and
+/// 7 a plotted ring (`EmitVolPlotDisc...`: a grenade's smoke shock wave, its
+/// puffs heading out from the ring).
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Volume {
     Point,
     Sphere(f32),
     Box(Vec3),
+    Disc(f32),
+    /// Level rows (the first `base` points, each next one more) `x` apart,
+    /// `y` between rows, about the emitter.
+    Lattice { x: f32, y: f32, base: u32, rows: u32 },
+    /// `count` points evenly round a level circle.
+    Ring { radius: f32, count: u32 },
 }
 
+/// The plotted volumes' next point, so a burst's particles go round them
+/// in turn.
+static PLOTTED_NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 impl Volume {
-    /// A point in it, Dunia axes, and on its surface for a sphere whose
-    /// particles head out from it.
+    fn of(kind: u32, radius: f32, half: Vec3, tri: [f32; 4], disc: [f32; 2]) -> Volume {
+        let sized = |v: Volume| match v {
+            Volume::Sphere(r) | Volume::Disc(r) if r <= 0.0 => Volume::Point,
+            Volume::Box(h) if h.max_element() <= 0.0 => Volume::Point,
+            v => v,
+        };
+        match kind {
+            0 => Volume::Point,
+            1 => sized(Volume::Sphere(radius)),
+            4 => sized(Volume::Disc(radius)),
+            6 if tri[3] >= 1.0 => Volume::Lattice { x: tri[0], y: tri[1], base: tri[2].max(1.0) as u32, rows: tri[3] as u32 },
+            7 if disc[1] >= 1.0 => Volume::Ring { radius: disc[0], count: disc[1] as u32 },
+            _ if half.max_element() > 0.0 => Volume::Box(half),
+            _ => sized(Volume::Sphere(radius)),
+        }
+    }
+
+    /// A point in it, Dunia axes, and on its surface for a sphere or a disc
+    /// whose particles head out from it.
     fn sample(self, rng: &mut crate::weapons::Rng, surface: bool) -> Vec3 {
         match self {
             Volume::Point => Vec3::ZERO,
@@ -685,6 +723,28 @@ impl Volume {
                 dir * if surface { r } else { r * rng.f32().cbrt() }
             }
             Volume::Box(h) => Vec3::new(rng.range(-h.x, h.x), rng.range(-h.y, h.y), rng.range(-h.z, h.z)),
+            Volume::Disc(r) => {
+                let a = rng.range(0.0, std::f32::consts::TAU);
+                Vec3::new(a.cos(), a.sin(), 0.0) * if surface { r } else { r * rng.f32().sqrt() }
+            }
+            Volume::Ring { radius, count } => {
+                let i = PLOTTED_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % count.max(1);
+                let a = i as f32 / count.max(1) as f32 * std::f32::consts::TAU;
+                Vec3::new(a.cos(), a.sin(), 0.0) * radius
+            }
+            Volume::Lattice { x, y, base, rows } => {
+                let total: u32 = (0..rows).map(|r| base + r).sum();
+                let mut i = PLOTTED_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % total.max(1);
+                let mut row = 0;
+                while row + 1 < rows && i >= base + row {
+                    i -= base + row;
+                    row += 1;
+                }
+                // (Level, as its X and Y name it: stood up, an explosion's
+                // core put a fireball 6 m over a grenade.)
+                let across = (base + row) as f32;
+                Vec3::new((i as f32 - (across - 1.0) * 0.5) * x, (row as f32 - (rows as f32 - 1.0) * 0.5) * y, 0.0)
+            }
         }
     }
 }
@@ -1331,5 +1391,43 @@ fn draw(
                 (None, Err(_)) => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The volume's type picks which of its sizes count; plotted rings and
+    /// lattices go round their points in turn.
+    #[test]
+    fn emitter_volumes_follow_their_type() {
+        let none = Vec3::ZERO;
+        assert_eq!(Volume::of(0, 2.5, none, [0.0; 4], [0.0; 2]), Volume::Point);
+        assert_eq!(Volume::of(1, 2.0, none, [0.0; 4], [0.0; 2]), Volume::Sphere(2.0));
+        assert_eq!(Volume::of(4, 2.5, none, [0.0; 4], [0.0; 2]), Volume::Disc(2.5));
+        assert_eq!(Volume::of(2, 0.0, Vec3::splat(0.5), [0.0; 4], [0.0; 2]), Volume::Box(Vec3::splat(0.5)));
+        assert_eq!(Volume::of(7, 5.0, none, [0.0; 4], [0.5, 20.0]), Volume::Ring { radius: 0.5, count: 20 });
+        assert_eq!(Volume::of(6, 0.0, none, [1.0, 3.0, 1.0, 3.0], [0.0; 2]), Volume::Lattice { x: 1.0, y: 3.0, base: 1, rows: 3 });
+        let mut rng = crate::weapons::Rng::seeded(7);
+        // (A disc is level: Dunia's Z, up, stays 0.)
+        for _ in 0..20 {
+            let p = Volume::Disc(2.0).sample(&mut rng, false);
+            assert!(p.z == 0.0 && p.truncate().length() <= 2.0 + 1e-4);
+        }
+        // (A ring's points all lie on it, four of them a quarter turn apart.)
+        let ring = Volume::Ring { radius: 1.5, count: 4 };
+        let points: Vec<Vec3> = (0..4).map(|_| ring.sample(&mut rng, true)).collect();
+        for p in &points {
+            assert!((p.length() - 1.5).abs() < 1e-4);
+        }
+        assert!((points[0].dot(points[1])).abs() < 1e-3);
+        // (A lattice's rows lie level, 3 m apart about it, each one point
+        // wider.)
+        let lattice = Volume::Lattice { x: 1.0, y: 3.0, base: 1, rows: 3 };
+        let points: Vec<Vec3> = (0..6).map(|_| lattice.sample(&mut rng, false)).collect();
+        assert!(points.iter().all(|p| p.z == 0.0));
+        let rows: std::collections::BTreeSet<i32> = points.iter().map(|p| p.y.round() as i32).collect();
+        assert_eq!(rows.into_iter().collect::<Vec<_>>(), [-3, 0, 3]);
     }
 }
