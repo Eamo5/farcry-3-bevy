@@ -983,7 +983,9 @@ fn emit(
         let Some(ids) = library.effect(fx.0).cloned() else { continue };
         let Some(mut clock) = clock else {
             let active = ids.iter().map(|&id| rng.f32() < library.emitters[id].chance).collect();
-            commands.entity(entity).insert(FxClock {
+            // (Its owner may take it away this same frame: a muzzle flash
+            // with the gun put away.)
+            commands.entity(entity).try_insert(FxClock {
                 carry: vec![0.0; ids.len()],
                 burst: vec![false; ids.len()],
                 active,
@@ -1003,7 +1005,7 @@ fn emit(
             let em = &library.emitters[id];
             !clock.active[k] || (!looping(em) && clock.age > em.delay + em.duration)
         }) {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         }
         let (_, turn, place) = at.to_scale_rotation_translation();
@@ -1456,7 +1458,7 @@ fn draw(
                     *vis = Visibility::Inherited;
                 }
                 (Some(place), Err(_)) => {
-                    commands.entity(*e).insert((*place, Visibility::Inherited));
+                    commands.entity(*e).try_insert((*place, Visibility::Inherited));
                 }
                 (None, Ok((_, mut vis))) => *vis = Visibility::Hidden,
                 (None, Err(_)) => {}
