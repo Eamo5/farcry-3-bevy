@@ -37,8 +37,8 @@
 //! (see [`Volume`]): a point, a sphere, a box, a level disc, or a plotted
 //! lattice or ring whose points a burst goes round in turn.
 //!
-//! Not played (yet): sounds; curves are joined linearly between their
-//! knots.
+//! Curves are Béziers through their keys' handles
+//! (`vine_puff::curve`). Not played (yet): sounds.
 
 use std::collections::HashMap;
 

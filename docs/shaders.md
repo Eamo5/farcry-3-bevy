@@ -736,7 +736,16 @@ in turn: a grenade's smoke shock wave, its puffs heading out from it. The
 lattice is level rows `EmitVolPlotTriX` apart and `...Y` between rows, the
 first `...Base` points and each next one more, `...Rows` of them, about the
 emitter (stood up, a frag grenade's core put a fireball 6 m over the
-blast). Curves are joined linearly between knots. `FC3_AUTHORED_FX=<name>[,<metres>]` plays one as an impact, on the ground
+blast).
+
+Curves. The editor writes a curve's knots as `t, value, dx, dy`: an inner
+key twice over at the same time, first with its left handle (`dx` < 0)
+then its right, the first key with only its right and the last its left.
+Each span between keys is a cubic Bézier through the handles (their `dx`
+kept within the span), as the editor draws it, solved for its time by
+halving (`vine_puff::curve`; the vine puff's travel integrals stay
+piecewise linear). Joined linearly, a fireball's quick rise and slow fade
+had been straight ramps. `FC3_AUTHORED_FX=<name>[,<metres>]` plays one as an impact, on the ground
 4 m (or that far) in front of the player, once he has stood 15 s.
 `FC3_AUTHORED_FX_SHOTS=<dir>` then captures the screen 0.05, 0.2, 0.5, 1, 2
 and 4 s in.

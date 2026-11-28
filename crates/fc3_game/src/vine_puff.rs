@@ -72,15 +72,82 @@ fn curve_points(e: &Element, name: &str) -> Vec<Vec2> {
         }).filter(|p| p.is_finite()).collect()
 }
 
-pub(crate) fn curve(e: &Element, name: &str, t: f32, fallback: f32) -> f32 {
-    let points = curve_points(e, name);
-    let Some(first) = points.first() else { return fallback };
-    if t <= first.x { return first.y; }
-    for pair in points.windows(2) {
-        let [a, b] = [pair[0], pair[1]];
-        if t <= b.x && b.x > a.x { return a.y + (b.y - a.y) * ((t - a.x) / (b.x - a.x)).clamp(0.0, 1.0); }
+/// A curve's keys: where each is, and its handles' offsets (the left one
+/// going back, the right one on).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Key {
+    at: Vec2,
+    left: Vec2,
+    right: Vec2,
+}
+
+/// The editor writes a curve as knots `t, value, dx, dy`: a key with both
+/// handles twice over at the same time, its left handle (`dx` < 0) then its
+/// right; the first key with its right handle alone, the last its left.
+fn curve_keys(e: &Element, name: &str) -> Vec<Key> {
+    let mut keys: Vec<Key> = Vec::new();
+    for k in e.child(name).into_iter().flat_map(|c| &c.children).filter(|c| c.name == "Knot") {
+        let Some(values) = k.attr("Value").map(|v| v.split(',').filter_map(|s| s.parse::<f32>().ok()).collect::<Vec<_>>()) else { continue };
+        if values.len() < 2 || !values[0].is_finite() || !values[1].is_finite() {
+            continue;
+        }
+        let at = Vec2::new(values[0], values[1]);
+        let handle = if values.len() >= 4 { Vec2::new(values[2], values[3]) } else { Vec2::ZERO };
+        let handle = if handle.is_finite() { handle } else { Vec2::ZERO };
+        match keys.last_mut() {
+            Some(last) if (last.at.x - at.x).abs() < 1e-5 => {
+                if handle.x > 0.0 {
+                    last.right = handle;
+                } else if handle.x < 0.0 {
+                    last.left = handle;
+                }
+            }
+            _ => keys.push(Key { at, left: if handle.x < 0.0 { handle } else { Vec2::ZERO }, right: if handle.x > 0.0 { handle } else { Vec2::ZERO } }),
+        }
     }
-    points.last().unwrap().y
+    keys
+}
+
+/// A curve's value at `t`: each span between keys a cubic Bézier through
+/// their handles (kept within the span, so time only goes forward), as the
+/// editor draws it. Joined linearly, a fireball's sharp rise and slow fade
+/// had come out as straight ramps.
+pub(crate) fn curve(e: &Element, name: &str, t: f32, fallback: f32) -> f32 {
+    curve_value(&curve_keys(e, name), t, fallback)
+}
+
+fn curve_value(keys: &[Key], t: f32, fallback: f32) -> f32 {
+    let Some(first) = keys.first() else { return fallback };
+    if t <= first.at.x {
+        return first.at.y;
+    }
+    for pair in keys.windows(2) {
+        let [a, b] = [pair[0], pair[1]];
+        if t > b.at.x || b.at.x <= a.at.x {
+            continue;
+        }
+        let span = b.at.x - a.at.x;
+        let p0 = a.at;
+        let p3 = b.at;
+        let p1 = p0 + Vec2::new(a.right.x.clamp(0.0, span), a.right.y);
+        let p2 = p3 + Vec2::new(b.left.x.clamp(-span, 0.0), b.left.y);
+        let at = |s: f32| {
+            let r = 1.0 - s;
+            p0 * (r * r * r) + p1 * (3.0 * r * r * s) + p2 * (3.0 * r * s * s) + p3 * (s * s * s)
+        };
+        // (Where along the span its time is `t`: by halving.)
+        let (mut lo, mut hi) = (0.0f32, 1.0f32);
+        for _ in 0..24 {
+            let mid = (lo + hi) * 0.5;
+            if at(mid).x < t {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        return at((lo + hi) * 0.5).y;
+    }
+    keys.last().unwrap().at.y
 }
 
 /// Integral and double integral of the preview's piecewise-linear curve.
@@ -263,6 +330,32 @@ mod tests {
         assert!(integrals(&triangle, 2.0, 0.0).abs_diff_eq(Vec2::new(0.5, 0.75), 1e-6));
         assert_eq!(integrals(&ramp, 0.0, 0.0), Vec2::ZERO);
         assert_eq!(integrals(&ramp, f32::NAN, 0.0), Vec2::ZERO);
+    }
+
+    /// Knots in pairs make keys with both handles; the spans between are
+    /// Béziers, so flat handles ease in and out where a line wouldn't.
+    #[test]
+    fn curves_follow_their_handles() {
+        let xml = r#"<E><C>
+            <Knot Value="0,0,0.25,0" />
+            <Knot Value="0.5,1,-0.25,0" />
+            <Knot Value="0.5,1,0.25,0" />
+            <Knot Value="1,0,-0.25,0" />
+        </C></E>"#;
+        let e = fc3_formats::xml::parse(xml).unwrap();
+        let keys = curve_keys(&e, "C");
+        assert_eq!(keys.len(), 3);
+        assert_eq!(keys[1].left, Vec2::new(-0.25, 0.0));
+        assert_eq!(keys[1].right, Vec2::new(0.25, 0.0));
+        // (At the keys, their values; between, the flat handles ease: a
+        // quarter of the way up the rise is below a line's 0.5.)
+        assert!((curve_value(&keys, 0.5, 9.0) - 1.0).abs() < 1e-3);
+        assert!((curve_value(&keys, 0.0, 9.0)).abs() < 1e-6);
+        let quarter = curve_value(&keys, 0.25, 9.0);
+        assert!((quarter - 0.5).abs() < 1e-3, "{quarter}");
+        let early = curve_value(&keys, 0.1, 9.0);
+        assert!(early < 0.2, "{early}");
+        assert_eq!(curve_value(&[], 0.3, 9.0), 9.0);
     }
 
     #[test]
