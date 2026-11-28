@@ -590,6 +590,7 @@ fn perf_log(
         ),
         With<Mesh3d>,
     >,
+    bodies: Query<(&avian3d::prelude::RigidBody, Has<avian3d::prelude::Sleeping>)>,
 ) {
     if std::env::var("FC3_PERF").is_err() {
         return;
@@ -617,6 +618,19 @@ fn perf_log(
         rigs.iter().count(),
     );
     *since = 0.0;
+    // The physics' bodies by kind, and the moving ones asleep.
+    let (mut dynamic, mut asleep, mut kinematic, mut fixed) = (0, 0, 0, 0);
+    for (body, sleeping) in &bodies {
+        match body {
+            avian3d::prelude::RigidBody::Dynamic => {
+                dynamic += 1;
+                asleep += sleeping as u32;
+            }
+            avian3d::prelude::RigidBody::Kinematic => kinematic += 1,
+            avian3d::prelude::RigidBody::Static => fixed += 1,
+        }
+    }
+    info!("perf: bodies {dynamic} dynamic ({asleep} asleep), {kinematic} kinematic, {fixed} static");
     // Meshes by material (all, visible to the camera) and shadow casters.
     let mut counts = [[0u32; 2]; 6];
     let mut casters = 0;
