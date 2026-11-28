@@ -50,7 +50,7 @@ use bevy::transform::TransformSystems;
 use fc3_formats::particle_effects::{Effect, Emitter};
 use fc3_formats::xml::Element;
 
-use crate::particles::{empty_mesh, frame_uv, ParticleMaterial, Quads};
+use crate::particles::{frame_uv, ParticleMaterial, QuadStore, Quads};
 use crate::player::PlayerCamera;
 pub use fc3_formats::particle_effects::blast;
 
@@ -1246,24 +1246,29 @@ fn draw(
     mut library: ResMut<Library>,
     daylight: Res<crate::clouds::Daylight>,
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
-    mut batches: Query<(&FxBatch, &Mesh3d, &mut Transform, &mut Visibility), Without<FxMesh>>,
+    mut batches: Query<(&FxBatch, &Mesh3d, &mut Transform, &mut Visibility, &mut QuadStore), Without<FxMesh>>,
     (mut shown, models): (Query<(&mut Transform, &mut Visibility), (With<FxMesh>, Without<FxBatch>)>, Res<Assets<crate::cache_assets::Fc3Model>>),
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ParticleMaterial>>,
     mut hazes: ResMut<Assets<crate::particles::HazeMaterial>>,
+    mut buffers: ResMut<Assets<bevy::render::storage::ShaderBuffer>>,
     server: Res<AssetServer>,
     mut commands: Commands,
 ) {
     let Ok(cam) = cameras.single() else { return };
-    // Batches for sheets not yet drawn.
+    // Batches for sheets not yet drawn (from their storage buffers: their
+    // quads change every frame).
     let wanted: Vec<BatchKey> = library.emitters.iter().filter_map(|e| e.batch.clone()).filter(|k| !library.batches.contains_key(k)).collect();
     for key in wanted {
         if library.batches.contains_key(&key) {
             continue;
         }
+        let store = QuadStore::new(&mut buffers);
+        let quads = store.buffer.clone();
         let mut batch = commands.spawn((
             FxBatch(key.clone()),
-            Mesh3d(meshes.add(empty_mesh())),
+            Mesh3d(meshes.add(store.mesh())),
+            store,
             Transform::default(),
             Visibility::Hidden,
             NotShadowCaster,
@@ -1273,8 +1278,8 @@ fn draw(
         ));
         let (shape, soft) = (load_sheet(&server, &key.texture), key.soft as f32 / 100.0);
         match &key.haze {
-            Some(haze) => batch.insert(MeshMaterial3d(hazes.add(haze.material(shape, load_map(&server, &haze.map), soft)))),
-            None => batch.insert(MeshMaterial3d(materials.add(ParticleMaterial::plain(key.mode as f32, shape).soft(soft).dissolve(key.dissolve)))),
+            Some(haze) => batch.insert(MeshMaterial3d(hazes.add(haze.material(shape, load_map(&server, &haze.map), soft).drawn_from(quads)))),
+            None => batch.insert(MeshMaterial3d(materials.add(ParticleMaterial::plain(key.mode as f32, shape).soft(soft).dissolve(key.dissolve).drawn_from(quads)))),
         };
         let e = batch.id();
         library.batches.insert(key, e);
@@ -1284,7 +1289,7 @@ fn draw(
     let up = cam.up().as_vec3();
     let view = cam.forward().as_vec3();
     let ambient = 0.12 + 0.88 * daylight.0;
-    for (batch, mesh, mut tr, mut vis) in &mut batches {
+    for (batch, mesh, mut tr, mut vis, mut store) in &mut batches {
         tr.translation = origin;
         let mut live: Vec<(&Particle, Vec3)> =
             library.particles.iter().filter(|p| library.emitters[p.emitter].batch.as_ref() == Some(&batch.0)).map(|p| (p, p.world_pos())).collect();
@@ -1406,9 +1411,7 @@ fn draw(
             *vis = want;
         }
         if !empty {
-            if let Some(mut m) = meshes.get_mut(&mesh.0) {
-                quads.write(&mut m);
-            }
+            quads.upload(&mut store, &mesh.0, &mut meshes, &mut buffers);
         }
     }
     // Mesh particles: their model where each is, turned as it was born and

@@ -451,8 +451,12 @@ radar and maps look up every second (a 39 ms frame each time).
 `--tour` with `FC3_TOUR_SPEED=25` drives the route. `FC3_PERF`, `FC3_GPU_TIMING`, `FC3_MESH_DEBUG` and `--features profile` (below) measure all this.
 `FC3_ASSET_CHURN` logs how many meshes change a frame and which: any mesh changed in a frame has
 Bevy look over every material's entities again for their pipelines (some 3 ms a frame at Badtown,
-where the authored effects' meshes change every frame). The decals' meshes are now built again only
-when a decal comes, goes or fades, or the camera has moved 25 m.
+where the authored effects' meshes changed every frame). The decals' meshes are now built again only
+when a decal comes, goes or fades, or the camera has moved 25 m, and the sprites (the authored
+effects, heat haze and the stand-in particles) are no longer meshes rebuilt each frame: each batch's
+mesh is a fixed run of quads that its vertex shader (`sprite_quads.wgsl`) places from a storage
+buffer rewritten in place, grown (with the mesh) only when its quads outgrow it. At Badtown, with 84
+effects and some 420 particles playing, no mesh changes from frame to frame.
 `FC3_HIERARCHY_CHECK` names the first entities shown in the world whose parent isn't, with both's
 components (Bevy's B0004 warning names neither; with `--features profile` the components have
 names): the gun's muzzle, a bare transform, had the authored muzzle flashes and their lights under it.

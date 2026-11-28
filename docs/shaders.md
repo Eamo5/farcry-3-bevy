@@ -761,6 +761,22 @@ dust puffs five a second, each with it). `SoundEffectStopFile` is -1 and
 `FC3_AUTHORED_FX_SHOTS=<dir>` then captures the screen 0.05, 0.2, 0.5, 1, 2
 and 4 s in.
 
+Drawing. Each sheet's particles are one batch, one draw. Their quads used to
+be a mesh rebuilt every frame, and any mesh changed in a frame has Bevy look
+over every material's entities again for their pipelines (some 3 ms a frame
+at Badtown, whose fires, flies and dust always play). A batch's mesh is now
+a fixed run of quads whose first UV names each vertex's quad and corner, and
+its material (`ParticleMaterial` or `HazeMaterial`, drawn from quads: their
+`SpriteKey`) takes `sprite_quads.wgsl` for its vertex shader, which places
+the corners from a storage buffer (`particles::QuadStore`: centre,
+half-extents, the frame's UV rectangle, normal and colour, six `vec4`s a
+quad) rewritten in place each frame. Only when a batch's quads outgrow its
+buffer are the buffer and the mesh made larger (to the next power of two,
+64 at least) and the material bound again (two frames running: the buffer
+and the material are made ready for the GPU in no set order). The stand-in
+particles draw the same way; decals (lit by the standard material) and the
+vine's puff keep their meshes.
+
 Lit effects (`EffectLit`: the foam sheets of waterfalls and rapids) stay on standard
 materials. They are drawn additively and unlit, since their maps are DXT1 with no alpha.
 Their first layer `23BE852F` is (tile u, tile v, speed u, speed v); the waterfall's is

@@ -16,6 +16,7 @@ use bevy::mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, BlendState, RenderPipelineDescriptor, SpecializedMeshPipelineError};
+use bevy::render::storage::ShaderBuffer;
 use bevy::shader::ShaderRef;
 use bevy::transform::TransformSystems;
 use fc3_formats::cache::fx_rel;
@@ -31,11 +32,19 @@ impl Plugin for ParticlesPlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "particles.wgsl");
         bevy::asset::embedded_asset!(app, "haze.wgsl");
+        bevy::asset::embedded_asset!(app, "sprite_quads.wgsl");
+        let none = app.world_mut().resource_mut::<Assets<ShaderBuffer>>().add(ShaderBuffer::new(&[0u8; QUAD_BYTES], RenderAssetUsages::default()));
+        let _ = NO_QUADS.set(none);
+        let shader: Handle<Shader> = app
+            .world()
+            .resource::<AssetServer>()
+            .load(bevy::asset::AssetPath::from_path_buf(bevy::asset::embedded_path!("sprite_quads.wgsl")).with_source("embedded"));
+        let _ = QUADS_SHADER.set(shader);
         app.add_plugins((MaterialPlugin::<ParticleMaterial>::default(), MaterialPlugin::<HazeMaterial>::default()))
             .init_resource::<Particles>()
             .init_resource::<Decals>()
             .add_systems(Update, (setup_batches.run_if(resource_exists::<CacheInfo>), simulate, fx_test))
-            .add_systems(PostUpdate, build_batches.before(TransformSystems::Propagate));
+            .add_systems(PostUpdate, (build_batches.before(TransformSystems::Propagate), rebind_quads));
     }
 }
 
@@ -268,6 +277,7 @@ impl Decals {
 // ------------------------------------------------------------- material ---
 
 #[derive(Asset, AsBindGroup, TypePath, Clone, Debug)]
+#[bind_group_data(SpriteKey)]
 pub struct ParticleMaterial {
     #[uniform(0)]
     mode: Vec4,
@@ -278,17 +288,73 @@ pub struct ParticleMaterial {
     /// 1 when it dissolves as it fades (`AlphaDissolve`).
     #[uniform(3)]
     soft: Vec4,
+    /// Its batch's quads, for one drawn from them (`QuadStore`); else a
+    /// stand-in (`NO_QUADS`).
+    #[storage(10, read_only)]
+    quads: Handle<ShaderBuffer>,
+    key: SpriteKey,
+}
+
+/// Whether a sprite material's batch is drawn from its storage buffer.
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Default, Debug)]
+pub struct SpriteKey {
+    quads: bool,
+}
+
+impl From<&ParticleMaterial> for SpriteKey {
+    fn from(m: &ParticleMaterial) -> SpriteKey {
+        m.key
+    }
+}
+
+impl From<&HazeMaterial> for SpriteKey {
+    fn from(m: &HazeMaterial) -> SpriteKey {
+        m.key
+    }
+}
+
+/// The storage buffer of the sprite materials not drawn from one, and the
+/// vertex shader of those that are (set as the plugin is built).
+static NO_QUADS: std::sync::OnceLock<Handle<ShaderBuffer>> = std::sync::OnceLock::new();
+static QUADS_SHADER: std::sync::OnceLock<Handle<Shader>> = std::sync::OnceLock::new();
+
+fn no_quads() -> Handle<ShaderBuffer> {
+    NO_QUADS.get().cloned().unwrap_or_default()
+}
+
+/// A sprite material's pipeline: both faces drawn; and for one drawn from
+/// its storage buffer, its vertex shader.
+fn specialize_sprites(descriptor: &mut RenderPipelineDescriptor, key: SpriteKey) {
+    descriptor.primitive.cull_mode = None;
+    if key.quads && descriptor.label.as_deref() != Some("prepass_pipeline") {
+        if let Some(shader) = QUADS_SHADER.get() {
+            descriptor.vertex.shader = shader.clone();
+        }
+    }
 }
 
 impl ParticleMaterial {
     /// A plain sheet (its frames chosen by UV): 0 adds light, 1 blends by
     /// alpha, 2 takes brightness as coverage.
     pub(crate) fn plain(mode: f32, sheet: Handle<Image>) -> Self {
-        Self { mode: Vec4::new(mode, 0.0, 0.0, 0.0), sheet, soft: Vec4::ZERO }
+        Self { mode: Vec4::new(mode, 0.0, 0.0, 0.0), sheet, soft: Vec4::ZERO, quads: no_quads(), key: SpriteKey::default() }
     }
 
     pub(crate) fn alpha_sheet(sheet: Handle<Image>, frames: [u32; 2], interpolate: bool) -> Self {
-        Self { mode: Vec4::new(1.0, frames[0] as f32, frames[1] as f32, if interpolate { 1.0 } else { 0.0 }), sheet, soft: Vec4::ZERO }
+        Self {
+            mode: Vec4::new(1.0, frames[0] as f32, frames[1] as f32, if interpolate { 1.0 } else { 0.0 }),
+            sheet,
+            soft: Vec4::ZERO,
+            quads: no_quads(),
+            key: SpriteKey::default(),
+        }
+    }
+
+    /// Drawn from a batch's storage buffer (`QuadStore`).
+    pub(crate) fn drawn_from(mut self, quads: Handle<ShaderBuffer>) -> Self {
+        self.quads = quads;
+        self.key.quads = true;
+        self
     }
 
     /// Fading over `range` (m) as it nears what's behind it.
@@ -325,9 +391,9 @@ impl Material for ParticleMaterial {
         _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
-        _key: MaterialPipelineKey<Self>,
+        key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        descriptor.primitive.cull_mode = None;
+        specialize_sprites(descriptor, key.bind_group_data);
         Ok(())
     }
 }
@@ -337,6 +403,7 @@ impl Material for ParticleMaterial {
 /// `haze.wgsl`). Drawn among the transmissive things, which see the scene
 /// as it stood before them, laid over it without writing depth.
 #[derive(Asset, AsBindGroup, TypePath, Clone, Debug)]
+#[bind_group_data(SpriteKey)]
 pub struct HazeMaterial {
     /// xy: the map's scroll a second (`DistortionSpeedU`, `...V`); zw: its
     /// tiling (`DistortionTilingU`, `...V`).
@@ -354,11 +421,22 @@ pub struct HazeMaterial {
     #[texture(4)]
     #[sampler(5)]
     map: Handle<Image>,
+    /// As `ParticleMaterial`'s.
+    #[storage(10, read_only)]
+    quads: Handle<ShaderBuffer>,
+    key: SpriteKey,
 }
 
 impl HazeMaterial {
     pub(crate) fn new(shape: Handle<Image>, map: Handle<Image>, motion: Vec4, look: Vec4) -> Self {
-        Self { motion, look, shape, map }
+        Self { motion, look, shape, map, quads: no_quads(), key: SpriteKey::default() }
+    }
+
+    /// Drawn from a batch's storage buffer (`QuadStore`).
+    pub(crate) fn drawn_from(mut self, quads: Handle<ShaderBuffer>) -> Self {
+        self.quads = quads;
+        self.key.quads = true;
+        self
     }
 }
 
@@ -389,9 +467,9 @@ impl Material for HazeMaterial {
         _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
-        _key: MaterialPipelineKey<Self>,
+        key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        descriptor.primitive.cull_mode = None;
+        specialize_sprites(descriptor, key.bind_group_data);
         if let Some(depth) = descriptor.depth_stencil.as_mut() {
             depth.depth_write_enabled = Some(false);
         }
@@ -446,6 +524,7 @@ fn setup_batches(
     mut meshes: ResMut<Assets<Mesh>>,
     mut particle_materials: ResMut<Assets<ParticleMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut commands: Commands,
 ) {
     if *done {
@@ -461,8 +540,9 @@ fn setup_batches(
         };
         // (Smoke and dust soft where they meet the ground; sparks sharp.)
         let soft = if d.blend == Blend::Add { 0.0 } else { STAND_IN_SOFT };
-        let material = particle_materials.add(ParticleMaterial::plain(mode, load_fx(&server, d.stem)).soft(soft));
-        commands.spawn((Batch::Particles(*sheet), Mesh3d(meshes.add(empty_mesh())), MeshMaterial3d(material), common.clone(), Name::new("particles")));
+        let store = QuadStore::new(&mut buffers);
+        let material = particle_materials.add(ParticleMaterial::plain(mode, load_fx(&server, d.stem)).soft(soft).drawn_from(store.buffer.clone()));
+        commands.spawn((Batch::Particles(*sheet), Mesh3d(meshes.add(store.mesh())), MeshMaterial3d(material), store, common.clone(), Name::new("particles")));
     }
     for (sheet, stem, _) in &DECAL_SHEETS {
         let material = materials.add(StandardMaterial {
@@ -500,44 +580,131 @@ fn simulate(time: Res<Time>, mut particles: ResMut<Particles>, mut decals: ResMu
     }
 }
 
-/// Quad geometry gathered for one batch.
+/// Quads gathered for one batch: centre ± `x` ± `y`, the frame's UV
+/// rectangle, the normal and the colour, as `sprite_quads.wgsl` reads them
+/// (six `vec4`s each).
 #[derive(Default)]
-pub(crate) struct Quads {
-    positions: Vec<[f32; 3]>,
-    normals: Vec<[f32; 3]>,
-    uvs: Vec<[f32; 2]>,
-    colors: Vec<[f32; 4]>,
-}
+pub(crate) struct Quads(Vec<[Vec4; 6]>);
 
 impl Quads {
-    /// Corners: centre ± `x` ± `y`, with the frame's UV rectangle.
     pub(crate) fn push(&mut self, centre: Vec3, x: Vec3, y: Vec3, uv: (Vec2, Vec2), normal: Vec3, colour: Vec4) {
         let (lo, hi) = uv;
-        for (p, t) in [
-            (centre - x - y, Vec2::new(lo.x, hi.y)),
-            (centre + x - y, Vec2::new(hi.x, hi.y)),
-            (centre + x + y, Vec2::new(hi.x, lo.y)),
-            (centre - x + y, Vec2::new(lo.x, lo.y)),
-        ] {
-            self.positions.push(p.to_array());
-            self.normals.push(normal.to_array());
-            self.uvs.push(t.to_array());
-            self.colors.push(colour.to_array());
-        }
+        self.0.push([centre.extend(0.0), x.extend(0.0), y.extend(0.0), Vec4::new(lo.x, lo.y, hi.x, hi.y), normal.extend(0.0), colour]);
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.positions.is_empty()
+        self.0.is_empty()
     }
 
+    /// As a mesh of its own (the decals, lit by the standard material).
     pub(crate) fn write(self, mesh: &mut Mesh) {
-        let quads = self.positions.len() / 4;
-        let indices: Vec<u32> = (0..quads as u32).flat_map(|q| [0, 1, 2, 0, 2, 3].map(|i| q * 4 + i)).collect();
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.positions);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, self.colors);
+        let n = self.0.len();
+        let (mut positions, mut normals, mut uvs, mut colors) =
+            (Vec::with_capacity(n * 4), Vec::with_capacity(n * 4), Vec::with_capacity(n * 4), Vec::with_capacity(n * 4));
+        for [centre, x, y, uv, normal, colour] in self.0 {
+            let (centre, x, y) = (centre.truncate(), x.truncate(), y.truncate());
+            for (p, t) in [
+                (centre - x - y, Vec2::new(uv.x, uv.w)),
+                (centre + x - y, Vec2::new(uv.z, uv.w)),
+                (centre + x + y, Vec2::new(uv.z, uv.y)),
+                (centre - x + y, Vec2::new(uv.x, uv.y)),
+            ] {
+                positions.push(p.to_array());
+                normals.push(normal.truncate().to_array());
+                uvs.push(t.to_array());
+                colors.push(colour.to_array());
+            }
+        }
+        let indices: Vec<u32> = (0..n as u32).flat_map(|q| [0, 1, 2, 0, 2, 3].map(|i| q * 4 + i)).collect();
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
         mesh.insert_indices(Indices::U32(indices));
+    }
+
+    /// Into a batch drawn from its storage buffer (see [`QuadStore`]): the
+    /// buffer rewritten in place, and, when they outgrow it, the buffer and
+    /// the batch's mesh of quads made larger (the material to be bound to
+    /// the new buffer: `QuadStore::rebind`).
+    pub(crate) fn upload(self, store: &mut QuadStore, mesh: &Handle<Mesh>, meshes: &mut Assets<Mesh>, buffers: &mut Assets<ShaderBuffer>) {
+        let n = self.0.len() as u32;
+        if n > store.capacity {
+            store.capacity = n.next_power_of_two().max(MIN_QUADS);
+            if let Some(mut m) = meshes.get_mut(mesh) {
+                *m = quad_mesh(store.capacity);
+            }
+            store.rebind = REBIND_FRAMES;
+        }
+        let mut bytes = vec![0u8; store.capacity as usize * QUAD_BYTES];
+        for (chunk, quad) in bytes.chunks_exact_mut(QUAD_BYTES).zip(&self.0) {
+            for (out, v) in chunk.chunks_exact_mut(4).zip(quad.iter().flat_map(|v| v.to_array())) {
+                out.copy_from_slice(&v.to_le_bytes());
+            }
+        }
+        if let Some(mut buffer) = buffers.get_mut(&store.buffer) {
+            buffer.data = Some(bytes);
+        }
+    }
+}
+
+/// A quad's size in the storage buffer.
+const QUAD_BYTES: usize = 6 * 16;
+/// The fewest quads a batch's buffer holds.
+const MIN_QUADS: u32 = 64;
+/// For how many frames a material is bound again after its buffer grew (the
+/// material and the buffer are made ready for the GPU in no set order).
+const REBIND_FRAMES: u8 = 2;
+
+/// A sprite batch drawn from a storage buffer (`sprite_quads.wgsl`): its
+/// quads rewritten each frame into `buffer`, which holds `capacity` of them,
+/// as does the batch's mesh; its material to be bound again for `rebind`
+/// more frames.
+#[derive(Component)]
+pub(crate) struct QuadStore {
+    pub buffer: Handle<ShaderBuffer>,
+    capacity: u32,
+    pub rebind: u8,
+}
+
+impl QuadStore {
+    pub(crate) fn new(buffers: &mut Assets<ShaderBuffer>) -> QuadStore {
+        QuadStore { buffer: buffers.add(ShaderBuffer::new(&vec![0u8; MIN_QUADS as usize * QUAD_BYTES], RenderAssetUsages::default())), capacity: MIN_QUADS, rebind: 0 }
+    }
+
+    /// Its mesh to start with.
+    pub(crate) fn mesh(&self) -> Mesh {
+        quad_mesh(self.capacity)
+    }
+}
+
+/// A run of `n` quads whose first UV names each vertex's quad and corner
+/// (its positions are the storage buffer's; it keeps the attributes, normal
+/// and colour, the sprites' shaders are built for).
+fn quad_mesh(n: u32) -> Mesh {
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let vertices = n as usize * 4;
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; vertices]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0f32, 1.0, 0.0]; vertices]);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, (0..n).flat_map(|q| (0..4).map(move |c| [q as f32, c as f32])).collect::<Vec<[f32; 2]>>());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; vertices]);
+    mesh.insert_indices(Indices::U32((0..n).flat_map(|q| [0, 1, 2, 0, 2, 3].map(|i| q * 4 + i)).collect()));
+    mesh
+}
+
+/// Binds again the materials of batches whose storage buffers grew.
+fn rebind_quads(mut stores: Query<(&mut QuadStore, Option<&MeshMaterial3d<ParticleMaterial>>, Option<&MeshMaterial3d<HazeMaterial>>)>, mut sprites: ResMut<Assets<ParticleMaterial>>, mut hazes: ResMut<Assets<HazeMaterial>>) {
+    for (mut store, sprite, haze) in &mut stores {
+        if store.rebind == 0 {
+            continue;
+        }
+        store.rebind -= 1;
+        if let Some(a) = sprite.and_then(|m| sprites.get_mut(&m.0)) {
+            a.into_inner();
+        }
+        if let Some(a) = haze.and_then(|m| hazes.get_mut(&m.0)) {
+            a.into_inner();
+        }
     }
 }
 
@@ -556,8 +723,9 @@ fn build_batches(
     decals: Res<Decals>,
     daylight: Res<crate::clouds::Daylight>,
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
-    mut batches: Query<(Entity, &Batch, &Mesh3d, &mut Transform, &mut Visibility)>,
+    mut batches: Query<(Entity, &Batch, &Mesh3d, &mut Transform, &mut Visibility, Option<&mut QuadStore>)>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut built: Local<std::collections::HashMap<Entity, (u64, Vec3)>>,
 ) {
     let Ok(cam) = cameras.single() else { return };
@@ -569,7 +737,7 @@ fn build_batches(
     let ambient = 0.12 + 0.88 * daylight.0;
     let sprites = std::mem::take(&mut particles.sprites);
     let fading = decals.list.iter().any(|d| d.age > DECAL_LIFE - DECAL_FADE);
-    for (e, batch, mesh, mut tr, mut vis) in &mut batches {
+    for (e, batch, mesh, mut tr, mut vis, store) in &mut batches {
         // (A decals' mesh stays as it was built, about where the camera was
         // then, until a decal comes or goes or fades, or the camera has gone
         // a way off: changing a mesh every frame has every material's
@@ -622,7 +790,7 @@ fn build_batches(
                 }
             }
         }
-        let empty = quads.positions.is_empty();
+        let empty = quads.is_empty();
         let wanted = if empty { Visibility::Hidden } else { Visibility::Inherited };
         if *vis != wanted {
             *vis = wanted;
@@ -630,8 +798,13 @@ fn build_batches(
         if empty {
             continue;
         }
-        if let Some(mut m) = meshes.get_mut(&mesh.0) {
-            quads.write(&mut m);
+        match store {
+            Some(mut store) => quads.upload(&mut store, &mesh.0, &mut meshes, &mut buffers),
+            None => {
+                if let Some(mut m) = meshes.get_mut(&mesh.0) {
+                    quads.write(&mut m);
+                }
+            }
         }
     }
 }
