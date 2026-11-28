@@ -1370,6 +1370,11 @@ fn story_seats(
             let rules = host.story.vehicle_rules(v.spawn_id);
             if request.pawn == fc3_story::PLAYER && !request.forced && (rules.unusable || rules.locked.contains(&(v.seats[seat].kind, v.seats[seat].index))) { return false; }
             // Repeated TakeSeat is idempotent and a change releases the old seat.
+            // (JAS_200_B40's graph asks again every couple of seconds while it
+            // waits: nothing to do for one already there.)
+            if v.seats[seat].pawn == Some(request.pawn) {
+                return false;
+            }
             let lost_driver = v.seats[seat].kind != 1 && v.seats.iter().any(|s| s.kind == 1 && s.pawn == Some(request.pawn));
             for s in &mut v.seats { if s.pawn == Some(request.pawn) { s.pawn = None; } }
             if lost_driver { v.parked = true; v.throttle = 0.0; v.steer = 0.0; }
