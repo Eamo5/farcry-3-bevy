@@ -780,8 +780,19 @@ vine's puff keep their meshes.
 Lit effects (`EffectLit`: the foam sheets of waterfalls and rapids) stay on standard
 materials. They are drawn additively and unlit, since their maps are DXT1 with no alpha.
 Their first layer `23BE852F` is (tile u, tile v, speed u, speed v); the waterfall's is
-(2, 2, -0.025, -0.45). `cache_assets::flow_materials` scrolls their UV transform at that
-speed, so the water runs down the falls.
+(2, 2, -0.025, -0.45). They go onto the effect material (`unlit_effects`, as the
+additive `Unlit` ones do), whose shader scrolls their map at that speed (taken back
+through the tiling, as the shader moves the mesh's UVs before it), so the water runs
+down the falls. `cache_assets::flow_materials` had scrolled their standard materials'
+UV transform from the CPU, a change to a material every frame, and each such change
+has Bevy look over all of that material's entities again for their meshes and
+pipelines; it now scrolls only those still on a standard material that something
+wears (looked for every 2 s), and a still one (speed 0) only once.
+`FC3_ASSET_CHURN` logs, besides the meshes, each material type changed in more
+than no frames, which of its materials, and who wears them (named with
+`--features profile`): at Badtown in steady play, after these and the
+highlights' pulse and a burning object's charring (now in 32 steps,
+`burnables::CHAR_STEPS`), only the clouds' own material changes a frame.
 
 Plants (foliage, grass) keep their wind material although they have a pair.
 

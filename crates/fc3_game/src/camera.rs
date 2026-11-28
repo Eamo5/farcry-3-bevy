@@ -21,6 +21,29 @@ impl Plugin for ScreenshotPlugin {
         }
         if std::env::var_os("FC3_ASSET_CHURN").is_some() {
             app.add_systems(Last, asset_churn);
+            app.init_resource::<ChurnUsers>();
+            app.add_systems(PostUpdate, tell_churn_users);
+            app.add_systems(
+                Last,
+                (
+                    material_churn::<StandardMaterial>,
+                    material_churn::<crate::original_shaders::OriginalMaterial>,
+                    material_churn::<crate::particles::ParticleMaterial>,
+                    material_churn::<crate::particles::HazeMaterial>,
+                    material_churn::<crate::cache_assets::TerrainMaterial>,
+                    material_churn::<crate::clouds::CloudMaterial>,
+                    material_churn::<crate::far_terrain::FarMaterial>,
+                    material_churn::<crate::metal::MetalMaterial>,
+                    material_churn::<crate::splines::RoadMaterial>,
+                    material_churn::<crate::splines::RiverMaterial>,
+                    material_churn::<crate::tattoo::TattooMaterial>,
+                    material_churn::<crate::unlit_effects::UnlitEffect>,
+                    material_churn::<crate::vegetation::FoliageMaterial>,
+                    material_churn::<crate::vista::VistaMaterial>,
+                    material_churn::<crate::water::WaterMaterial>,
+                    material_churn::<crate::shimmer::ShimmerMaterial>,
+                ),
+            );
         }
         if std::env::var_os("FC3_HIERARCHY_CHECK").is_some() {
             app.add_systems(Last, hierarchy_check);
@@ -92,6 +115,80 @@ fn asset_churn(
         .collect();
     info!("asset churn over {frames} frames: {frames_with} with a mesh event, {added} added, {modified} changed; most changed {named:?}");
     (*since, *frames, *added, *modified, *frames_with) = (0.0, 0, 0, 0, 0);
+}
+
+/// Entities wearing the materials changed most (`material_churn`), to be
+/// told with their components and their parents'.
+#[derive(Resource, Default)]
+struct ChurnUsers(Vec<Entity>);
+
+fn tell_churn_users(world: &mut World) {
+    let users = std::mem::take(&mut world.resource_mut::<ChurnUsers>().0);
+    let names = |world: &World, e: Entity| -> Vec<String> {
+        world.inspect_entity(e).map(|it| it.map(|i| i.name().shortname().to_string()).collect()).unwrap_or_default()
+    };
+    for e in users {
+        let mut line = format!("{e:?} {:?}", names(world, e));
+        let mut at = e;
+        for _ in 0..4 {
+            let Some(p) = world.get::<ChildOf>(at).map(|c| c.parent()) else { break };
+            line += &format!(" under {p:?} {:?} {:?}", world.get::<Name>(p), names(world, p));
+            at = p;
+        }
+        info!("material churn user: {line}");
+    }
+}
+
+/// `FC3_ASSET_CHURN`, materials: how many frames in five seconds changed a
+/// material of this type (any changed in a frame has Bevy look over every
+/// entity of the type again, for its meshes and its pipelines).
+fn material_churn<M: bevy::pbr::Material>(
+    time: Res<Time<Real>>,
+    mut events: MessageReader<AssetEvent<M>>,
+    mut counts: Local<(f32, u32, u32, u32, std::collections::HashMap<AssetId<M>, u32>)>,
+    users: Query<(Entity, &MeshMaterial3d<M>, Option<&Name>, Option<&ChildOf>)>,
+    names: Query<&Name>,
+    mut churn_users: ResMut<ChurnUsers>,
+) {
+    let (since, frames, frames_with, modified, by) = &mut *counts;
+    *since += time.delta_secs();
+    *frames += 1;
+    let mut n = 0;
+    for e in events.read() {
+        if let AssetEvent::Added { id } | AssetEvent::Modified { id } = e {
+            n += 1;
+            *by.entry(*id).or_default() += 1;
+        }
+    }
+    *modified += n;
+    *frames_with += u32::from(n > 0);
+    if *since < 5.0 {
+        return;
+    }
+    if *frames_with > 0 {
+        let name = std::any::type_name::<M>();
+        let mut top: Vec<(AssetId<M>, u32)> = by.drain().collect();
+        top.sort_by(|a, b| b.1.cmp(&a.1));
+        // (Who wears the most changed: its name, else its parent's.)
+        let who: Vec<String> = top
+            .iter()
+            .take(4)
+            .map(|(id, k)| {
+                let user = users.iter().filter(|u| u.1.id() == *id).map(|(e, _, n, p)| {
+                    n.map(|n| n.to_string()).or_else(|| p.and_then(|p| names.get(p.parent()).ok()).map(|n| format!("under {n}"))).unwrap_or_else(|| format!("{e:?}"))
+                });
+                format!("x{k} {} users, e.g. {:?}", users.iter().filter(|u| u.1.id() == *id).count(), user.take(2).collect::<Vec<_>>())
+            })
+            .collect();
+        info!("material churn {}: {frames_with} of {frames} frames, {modified} added or changed; {who:?}", name.rsplit("::").next().unwrap_or(name));
+        for (id, _) in top.iter().take(4) {
+            if let Some((e, ..)) = users.iter().find(|u| u.1.id() == *id) {
+                churn_users.0.push(e);
+            }
+        }
+    }
+    (*since, *frames, *frames_with, *modified) = (0.0, 0, 0, 0);
+    by.clear();
 }
 
 /// `FC3_GROUND_MAP=<x>,<z>,<half>,<step>,<top>,<secs>` (Bevy, metres;

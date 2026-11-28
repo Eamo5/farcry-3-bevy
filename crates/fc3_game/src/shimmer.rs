@@ -7,19 +7,50 @@
 //! open, oxygen bottles, a treasure; a picked-up mushroom's taken off). A
 //! script's colour and rate stand over the object's own (`-1`: the
 //! object's). It is drawn as the object's meshes again over themselves,
-//! added on in the colour of the moment.
+//! added on in the colour of the moment, which the shader works out
+//! (`shimmer.wgsl`: its colours and rate are the material's, the clock the
+//! shader's). Changed every frame on the CPU, each flashing object's
+//! material had Bevy look over all of the standard material's entities
+//! again, frame after frame.
 
 use std::collections::HashMap;
 
 use bevy::camera::visibility::{RenderLayers, VisibilityRange};
 use bevy::light::NotShadowCaster;
 use bevy::mesh::skinning::SkinnedMesh;
+use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
+use bevy::render::render_resource::{AsBindGroup, ShaderType};
 
 pub struct ShimmerPlugin;
 impl Plugin for ShimmerPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Shimmers>().add_systems(Update, (own_highlights, apply_shimmers, pulse_shimmers).chain());
+        bevy::asset::embedded_asset!(app, "shimmer.wgsl");
+        app.add_plugins(MaterialPlugin::<ShimmerMaterial>::default())
+            .init_resource::<Shimmers>()
+            .add_systems(Update, (own_highlights, apply_shimmers).chain());
+    }
+}
+
+/// A highlight's overlay: added on, unlit, in its colours at its rate.
+pub type ShimmerMaterial = ExtendedMaterial<StandardMaterial, ShimmerExt>;
+
+#[derive(Asset, AsBindGroup, TypePath, Debug, Clone, Default)]
+pub struct ShimmerExt {
+    #[uniform(100)]
+    params: ShimmerParams,
+}
+
+/// The low colour (rgb) and the high (rgb) with the flashes a second (w).
+#[derive(Clone, Copy, Debug, Default, ShaderType)]
+struct ShimmerParams {
+    low: Vec4,
+    high: Vec4,
+}
+
+impl MaterialExtension for ShimmerExt {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        bevy::asset::AssetPath::from_path_buf(bevy::asset::embedded_path!("shimmer.wgsl")).with_source("embedded").into()
     }
 }
 
@@ -54,7 +85,8 @@ impl Highlight {
         }
     }
 
-    /// Its colour `t` seconds in.
+    /// Its colour `t` seconds in (as `shimmer.wgsl` works it out).
+    #[cfg(test)]
     fn at(&self, t: f32) -> Vec3 {
         let k = 0.5 - 0.5 * (std::f32::consts::TAU * self.rate * t).cos();
         self.low.lerp(self.high, k)
@@ -89,7 +121,6 @@ impl Shimmers {
 }
 
 struct Drawn {
-    material: Handle<StandardMaterial>,
     overlays: Vec<Entity>,
     look: Highlight,
 }
@@ -121,7 +152,7 @@ fn own_highlights(
 fn apply_shimmers(
     mut shimmers: ResMut<Shimmers>,
     mut commands: Commands,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<ShimmerMaterial>>,
     props: Query<(Entity, &crate::objects::PlacedId)>,
     actors: Query<(Entity, &crate::story_actors::StoryActor)>,
     children: Query<&Children>,
@@ -173,7 +204,10 @@ fn apply_shimmers(
         if found.is_empty() {
             continue;
         }
-        let material = materials.add(StandardMaterial { base_color: Color::NONE, unlit: true, alpha_mode: AlphaMode::Add, depth_bias: 4.0, ..default() });
+        let material = materials.add(ShimmerMaterial {
+            base: StandardMaterial { base_color: Color::WHITE, unlit: true, alpha_mode: AlphaMode::Add, depth_bias: 4.0, ..default() },
+            extension: ShimmerExt { params: ShimmerParams { low: look.low.extend(0.0), high: look.high.extend(look.rate) } },
+        });
         let overlays = found
             .into_iter()
             .map(|(e, mesh, skin, range, layers)| {
@@ -192,18 +226,7 @@ fn apply_shimmers(
             .collect::<Vec<_>>();
         let at = places.get(root).map(|t| crate::data::to_dunia(t.translation())).unwrap_or_default();
         debug!("shimmer: {id} at {at:.1?} ({} meshes, {look:?})", overlays.len());
-        shimmers.drawn.insert(id, Drawn { material, overlays, look });
-    }
-}
-
-/// The flashes: each overlay's colour rising and falling at its rate.
-fn pulse_shimmers(time: Res<Time>, shimmers: Res<Shimmers>, mut materials: ResMut<Assets<StandardMaterial>>) {
-    let t = time.elapsed_secs();
-    for d in shimmers.drawn.values() {
-        if let Some(mut m) = materials.get_mut(&d.material) {
-            let c = d.look.at(t);
-            m.base_color = Color::linear_rgba(c.x, c.y, c.z, 1.0);
-        }
+        shimmers.drawn.insert(id, Drawn { overlays, look });
     }
 }
 

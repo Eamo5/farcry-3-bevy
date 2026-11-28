@@ -61,9 +61,16 @@ struct Burning {
     flames: Vec<(Entity, &'static str)>,
     smoke: Option<Entity>,
     chars: Vec<(Handle<StandardMaterial>, LinearRgba)>,
+    /// How far its charring has gone, in `CHAR_STEPS` (as last applied).
+    charred: u32,
     started: bool,
     spread: bool,
 }
+
+/// The steps its parts char in over its burning: each one a change to their
+/// materials (changed every frame, they had Bevy look over every entity of
+/// the standard material again, frame after frame, while anything burned).
+const CHAR_STEPS: f32 = 32.0;
 
 /// A burnt object's smoke, rising on a while (seconds left).
 #[derive(Component)]
@@ -165,6 +172,7 @@ fn ignite(
                 flames: Vec::new(),
                 smoke: None,
                 chars: Vec::new(),
+                charred: 0,
                 started: false,
                 spread: false,
             });
@@ -247,12 +255,14 @@ fn burn(
         }
         b.age += dt;
         // Charring as it burns, to its burn colour by the end.
-        let k = crate::sky::smoothstep(0.0, 1.0, b.age / b.life);
-        let char = Vec3::from_array(profile.char);
-        for (h, before) in &b.chars {
-            if let Some(mut m) = materials.get_mut(h) {
-                let tint = Vec3::ONE.lerp(char, k);
-                m.base_color = Color::LinearRgba(LinearRgba::new(before.red * tint.x, before.green * tint.y, before.blue * tint.z, before.alpha));
+        let step = (crate::sky::smoothstep(0.0, 1.0, b.age / b.life) * CHAR_STEPS).round() as u32;
+        if step != b.charred {
+            b.charred = step;
+            let tint = Vec3::ONE.lerp(Vec3::from_array(profile.char), step as f32 / CHAR_STEPS);
+            for (h, before) in &b.chars {
+                if let Some(mut m) = materials.get_mut(h) {
+                    m.base_color = Color::LinearRgba(LinearRgba::new(before.red * tint.x, before.green * tint.y, before.blue * tint.z, before.alpha));
+                }
             }
         }
         // The ground under it, once its fire has grown.

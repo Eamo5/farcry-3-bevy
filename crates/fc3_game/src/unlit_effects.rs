@@ -19,6 +19,7 @@ impl Plugin for UnlitEffectsPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<UnlitEffect>::default())
             .init_resource::<GlowBlends>()
+            .init_resource::<crate::cache_assets::ShaderFlows>()
             .add_systems(Update, (swap_effects, blend_glows).chain())
             .add_systems(PreUpdate, crate::original_shaders::finish_swaps::<UnlitEffect>);
         bevy::asset::embedded_asset!(app, "unlit_effect.wgsl");
@@ -143,6 +144,18 @@ pub(crate) fn effect_params(cm: &CachedMaterial) -> Option<UnlitEffectParams> {
     (blend != Some(AlphaMode::Blend) || effect_like).then_some(params)
 }
 
+/// A flowing lit effect's figures (it adds its light as it is, scrolling at
+/// its speed) and its map's tiling. The shader scrolls the mesh's UVs before
+/// the tiling, so its speed is taken back through it.
+fn flow_params(flow: crate::cache_assets::Flow) -> (UnlitEffectParams, Vec2) {
+    let per = |speed: f32, tile: f32| if tile.abs() > 1e-6 { speed / tile } else { speed };
+    let params = UnlitEffectParams {
+        shade: Vec4::new(1.0, 0.0, 1.0, 0.0),
+        scroll: Vec4::new(per(flow.speed.x, flow.tile.x), per(flow.speed.y, flow.tile.y), 0.0, 0.0),
+    };
+    (params, flow.tile)
+}
+
 /// Puts parts whose standard material is an unlit additive one on the effect
 /// material (off the original shaders), once that material has loaded.
 #[allow(clippy::type_complexity)]
@@ -155,6 +168,7 @@ fn swap_effects(
     current: Query<&MeshMaterial3d<StandardMaterial>>,
     mut pending: Local<Vec<Entity>>,
     mut made: Local<std::collections::HashMap<AssetId<StandardMaterial>, Option<Handle<UnlitEffect>>>>,
+    mut flows: ResMut<crate::cache_assets::ShaderFlows>,
 ) {
     // Only unlit additive stand-ins are candidates (a few among thousands).
     for (e, m) in &added {
@@ -175,9 +189,21 @@ fn swap_effects(
             .or_insert_with(|| {
                 let path = server.get_path(m.0.id())?;
                 let bytes = std::fs::read(fc3_formats::cache::default_cache_root().join(path.path())).ok()?;
-                let params = effect_params(&CachedMaterial::from_bytes(&bytes).ok()?)?;
+                let cm = CachedMaterial::from_bytes(&bytes).ok()?;
+                let mut base = base.clone();
+                let params = match effect_params(&cm) {
+                    Some(params) => params,
+                    None => {
+                        // (A flowing lit effect, a waterfall's foam: scrolled
+                        // in the shader, its map tiled as it flows.)
+                        let (params, tile) = flow_params(crate::cache_assets::Flow::of(&cm)?);
+                        base.uv_transform = bevy::math::Affine2::from_scale(tile);
+                        flows.0.insert(m.0.id());
+                        params
+                    }
+                };
                 debug!("unlit effect: {path} {params:?}");
-                Some(effects.add(UnlitEffect { base: base.clone(), extension: UnlitEffectExt { params } }))
+                Some(effects.add(UnlitEffect { base, extension: UnlitEffectExt { params } }))
             })
             .clone();
         if let Some(handle) = handle {

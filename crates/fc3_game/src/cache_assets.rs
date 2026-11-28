@@ -463,7 +463,7 @@ pub struct Flow {
 impl Flow {
     const LAYER: u32 = 0x23BE_852F;
 
-    fn of(cm: &CachedMaterial) -> Option<Flow> {
+    pub(crate) fn of(cm: &CachedMaterial) -> Option<Flow> {
         if cm.shader != "EffectLit" {
             return None;
         }
@@ -476,18 +476,43 @@ impl Flow {
 /// Flowing materials by asset path, noted as they load.
 pub static FLOWING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, Flow>>> = std::sync::LazyLock::new(Default::default);
 
-/// Scrolls the lit effects' maps (waterfalls run, foam drifts).
+/// The flowing materials whose parts went over to the effect material, which
+/// scrolls them in its shader (`unlit_effects::swap_effects`): left alone
+/// here.
+#[derive(Resource, Default)]
+pub struct ShaderFlows(pub std::collections::HashSet<AssetId<StandardMaterial>>);
+
+/// Scrolls the lit effects' maps (waterfalls run, foam drifts) not yet on
+/// the effect material. (Each change to a material has Bevy look over all
+/// the standard material's entities again; a waterfall's, changed every
+/// frame, had it do so frame after frame.)
 pub fn flow_materials(
     time: Res<Time>,
     server: Res<AssetServer>,
     mut events: MessageReader<AssetEvent<StandardMaterial>>,
     mut flowing: Local<Vec<(AssetId<StandardMaterial>, Flow)>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    moved: Option<Res<ShaderFlows>>,
+    wearers: Query<&MeshMaterial3d<StandardMaterial>>,
+    mut worn: Local<(f32, std::collections::HashSet<AssetId<StandardMaterial>>)>,
 ) {
+    if let Some(moved) = moved.as_ref().filter(|m| m.is_changed()) {
+        flowing.retain(|(id, _)| !moved.0.contains(id));
+    }
+    // (Only those something wears now, looked for every couple of seconds:
+    // a part on the original shaders keeps its standard material for the
+    // switch back, and the shaders scroll it themselves.)
+    worn.0 -= time.delta_secs();
+    if worn.0 <= 0.0 && !flowing.is_empty() {
+        worn.0 = 2.0;
+        let ids: std::collections::HashSet<AssetId<StandardMaterial>> = flowing.iter().map(|(id, _)| *id).collect();
+        worn.1 = wearers.iter().map(|m| m.0.id()).filter(|id| ids.contains(id)).collect();
+    }
     for ev in events.read() {
         if let AssetEvent::LoadedWithDependencies { id } | AssetEvent::Added { id } = ev {
             let flow = server.get_path(*id).and_then(|p| FLOWING.lock().unwrap().get(&p.to_string()).copied());
-            if let Some(flow) = flow.filter(|_| !flowing.iter().any(|(f, _)| f == id)) {
+            let moved_here = moved.as_ref().is_some_and(|m| m.0.contains(id));
+            if let Some(flow) = flow.filter(|_| !moved_here && !flowing.iter().any(|(f, _)| f == id)) {
                 flowing.push((*id, flow));
                 debug!("flowing material {id:?}: {flow:?} ({} now)", flowing.len());
             }
@@ -495,6 +520,13 @@ pub fn flow_materials(
     }
     let t = time.elapsed_secs();
     flowing.retain(|(id, flow)| {
+        if !materials.contains(*id) {
+            return false;
+        }
+        // (One that doesn't move needs no more than its tiling, once.)
+        if !worn.1.contains(id) || (flow.speed == Vec2::ZERO && materials.get(*id).is_some_and(|m| m.uv_transform.matrix2 == bevy::math::Mat2::from_diagonal(flow.tile))) {
+            return true;
+        }
         let Some(mut m) = materials.get_mut(*id) else { return false };
         let offset = (flow.speed * t).fract_gl();
         m.uv_transform = bevy::math::Affine2::from_scale_angle_translation(flow.tile, 0.0, offset);

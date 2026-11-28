@@ -521,7 +521,11 @@ is the story's own:
   colour and rate over the object's own (`-1`: the object's). Our white
   glint stays for pickups without one, and for bodies. Seen: a kelp
   pickup at JAS_100's outpost lit gold (`FC3_NO_HIGHLIGHTS=1`, for a
-  comparison, leaves it dark).
+  comparison, leaves it dark). The pulse is worked out in its shader
+  (`shimmer.wgsl`, the material holding the two colours and the rate):
+  set on the CPU, each flashing object's material changed every frame,
+  and every change to a standard material has Bevy look over all of that
+  material's entities again.
 * **Where they fight.** `SetBattlefields <group> <region> <kind>` gives a
   group a region by kind (the `SetBattlefields` box: 0 the battlefield,
   1 the idle BSR, 2 the search BSR, 3 the combat BSR; `SetAll` sends all
