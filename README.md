@@ -280,7 +280,8 @@ No game data is included in this repository, and none is written into it.
   the world's 12 patrol routes with a driver and a gunner in the back; when they spot or hear you they
   pull up and pile out to fight, and the vehicle is yours to take. At the world's boat-patrol
   markers (bays and the C4/C7 rivers and lakes) a Zodiac with a gunner circles the open water,
-  slowing to fight from the boat when alerted. Cars driven into deep water flood and stall.
+  slowing to fight from the boat when alerted (its gunner opening up on the player), and going
+  back to its round some 20 s after losing him. Cars driven into deep water flood and stall.
 - **Pickups**: ammo, health, weapons, loot and herbs at the world's pickup locations; pickups and
   unsearched bodies nearby catch the light with a passing glint. A fallen enemy drops the gun he
   carried by his feet (the pirates' AK-74M, the privateers' P416); walk over one of a kind you carry

@@ -3719,6 +3719,14 @@ fn drive_stealth(
     if last.as_ref() == Some(&now) {
         return;
     }
+    if now.iter().flatten().count() != last.unwrap_or_default().iter().flatten().count() {
+        let who: Vec<String> = npcs
+            .iter()
+            .filter(|(_, n, h)| !h.dead && n.hostile() && n.foe.is_none() && (n.awareness > 0.02 || n.sees_player))
+            .map(|(t, n, _)| format!("{:.0} m {:?} {:.2} sees {}", t.translation().distance(at.translation()), n.state, n.awareness, n.sees_player))
+            .collect();
+        debug!("stealth indicators: {} ({who:?})", now.iter().flatten().count());
+    }
     let old = last.unwrap_or([None; STEALTH_SLOTS]);
     let first = last.is_none();
     let mut ok = true;

@@ -397,6 +397,9 @@ const BOAT_RANGE: f32 = 380.0;
 const BOAT_REACH: f32 = 160.0;
 const BOAT_DEPTH: f32 = 2.0;
 const BOAT_ALERT_SPEED: f32 = 5.0;
+/// The most a patrol's alert holds (full is 1): once he's out of sight it
+/// ebbs at 0.08 a second, so it's gone some 19 s after it was last full.
+const ALERT_HELD: f32 = 1.5;
 /// Boat patrol vehicles carry spawn ids from here (marker index below).
 const BOAT_SPAWN: u64 = 0x5100_0000_0000_0000;
 
@@ -574,7 +577,7 @@ fn spot(
             d.alert = 1.0;
         }
         if noises.iter().any(|n| n.at.distance(vt.translation) < n.radius.min(80.0)) {
-            d.alert = d.alert.max(0.8) + 0.2;
+            d.alert = (d.alert.max(0.8) + 0.2).min(ALERT_HELD);
         }
         d.look -= dt;
         if d.look <= 0.0 && !ph.dead && !player.noclip {
@@ -590,17 +593,46 @@ fn spot(
                 });
             if seen {
                 // A couple of seconds to be sure at range, at once up close.
-                d.alert += 0.25 * (1.6 - dist / range) * if player.driving { 2.0 } else { 1.0 };
+                // (Held a little over full, so that once he's gone it ebbs
+                // away in a while.)
+                d.alert = (d.alert + 0.25 * (1.6 - dist / range) * if player.driving { 2.0 } else { 1.0 }).min(ALERT_HELD);
             } else {
                 d.alert = (d.alert - 0.02).max(0.0);
+            }
+            // (A boat that has lost him altogether goes back to its round.)
+            if d.stopping && d.alert <= 0.0 && v.kind() == crate::vehicles::Kind::Boat && d.goal.is_none() {
+                d.stopping = false;
+                for (r, mut npc) in &mut crew {
+                    if r.vehicle == ve && npc.state == NpcState::Combat {
+                        npc.state = NpcState::Idle;
+                        npc.state_time = 0.0;
+                        npc.last_known = None;
+                    }
+                }
+            }
+            // (The crew notice as their vehicle does, and lose him as it
+            // does: what the HUD's stealth indicators show of them, a boat's
+            // crew once lingering full at the edge of the view for good.)
+            for (r, mut npc) in &mut crew {
+                if r.vehicle == ve {
+                    npc.sees_player = seen;
+                    npc.awareness = d.alert.min(1.0);
+                }
             }
         }
         if d.alert >= 1.0 && !d.stopping {
             d.stopping = true;
+            // (A boat's crew fight from the boat, and only one in a fight
+            // works its gun: it had circled on with its gunner at ease.)
+            let boat = v.kind() == crate::vehicles::Kind::Boat;
             for (r, mut npc) in &mut crew {
                 if r.vehicle == ve {
                     npc.awareness = 1.0;
                     npc.last_known = Some(pt.translation);
+                    if boat {
+                        npc.state = NpcState::Combat;
+                        npc.state_time = 0.0;
+                    }
                 }
             }
         }

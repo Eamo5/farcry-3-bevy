@@ -643,7 +643,18 @@ only what changed (and everything again until the movies have loaded):
   suspicion grows (`StealthIndicatorAnim_<n>`, frames 1 to 100) and white
   while suspicious, red once spotted (`StealthIndicatorState_<n>` frame 1
   or 8). Our own bars over noticing enemies' heads are left out with it
-  (the game shows who notices only by these arrows).
+  (the game shows who notices only by these arrows). A patrol's crew
+  (riders, whom the senses leave to their vehicle) notice as their vehicle
+  does: their awareness follows its alert, seen or not, so their arrows fill
+  as it notices the player and ebb as it loses him. They had been set to
+  full once the vehicle was alerted and never let go, and a boat patrol's
+  crew, circling on the river at -500, -1900, showed as a full white arrow
+  at the edge of the view in shot after shot; nor did its gunner ever fire,
+  a boat's crew never being put into the fight (land crews are as they get
+  out). Now a boat's crew go into the fight when it's alerted, the alert is
+  held at most half again over full (`ALERT_HELD`) so it ebbs within about
+  20 s of losing the player, and a boat that has lost him goes back to its
+  round, its crew at ease.
 * **Tagged**: over each tagged enemy and animal, through walls, the icon
   the engine draws for its kind (`tx_tagged_<kind>` under
   `graphics\__fc3_graphics\_common\_textures\ui\tagindicators\`, converted
