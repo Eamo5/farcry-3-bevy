@@ -5477,6 +5477,9 @@ fn run_story(
                     // (A minigame's resources, loaded with its keeper: the
                     // race and the table are the host's own.)
                     "CreateSpecificGameplay" if a(1).ends_with("ResourceContainer") => {}
+                    // (The minigames that find their gameplay among those
+                    // running themselves: the drinking game, poker, knives.)
+                    "CreateSpecificGameplay" if played_gameplay(&host, a(0).parse().unwrap_or(0), &a(1)) => {}
                     // (A prop's own simple animation: already looping it
                     // plays, `prop_anims`; the flag controller sets the
                     // outpost's flag waving again.)

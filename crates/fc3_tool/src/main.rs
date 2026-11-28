@@ -4378,6 +4378,32 @@ fn main() -> Result<()> {
                 println!("  x {x:8.4} -> {:.4}", curve[i]);
             }
         }
+        "cube" => {
+            // How a colour cube (an `.xbt` volume) maps a few colours: cube <path>
+            let path = args.get(1).context("usage: cube <path>")?;
+            let xbt = vfs.read(path)?;
+            let (size, cube) = fc3_formats::grade::cube_from_dds(fc3_formats::texture::parse(&xbt)?.dds)?;
+            println!("{size}^3, {} texels", cube.len());
+            let size = size as usize;
+            let at = |r: usize, g: usize, b: usize| {
+                let t = cube[(b * size + g) * size + r];
+                [t[0], t[1], t[2]]
+            };
+            let n = size - 1;
+            for (name, (r, g, b)) in [
+                ("black", (0, 0, 0)),
+                ("grey", (n / 2, n / 2, n / 2)),
+                ("white", (n, n, n)),
+                ("red", (n, 0, 0)),
+                ("green", (0, n, 0)),
+                ("blue", (0, 0, n)),
+                ("skin", (n * 9 / 10, n * 6 / 10, n * 45 / 100)),
+                ("foliage", (n * 25 / 100, n * 45 / 100, n * 15 / 100)),
+                ("sky", (n * 45 / 100, n * 65 / 100, n * 90 / 100)),
+            ] {
+                println!("  {name:8} {:?} -> {:?}", [r, g, b].map(|v| v as f32 / n as f32), at(r, g, b));
+            }
+        }
         "shader-dis" => {
             let target = args.get(1).context("usage: shader-dis <path|hash>")?;
             let data = vfs.read_hash(parse_target(&vfs, target)?)?;
